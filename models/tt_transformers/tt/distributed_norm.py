@@ -120,8 +120,8 @@ class DistributedNorm(LightweightModule):
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                chunks_per_sync=1,
+                num_workers_per_link=1,
                 num_buffers_per_channel=2,
             )
 

@@ -1,0 +1,964 @@
+{
+  "decoders": {
+    "0": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "1": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "2": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "3": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "4": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "5": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "6": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "7": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "8": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "9": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "10": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "11": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "12": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "13": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "14": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "15": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "16": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "17": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "18": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "19": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "20": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "21": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "22": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "23": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "24": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "25": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "26": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "27": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "28": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "29": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "30": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "31": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "32": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "33": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "34": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "35": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "36": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "37": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "38": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "39": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "40": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "41": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "42": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "43": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "44": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "45": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "46": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "47": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "48": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "49": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "50": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "51": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "52": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "53": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "54": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "55": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "56": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "57": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "58": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "59": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "60": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "61": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "62": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    },
+    "63": {
+      "precision_cfg": {
+        "FF1_FF3": "BFP4",
+        "FF2": "BFP4",
+        "WQKV": "BFP4",
+        "WO": "BFP4"
+      },
+      "fidelity_cfg": {
+        "LI_FF1_FF3": "LOFI",
+        "LI_FF2": "LOFI",
+        "LI_QKV_DECODE": "LOFI",
+        "LI_O_DECODE": "LOFI",
+        "SDPA_DECODE": "LOFI"
+      }
+    }
+  }
+}

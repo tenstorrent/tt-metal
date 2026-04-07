@@ -31,13 +31,20 @@ class LMHead(LightweightModule):
         self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.vocab_size = args.vocab_size
-        self.padded_vocab_size = args.padded_vocab_size
+        self.padded_vocab_size = args.padded_vocab_size if args.padded_vocab_size else args.vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
 
+        # Pad vocab_size to be divisible by (tile_size * num_devices) so that:
+        # 1. vocab_size is tile-aligned (divisible by tile_size)
+        # 2. size_per_device is also tile-aligned after dividing by num_devices
+        # This ensures TILE concat doesn't have padding in the middle and avoids
+        # truncation when sharding columns across devices.
+        tile_size = 32
+        shard_alignment = tile_size * self.num_devices
+        self.padded_vocab_size = math.ceil(self.padded_vocab_size / shard_alignment) * shard_alignment
         size_per_device = self.padded_vocab_size // self.num_devices
 
-        tile_size = 32
         max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
         max_columns_per_device_dram_sharded = max_columns_per_device
 
@@ -143,8 +150,12 @@ class LMHead(LightweightModule):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
         split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded
+        input_height = x.shape[-2] if len(x.shape) >= 2 else self.args.tile_padded_batch_rows
+        M_override = input_height if input_height != self.args.tile_padded_batch_rows else None
         program_configs = [
-            self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
+            self.args.get_lm_head_program_config(
+                split_size, self.prefetcher if use_prefetcher else None, M_override=M_override
+            )
             for split_size in split_sizes
         ]
 

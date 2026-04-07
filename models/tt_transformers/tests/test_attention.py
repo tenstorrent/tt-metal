@@ -15,7 +15,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.rope import RotarySetup
 
 
 @torch.no_grad()
@@ -100,7 +100,7 @@ def test_attention_inference(
     generation_length = 10
     all_tests_pass = True
 
-    DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup
+    DefaultRopeSetup = RotarySetup
 
     # Setup RoPE transformation matrices
     rope_setup = DefaultRopeSetup(

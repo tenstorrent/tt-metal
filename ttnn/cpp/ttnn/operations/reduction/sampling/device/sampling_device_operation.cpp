@@ -44,7 +44,11 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_indices_tensor.logical_shape() == input_values_tensor.logical_shape(),
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.logical_shape();
-    TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
+    auto num_users = input_shape[0] * input_shape[1] * input_shape[2];
+    TT_FATAL(
+        num_users % 32 == 0 && num_users <= 128,
+        "Input must have a multiple of 32 users (max 128), got {}!",
+        num_users);
     TT_FATAL(
         input_shape[3] != 0 && input_shape[3] % 32 == 0,
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
@@ -52,7 +56,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
 
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(
-            args.sub_core_grids.value().num_cores() == input_shape[0] * input_shape[1] * input_shape[2],
+            args.sub_core_grids.value().num_cores() == num_users,
             "Subcore grid expects num_users cores, but found {}!",
             args.sub_core_grids.value().num_cores());
     }
@@ -74,9 +78,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
     TT_FATAL(p.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for p!");
     TT_FATAL(temp.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for temp!");
-    TT_FATAL(k.logical_shape() == Shape({32}), "k must have shape [32]!");
-    TT_FATAL(p.logical_shape() == Shape({32}), "p must have shape [32]!");
-    TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
+    TT_FATAL(k.logical_shape() == Shape({num_users}), "k must have shape [{}], got {}!", num_users, k.logical_shape());
+    TT_FATAL(p.logical_shape() == Shape({num_users}), "p must have shape [{}], got {}!", num_users, p.logical_shape());
+    TT_FATAL(
+        temp.logical_shape() == Shape({num_users}),
+        "temp must have shape [{}], got {}!",
+        num_users,
+        temp.logical_shape());
 }
 
 TensorSpec SamplingDeviceOperation::compute_output_specs(

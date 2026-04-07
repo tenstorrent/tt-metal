@@ -121,8 +121,8 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
-    chunks_per_sync=10,
-    num_workers_per_link=2,
+    chunks_per_sync=1,
+    num_workers_per_link=1,
     subdevice_id=None,
 ):
     """
@@ -210,8 +210,8 @@ def tt_all_reduce(
             topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -242,8 +242,8 @@ def tt_all_reduce(
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=1,
+            num_workers_per_link=1,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -258,8 +258,8 @@ def tt_all_reduce(
             topology=topology,
             memory_config=input_mem_cfg,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=1,
+            num_workers_per_link=1,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -330,8 +330,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=1,
+            num_workers_per_link=1,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -346,8 +346,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=1,
+            num_workers_per_link=1,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -451,8 +451,8 @@ def tt_sharded_distributed_rmsnorm(
         topology=ttnn.Topology.Linear,
         memory_config=ln_sharded_stats_memcfg,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
+        chunks_per_sync=1,
+        num_workers_per_link=1,
         num_buffers_per_channel=2,
     )
 
