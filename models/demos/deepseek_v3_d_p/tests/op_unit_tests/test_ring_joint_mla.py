@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,10 @@
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -398,6 +400,11 @@ def run_ring_joint_sdpa(
             logger.debug("Synchronize call...")
             ttnn.synchronize_device(submesh)
             logger.debug("Done synchronizing...")
+
+            logger.debug("  Distributed synchronization started")
+            ttnn.distributed_context_barrier()
+            logger.debug("✓ Distributed synchronization completed")
+
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -448,6 +455,10 @@ def run_ring_joint_sdpa(
         ttnn.synchronize_device(submesh)
         logger.info("Synchronize call ended")
 
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
+
 
 #  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
@@ -457,6 +468,7 @@ def run_ring_joint_sdpa(
         (128 * 1024, 256, 128),
         (100 * 1024, 320, 64),
     ],
+    ids=["seq128k", "seq100k"],
 )
 @pytest.mark.parametrize(
     "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
@@ -465,13 +477,8 @@ def run_ring_joint_sdpa(
     ],
 )
 @pytest.mark.parametrize("n_iters", [1, 3], ids=["single_run", "determinism_check"])
-@pytest.mark.parametrize(
-    "trace_enabled, skip_check",
-    [
-        (False, False),
-    ],
-    ids=["no_trace"],
-)
+@pytest.mark.parametrize("trace_enabled", [False], ids=["no_trace"])
+@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_pcc", "pcc_check"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -488,8 +495,8 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 2), (2, 2)],
-    ids=["4x2", "2x2"],
+    [(32, 4), (4, 2), (2, 2)],
+    ids=["32x4", "4x2", "2x2"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -502,6 +509,7 @@ def run_ring_joint_sdpa(
     ],
 )
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+@pytest.mark.timeout(0)
 def test_mla_sdpa(
     mesh_device,
     b,
@@ -571,4 +579,366 @@ def test_mla_sdpa(
         is_causal=True,
         is_balanced=is_balanced,
         cache_path=cache_path,
+    )
+
+
+def run_ring_joint_sdpa_perf(
+    submesh,
+    b,
+    nhq,
+    nhk,
+    nhv,
+    base_seq_len,
+    padded_seq_len,
+    joint_seq_len,
+    head_dim_q,
+    head_dim_k,
+    head_dim_v,
+    q_chunk_size,
+    k_chunk_size,
+    q_dtype,
+    kv_dtype,
+    num_perf_runs,
+    num_links,
+    rp_axis,
+    up_axis,
+    all_gather_topology,
+    is_causal=False,
+    is_balanced=False,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+):
+    """Run ring joint SDPA with 1 compile run + num_perf_runs measured runs with signposts."""
+    logger.info("Perf test: setting up sub-devices")
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
+    ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
+
+    # Sub-device setup
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group(sub_device_stall_group)
+
+    # 1 compile run + num_perf_runs measured runs, each needs its own semaphores/buffers
+    n_total_iters = 1 + num_perf_runs
+    logger.info(f"Perf test: creating {n_total_iters} sets of global semaphores")
+    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_total_iters)]
+
+    # Persistent output buffers
+    ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
+    ag_output_shape_v = (b, nhv, padded_seq_len, head_dim_v)
+
+    kv_shard_dims = [None, None]
+    kv_shard_dims[rp_axis] = None
+    kv_shard_dims[up_axis] = 1
+
+    persistent_k_output_shard_dims = [None, None]
+    if nhk != 1:
+        persistent_k_output_shard_dims[up_axis] = 1
+
+    logger.info(f"Perf test: creating {n_total_iters} persistent output buffer pairs")
+    persistent_output_buffers = [
+        [
+            ttnn.as_tensor(
+                torch.zeros(ag_output_shape_k),
+                device=submesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=kv_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
+                ),
+            ),
+            ttnn.as_tensor(
+                torch.zeros(ag_output_shape_v),
+                device=submesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=kv_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+            ),
+        ]
+        for _ in range(n_total_iters)
+    ]
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Create input tensors
+    logger.info(
+        f"Perf test: creating torch input tensors (Q: [{b},{nhq},{base_seq_len},{head_dim_q}], "
+        f"K: [{b},{nhk},{base_seq_len},{head_dim_k}], V: [{b},{nhv},{base_seq_len},{head_dim_v}])"
+    )
+    Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
+    K = fa_rand(b, nhk, base_seq_len, head_dim_k)
+    V = fa_rand(b, nhv, base_seq_len, head_dim_v)
+
+    logger.info(f"Perf test: padding tensors (seq {base_seq_len} -> {padded_seq_len})")
+    padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
+    padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
+    padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
+
+    if is_balanced:
+        rp_factor = submesh.shape[rp_axis]
+        chunk_order = create_balanced_chunk_order(rp_factor)
+        logger.info(f"Perf test: applying balanced reordering (rp_factor={rp_factor})")
+        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
+        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
+        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+
+    # Joint tensors
+    joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
+    joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
+    joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
+
+    # Shard dims
+    sdpa_input_shard_dims = [None, None]
+    sdpa_input_shard_dims[rp_axis] = 2
+    sdpa_input_shard_dims[up_axis] = 1
+
+    sdpa_joint_shard_dims = [None, None]
+    sdpa_joint_shard_dims[up_axis] = 1
+
+    sdpa_k_input_shard_dims = [None, None]
+    sdpa_k_input_shard_dims[rp_axis] = 2
+    if nhk == 1:
+        sdpa_k_input_shard_dims[up_axis] = None
+    else:
+        sdpa_k_input_shard_dims[up_axis] = 1
+
+    logger.info("Perf test: converting Q to device tensor")
+    tt_Q = ttnn.as_tensor(
+        padded_Q,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    logger.info("Perf test: converting K to device tensor")
+    tt_K = ttnn.as_tensor(
+        padded_K,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
+    )
+    logger.info("Perf test: converting V to device tensor")
+    tt_V = ttnn.as_tensor(
+        padded_V,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+
+    logger.info("Perf test: converting joint tensors to device")
+    tt_joint_Q = ttnn.from_torch(
+        joint_Q,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+    )
+    joint_k_mesh_mapper = (
+        ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims)
+        if nhk > 1
+        else ttnn.ReplicateTensorToMesh(submesh)
+    )
+    tt_joint_K = ttnn.from_torch(
+        joint_K,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=joint_k_mesh_mapper,
+    )
+    tt_joint_V = ttnn.from_torch(
+        joint_V,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+    )
+    logger.info("Perf test: all tensors ready on device")
+
+    def run_once(iter_idx):
+        ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            tt_joint_Q,
+            tt_joint_K,
+            tt_joint_V,
+            persistent_output_buffer_k=persistent_output_buffers[iter_idx][0],
+            persistent_output_buffer_v=persistent_output_buffers[iter_idx][1],
+            joint_strategy="rear",
+            logical_n=base_seq_len,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_semaphore_handles[iter_idx],
+            num_links=num_links,
+            cluster_axis=rp_axis,
+            mesh_device=submesh,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+            ccl_core_grid_offset=ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=is_causal,
+            is_balanced=is_balanced,
+        )
+
+    # Step 1: Compile run (caches kernels)
+    logger.info("Perf test: compile run (1/1)")
+    run_once(0)
+    ttnn.synchronize_device(submesh)
+    logger.info("Perf test: compile run done")
+
+    # Step 2: Execute op num_perf_runs times with signposts for tracy measurement
+    logger.info(f"Perf test: starting {num_perf_runs} measured runs")
+    signpost("start")
+    for i in range(num_perf_runs):
+        logger.info(f"Perf test: run {i + 1}/{num_perf_runs}")
+        run_once(1 + i)
+        ttnn.synchronize_device(submesh)
+    signpost("stop")
+    logger.info(f"Perf test: all {num_perf_runs} runs complete")
+
+    ttnn.synchronize_device(submesh)
+    ttnn.distributed_context_barrier()
+    logger.info("Perf test: done")
+
+
+# Perf test: 1 compile run + num_perf_runs measured runs with tracy signposts
+# Inputs are for 32x4 production config, scaled down for smaller meshes
+@pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
+@pytest.mark.parametrize(
+    "seq_len, q_chunk_size, k_chunk_size",
+    [
+        (128 * 1024, 256, 128),
+        (100 * 1024, 160, 160),
+    ],
+    ids=["seq128k", "seq100k"],
+)
+@pytest.mark.parametrize(
+    "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
+    [
+        (1, 128, 1, 576, 128),
+    ],
+)
+@pytest.mark.parametrize("num_perf_runs", [5], ids=["5runs"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line", "ring"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, up_axis",
+    [[0, 1]],
+    ids=["rpxup"],
+)
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+@pytest.mark.timeout(0)
+def test_mla_sdpa_perf(
+    mesh_device,
+    b,
+    nhq_v,
+    nhk,
+    head_dim_q_k,
+    head_dim_v,
+    seq_len,
+    q_chunk_size,
+    k_chunk_size,
+    q_dtype,
+    kv_dtype,
+    num_perf_runs,
+    num_links,
+    rp_axis,
+    up_axis,
+    all_gather_topology,
+    is_balanced,
+    reset_seeds,
+):
+    if num_links == 2 and is_wormhole_b0():
+        pytest.skip("2 links not supported on Wormhole")
+
+    production_shape = [32, 4]
+
+    mesh_device_shape = list(mesh_device.shape)
+    rp_factor = mesh_device_shape[rp_axis]
+    up_factor = mesh_device_shape[up_axis]
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    seq_len = (seq_len // production_shape[0]) * rp_factor
+    nhq_v = (nhq_v // production_shape[1]) * up_factor
+    padded_seq_len = get_padded_vision_seq_len(seq_len, mesh_device_shape[rp_axis])
+
+    logger.info(
+        f"Perf test config: mesh={mesh_device_shape}, rp={rp_factor}, up={up_factor}, "
+        f"seq_len={seq_len}, padded_seq_len={padded_seq_len}, nhq_v={nhq_v}, "
+        f"num_links={num_links}, topology={all_gather_topology}"
+    )
+
+    joint_seq_len = 0
+
+    run_ring_joint_sdpa_perf(
+        submesh,
+        b,
+        nhq_v,
+        nhk,
+        nhq_v,
+        seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        head_dim_q_k,
+        head_dim_q_k,
+        head_dim_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
+        num_perf_runs,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        is_causal=True,
+        is_balanced=is_balanced,
     )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -24,6 +24,7 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
+        topology=ttnn.FabricConfig.FABRIC_1D,
     ):
         self.config = config
         self.mesh_device = mesh_device
@@ -87,13 +88,14 @@ class ttMLA:
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
-        self.tp_factor = mesh_device.shape[tp_axis]
+        self.tp_factor = mesh_device.shape[self.tp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1
+        self.ccl_topology = topology
 
         # ring attention setup
         persistent_v_shard_dims = [None, None]
-        persistent_v_shard_dims[tp_axis] = 1  # TP heads
+        persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
         persistent_k_shard_dims = [None, None]
 
         ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
@@ -124,7 +126,7 @@ class ttMLA:
         # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
         num_heads_local = self.num_heads // self.tp_factor
         joint_shard_dims = [None, None]
-        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+        joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
 
         self.joint_q = ttnn.from_torch(
             torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
@@ -343,7 +345,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         tt_q = ttnn.experimental.all_gather_async(
@@ -353,7 +355,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -425,7 +427,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -475,6 +477,18 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
+        # from tracy import Profiler
+
+        # profiler = Profiler()
+
+        # profiler.enable()
+        # ttnn.synchronize_device(self.mesh_device)
+        # ttnn.distributed_context_barrier()
+
+        # start = time.time()
+
+        # ttnn.distributed_context_barrier()
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -493,13 +507,19 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             is_causal=True,
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+        # ttnn.synchronize_device(self.mesh_device)
+        # profiler.disable()
+
+        # ttnn.distributed_context_barrier()
+        # end = time.time()
+        # logger.debug(f"SDPA time: {end - start}s")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
@@ -515,7 +535,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         return out
