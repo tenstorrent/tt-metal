@@ -16,6 +16,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeCausalConvNet,
     Qwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeConvNeXtBlock,
     Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
     Qwen3OmniMoeRMSNorm,
@@ -55,6 +56,7 @@ from models.experimental.tt_symbiote.modules.activation import (
     TTNNQwen3OmniMoeCausalConvNet,
     TTNNQwen3OmniMoeCausalTransConvNet,
     TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    TTNNQwen3OmniMoeConvNeXtBlock,
     TTNNSilu,
     # TTNNSnakeBeta,
 )
@@ -219,10 +221,11 @@ NN_TO_TTNN_THINKER = {
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
+    Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
     # Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
-    # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
     Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
@@ -981,15 +984,18 @@ def test_qwen_omni(mesh_device):
     DispatchManager.clear_timings()
 
     # Inference: Generation of the output text and audio
-    # Use deterministic talker decoding to make waveform quality reproducible.
+    # Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision:
+    # tiny logit differences can make codec_eos_token_id the argmax on the first step,
+    # producing near-empty audio.  Default to sampling (HF default) for robust TTS output.
     talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
+    talker_do_sample = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_DO_SAMPLE", "1").lower() in ("1", "true", "yes")
     t_start = time.perf_counter()
     text_ids, audio = model.generate(
         **inputs,
         speaker="Ethan",
         thinker_return_dict_in_generate=True,
         use_audio_in_video=USE_AUDIO_IN_VIDEO,
-        talker_do_sample=False,
+        talker_do_sample=talker_do_sample,
         talker_max_new_tokens=talker_max_new_tokens,
     )
     ttnn.synchronize_device(mesh_device)
