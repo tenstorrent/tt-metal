@@ -196,7 +196,7 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
-    friend std::shared_ptr<MeshBuffer> experimental::per_core_allocation::create_on_single_device(
+    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const MeshBufferConfig&, const DeviceLocalBufferConfig&, MeshDevice*, const MeshCoordinate&);
 };
 
