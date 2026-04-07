@@ -5,21 +5,80 @@
 """DeepSeek V3 per-device overlap spec dataclasses and singleton instances.
 
 Each ``*_SingleDeviceOverlapSpec`` bundles the :class:`OverlappedTensorSpec`
-fields and weight-shuffle methods for one fusion group. The singleton
-instances (e.g. ``QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC``) provide the
-default shapes/core assignments used by both the fusion-group constants
-(:mod:`~weights.specs.fusion_groups`) and the transform functions
-(:mod:`~weights.transforms`).
+fields, weight-shuffle methods, and a :meth:`fusion_group_spec` factory for
+one fusion group.  The singleton instances (e.g.
+``QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC``) are the single source of truth
+consumed by the transform functions (:mod:`~weights.transforms`) and the
+cache fingerprinting / packing system.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.weights.cache.types import (
+    FusionGroupSpec,
+    MeshMapperConfig,
+    RegionSpec,
+    ReplicateMeshMapper,
+    Shard2dMeshMapper,
+)
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
+
+
+def _infer_mesh_mapper(
+    lanes: list[list[tuple[str, OverlappedTensorSpec]]],
+) -> MeshMapperConfig:
+    """Derive the mesh mapper config from ``tp_dim`` values across all specs."""
+    dims: list[int | None] = [None, None]
+    for lane in lanes:
+        for spec_name, spec in lane:
+            for mesh_dim in range(2):
+                td = spec.tp_dim[mesh_dim]
+                if td is not None:
+                    if dims[mesh_dim] is not None and dims[mesh_dim] != td:
+                        raise ValueError(
+                            f"Conflicting tp_dim[{mesh_dim}] in {spec_name!r}: "
+                            f"previously saw {dims[mesh_dim]}, now {td}"
+                        )
+                    dims[mesh_dim] = td
+    if dims[0] is None and dims[1] is None:
+        return ReplicateMeshMapper()
+    return Shard2dMeshMapper(dims=(dims[0], dims[1]))
+
+
+def _build_fusion_group_spec(
+    name: str,
+    lanes: list[list[tuple[str, OverlappedTensorSpec]]],
+    sharding_strategy: ttnn.TensorMemoryLayout,
+    mesh_mapper_config: MeshMapperConfig | None = None,
+    transform_version: int = 0,
+) -> FusionGroupSpec:
+    """Derive a :class:`FusionGroupSpec` from named :class:`OverlappedTensorSpec` fields."""
+    if mesh_mapper_config is None:
+        mesh_mapper_config = _infer_mesh_mapper(lanes)
+    regions: list[RegionSpec] = []
+    for lane in lanes:
+        subtensors = tuple(
+            replace(spec, name=n, logical_tensor_shape=spec.logical_tensor_shape or spec.raw_tensor_shape)
+            for n, spec in lane
+        )
+        regions.append(
+            RegionSpec(
+                core_range_set=lane[0][1].core_range_set,
+                subtensors=subtensors,
+            )
+        )
+    return FusionGroupSpec(
+        name=name,
+        regions=tuple(regions),
+        sharding_strategy=sharding_strategy,
+        mesh_mapper_config=mesh_mapper_config,
+        transform_version=transform_version,
+    )
 
 
 def shuffle_weights_for_interleaved_qnope_qrope(
@@ -82,6 +141,8 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     uses the packed shape ``(H/2, 2W)`` after the ``shuffle_q_a``
     transform.
     """
+
+    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
 
     num_qnope_heads: int = 64
     num_qrope_heads: int = 64
@@ -155,6 +216,18 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
         shards = weights.reshape(kv_h, kv_num_cores, kv_w // kv_num_cores)
         return shards[:, list(self.kv_a_proj_shard_order), :].reshape(kv_h, kv_w)
 
+    def fusion_group_spec(self) -> FusionGroupSpec:
+        """Build the ``q_ab_kv_a`` :class:`FusionGroupSpec` from this config."""
+        return _build_fusion_group_spec(
+            "q_ab_kv_a",
+            [
+                [("q_a_proj", self.q_a_shard_spec), ("q_b_proj", self.q_b_shard_spec)],
+                [("kv_a_proj", self.kv_a_shard_spec)],
+            ],
+            sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            transform_version=self.transform_version,
+        )
+
 
 QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = QAB_KVA_PROJ_SingleDeviceOverlapSpec()
 
@@ -177,6 +250,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
     * **kv_norm** — BFP16, (1, 512), on core (0, 8).
     * **ffn_norm** — BFP16, (1, 7168), on core (12, 9).
     """
+
+    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
 
     o_proj: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
@@ -235,6 +310,21 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
         )
     )
 
+    def fusion_group_spec(self) -> FusionGroupSpec:
+        """Build the ``o_proj_gate_mm_norms`` :class:`FusionGroupSpec` from this config."""
+        return _build_fusion_group_spec(
+            "o_proj_gate_mm_norms",
+            [
+                [("o_proj", self.o_proj)],
+                [("gate_mm", self.gate_mm)],
+                [("attn_norm", self.attn_norm), ("q_norm", self.q_norm), ("ffn_norm", self.ffn_norm)],
+                [("kv_norm", self.kv_norm)],
+            ],
+            sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            mesh_mapper_config=Shard2dMeshMapper(dims=(None, 1)),
+            transform_version=self.transform_version,
+        )
+
 
 O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
 
@@ -242,6 +332,8 @@ O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM
 @dataclass(frozen=True)
 class KVB12_PROJ_SingleDeviceOverlapSpec:
     """Configuration for the kv_b1 / kv_b2 weight overlap."""
+
+    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
 
     kv_b1_shard_spec: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
@@ -299,6 +391,18 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
         tiles = tiles.reshape(n_cores, head_dim // t, kv_dim // t, t, t)
         return tiles.permute(0, 1, 3, 2, 4).reshape(n_cores * head_dim, kv_dim).contiguous()
 
+    def fusion_group_spec(self) -> FusionGroupSpec:
+        """Build the ``kv_b12`` :class:`FusionGroupSpec` from this config."""
+        return _build_fusion_group_spec(
+            "kv_b12",
+            [
+                [("kv_b1_proj", self.kv_b1_shard_spec)],
+                [("kv_b2_proj", self.kv_b2_shard_spec)],
+            ],
+            sharding_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            transform_version=self.transform_version,
+        )
+
 
 KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = KVB12_PROJ_SingleDeviceOverlapSpec()
 
@@ -306,6 +410,8 @@ KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = KVB12_PROJ_SingleDeviceOverlapSpec()
 @dataclass(frozen=True)
 class GATE_UP_PROJ_SingleDeviceOverlapSpec:
     """Configuration for the gate / up projection weight overlap."""
+
+    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
 
     gate_shard_spec: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
@@ -392,6 +498,18 @@ class GATE_UP_PROJ_SingleDeviceOverlapSpec:
         )
         perm = self._crs_shard_permutation(core_range_set)
         return block_shards[list(perm)].reshape(-1, sw).contiguous()
+
+    def fusion_group_spec(self) -> FusionGroupSpec:
+        """Build the ``gate_up`` :class:`FusionGroupSpec` from this config."""
+        return _build_fusion_group_spec(
+            "gate_up",
+            [
+                [("shared_gate_proj", self.gate_shard_spec)],
+                [("shared_up_proj", self.up_shard_spec)],
+            ],
+            sharding_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            transform_version=self.transform_version,
+        )
 
 
 GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = GATE_UP_PROJ_SingleDeviceOverlapSpec()
