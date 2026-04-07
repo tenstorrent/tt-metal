@@ -78,11 +78,11 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
-std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
-    const distributed::MeshBufferConfig& mesh_buffer_config,
-    const distributed::DeviceLocalBufferConfig& device_local_config,
-    distributed::MeshDevice* mesh_device,
-    const distributed::MeshCoordinate& coord);
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
+    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
 namespace tt::tt_metal::distributed {
