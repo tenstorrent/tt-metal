@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -68,6 +69,7 @@ ALWI void pack_untilize_dest_init(
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
 #endif // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(

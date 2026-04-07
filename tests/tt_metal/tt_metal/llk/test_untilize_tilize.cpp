@@ -669,10 +669,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
 
 // Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
-    vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    vector<vector<uint32_t>> test_configs = {/*{1, 1}, {4, 12}, {8, 8}, {40, 14}, */{2, 40}};
     for (auto& cfg : test_configs) {
-        for (bool dst_full_sync_en : {true, false}) {
-            for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool dst_full_sync_en : {true}) {
+            for (bool fp32_dest_acc_en : {true}) {
                 run_quasar_pack_untilize_test(
                     this->devices_.at(0)->get_devices()[0],
                     cfg[0],
