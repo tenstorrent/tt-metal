@@ -79,6 +79,9 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
             this->tiles_[format_descriptor.buffer_index] = Tile(
                 {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
         }
+        if (format_descriptor.face_geometry) {
+            this->unpack_face_geometry_[format_descriptor.buffer_index] = format_descriptor.face_geometry.value();
+        }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
     this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());

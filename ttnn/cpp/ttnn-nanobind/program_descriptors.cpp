@@ -359,7 +359,11 @@ void py_module_types(nb::module_& mod) {
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
-        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions");
+        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions")
+        .def_rw(
+            "face_geometry",
+            &tt::tt_metal::CBFormatDescriptor::face_geometry,
+            "Optional (face_r_dim, num_faces) pair for pack/unpack face geometry override");
 
     nb::class_<tt::tt_metal::CBDescriptor>(mod, "CBDescriptor", R"pbdoc(
         Circular Buffer Descriptor.

@@ -35,7 +35,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_to_dst_init_short(tt::CBIndex::c_0);
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(tt::CBIndex::c_16);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         cb_reserve_back(tt::CBIndex::c_16, full_ct_dim);
@@ -47,7 +47,7 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dest<block_ct_dim, full_ct_dim>(tt::CBIndex::c_16, 1, b, num_rows_per_face, num_faces);
+            pack_untilize_dest<block_ct_dim, full_ct_dim>(tt::CBIndex::c_16, 1, b);
             tile_regs_release();
             cb_pop_front(tt::CBIndex::c_0, block_ct_dim);
         }

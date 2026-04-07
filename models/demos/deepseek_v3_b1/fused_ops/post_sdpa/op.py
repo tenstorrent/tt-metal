@@ -1012,6 +1012,7 @@ class PostSDPA:
                     sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_l_out, sdpa_output_l_device
                     )
+                    sdpa_l_out_cb_descriptor.format_descriptors[0].face_geometry = (8, 2)
                     cb_list.append(sdpa_l_out_cb_descriptor)
 
                 # ========================================================================

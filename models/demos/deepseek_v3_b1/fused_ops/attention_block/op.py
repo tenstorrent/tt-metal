@@ -2864,6 +2864,7 @@ class AttentionBlock:
             page_size=sdpa_l_tile_size,
             tile=ttnn.TileDescriptor(sdpa_tile),
         )
+        sdpa_l_out_cb_format.face_geometry = (8, 2)
         sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             sdpa_cb_l_out,
             ref_sdpa_out_interm_buffer,

@@ -578,15 +578,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t pre_tilize_cb_id = INVALID_CB_ID;
 
+    constexpr uint32_t pack_untilize_face_r_dim = 1;
+    constexpr uint32_t pack_untilize_num_faces = 2;
+
     if (cb_sizes.has_pre_tilize) {
         pre_tilize_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(
-            pre_tilize_cb_id,
-            program,
-            all_cores,
-            cb_sizes.pre_tilize_cb_pagesize,
-            cb_sizes.pre_tilize_cb_npages,
-            params.data_format);
+        tt::tt_metal::CircularBufferConfig pre_tilize_cb_config(
+            cb_sizes.pre_tilize_cb_npages * cb_sizes.pre_tilize_cb_pagesize, {{pre_tilize_cb_id, params.data_format}});
+        pre_tilize_cb_config.set_page_size(pre_tilize_cb_id, cb_sizes.pre_tilize_cb_pagesize);
+        pre_tilize_cb_config.set_unpack_face_geometry(
+            pre_tilize_cb_id, pack_untilize_face_r_dim, pack_untilize_num_faces);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_tilize_cb_config);
         log_debug(
             tt::LogOp,
             "CB {} :: PS = {}, NP = {}",
@@ -598,14 +600,26 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_cb_pagesize = cb_sizes.out_cb_pagesize;
     const uint32_t out_cb_npages = cb_sizes.out_cb_npages;
 
-    const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
-        next_cb_index++,
-        program,
-        all_cores,
-        out_cb_pagesize,
-        out_cb_npages,
-        params.output_data_format,
-        outputs[0].buffer());
+    uint32_t out_cb_id;
+    tt::tt_metal::CBHandle out_cb;
+    if (!is_output_tiled) {
+        tt::tt_metal::CircularBufferConfig out_cb_config(
+            out_cb_npages * out_cb_pagesize, {{next_cb_index, params.output_data_format}});
+        out_cb_config.set_page_size(next_cb_index, out_cb_pagesize);
+        out_cb_config.set_unpack_face_geometry(next_cb_index, pack_untilize_face_r_dim, pack_untilize_num_faces);
+        out_cb_config = out_cb_config.set_globally_allocated_address(*outputs[0].buffer());
+        out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+        out_cb_id = next_cb_index++;
+    } else {
+        std::tie(out_cb_id, out_cb) = tt::tt_metal::create_cb(
+            next_cb_index++,
+            program,
+            all_cores,
+            out_cb_pagesize,
+            out_cb_npages,
+            params.output_data_format,
+            outputs[0].buffer());
+    }
 
     uint32_t out_idx_cb_id = INVALID_CB_ID;
     tt::tt_metal::CBHandle out_idx_cb = 0;

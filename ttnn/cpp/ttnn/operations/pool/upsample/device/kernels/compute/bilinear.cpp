@@ -47,8 +47,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
 
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dest<tiles_per_reduction>(
-        out_cb_id, 1, 0, 1, num_faces); /* pack 1 row (1x (32 * tiles_per_reduction)) from 2 faces */
+    pack_untilize_dest<tiles_per_reduction>(out_cb_id); /* pack 1 row (1x (32 * tiles_per_reduction)) from 2 faces */
     tile_regs_release();
 
     PACK(llk_push_pages_bilinear(out_cb_id, tiles_per_reduction));
@@ -87,7 +86,7 @@ void kernel_main() {
 
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
         tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id);
-    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, 1, num_faces); /* pack 1 row (1x32) from 2 faces */
+    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* pack 1 row (1x32) from 2 faces */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
         const uint32_t cb_id = (i % 2 == 0) ? tilize_reduce_cb_0 : tilize_reduce_cb_1;
         const uint32_t scalar_cb_id = (i % 2 == 0) ? in_scalar_cb_id1 : in_scalar_cb_id2;

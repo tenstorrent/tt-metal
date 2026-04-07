@@ -140,6 +140,7 @@ class SdpaTailSingleCore:
         l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, l_out_tensor)
         l_out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         l_out_cb_descriptor.format_descriptors[0].page_size = tile_size
+        l_out_cb_descriptor.format_descriptors[0].face_geometry = (8, 2)
 
         ms_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_ms_out, ms_out_tensor)
         ms_out_cb_descriptor.format_descriptors[0].tile = tile_descriptor

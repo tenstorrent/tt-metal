@@ -141,10 +141,16 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const uint32_t out_cb_pagesize = tt::constants::TILE_WIDTH * output.element_size();
     const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
 
-    const std::tuple<uint32_t, tt::tt_metal::CBHandle> cb_tuple_out = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
-    const uint32_t out_cb_id = std::get<0>(cb_tuple_out);
-    const tt::tt_metal::CBHandle out_cb = std::get<1>(cb_tuple_out);
+    {
+        tt::tt_metal::CircularBufferConfig out_cb_config(
+            out_cb_npages * out_cb_pagesize, {{next_cb_index, output_cb_data_format}});
+        out_cb_config.set_page_size(next_cb_index, out_cb_pagesize);
+        out_cb_config.set_unpack_face_geometry(next_cb_index, 1, 2);
+        out_cb_config = out_cb_config.set_globally_allocated_address(*output.buffer());
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+    }
+    const uint32_t out_cb_id = next_cb_index++;
+    const tt::tt_metal::CBHandle out_cb = 0;
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(tt::LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);

@@ -33,12 +33,9 @@ namespace ckernel {
  * - full-sync mode (16-bit mode): 16 tiles
  * - full-sync mode (32-bit mode): 8 tiles
  *
- * NOTE: This function allows the user to specify `face_r_dim` and `num_faces` through function parameters. Setting these
- * parameters results in an expensive MMIO write and cannot be avoided currently.
- * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
- * of the MMIO write only once, in `compute_kernel_hw_startup`.
+ * Face geometry (face_r_dim, num_faces) is derived from the output circular buffer metadata set on the host
+ * via set_unpack_face_geometry. The packer hardware is configured once during compute_kernel_hw_startup;
+ * this function only performs lightweight MOP reconfiguration.
  *
  * Return value: None
  *
@@ -50,8 +47,6 @@ namespace ckernel {
  * | Template   | row_num_datums | Number of datums per row                         | uint32_t  | >= 1                      | False                 |
  * | Template   | dense          | Packs two 2 face tiles in a single 4 face region | bool      | true/false                | False (default false) |
  * | Function   | ocb            | Output circular buffer identifier                | uint32_t  | 0 to 31                   | True                  |
- * | Function   | face_r_dim     | Face height in rows                              | uint32_t  | 1, 8 or 16                | False (default = 16)  |
- * | Function   | num_faces      | Number of faces                                  | uint32_t  | 1, 2 or 4                 | False (default = 4)   |
  */
 // clang-format on
 template <
@@ -60,19 +55,13 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
-ALWI void pack_untilize_dest_init(
-    uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
 #endif
-    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-
-    PACK(
-        (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
-        ocb, face_r_dim, num_faces)));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(ocb)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
 }
 
@@ -91,12 +80,6 @@ ALWI void pack_untilize_dest_init(
  * - full-sync mode (16-bit mode): 16 tiles
  * - full-sync mode (32-bit mode): 8 tiles
  *
- * NOTE: This function uses default `face_r_dim` and `num_faces` values (16 and 4, respectively). Setting these
- * parameters results in an expensive MMIO write and cannot be avoided currently.
- * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
- * of the MMIO write only once, in `compute_kernel_hw_startup`.
  *
  * Return value: None
  *
@@ -155,7 +138,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
@@ -188,8 +171,6 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
  * | Function   | block_rt_dim       | Height of a single block in tiles                                            | uint32_t  | >= 1                                    | False (default=1)     |
  * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | >= 0                                    | False (default=0)     |
- * | Function   | face_r_dim         | Face height in rows                                                          | uint32_t  | 1, 8 or 16                              | False (default=16)    |
- * | Function   | num_faces          | Number of faces                                                              | uint32_t  | 1, 2 or 4                               | False (default=4)     |
  * | Function   | tile_dst_offset    | Runtime offset for the index of the tile in the dest from which to pack      | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
  */
 // clang-format on
@@ -205,11 +186,9 @@ ALWI void pack_untilize_dest(
     uint32_t ocb,
     uint32_t block_rt_dim = 1,
     uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
-    uint32_t face_r_dim = 16,
-    uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
-        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
+        block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 }
 
 // clang-format off

@@ -86,7 +86,7 @@ void kernel_main() {
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb);
 
-    pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
+    pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -160,14 +160,12 @@ void kernel_main() {
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed
                 if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id);
                     cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
                     tilize_stick_counter++;
                     tilize_stick_total++;
                 } else {
-                    pack_untilize_dest<max_tiles_per_iter>(
-                        pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<max_tiles_per_iter>(pre_tilize_cb_id);
                     cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
                 }
                 tile_regs_release();
@@ -209,21 +207,16 @@ void kernel_main() {
                     MATH((llk_math_reconfig_remap(true)));
 #endif
 
-                    constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
-                    if constexpr (is_output_block_format) {
-                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
-                            pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
-                    }
+                    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(pre_tilize_cb_id)));
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
+                        pre_tilize_cb_id)));
                 }
             } else {
                 // ROW_MAJOR output: pack directly to output CB
                 if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<partial_iter_output_tiles>(out_cb_id);
                 } else {
-                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id);
                 }
                 cb_push_back(out_cb_id, output_faces);
                 tile_regs_release();

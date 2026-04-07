@@ -442,6 +442,7 @@ class SdpaReduceToAll:
                 cb_l_out_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, output_l_device)
                 cb_l_out_desc.format_descriptors[0].tile = tile_desc
                 cb_l_out_desc.format_descriptors[0].page_size = aligned_page_size
+                cb_l_out_desc.format_descriptors[0].face_geometry = (8, 2)
 
                 # r1_recv_device is used for both R1 and R2
                 # CBs are manually offset into the recv buffer

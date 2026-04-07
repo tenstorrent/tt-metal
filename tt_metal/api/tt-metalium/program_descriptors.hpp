@@ -54,6 +54,7 @@ struct CBFormatDescriptor {
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
+    std::optional<std::pair<uint32_t, uint32_t>> face_geometry;  // {face_r_dim, num_faces}
 };
 
 struct CBDescriptor {

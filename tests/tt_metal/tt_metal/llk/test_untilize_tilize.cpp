@@ -174,6 +174,10 @@ void run_single_core_tilize_program(
             num_output_tiles * test_config.output_single_tile_size,
             {{ouput_cb_index, output_cb_format}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+        cb_output_config.set_unpack_face_geometry(
+            ouput_cb_index, test_config.face_r_dim, test_config.num_faces_per_tile);
+    }
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     std::string reader_kernel_path;
