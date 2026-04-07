@@ -19,34 +19,34 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 - **Text:** **UMT5** encoder (HF checkpoint) on TTNN for embeddings used in cross-attention; **tokenization** stays on CPU (see **PyTorch / CPU components**).
 - **Backbone:** `WanTransformer3DModel` with self-attention + cross-attention blocks, RoPE over a 3D grid, dual paths for **video latents** vs **action** tokens, and patch embedding for `(C, F, H, W)`.
 - **Schedulers:** Flow-matching style stepping for video and action branches (configurable step counts in demo/tests).
-- **Outputs:** Per-chunk **actions** (infer mode) or decoded `**demo.mp4`** (multi-chunk generate mode). TT demo writes video next to the demo script by default unless `--save-dir` is set.
+- **Outputs:** Per-chunk **actions** (infer mode) or decoded `demo.mp4` (multi-chunk generate mode). TT demo writes video next to the demo script by default unless `--save-dir` is set.
 
 **Key details:**
 
 - Transformer and VAE TT code live under `tt/`; weights are mapped from the reference checkpoints.
-- Demo entrypoint is `**tests/demo/demo.py`** (TTNN path);
+- Demo entrypoint is `tests/demo/demo.py` (TTNN path);
 
 ## Performance
 
 
-| Kind                                                           | Measured value |
-| -------------------------------------------------------------- | -------------- |
-| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`)         | 0.39           |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`, trace-on case)  | 5.68 fps       |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`, trace-off case) | 1.03 fps       |
+| Kind                                                           | Measured value                   |
+| -------------------------------------------------------------- | -------------------------------- |
+| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`)         | 0.39 Avg Device Kernel Samples/S |
+| **End-to-end** (`tests/perf/test_perf_e2e.py`, trace-on case)  | 5.68 fps                         |
+| **End-to-end** (`tests/perf/test_perf_e2e.py`, trace-off case) | 1.03 fps                         |
 
 
-NOTE: Device perf (`test_perf_ttnn_lingbot_va.py`) profiles a single-pass `demo.run_inference` path with Tracy. The **E2E perf** test (`test_perf_lingbot_va_e2e_2cq`) drives `TtLingbotVA` through the `tt_cnn` 2-CQ pipeline; behavior depends on the `**use_trace`** parametrized case (see table below).
+NOTE: Device perf (`test_perf_ttnn_lingbot_va.py`) profiles a single-pass `demo.run_inference` path with Tracy. The **E2E perf** test (`test_perf_lingbot_va_e2e_2cq`) drives `TtLingbotVA` through the `tt_cnn` 2-CQ pipeline; behavior depends on the `use_trace` parametrized case. TTNN trace cannot be enabled for the full `run_inference` path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E `use_trace=True` single-transformer case.
 
 ## PyTorch / CPU components
 
-Some steps stay on **CPU via PyTorch / Hugging Face** while the TT demo runs the backbone on Tenstorrent (similar to other `models/experimental/` stacks that call out non-TTNN paths explicitly). Initial **Gaussian noise** for video latents and action tokens is also generated on the host: there is no TTNN operation with the same role as **`torch.randn`**, so the demo uses a small helper that samples on CPU and uploads to the mesh (see table).
+Some steps stay on **CPU via PyTorch / Hugging Face** while the TT demo runs the backbone on Tenstorrent (similar to other `models/experimental/` stacks that call out non-TTNN paths explicitly). Initial **Gaussian noise** for video latents and action tokens is also generated on the host: there is no TTNN operation with the same role as `torch.randn`, so the demo uses a small helper that samples on CPU and uploads to the mesh.
 
 
-| Component                         | Runtime                      | Notes                                                                                                                                                                                                                                                                 |
-| --------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Text tokenizer**                | **PyTorch (`transformers`)** | **`T5TokenizerFast`** from the checkpoint `tokenizer/` directory, loaded by `load_tokenizer()` in `reference/utils.py`. Runs on **CPU** to produce `input_ids` and attention masks for the **UMT5** encoder (TTNN).                                                    |
-| **Gaussian noise (`_randn_ttnn`)** | **PyTorch (`torch.randn`)**  | In **`tests/demo/demo.py`**, **`_randn_ttnn`** draws independent and identically distributed normal samples on the host with **`torch.randn`**, casts to the run dtype (e.g. bfloat16), and materializes them on device with **`ttnn.from_torch`**. TTNN does not offer a direct random-normal primitive equivalent to **`torch.randn`** for this path, so host sampling remains the supported approach. |
+| Component                          | Runtime                      | Notes                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Text tokenizer**                 | **PyTorch (`transformers`)** | `T5TokenizerFast` from the checkpoint `tokenizer/` directory, loaded by `load_tokenizer()` in `reference/utils.py`. Runs on **CPU** to produce `input_ids` and attention masks for the **UMT5** encoder (TTNN).                                                                                                                                                                        |
+| **Gaussian noise (`_randn_ttnn`)** | **PyTorch (`torch.randn`)**  | In `tests/demo/demo.py`, `_randn_ttnn` draws independent and identically distributed normal samples on the host with `torch.randn`, casts to the run dtype (e.g. bfloat16), and materializes them on device with `ttnn.from_torch`. TTNN does not offer a direct random-normal primitive equivalent to **`torch.randn` for this path, so host sampling remains the supported approach. |
 
 
 ## Directory Structure
@@ -75,7 +75,6 @@ lingbot_va/
 │   ├── perf/                   # Device perf + E2E pipeline perf (pytest)
 │   ├── demo/                   # demo.py, sample_images/
 │   └── download_pretrained_weights.py # Script to download the pretrained weights
-├── PR_SUMMARY.md               # PR / release template (problem, PCC table, host paths)
 └── README.md
 ```
 
@@ -114,13 +113,12 @@ Run pytest from the **tt-metal** repo root with `PYTHONPATH=$TT_METAL_HOME` (or 
 ### PCC Tests (Accuracy)
 
 
-| File                                | Test function(s)                                                       | What it checks                                                    |
-| ----------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `tests/pcc/test_transformer_wan.py` | `test_wan_transformer_model`, `test_wan_transformer_model_action_mode` | TT vs reference transformer (video and action paths)              |
-| `tests/pcc/test_encoder_wan.py`     | `test_umt5_encoder_comparison`                                         | HF UMT5 vs TT encoder                                             |
-| `tests/pcc/test_vae_encoder.py`     | `test_encode_one_video_pcc`                                            | Torch encoder vs TT `WanVAEEncoder`                               |
-| `tests/pcc/test_vae_decoder.py`     | `test_decode_one_video_pcc`                                            | Torch decode vs TT `WanVAEDecoder`                                |
-| `tests/pcc/test_causal_conv_3d.py`  | `test_wan_causal_conv3d`                                               | Diffusers causal conv vs TT `WanCausalConv3d` (encoder `conv_in`) |
+| File                                | Test function(s)                              | What it checks                                       |
+| ----------------------------------- | --------------------------------------------- | ---------------------------------------------------- |
+| `tests/pcc/test_transformer_wan.py` | `test_wan_transformer_model_video_and_action` | TT vs reference transformer (video and action paths) |
+| `tests/pcc/test_encoder_wan.py`     | `test_umt5_encoder_comparison`                | HF UMT5 vs TT encoder                                |
+| `tests/pcc/test_vae_encoder.py`     | `test_encode_one_video_pcc`                   | Torch encoder vs TT `WanVAEEncoder`                  |
+| `tests/pcc/test_vae_decoder.py`     | `test_decode_one_video_pcc`                   | Torch decode vs TT `WanVAEDecoder`                   |
 
 
 #### PCC scores
@@ -155,17 +153,16 @@ pytest models/experimental/lingbot_va/tests/pcc/test_encoder_wan.py::test_umt5_e
 | File                                      | Test function                            | Notes                                                                     |
 | ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
 | `tests/perf/test_perf_ttnn_lingbot_va.py` | `test_perf_device_bare_metal_lingbot_va` | Device profiler (Tracy); nested run of `test_lingbot_va_ttnn_forward_run` |
-| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq`           | `TtLingbotVA` + `tt_cnn` pipeline, 2 CQs                                    |
+| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq`           | `TtLingbotVA` + `tt_cnn` pipeline, 2 CQs                                  |
 
 
 **E2E perf modes** (`test_perf_lingbot_va_e2e_2cq` runs both as separate parametrized cases):
 
 
-| `use_trace` | Pipeline                             | What runs each pipeline iteration                                                                                                                                                                                                                                                |
-| ----------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `False`     | `PipelineConfig(use_trace=False, …)` | `**run_inference`** from `tests/demo/demo.py` (prepared path): TT **text encoder** → **VAE encoder** (`_encode_obs_ttnn` during prepare) → full `**_infer_impl`** with video + action denoise loops using the TT **transformer** (`WanTransformer3DModel` via the demo adapter). |
-| `True`      | `PipelineConfig(use_trace=True, …)`  | After `prepare(use_trace=True)` builds `**_prepare_single_run_inputs`**, each iteration calls `**WanTransformer3DModel.forward`** only (`single_run=True`), i.e. a single DiT forward for trace-friendly wall-clock (no full `run_inference` loop).                              |
-
+| use_trace | Pipeline                             | What runs each pipeline iteration                                                                                                                                                                                                                                        |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `False`   | `PipelineConfig(use_trace=False, …)` | `run_inference` from `tests/demo/demo.py` (prepared path): TT **text encoder** → **VAE encoder** (`_encode_obs_ttnn` during prepare) → full `_infer_impl` with video + action denoise loops using the TT **transformer** (`WanTransformer3DModel` via the demo adapter). |
+| `True`    | `PipelineConfig(use_trace=True, …)`  | After `prepare(use_trace=True)` builds `_prepare_single_run_inputs`, each iteration calls `WanTransformer3DModel.forward` only (`single_run=True`), i.e. a single DiT forward for trace-friendly wall-clock (no full `run_inference` loop).                              |
 
 
 **Device perf (Tracy / bare-metal):**
@@ -181,7 +178,6 @@ pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::t
 ```bash
 pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq -v -s
 ```
-
 
 Checkpoints must exist under `reference/checkpoints/` (see **Download Pretrained Weights**). The test resolves that path from the tt-metal repo root so it still works after `demo`/`prepare` changes the process working directory.
 
@@ -235,7 +231,7 @@ python3 models/experimental/lingbot_va/tests/demo/demo.py \
   --generate
 ```
 
-By default, `demo.mp4` is written under `tests/demo/` (see `--save-dir` to override). Use `--num-chunks` to change how many chunks are stitched into the video.
+By default, `demo.mp4` is written under `tests/demo/` (see `--save-dir` to override). Use `--num-chunks` to change how many chunks are stitched into the video. Pass `--log-time` to print phase timings (per-stage `perf_counter` breakdown) and start/end timestamps with total elapsed seconds for `run_generate` or infer-mode `run_inference`. Omit it for a quieter run with no timing collection or those logs.
 
 ## Troubleshooting
 
@@ -254,7 +250,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 3. **TT-Perf-Report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
 4. Multi-device support is not currently available.
 5. VAE Decoder pcc is ~0.98.
-6. **`run_inference` and trace:** TTNN trace cannot be enabled for the full **`run_inference`** path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E **`use_trace=True`** single-transformer case.
+6. TTNN trace cannot be enabled for the full `run_inference` path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E `use_trace=True` single-transformer case.
 7. **Device memory (staged weights):** **Text encoder, VAE encoder, and transformer** device weights **cannot all be loaded at once** on typical configurations—doing so **risks OOM**, so the implementation loads or swaps modules rather than holding every submodule resident simultaneously.
 8. **Cold start vs steady state:** On a fresh run, much of the wall time is **loading weights** and **first-time kernel / graph compilation** for the text encoder, VAE, and transformer—not the denoise or decode loops alone. Expect long gaps before the first meaningful forward completes; per-step cost afterward is usually much smaller in comparison.
 
