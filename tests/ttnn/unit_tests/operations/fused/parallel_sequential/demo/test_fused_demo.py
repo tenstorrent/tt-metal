@@ -36,6 +36,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import is_watcher_enabled
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 
@@ -1818,6 +1819,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -1843,6 +1845,7 @@ void kernel_main() {
         remote_cb.pop_front(noc, 1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -2087,15 +2090,23 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
 
         ref = ttnn.to_torch(t_in)
         [out_a, out_b] = seq.run(results=[op_a, op_b])
-        assert_numeric_metrics(ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
-        assert_numeric_metrics(ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
     elif perf_mode == "e2e":
         e2e = _time_e2e(seq.run, device)
 
         ref = ttnn.to_torch(t_in)
         [out_a, out_b] = seq.run(results=[op_a, op_b])
-        assert_numeric_metrics(ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
-        assert_numeric_metrics(ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
 
 
 # -----------------------------------------------------------------
@@ -2135,6 +2146,9 @@ def _barrier_bench_setup(device, num_phases, num_cores):
     return [_build_noop_op(core_ranges, dummy) for _ in range(num_phases)]
 
 
+@pytest.mark.skipif(
+    is_watcher_enabled(), reason="pytest-timeout plugin interacts with watcher on device reopen (noop kernels)"
+)
 @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
 @pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
 @pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])

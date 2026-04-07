@@ -147,7 +147,8 @@ bool flatten(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        num_tiles * 32  // per_core_tile_cnt
+        num_tiles * 32,  // per_core_tile_cnt
+        false            // use_dfbs
     };
 
     tt_metal::CreateKernel(
@@ -253,7 +254,7 @@ bool flatten_stress(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    vector<uint32_t> compute_kernel_args = {num_tiles * 32};
+    vector<uint32_t> compute_kernel_args = {num_tiles * 32, /*use_dfbs=*/false};
 
     CreateKernel(
         program,

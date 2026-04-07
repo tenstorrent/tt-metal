@@ -2,23 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "experimental/endpoints.h"
+#include "experimental/noc.h"
+#include "experimental/dataflow_buffer.h"
+#ifndef ARCH_QUASAR
+#include "experimental/circular_buffer.h"
+#endif
 
-inline __attribute__((always_inline))
-void read_and_push_to_cb(const uint32_t cb_id, uint32_t num_tiles_per_cb, uint32_t ublock_size_tiles, uint32_t ublock_size_bytes,
-                               uint32_t bank_id, uint32_t& dram_buffer_src_addr) {
-    // read a ublock of tiles at the time from DRAM to L1 buffer, and push a ublock at the time to unpacker
+template <bool use_dfbs, typename SyncBuffer>
+inline __attribute__((always_inline)) void read_and_push_to_cb(
+    SyncBuffer& sync_buffer,
+    uint32_t num_tiles_per_cb,
+    uint32_t ublock_size_tiles,
+    uint32_t ublock_size_bytes,
+    uint32_t bank_id,
+    uint32_t& dram_buffer_src_addr) {
+    experimental::Noc noc;
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    experimental::AllocatorBank<bank_type> src_dram;
+
     for (uint32_t i = 0; i < num_tiles_per_cb; i += ublock_size_tiles) {
-        // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_buffer_src_addr);
-        cb_reserve_back(cb_id, ublock_size_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-
-        noc_async_read(dram_buffer_src_noc_addr, l1_write_addr, ublock_size_bytes);
-        noc_async_read_barrier();
-
-        cb_push_back(cb_id, ublock_size_tiles);
+        sync_buffer.reserve_back(ublock_size_tiles);
+        noc.async_read(
+            src_dram, sync_buffer, ublock_size_bytes, {.bank_id = bank_id, .addr = dram_buffer_src_addr}, {});
+        noc.async_read_barrier();
+        sync_buffer.push_back(ublock_size_tiles);
         dram_buffer_src_addr += ublock_size_bytes;
     }
 }
@@ -33,16 +43,42 @@ void kernel_main() {
     constexpr uint32_t stride = get_compile_time_arg_val(2);
     constexpr uint32_t topmost_cb = get_compile_time_arg_val(3);
     constexpr uint32_t ublock_size_tiles = get_compile_time_arg_val(4);
+    constexpr bool use_dfbs = get_compile_time_arg_val(5) == 1;
+#ifdef ARCH_QUASAR
+    static_assert(use_dfbs, "DFBs must be used on Quasar");
+#endif
 
     // Process strided CBs: 0, 8, 16, ...
     for (uint32_t i = 0; i < num_cbs_stride; i++) {
         uint32_t cb_id = start_cb + i * stride;
-        uint32_t ublock_size_bytes = get_tile_size(cb_id) * ublock_size_tiles;
-        read_and_push_to_cb(
-            cb_id, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+#ifndef ARCH_QUASAR
+        experimental::CircularBuffer cb(cb_id);
+#endif
+        experimental::DataflowBuffer dfb(cb_id);
+        uint32_t ublock_size_bytes;
+        if constexpr (use_dfbs) {
+            ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
+            read_and_push_to_cb<true, experimental::DataflowBuffer>(
+                dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+        } else {
+            ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
+            read_and_push_to_cb<false, experimental::CircularBuffer>(
+                cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+        }
     }
     // Process topmost CB
-    uint32_t ublock_size_bytes = get_tile_size(topmost_cb) * ublock_size_tiles;
-    read_and_push_to_cb(
-        topmost_cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+#ifndef ARCH_QUASAR
+    experimental::CircularBuffer cb(topmost_cb);
+#endif
+    experimental::DataflowBuffer dfb(topmost_cb);
+    uint32_t ublock_size_bytes;
+    if constexpr (use_dfbs) {
+        ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
+        read_and_push_to_cb<true, experimental::DataflowBuffer>(
+            dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+    } else {
+        ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
+        read_and_push_to_cb<false, experimental::CircularBuffer>(
+            cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+    }
 }
