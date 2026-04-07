@@ -523,10 +523,16 @@ def test_scatter_negative_dim(device, shape, dim, dtype):
     torch_output_neg = torch_input.clone()
     torch_output_neg.scatter_(dim, torch_index.long(), torch_source)
 
-    # Convert to ttnn
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Convert to ttnn using the matching test dtype
+    torch_to_ttnn_dtype = {
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float32: ttnn.float32,
+    }
+    ttnn_dtype = torch_to_ttnn_dtype[dtype]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Test with negative dim
     ttnn_output = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_source)
@@ -535,7 +541,9 @@ def test_scatter_negative_dim(device, shape, dim, dtype):
     assert (
         output.shape == torch_output_neg.shape
     ), f"Output shape {output.shape} does not match expected {torch_output_neg.shape}"
-    assert_allclose(torch_output_neg, output, rtol=1e-2)
+    # Use tighter tolerance for float32 as per existing scatter tests
+    rtol = 1e-3 if dtype == torch.float32 else 1e-2
+    assert_allclose(torch_output_neg, output, rtol=rtol)
 
 
 @pytest.mark.parametrize(

@@ -271,7 +271,7 @@ namespace ttnn {
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
 Tensor scatter(
     const Tensor& input_tensor,
-    int32_t dim,
+    const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
@@ -282,11 +282,16 @@ Tensor scatter(
 
     using namespace operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
 
-    check_support(input_tensor, index_tensor, source_tensor, dim);
-    validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_reduction_string);
+    // Normalize negative dimension before any helper indexes shapes with dim
+    const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
+    TT_FATAL(
+        normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
+        "scatter: dim {} is out of range for tensor rank {}",
+        dim,
+        input_tensor_rank);
 
-    // Normalize negative dimension to positive index
-    dim = dim < 0 ? dim + input_tensor_rank : dim;
+    check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
+    validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
@@ -295,7 +300,7 @@ Tensor scatter(
     const auto original_layout = input_tensor.layout();
 
     // index and source tensors should have same rank as input tensor
-    const bool input_tensor_is_dim_last_idx = (dim == input_tensor_rank - 1);
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     // tensors sent to the device operation must be:
@@ -304,13 +309,17 @@ Tensor scatter(
     // - (un)squeezed to 4D
     Shape after_transpose_shape;
     Tensor transformed_input_tensor = pre_scatter_transform_tensor(
-        input_tensor, after_transpose_shape, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+        input_tensor, after_transpose_shape, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor transformed_index_tensor =
-        pre_scatter_transform_tensor(index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    Tensor transformed_index_tensor = pre_scatter_transform_tensor(
+        index_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     Tensor transformed_source_tensor = pre_scatter_transform_tensor(
-        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, index_tensor.logical_shape());
+        source_tensor,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        input_tensor_is_rank_le_4d,
+        index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
@@ -319,7 +328,7 @@ Tensor scatter(
 
     Tensor output = ttnn::prim::scatter(
         transformed_input_tensor,
-        dim,
+        normalized_dim,
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
@@ -328,7 +337,7 @@ Tensor scatter(
     output = post_scatter_transform_tensor(
         output,
         after_transpose_shape,
-        dim,
+        normalized_dim,
         input_tensor_is_dim_last_idx,
         original_input_tensor_lshape,
         original_layout);
@@ -337,7 +346,7 @@ Tensor scatter(
 
 Tensor scatter_add(
     const Tensor& input_tensor,
-    int32_t dim,
+    const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,

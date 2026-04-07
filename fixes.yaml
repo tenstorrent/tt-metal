@@ -1,0 +1,19 @@
+Diagnostics:
+- BuildDirectory: /proj_sw/user_dev/cmaryan/tt-metal/build_Release
+  DiagnosticMessage:
+    FileOffset: 8447
+    FilePath: /proj_sw/user_dev/cmaryan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp
+    Message: repeated branch body in conditional chain
+    Replacements: []
+  DiagnosticName: bugprone-branch-clone
+  Level: Warning
+  Notes:
+  - FileOffset: 8511
+    FilePath: /proj_sw/user_dev/cmaryan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp
+    Message: end of the original
+    Replacements: []
+  - FileOffset: 8640
+    FilePath: /proj_sw/user_dev/cmaryan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp
+    Message: clone 1 starts here
+    Replacements: []
+MainSourceFile: ''

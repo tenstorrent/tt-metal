@@ -27,8 +27,14 @@ def test_gather_negative_dim(device, shape, dim, dtype):
     # PyTorch reference with negative dim
     torch_output_neg = torch.gather(torch_input, dim, torch_index.long())
 
-    # Convert to ttnn
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # Convert to ttnn using the matching test dtype
+    torch_to_ttnn_dtype = {
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float32: ttnn.float32,
+    }
+    ttnn_dtype = torch_to_ttnn_dtype[dtype]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
     ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
 
     # Test with negative dim
@@ -38,7 +44,9 @@ def test_gather_negative_dim(device, shape, dim, dtype):
     assert (
         output.shape == torch_output_neg.shape
     ), f"Output shape {output.shape} does not match expected {torch_output_neg.shape}"
-    assert_with_pcc(torch_output_neg, output, 0.999)
+    # Use tighter tolerance for float32
+    pcc_threshold = 0.9999 if dtype == torch.float32 else 0.999
+    assert_with_pcc(torch_output_neg, output, pcc_threshold)
 
 
 @pytest.mark.parametrize(
