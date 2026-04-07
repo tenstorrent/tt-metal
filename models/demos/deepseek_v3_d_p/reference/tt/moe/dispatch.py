@@ -64,15 +64,13 @@ class TorchDispatchModule(torch.nn.Module):
         self.dispatched_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.experts_per_chip * self.max_dispatched_tokens_per_expert,
             emb_dim,
         )
         self.dispatched_metadata_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.experts_per_chip * self.max_dispatched_tokens_per_expert,
             self.metadata_len,
         )
 
@@ -154,15 +152,14 @@ class TorchDispatchModule(torch.nn.Module):
                                 False
                             ), "Dispatch table must be provided in multi-group configuration to determine expert chip mapping"
 
-                        expert_index_within_chip = routed_expert % self.experts_per_chip
                         dst_index = offset_copy[chip, routed_expert]
 
-                        dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        dispatched_buffer[group, expert_chip, dst_index] = x[chip, token]
                         # Compute linearized mesh coord for combine module
                         linearized_coord = ExpertMapping.compute_linearized_mesh_coord(
                             chip, group, self.num_dispatch_groups
                         )
-                        dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
+                        dispatched_metadata[group, expert_chip, dst_index] = torch.tensor(
                             [
                                 linearized_coord,
                                 token,

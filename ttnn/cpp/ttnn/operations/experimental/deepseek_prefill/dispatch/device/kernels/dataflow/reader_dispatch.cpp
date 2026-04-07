@@ -211,15 +211,14 @@ void kernel_main() {
                     continue;
                 }
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
-                auto expert_index_within_chip = routed_expert % experts_per_chip;
                 auto& offset = offsets[routed_expert];
-                if (offset >= max_dispatched_tokens_per_expert) {
+                if (offset >= experts_per_chip * max_dispatched_tokens_per_expert) {
                     // Token would overflow the dispatch buffer - skip to prevent
                     // out-of-bounds DRAM writes that corrupt memory and cause hangs.
                     offset++;
                     continue;
                 }
-                auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
+                auto page_idx = offset;
 
                 if (expert_chip == linearized_mesh_coord) {
                     volatile tt_l1_ptr int32_t* metadata =

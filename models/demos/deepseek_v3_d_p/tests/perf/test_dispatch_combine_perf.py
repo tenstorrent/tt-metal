@@ -346,7 +346,7 @@ def test_dispatch_combine_perf(
         dtype=ttnn.int32,
     )
 
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         NUM_ROUTED_EXPERTS,
@@ -367,6 +367,13 @@ def test_dispatch_combine_perf(
     mesh_mapper_combine_counter = get_ep_mesh_mapper(mesh_device)
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
+        mesh_mapper=mesh_mapper_combine_counter,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    tt_expert_region_offsets = ttnn.from_torch(
+        expert_region_offsets,
         mesh_mapper=mesh_mapper_combine_counter,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -407,7 +414,9 @@ def test_dispatch_combine_perf(
         tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
             tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
         )
-        tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+        tt_output = tt_combine_module(
+            tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets
+        )
         ttnn.synchronize_device(mesh_device)
 
     # Flush any warmup profiler data
@@ -422,7 +431,9 @@ def test_dispatch_combine_perf(
 
     def run_combine():
         nonlocal tt_output
-        tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+        tt_output = tt_combine_module(
+            tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets
+        )
 
     def run_roundtrip():
         run_dispatch()

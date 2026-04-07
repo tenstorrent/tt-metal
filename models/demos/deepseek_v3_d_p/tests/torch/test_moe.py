@@ -118,7 +118,7 @@ def test_moe(
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         )
-        expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
             indices,
             dispatch_group_size,
             num_routed_experts,

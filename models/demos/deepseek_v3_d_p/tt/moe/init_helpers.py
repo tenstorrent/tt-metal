@@ -300,6 +300,10 @@ def get_gate_outputs(
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
         expert_token_counts: Total tokens per expert (sparse per group, replicated across dispatch_group_size)
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+        expert_region_offsets: Expert region component of expert_offsets — identical across
+            the dispatch_group_size dimension. Equals expert_offsets minus the
+            per-source-device local offset.
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
         expert_counter: Per-chip token counts for each expert (sparse per group).
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
     """
@@ -329,18 +333,46 @@ def get_gate_outputs(
 
     # Cumsum along dispatch_group_size (dim=1) per group
     cum_sum = torch.cumsum(expert_counter, dim=1)
-    expert_offsets = torch.cat(
+    local_expert_offsets = torch.cat(
         [torch.zeros((num_dispatch_groups, 1, num_routed_experts), dtype=torch.int32), cum_sum[:, :-1, :]], dim=1
     )
 
     # Token counts: last row of cumsum, replicated across dispatch_group_size
     expert_token_counts = cum_sum[:, -1:, :].expand(-1, dispatch_group_size, -1).contiguous()
 
+    # Partial cumsum along expert dimension (dim=-1)
+    # Split num_routed_experts into (num_chips, experts_per_chip), cumsum within each chip
+    # Pad each expert's count to TILE_SIZE so each expert starts at a tile boundary in the dispatch buffer
+    aligned_token_counts = ((expert_token_counts + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    global_expert_offsets = torch.reshape(
+        aligned_token_counts,
+        (num_dispatch_groups, dispatch_group_size, num_routed_experts // experts_per_chip, experts_per_chip),
+    )
+    global_expert_offsets = torch.cumsum(global_expert_offsets, dim=-1)
+    global_expert_offsets = torch.cat(
+        [
+            torch.zeros(
+                (num_dispatch_groups, dispatch_group_size, num_routed_experts // experts_per_chip, 1), dtype=torch.int32
+            ),
+            global_expert_offsets[:, :, :, :-1],
+        ],
+        dim=-1,
+    )
+    global_expert_offsets = torch.reshape(
+        global_expert_offsets,
+        (num_dispatch_groups, dispatch_group_size, num_routed_experts),
+    )
+    # Snapshot expert region component (shared across source devices) before adding local offsets
+    expert_region_offsets = global_expert_offsets.clone()
+    global_expert_offsets += local_expert_offsets
+
     logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
     logger.debug(f"  expert_counter.shape={expert_counter.shape}")
-    logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
+    logger.debug(f"  local_expert_offsets.shape={local_expert_offsets.shape}")
+    logger.debug(f"  global_expert_offsets.shape={global_expert_offsets.shape}")
+    logger.debug(f"  expert_region_offsets.shape={expert_region_offsets.shape}")
     logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
-    return expert_offsets, expert_token_counts, expert_counter
+    return global_expert_offsets, expert_token_counts, expert_region_offsets, expert_counter
 
 
 def compute_constants(
@@ -366,7 +398,9 @@ def compute_constants(
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
     # total number of tokens in group times x distribution ratio (8/256 == 2/64)
     balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
-    max_dispatched_tokens_per_expert = int(balanced_load * capacity_factor)
+    max_dispatched_tokens_per_expert = (
+        (int(balanced_load * capacity_factor) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    ) * ttnn.TILE_SIZE  # Round up to nearest TILE_SIZE
     return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
 
 

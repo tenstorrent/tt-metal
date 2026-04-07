@@ -76,8 +76,11 @@ void kernel_main() {
 
     // Batch configuration (index 33) — read_batch_size not used by writer
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 34)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
+    // Expert region offsets tensor metadata (indices 34-37) — unused by writer but present
+    // so that compile_time_args stays consistent between reader and writer.
+
+    // TensorAccessorArgs for all 5 tensors (starting at index 38)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<38>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -89,6 +92,7 @@ void kernel_main() {
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    rt_args_idx++;  // expert_region_offsets_addr — consumed by reader only
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);

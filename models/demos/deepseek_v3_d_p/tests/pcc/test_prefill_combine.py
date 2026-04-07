@@ -274,7 +274,7 @@ def test_ttnn_combine(
     )
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -327,6 +327,13 @@ def test_ttnn_combine(
         device=mesh_device,
         dtype=ttnn.int32,
     )
+    tt_expert_region_offsets = ttnn.from_torch(
+        expert_region_offsets,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
 
     torch_combine = TorchCombineModule(
         dispatch_group_size=dispatch_group_size,
@@ -336,7 +343,7 @@ def test_ttnn_combine(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
+    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
 
     # Run ttnn combine
     tt_combine = TtCombineModule(
@@ -356,6 +363,7 @@ def test_ttnn_combine(
         tt_dispatched_buffer,
         tt_dispatched_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
     )
 
     # Step 6: Convert ttnn output to torch for comparison

@@ -366,7 +366,7 @@ def test_ttnn_dispatch(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -407,6 +407,7 @@ def test_ttnn_dispatch(
     buffer_result = validate_dispatch_buffer(
         torch_dispatched,
         tt_out_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -418,6 +419,7 @@ def test_ttnn_dispatch(
     metadata_result = validate_dispatch_metadata(
         torch_metadata,
         tt_out_metadata,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,

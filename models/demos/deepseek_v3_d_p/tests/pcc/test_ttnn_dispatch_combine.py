@@ -331,9 +331,12 @@ def test_ttnn_dispatch_combine(
 
     # Run TtMoERoutingSetup for TTNN execution path
     tt_moe_routing_setup = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+        mesh_device=mesh_device,
+        expert_dispatch_table=expert_dispatch_table,
+        num_links=num_links,
+        experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -341,7 +344,7 @@ def test_ttnn_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) for torch reference path
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -417,7 +420,9 @@ def test_ttnn_dispatch_combine(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
+    torch_output = torch_combine_module(
+        torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts, expert_region_offsets
+    )
 
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
@@ -435,7 +440,7 @@ def test_ttnn_dispatch_combine(
 
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets)
     ttnn.synchronize_device(mesh_device)
     logger.debug("Combine complete!")
 
@@ -588,9 +593,12 @@ def test_ttnn_dispatch_combine_overflow(
     )
 
     tt_moe_routing_setup = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+        mesh_device=mesh_device,
+        expert_dispatch_table=expert_dispatch_table,
+        num_links=num_links,
+        experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -638,7 +646,7 @@ def test_ttnn_dispatch_combine_overflow(
     )
 
     logger.info("[overflow test] Running combine with overflow data...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets)
     ttnn.synchronize_device(mesh_device)
     logger.info("[overflow test] Combine completed (did not hang)")
 

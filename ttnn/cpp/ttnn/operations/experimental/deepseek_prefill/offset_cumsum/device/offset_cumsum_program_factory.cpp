@@ -22,7 +22,8 @@ struct CreatedProgram {
     OffsetCumsumSharedVariables shared_variables;
 };
 
-CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor_return_value, uint32_t row_idx) {
+CreatedProgram create_program(
+    const Tensor& input, std::array<Tensor, 3>& tensor_return_value, uint32_t row_idx, uint32_t experts_per_chip) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
@@ -37,13 +38,16 @@ CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor
     auto* src_buffer = input.buffer();
     auto* dst_offsets_buffer = tensor_return_value.at(0).buffer();
     auto* dst_totals_buffer = tensor_return_value.at(1).buffer();
+    auto* dst_expert_region_buffer = tensor_return_value.at(2).buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_offsets_is_dram = dst_offsets_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_totals_is_dram = dst_totals_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_expert_region_is_dram = dst_expert_region_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t input_page_size = src_buffer->aligned_page_size();
     uint32_t offsets_page_size = dst_offsets_buffer->aligned_page_size();
     uint32_t totals_page_size = dst_totals_buffer->aligned_page_size();
+    uint32_t expert_region_page_size = dst_expert_region_buffer->aligned_page_size();
 
     uint32_t cb_in0_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_in0_config =
@@ -57,21 +61,32 @@ CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor
             .set_page_size(cb_out0_index, offsets_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_set, cb_out0_config);
 
+    uint32_t cb_local_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig cb_local_config =
+        tt::tt_metal::CircularBufferConfig(offsets_page_size, {{cb_local_index, cb_data_format}})
+            .set_page_size(cb_local_index, offsets_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_set, cb_local_config);
+
     std::vector<uint32_t> compile_time_args = {
         cb_in0_index,
         cb_out0_index,
+        cb_local_index,
         (uint32_t)src_is_dram,
         (uint32_t)dst_offsets_is_dram,
         (uint32_t)dst_totals_is_dram,
+        (uint32_t)dst_expert_region_is_dram,
         input_page_size,
         offsets_page_size,
         totals_page_size,
+        expert_region_page_size,
         W,
         H,
+        experts_per_chip,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_offsets_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_totals_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_expert_region_buffer).append_to(compile_time_args);
 
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
@@ -85,7 +100,11 @@ CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor
         program,
         kernel_id,
         core,
-        {src_buffer->address(), dst_offsets_buffer->address(), dst_totals_buffer->address(), row_idx});
+        {src_buffer->address(),
+         dst_offsets_buffer->address(),
+         dst_totals_buffer->address(),
+         dst_expert_region_buffer->address(),
+         row_idx});
 
     return CreatedProgram{
         std::move(program),
@@ -106,7 +125,7 @@ OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::c
     for (const auto& coord : tensor_coords.coords()) {
         uint32_t row_idx = coord[operation_attributes.cluster_axis];
 
-        auto result = create_program(input, tensor_return_value, row_idx);
+        auto result = create_program(input, tensor_return_value, row_idx, operation_attributes.experts_per_chip);
         auto coord_range = ttnn::MeshCoordinateRange(coord);
         mesh_workload.add_program(coord_range, std::move(result.program));
         shared_variables.emplace(coord_range, result.shared_variables);
@@ -129,7 +148,8 @@ void OffsetCumsumProgramFactory::override_runtime_arguments(
         runtime_args[0] = input.buffer()->address();
         runtime_args[1] = tensor_return_value.at(0).buffer()->address();
         runtime_args[2] = tensor_return_value.at(1).buffer()->address();
-        runtime_args[3] = row_idx;
+        runtime_args[3] = tensor_return_value.at(2).buffer()->address();
+        runtime_args[4] = row_idx;
     }
 }
 

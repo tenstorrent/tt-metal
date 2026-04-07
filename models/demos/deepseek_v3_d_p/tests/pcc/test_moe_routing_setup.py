@@ -48,6 +48,17 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+            id="linear-4",
+        ),
+        pytest.param(
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -95,7 +106,31 @@ def test_prep_dispatch_combine(
     topology,
     use_predictable_data,
 ):
-    """Test TTNN dispatch operation against PyTorch reference."""
+    """
+    Test TtMoERoutingSetup (masked_bincount + offset_cumsum pipeline) against the
+    PyTorch reference implementation get_gate_outputs().
+
+    Starting from top-k expert indices of shape
+    (dispatch_group_size, seq_len_per_chip, num_experts_per_tok), the test verifies that
+    the TTNN pipeline produces numerically identical results to the reference for:
+
+        expert_offsets (shape: num_dispatch_groups, dispatch_group_size, num_routed_experts):
+            The global dispatch offset for each source device and each expert. Each entry
+            is the starting token index in the destination device's flat dispatch buffer
+            (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim) where that
+            source device begins writing its tokens for that expert.
+
+        expert_token_counts (shape: num_dispatch_groups, dispatch_group_size, num_routed_experts):
+            Total tokens routed to each expert across all devices in the dispatch group.
+            Must be identical for all devices in a dispatch group (validated separately by
+            counts_replication check).
+
+        expert_region_offsets (shape: num_dispatch_groups, dispatch_group_size, num_routed_experts):
+            Only the expert region component of the global dispatch offset — shared across
+            all source devices in a dispatch group (i.e. identical along the
+            dispatch_group_size dimension). Equals global_expert_offsets minus the
+            per-source-device local offset.
+    """
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 
@@ -169,7 +204,7 @@ def test_prep_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, per_device_expert_counter = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, per_device_expert_counter = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -180,10 +215,18 @@ def test_prep_dispatch_combine(
     )
 
     tt_gate_outputs = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+        mesh_device=mesh_device,
+        expert_dispatch_table=expert_dispatch_table,
+        num_links=num_links,
+        experts_per_chip=experts_per_chip,
     )
 
-    tt_expert_offsets, tt_expert_token_counts, tt_per_device_expert_counter = tt_gate_outputs(
+    (
+        tt_expert_offsets,
+        tt_expert_token_counts,
+        tt_expert_region_offsets,
+        tt_per_device_expert_counter,
+    ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -195,14 +238,18 @@ def test_prep_dispatch_combine(
     # Compose across cols (dispatch groups) and rows (dispatch_group_size)
     tt_expert_offsets = ttnn.unsqueeze_to_4D(tt_expert_offsets)
     tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+    tt_expert_region_offsets = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
 
     ep_composer = get_ep_mesh_composer(mesh_device)
     # squeeze(2) removes only the singleton dim from unsqueeze_to_4D, preserving [groups, chips, experts]
     host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=ep_composer).squeeze(2)
     host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=ep_composer).squeeze(2)
+    host_expert_region_offsets = ttnn.to_torch(tt_expert_region_offsets, mesh_composer=ep_composer).squeeze(2)
 
     # Validate replication of expert_token_counts within dispatch groups (all chips see same totals)
     replication_result = validate_replication(host_expert_token_counts, name="counts_replication")
+    # expert_region_offsets must also be identical across all source devices within a dispatch group
+    region_replication_result = validate_replication(host_expert_region_offsets, name="region_replication")
 
     # Validate values match torch reference
     offsets_result = validate_composed(
@@ -221,13 +268,21 @@ def test_prep_dispatch_combine(
         compare_exact,
         name="expert_token_counts",
     )
+    region_offsets_result = validate_composed(
+        host_expert_region_offsets.int(),
+        expert_region_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_region_offsets",
+    )
 
     log_validation_results(
-        results=[offsets_result, counts_result],
+        results=[offsets_result, counts_result, region_offsets_result],
         num_dispatch_groups=num_dispatch_groups,
         dispatch_group_size=dispatch_group_size,
         title="Routing Setup Validation",
     )
 
-    for r in [replication_result, offsets_result, counts_result]:
+    for r in [replication_result, region_replication_result, offsets_result, counts_result, region_offsets_result]:
         r.assert_passed(f"{r.name} validation failed")

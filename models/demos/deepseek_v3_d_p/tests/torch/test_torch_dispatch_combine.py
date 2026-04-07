@@ -89,7 +89,7 @@ def test_torch_dispatch_combine(
     )
 
     # Compute gate outputs before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -116,6 +116,7 @@ def test_torch_dispatch_combine(
         dispatched,
         metadata,
         expert_token_counts,
+        expert_region_offsets,
     )
     logger.debug(f"{y.shape=}")
     y /= num_experts_per_tok  # since we are summing contributions from multiple experts, we need to average them

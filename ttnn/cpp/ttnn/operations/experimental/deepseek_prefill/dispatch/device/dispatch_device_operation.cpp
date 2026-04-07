@@ -82,9 +82,9 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
     // Define output shapes - these are PER-DEVICE shapes (not global shapes)
-    auto dispatch_buffer_shape = ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
+    auto dispatch_buffer_shape = ttnn::Shape({1, 1, experts_per_chip * max_dispatched_tokens_per_expert, hidden_dim});
     auto dispatch_metadata_shape =
-        ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+        ttnn::Shape({1, 1, experts_per_chip * max_dispatched_tokens_per_expert, metadata_len});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(

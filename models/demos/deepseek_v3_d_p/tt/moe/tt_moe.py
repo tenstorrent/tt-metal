@@ -344,7 +344,9 @@ class TtMoe(LightweightModule):
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
+        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
+            x_for_gate
+        )
         ttnn.deallocate(x_for_gate)  # x_for_gate is no longer needed.
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
@@ -440,7 +442,7 @@ class TtMoe(LightweightModule):
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
+        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
@@ -460,6 +462,7 @@ class TtMoe(LightweightModule):
             expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
+            tt_expert_region_offsets,
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 

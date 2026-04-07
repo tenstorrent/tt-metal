@@ -311,7 +311,7 @@ def test_moe_reference_pcc():
     indices_tt = indices.view(dispatch_group_size, seq_len, num_experts_per_tok).to(torch.int32)
 
     # Compute expert_offsets and expert_token_counts
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, _, _ = get_gate_outputs(
         indices_tt,
         dispatch_group_size=dispatch_group_size,
         num_routed_experts=n_routed_experts,

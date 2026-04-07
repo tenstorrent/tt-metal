@@ -351,6 +351,7 @@ def test_ttnn_moe(
         # fmt: on
 
         expert_token_counts = torch_intermediates.expert_token_counts
+        expert_region_offsets = torch_intermediates.expert_region_offsets
 
         for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
             if tt_tensor is None or torch_tensor is None:
@@ -365,6 +366,7 @@ def test_ttnn_moe(
             result = validate_fn(
                 torch_ref,
                 tt_host,
+                expert_region_offsets,
                 expert_token_counts,
                 expert_dispatch_table,
                 num_dispatch_groups,

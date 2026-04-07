@@ -258,8 +258,8 @@ class TorchMoe(nn.Module):
             gate_scores = weights
             gate_indices = indices
 
-            # Compute expert_offsets and expert_token_counts from indices
-            expert_offsets, expert_token_counts, _ = get_gate_outputs(
+            # Compute expert_offsets, expert_token_counts, and expert_region_offsets from indices
+            expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
                 indices,
                 self.dispatch_group_size,
                 self.num_routed_experts,
@@ -305,7 +305,7 @@ class TorchMoe(nn.Module):
         # Step 4: Combine routed expert outputs
         # TorchDispatchModule now outputs linearized mesh coords directly in metadata field 0,
         # so no transformation is needed before calling combine.
-        combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts)
+        combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts, expert_region_offsets)
 
         # Step 5: Apply gate weights and sum over topk
         # combined_output: (dispatch_group_size, seq_len, topk, emb_dim)
@@ -329,6 +329,7 @@ class TorchMoe(nn.Module):
                 combined_output=combined_output,
                 routed_output=routed_output,
                 expert_token_counts=expert_token_counts,
+                expert_region_offsets=expert_region_offsets,
             )
 
         return final_output, intermediates
