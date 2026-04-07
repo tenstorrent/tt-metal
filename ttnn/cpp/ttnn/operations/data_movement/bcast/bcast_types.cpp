@@ -14,13 +14,6 @@ std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath
     defines["BCAST_OP"] = math_to_op_define[int(bcast_math)];
     defines["BCAST_LLKOP"] = math_to_llkop_define[int(bcast_math)];
     defines["BCAST_DIM"] = bdim_to_llkdim_define[int(bcast_dim)];
-    // Intentional clang-tidy violation: expensive copy in range-based for loop.
-    // Should be `const auto& [k, v]` to avoid copying std::string pairs.
-    std::size_t total_len = 0;
-    for (auto kv : defines) {
-        total_len += kv.first.size() + kv.second.size();
-    }
-    (void)total_len;
     return defines;
 }
 
