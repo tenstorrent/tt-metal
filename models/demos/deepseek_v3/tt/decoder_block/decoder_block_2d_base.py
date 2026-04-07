@@ -128,7 +128,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
     ) -> ttnn.Tensor:
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_decode(
-            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=**cfg["mla_reshard"]
+            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=cfg["mla_reshard"]["memory_config"]
         )
 
         # MLA
