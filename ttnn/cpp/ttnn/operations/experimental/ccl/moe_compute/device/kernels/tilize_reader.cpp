@@ -442,8 +442,12 @@ void kernel_main() {
         uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
 
         // NOC read indices and scores for this core's token range
-        noc_async_read(drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
-        noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+
+        if (num_tokens_this_core > 0) {
+            noc_async_read(
+                drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
+            noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+        }
     }
 
     // Wait for all reads to complete (mapping + indices/scores for non-drain)
@@ -733,7 +737,9 @@ void kernel_main() {
         // Write to DRAM: activated rows (num_activated_tokens) rows
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
-        noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        if (num_activated_tokens > 0) {
+            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        }
         // Barrier for this write is at the very end of the kernel
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);

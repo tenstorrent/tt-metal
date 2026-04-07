@@ -226,8 +226,16 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
-    const auto expert_token_segment_buffer_block_size_bytes =
-        token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
+
+    // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
+    //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
+    //  number of tokens
+    const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
+    const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
+                                         (hidden_size / num_data_parallel_cores / experts_per_device) /
+                                         num_token_parallel_cores;
+    const auto expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
+
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
