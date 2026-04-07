@@ -83,17 +83,17 @@ std::string normalize_cache_root(std::string cache_root) {
 // Currently acceptable because this is a trusted internal tool; if the server is ever
 // exposed to untrusted clients, validate that kernel_name is a safe relative path.
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
-    return g_server_cache_root + std::to_string(build_key) + "/kernels/" + kernel_name;
+    return (fs::path(g_server_cache_root) / std::to_string(build_key) / "kernels" / kernel_name).string() + "/";
 }
 
 std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_name, const std::string& target_name) {
-    return kernel_cache_dir(build_key, kernel_name) + target_name + "/";
+    return (fs::path(kernel_cache_dir(build_key, kernel_name)) / target_name).string() + "/";
 }
 
 void handle_signal(int /*signal*/) { g_keep_running.store(false); }
 
 std::string firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
-    return g_server_cache_root + std::to_string(build_key) + "/firmware/" + target_name + "/";
+    return (fs::path(g_server_cache_root) / std::to_string(build_key) / "firmware" / target_name).string() + "/";
 }
 
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
