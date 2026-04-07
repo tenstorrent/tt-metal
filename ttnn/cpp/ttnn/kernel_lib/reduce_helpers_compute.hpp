@@ -333,12 +333,11 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX)
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam enforce_fp32_accumulation Enable accumulation in full FP32 precision
  * @param old_cbid The previous CB ID (accumulator CB) to reconfigure from
  * @param input_cb The input CB ID to reduce from
  * @param scaler_cb The scaler CB ID
  */
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_cbid, uint32_t input_cb, uint32_t scaler_cb);
 
 /**
@@ -362,14 +361,8 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate);
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX)
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_SCALAR, etc.)
  * @tparam AccumulateT Either Accumulate (enables accumulation) or NoAccumulation (zero overhead)
- * @tparam enforce_fp32_accumulation Whether to enforce FP32 accumulation
  */
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    typename AccumulateT,
-    bool enforce_fp32_accumulation,
-    bool use_matmul = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate);
 
 // =============================================================================

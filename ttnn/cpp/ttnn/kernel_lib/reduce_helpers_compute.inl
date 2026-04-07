@@ -41,17 +41,17 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 // Helper Function Implementations
 // =============================================================================
 
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation>
+template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_cbid, uint32_t input_cb, uint32_t scaler_cb) {
     // Reconfigure SRCA data format from old_cbid to input_cb (similar to copy_tile_to_dst_init_short_with_dt)
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, input_cb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, input_cb)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb)));
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_cb, scaler_cb)));
 
     // Reconfigure math for reduce operation
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
 
     // Skip packer reconfiguration - it remains valid from initial reduce_init call
 }
@@ -65,7 +65,7 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool enforce_fp32_accumulation, bool use_matmul>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool use_matmul>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
@@ -81,7 +81,7 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
             if constexpr (use_matmul) {
                 mm_init_short_with_dt(input_cb, scaler_cb, accumulate.config.cb_accumulator);
             } else {
-                reduce_init_short_with_dt<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_cb, scaler_cb);
             }
         }
@@ -191,14 +191,11 @@ ALWI void reduce(
         pack_reconfig_data_format(output_cb);
     }
 
-    // Auto-detect FP32 dest accumulation mode from compile-time define
-    constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
-
     // Initialization
     if constexpr (use_matmul) {
         mm_init_short(input_cb, scaler_cb);
     } else {
-        reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, output_cb);
+        reduce_init<reduce_type, reduce_dim>(input_cb, scaler_cb, output_cb);
     }
     cb_wait_front(scaler_cb, partial_scaler.last_tile_scaler_idx + 1);  // Wait for scaler tile(s)
 
@@ -236,7 +233,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, enforce_fp32_accumulation>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
                 input_cb, scaler_cb, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -245,16 +242,16 @@ ALWI void reduce(
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         cb_wait_front(input_cb, onetile);
-                        reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, 0, 0, dst_idx);
+                        reduce_tile<reduce_type, reduce_dim>(input_cb, scaler_cb, 0, 0, dst_idx);
                         cb_pop_front(input_cb, onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         uint32_t tile_idx = ht * stride + wt;
-                        reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                        reduce_tile<reduce_type, reduce_dim>(
                             input_cb, scaler_cb, tile_idx, 0, dst_idx);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
-                        reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                        reduce_tile<reduce_type, reduce_dim>(
                             input_cb, scaler_cb, tile_idx, 0, dst_idx);
                     }
                 }
@@ -317,7 +314,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, enforce_fp32_accumulation, use_matmul>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, use_matmul>(
                     input_cb, scaler_cb, accumulate);
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
@@ -330,7 +327,7 @@ ALWI void reduce(
                         if constexpr (use_matmul) {
                             matmul_tiles(input_cb, scaler_cb, 0, scaler_idx, dst_idx);
                         } else {
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, 0, scaler_idx, dst_idx);
                         }
                         cb_pop_front(input_cb, onetile);
@@ -339,14 +336,14 @@ ALWI void reduce(
                         if constexpr (use_matmul) {
                             matmul_tiles(input_cb, scaler_cb, wt, scaler_idx, dst_idx);
                         } else {
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, wt, scaler_idx, dst_idx);
                         }
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         if constexpr (use_matmul) {
                             matmul_tiles(input_cb, scaler_cb, wt + index_offset, scaler_idx, dst_idx);
                         } else {
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, wt + index_offset, scaler_idx, dst_idx);
                         }
                     }
@@ -427,7 +424,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, enforce_fp32_accumulation>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
                     input_cb, scaler_cb, accumulate);
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -439,17 +436,17 @@ ALWI void reduce(
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             cb_wait_front(input_cb, onetile);
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, 0, scaler_idx, dst_idx);
                             cb_pop_front(input_cb, onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
                             // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, tile_idx, scaler_idx, dst_idx);
                         } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
-                            reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, tile_idx, scaler_idx, dst_idx);
                         }
                         ++dst_idx;
@@ -495,7 +492,7 @@ ALWI void reduce(
 
     // Cleanup
     if constexpr (!use_matmul) {
-        reduce_uninit<enforce_fp32_accumulation>();
+        reduce_uninit<>();
     }
 }
 
