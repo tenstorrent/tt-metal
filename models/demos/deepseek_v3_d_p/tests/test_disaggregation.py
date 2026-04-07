@@ -286,7 +286,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
                 (current_position, max_position) = device_position_indices_high_strip[row]
 
     # 5. Lookup the location
-    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    for position in range(low_strip_start_idx, high_strip_end_idx, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         retrieved = lookup_table.lookup(layer, position, slot)
         logger.info(
             f"Rank: {rank} Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
