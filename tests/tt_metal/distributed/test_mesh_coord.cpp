@@ -1222,4 +1222,3 @@ TEST(MeshCoordinateRangeTest, VectorConstructionFromIterators) {
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed
-
