@@ -5,7 +5,9 @@ set(HW_JIT_API_HEADERS
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
+    inc/api/debug/checkpoint.h
     inc/api/debug/dprint.h
+    inc/api/debug/dump.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
     inc/api/debug/dprint_pages.h
