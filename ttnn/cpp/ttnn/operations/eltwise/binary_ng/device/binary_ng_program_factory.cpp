@@ -1112,6 +1112,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
+        !inputs_row_major &&
         CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
