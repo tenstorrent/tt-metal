@@ -76,7 +76,7 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
 }
 
 // MeshTensor lifetime holder:
-// Conceptually MeshTensor has two states:
+// This holder type has two states:
 // - Allocated: actively holding a MeshTensor.
 // - Deallocated: the MeshTensor was deallocated by any of the DeviceStorage instances.
 //
@@ -108,7 +108,11 @@ struct DeviceStorage::MeshTensorHolder {
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
+            // We should favor letting MeshTensor go out of scope instead of explicitly calling the underlying
+            // MeshBuffer. Calling deallocate is currently needed as we keep the MeshBuffer object alive in the
+            // DeallocatedTombStone state.
             allocated->mesh_tensor_.mesh_buffer().deallocate();
+            // MeshTensor goes out of scope at this assignment:
             state_ = DeallocatedTombStone{
                 allocated->mesh_tensor_.tensor_spec(),
                 allocated->mesh_tensor_.tensor_topology(),
