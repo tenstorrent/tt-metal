@@ -359,6 +359,13 @@ run_t3000_mistral_tests() {
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
 
+  # Text demos moved from T3000 demo pipeline (t3k_demo_tests run_t3000_mistral_tests).
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
+  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
+  MESH_DEVICE=T3K TT_CACHE_PATH=$tt_cache_mistral24b HF_MODEL=$mistral24b \
+    pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
+
 }
 
 run_t3000_mistral-small-3.1-24b-vision_unit_tests() {

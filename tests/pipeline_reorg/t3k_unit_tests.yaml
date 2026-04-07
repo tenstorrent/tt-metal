@@ -147,7 +147,7 @@
   cmd: run_t3000_mistral_tests
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 45
   owner_id: U0896VBAKFC # Pratikkumar Prajapati
   team: models
   model-name: mistral
@@ -157,7 +157,7 @@
   skus:
     wh_llmbox:
       timeout: 20
-  owner_id: U0896VBAKFC # Pratikkumar Prajapati
+  owner_id: U08GEGWHQJF # Adam Roberge
   team: models
   model-name: mistral-small-3.1-24b-vision
 
