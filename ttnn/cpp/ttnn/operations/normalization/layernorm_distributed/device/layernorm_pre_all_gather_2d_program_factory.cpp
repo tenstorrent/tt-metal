@@ -136,9 +136,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
         merge_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool float32_reduction = fp32_dest_acc_en && !operation_attributes.program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1 : 0};
+    std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 
     auto compute_kernels_id = tt::tt_metal::CreateKernel(
         program,
