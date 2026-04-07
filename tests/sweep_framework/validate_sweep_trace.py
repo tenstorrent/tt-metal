@@ -57,9 +57,6 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
                 continue
-            # memory_config.hash is a device pointer, always different
-            if k == "hash" and isinstance(v, (int, float)):
-                continue
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
