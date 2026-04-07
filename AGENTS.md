@@ -13,3 +13,9 @@
   - If `mode: pipeline_only`, do not manually freestyle op implementation before pipeline phases complete.
 - If pipeline setup is missing or a phase command fails, stop and report the failure; do not silently fall back to manual implementation.
 - Manual/freestyle implementation is allowed only if the user explicitly requests bypassing the pipeline.
+- For new ops that must "run on device", treat this as requiring op-specific kernels and program-factory wiring.
+  - Composite-only implementations that just chain existing ops are not sufficient unless explicitly approved by the user.
+- The TDD phase is only complete when all registered stages are completed/passed and no stage is left pending.
+- Build validation command for op creation runs: `./build_metal.sh --release`.
+- Test validation command for op creation runs: `scripts/tt-test.sh --dev <test_path>`.
+  - Do not use plain `pytest` for on-device validation when `tt-test.sh` can be used.
