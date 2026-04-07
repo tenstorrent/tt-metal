@@ -724,12 +724,12 @@ AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
 }
 
 void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size) {
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
     // Skip if this address is already marked (e.g., multiple devices mirroring the same address)
     if (allocated_buffers_[allocator_id.get()].contains(address)) {
         return;
     }
-    auto* alloc = get_allocator_from_id(allocator_id);
-    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
     auto stats = alloc->get_statistics();
     auto result = alloc->allocate_at_address(address, size);
     TT_FATAL(
@@ -749,12 +749,12 @@ void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id
 }
 
 void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address) {
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
     // Skip if this address is not marked (e.g., was deduplicated during mirroring)
     if (!allocated_buffers_[allocator_id.get()].contains(address)) {
         return;
     }
-    auto* alloc = get_allocator_from_id(allocator_id);
-    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);

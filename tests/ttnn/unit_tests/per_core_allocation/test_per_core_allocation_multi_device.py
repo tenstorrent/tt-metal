@@ -10,7 +10,6 @@ Tests the two-level allocator architecture:
 - Per-core and lockstep allocations never overlap on any device
 """
 
-import pytest
 import torch
 from loguru import logger
 

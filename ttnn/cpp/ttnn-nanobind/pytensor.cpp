@@ -1526,6 +1526,11 @@ void pytensor_module(nb::module_& mod) {
                 coord);
 
             const auto& host_storage = host_tensor.host_storage();
+            TT_FATAL(
+                host_storage.buffer().shape() == tt::tt_metal::distributed::MeshShape(1, 1),
+                "experimental_to_single_device expects a single-shard host tensor, got shape ({}, {})",
+                host_storage.buffer().shape()[0],
+                host_storage.buffer().shape()[1]);
             auto host_buffer = host_storage.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
             TT_FATAL(host_buffer.has_value(), "Host tensor has no data");
 
@@ -1545,7 +1550,6 @@ void pytensor_module(nb::module_& mod) {
         R"doc(
         Write a host tensor to a single device within a mesh (experimental per-core allocation).
         Allocates on the target device's own allocator and writes data.
-        Per-core allocations are automatically mirrored into the mesh-level allocator.
     )doc");
 
     mod.def(
