@@ -174,6 +174,20 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
+        disable_program_cache = False
+        if disable_program_cache:
+            logger.info("Disabling program cache on mesh_device")
+            self.mesh_device.disable_and_clear_program_cache()
+        else:
+            logger.info("program cache enabled on mesh_device")
+
+        logger.info(f"TT_METAL_TRACE_ALLOC_TRACKING: {os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING', 'undefined')}")
+        logger.info(
+            f"TT_METAL_TRACE_ALLOC_TRACEBACKS: {os.environ.get('TT_METAL_TRACE_ALLOC_TRACEBACKS', 'undefined')}"
+        )
+        logger.info(
+            f"TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: {os.environ.get('TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE', 'undefined')}"
+        )
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -301,6 +315,9 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
+
+        logger.info(f"before get_prefill_tokens_buffer max_seq_len: {self.hf_config.max_seq_len}")
+        tt_tokens = self._get_prefill_tokens_buffer(self.hf_config.max_seq_len)
 
     def _validate_and_initialize_sampling(
         self,
@@ -431,15 +448,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                 logger.warning(f"Failed to deallocate prefill token buffer for seq_len={seq_len}: {e}")
         self._prefill_tokens_tt_by_seq_len = {}
 
-    def _get_prefill_tokens_buffer(self, seq_len: int) -> ttnn.Tensor:
+    def _get_prefill_tokens_buffer(self, seq_len: int, use_max_seq_len: bool = True) -> ttnn.Tensor:
+        if use_max_seq_len:
+            logger.info(f"Using max_seq_len: {self.hf_config.max_seq_len}")
+            seq_len = self.hf_config.max_seq_len
         buffers = getattr(self, "_prefill_tokens_tt_by_seq_len", None)
         if buffers is None:
             buffers = {}
             self._prefill_tokens_tt_by_seq_len = buffers
         cached = buffers.get(seq_len)
         if cached is not None:
+            logger.info(f"Using cached prefill tokens buffer for seq_len={seq_len}")
             return cached
         zero_host = torch.zeros((1, 1, seq_len), dtype=torch.int32)
+        logger.info(f"Creating new prefill tokens buffer for seq_len={seq_len}")
         tt_buffer = ttnn.from_torch(
             zero_host,
             device=self.mesh_device,
@@ -449,6 +471,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         buffers[seq_len] = tt_buffer
+        logger.info(f"New prefill tokens buffer created for seq_len={seq_len}")
         return tt_buffer
 
     def _free_sampling_reset_prompt_buffers(self) -> None:
@@ -2367,6 +2390,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Reuse per-seq_len device buffers and only refresh host values per call.
         logger.info(f"before copy_host_to_device tokens shape: {tokens.shape} user_id: {user_id}")
         tt_tokens = self._get_prefill_tokens_buffer(seq_len)
+        tt_tokens_trimmed = tt_tokens
+        if tt_tokens.shape[-1] != seq_len:
+            tt_tokens_trimmed = ttnn.slice(tt_tokens, [0, 0, 0], [1, 1, seq_len])
+
         host_tokens_tt = ttnn.from_torch(
             tokens,
             device=None,
@@ -2374,7 +2401,8 @@ class DeepseekGenerator(WarmupForwardMixin):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        ttnn.copy_host_to_device_tensor(host_tokens_tt, tt_tokens)
+        logger.info(f"before copy_host_to_device host_tokens_tt shape: {host_tokens_tt.shape} user_id: {user_id}")
+        ttnn.copy_host_to_device_tensor(host_tokens_tt, tt_tokens_trimmed)
         logger.info(f"after copy_host_to_device tt_tokens shape: {tt_tokens.shape} user_id: {user_id}")
 
         rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
@@ -2393,7 +2421,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         last_hidden = None
         if self.enable_mtp:
             logits_tt, hidden_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
+                x=tt_tokens_trimmed,
                 user_id=user_id,
                 cfg=self.model_run_config_prefill,
                 rope_tensors=rope_tensors,
@@ -2403,7 +2431,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             logger.info(f"before forward_prefill user_id: {user_id}")
             logits_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
+                x=tt_tokens_trimmed,
                 user_id=user_id,
                 cfg=self.model_run_config_prefill,
                 rope_tensors=rope_tensors,
@@ -2524,6 +2552,8 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.deallocate(hidden_tt)
 
+        if tt_tokens_trimmed is not tt_tokens:
+            ttnn.deallocate(tt_tokens_trimmed)
         self._deallocate_rope_tensors(rope_tensors)
         if not sample_on_device:
             ttnn.deallocate(logits_tt)
