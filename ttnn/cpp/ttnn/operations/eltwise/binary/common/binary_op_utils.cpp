@@ -527,6 +527,10 @@ std::map<std::string, std::string> get_defines_fp32(
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst1, input_a_dtype));
             break;
+        case BinaryOpType::ATAN2:
+            new_defines.insert({"BINOP_INIT", fmt::format("atan2_binary_tile_init();")});
+            op_name = "atan2_binary_tile";
+            break;
         default:
             log_debug(tt::LogOp, "Undefined op type {}", op_type);
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);

@@ -58,6 +58,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
+        case BinaryOpType::ATAN2:
         case BinaryOpType::FMOD:
         case BinaryOpType::POWER: return true;
         default: return false;
