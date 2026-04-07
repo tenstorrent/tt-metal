@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -127,12 +127,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         # MLA norm
-        mla_reshard_memory_config = ttnn.create_sharded_memory_config(
-            x.shape,
-            **cfg["mla_reshard"],
-        )
         mla_norm_out = DistributedRMSNorm.forward_decode(
-            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=mla_reshard_memory_config
+            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=**cfg["mla_reshard"]
         )
 
         # MLA
@@ -164,8 +160,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        return MLA2D.prefill_model_config(hf_config, mesh_device)
+        return MLA2D.prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod
@@ -173,12 +170,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLA component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLA configurations.
         """
-        return MLA2D.decode_model_config(hf_config, mesh_device)
+        return MLA2D.decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod

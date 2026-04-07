@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -31,11 +31,12 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         mla_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
 
-        mla_config = cls.prefill_mla_config(hf_config, mesh_device)
+        mla_config = cls.prefill_mla_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
@@ -54,12 +55,26 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        mla_norm_config = DistributedRMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
+        mlp_norm_config = DistributedRMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
 
-        mla_config = cls.decode_mla_config(hf_config, mesh_device)
-        mlp_config = cls.decode_mlp_config(hf_config, mesh_device, fabric_config)
+        mla_config = cls.decode_mla_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        mlp_config = cls.decode_mlp_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            batch_size_per_row=batch_size_per_row,
+        )
 
         # Get the input_memory_config for the mlp_reshard
         # For MoE blocks, input_memory_config is nested inside shared_expert
@@ -71,7 +86,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
-            "mla_reshard": mla_config["mla1d"]["wq_kv_a_in0_memory_config"],
+            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
@@ -118,6 +133,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLA component of the decoder layer.
@@ -145,6 +161,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLA component of the decoder layer.
@@ -159,6 +176,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLP component of the decoder layer.

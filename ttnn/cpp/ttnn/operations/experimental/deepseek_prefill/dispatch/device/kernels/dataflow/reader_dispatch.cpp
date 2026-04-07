@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -138,7 +138,7 @@ void kernel_main() {
         noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
     }
     noc_async_read_barrier();
-    int32_t* offsets = (int32_t*)offsets_base_addr;
+    uint32_t* offsets = (uint32_t*)offsets_base_addr;
 
     // Read dispatch table into local scratch
     const auto dispatch_table_addr_gen =
@@ -211,6 +211,12 @@ void kernel_main() {
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
                 auto expert_index_within_chip = routed_expert % experts_per_chip;
                 auto& offset = offsets[routed_expert];
+                if (offset >= max_dispatched_tokens_per_expert) {
+                    // Token would overflow the dispatch buffer - skip to prevent
+                    // out-of-bounds DRAM writes that corrupt memory and cause hangs.
+                    offset++;
+                    continue;
+                }
                 auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
 
                 // Construct metadata
