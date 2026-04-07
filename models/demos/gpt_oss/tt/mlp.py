@@ -10,7 +10,13 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import ExpertConfig, Experts
-from .experts_throughput import ThroughputExpertConfig, ThroughputExperts, create_fused_moe_gpt_config
+from .experts_throughput import (
+    DeepSeekPrefillConfig,
+    ThroughputExpertConfig,
+    ThroughputExperts,
+    create_fused_moe_gpt_config,
+)
+from .experts_throughput.prefill_deepseek import _prepare_expert_weights_for_deepseek
 from .topk import TopKRouter
 
 
@@ -28,6 +34,8 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        use_deepseek_prefill=False,
+        prefill_seq_len=128,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -63,6 +71,25 @@ class MLP:
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
+            # Create DeepSeek prefill config if requested
+            prefill_deepseek_config = None
+            if use_deepseek_prefill:
+                expert_weights_for_prefill = _prepare_expert_weights_for_deepseek(
+                    experts_state_dict, throughput_expert_config
+                )
+                prefill_deepseek_config = DeepSeekPrefillConfig(
+                    mesh_device=mesh_device,
+                    config=throughput_expert_config,
+                    routed_expert_weights=expert_weights_for_prefill,
+                    dispatch_group_size=mesh_device.shape[0],
+                    num_dispatch_groups=mesh_device.shape[1],
+                    capacity_factor=2.0,
+                    seq_len_per_chip=prefill_seq_len,
+                    num_links=1,
+                    activations_dtype=ttnn.bfloat8_b,
+                    weights_dtype=ttnn.bfloat4_b,
+                )
+
             # Create TT experts module
             self.experts = ThroughputExperts(
                 mesh_device=mesh_device,
@@ -70,11 +97,12 @@ class MLP:
                 state_dict=experts_state_dict,
                 weight_dtype=ttnn.bfloat4_b,
                 dispatch_cluster_axis=0,
-                decode_memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for better decode throughput
+                decode_memory_config=ttnn.L1_MEMORY_CONFIG,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
+                prefill_deepseek_config=prefill_deepseek_config,
             )
         else:
             # Create expert config from HF config

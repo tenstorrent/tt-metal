@@ -50,6 +50,7 @@ from .config import (
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
 from .prefill import prefill_forward_chunked
+from .prefill_deepseek import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
@@ -61,6 +62,7 @@ __all__ = [
     "ThroughputExperts",
     "ThroughputExpertConfig",
     "ThroughputProgramConfig",
+    "DeepSeekPrefillConfig",
     "ThroughputExpertWeights",
     "AllToAllDispatchConfig",
     "AllToAllCombineConfig",
@@ -110,6 +112,7 @@ class ThroughputExperts:
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
         fused_config: Optional[FusedMoeGptConfig] = None,
+        prefill_deepseek_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
         Initialize throughput experts.
@@ -140,6 +143,7 @@ class ThroughputExperts:
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
         self.fused_config = fused_config
+        self.prefill_deepseek_config = prefill_deepseek_config
 
         # Memory configurations
         decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
@@ -301,6 +305,33 @@ class ThroughputExperts:
         Returns:
             Output [seq_per_device, 1, 1, hidden_size]
         """
+        if self.prefill_deepseek_config is not None:
+            pc = self.prefill_deepseek_config
+            seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) > 3 else hidden_states.shape[0]
+            if seq_per_device != pc.seq_len_per_chip:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "DeepSeek prefill seq_len mismatch: got %d, configured %d. Falling back to chunked-decode.",
+                    seq_per_device,
+                    pc.seq_len_per_chip,
+                )
+            else:
+                try:
+                    return forward_prefill_deepseek(
+                        hidden_states=hidden_states,
+                        topk_expert_indices=topk_expert_indices,
+                        topk_expert_weights=topk_expert_weights,
+                        config=self.config,
+                        prefill_config=self.prefill_deepseek_config,
+                        mesh_device=self.mesh_device,
+                        mesh_config=self.mesh_config,
+                        ccl_manager=self.ccl_manager,
+                    )
+                except Exception as e:
+                    import logging
+
+                    logging.getLogger(__name__).error("DeepSeek prefill failed: %s. Falling back to chunked-decode.", e)
         return prefill_forward_chunked(
             hidden_states=hidden_states,
             topk_expert_indices=topk_expert_indices,

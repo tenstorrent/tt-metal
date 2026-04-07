@@ -74,8 +74,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Number of dispatch groups (index 33)
+    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(33);
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -151,13 +154,15 @@ void kernel_main() {
     }
     noc_async_read_barrier();
 
-    // Expert token counts are laid out as [n_dispatch_groups, experts_per_dispatch_group]
-    // where each dispatch group is a mesh column (all rows in that column).
-    // Row-major linearization: linearized_mesh_coord = mesh_row * mesh_cols + mesh_col
-    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;  // position within dispatch group
-    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;  // which dispatch group
-    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * mesh_rows;
-    constexpr uint32_t offset = mesh_col * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    // Expert token counts: flat [num_routed_experts] array per device.
+    // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
+    // then map col -> dispatch_group_idx via modulo num_dispatch_groups.
+    // This handles DP replicas (ndg < mesh_cols) where multiple columns share the same group.
+    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;
+    constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
+    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
+    constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 

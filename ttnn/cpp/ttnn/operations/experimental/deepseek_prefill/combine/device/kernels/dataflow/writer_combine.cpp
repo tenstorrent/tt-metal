@@ -73,8 +73,8 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // TensorAccessorArgs for all 4 tensors (starting at index 34, after num_dispatch_groups at 33)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -98,7 +98,7 @@ void kernel_main() {
     uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling)
-    uint64_t all_core_barrier_noc_addrs[2];
+    uint64_t all_core_barrier_noc_addrs[4];
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
