@@ -77,8 +77,7 @@ int main() {
 
         uint32_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[0];
         invalidate_l1_cache();
-        // DRISC uses the same manual i$ flush as ERISC (no MMIO-based cache invalidation).
-        flush_erisc_icache();
+        manually_flush_icache();
 
         WAYPOINT("R");
         reinterpret_cast<uint32_t (*)()>(kernel_lma)();
