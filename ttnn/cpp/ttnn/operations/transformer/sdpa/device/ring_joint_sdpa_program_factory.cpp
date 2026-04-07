@@ -751,14 +751,15 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         uint32_t head_work_index = 0;
     };
 
-    struct CoreChainInfo {
+    // Unified chain info for both V chains (head-level) and K chains (batch-level)
+    struct ChainInfo {
         bool participates = false;
         bool is_injector = false;
         bool is_sink = false;
         uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
+        uint32_t head = 0;           // V chain only
+        uint32_t q_chunk_start = 0;  // V chain only
+        uint32_t q_chunk_count = 0;  // V chain only
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
@@ -767,20 +768,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         uint32_t mcast_sender_wait = 0;
     };
 
-    // K chain info for MLA mode (K shared across heads)
-    struct CoreKChainInfo {
-        bool participates = false;
-        bool is_injector = false;
-        bool is_sink = false;
-        uint32_t batch = 0;
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
-    };
-
     std::vector<CoreWork> core_work(num_cores);
-    std::vector<CoreChainInfo> core_chain_info(num_cores);
-    std::vector<CoreKChainInfo> core_k_chain_info(num_cores);
+    std::vector<ChainInfo> v_chain_info(num_cores);
+    std::vector<ChainInfo> k_chain_info(num_cores);
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
@@ -812,7 +802,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
             // Determine role tag from V chain info
             std::string role_tag;
-            const auto& chain = core_chain_info[i];
+            const auto& chain = v_chain_info[i];
             if (chain.participates) {
                 if (chain.is_injector) {
                     role_tag = "[INJ]";
@@ -884,54 +874,87 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         return "RCV";
     };
 
-    // Print V chains grouped by head
-    auto print_chains = [&](const char* pass_name) {
-        log_debug(tt::LogOp, "============================================================");
-        log_debug(tt::LogOp, "V Chains after: {}", pass_name);
-        log_debug(tt::LogOp, "============================================================");
-
+    // Unified chain printing helper
+    // chain_type: "V" or "K"
+    // group_key: "head" or "batch"
+    // group_to_cores: mapping from group_id to core indices
+    // chain_info: the chain info vector to read from
+    // get_work_count: (core_idx) -> work count for DRAM ratio calculation
+    auto print_chain_group = [&](const char* chain_type,
+                                 const char* group_key,
+                                 const std::map<uint32_t, std::vector<uint32_t>>& group_to_cores,
+                                 const std::vector<ChainInfo>& chain_info,
+                                 auto&& get_work_count) {
         uint32_t chain_count = 0;
-        uint32_t total_all_chunks = 0;
-        uint32_t total_max_chunks = 0;
+        uint32_t total_all_work = 0;
+        uint32_t total_max_work = 0;
 
-        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+        for (const auto& [group_id, core_indices] : group_to_cores) {
             std::vector<std::tuple<CoreCoord, uint32_t, std::string>> chain_cores;
-            uint32_t total_chunks = 0;
-            uint32_t max_chunks = 0;
+            uint32_t total_work = 0;
+            uint32_t max_work = 0;
 
-            for (const auto& seg : head_segments[head_id]) {
-                const auto& chain = core_chain_info[seg.core_idx];
-                if (!chain.participates || chain.batch != head_id / NH || chain.head != head_id % NH) {
+            for (uint32_t ci : core_indices) {
+                const auto& chain = chain_info[ci];
+                if (!chain.participates) {
                     continue;
                 }
-                chain_cores.push_back(
-                    {core_work[seg.core_idx].logical_core,
-                     chain.q_chunk_count,
-                     get_role(chain.is_injector, chain.is_sink)});
-                total_chunks += chain.q_chunk_count;
-                max_chunks = std::max(max_chunks, chain.q_chunk_count);
+                uint32_t work = get_work_count(ci);
+                chain_cores.push_back({core_work[ci].logical_core, work, get_role(chain.is_injector, chain.is_sink)});
+                total_work += work;
+                max_work = std::max(max_work, work);
             }
 
             if (chain_cores.size() < 2) {
                 continue;
             }
             chain_count++;
-            total_all_chunks += total_chunks;
-            total_max_chunks += max_chunks;
+            total_all_work += total_work;
+            total_max_work += max_work;
 
             log_debug(
                 tt::LogOp,
-                "V-Chain(head={}: {}, dram_ratio={})",
-                head_id,
+                "{}-Chain({}={}: {}, dram_ratio={})",
+                chain_type,
+                group_key,
+                group_id,
                 format_chain(chain_cores),
-                dram_ratio_str(max_chunks, total_chunks));
+                dram_ratio_str(max_work, total_work));
         }
 
-        log_debug(
-            tt::LogOp,
-            "Total V chains: {}, DRAM ratio: {}",
-            chain_count,
-            dram_ratio_str(total_max_chunks, total_all_chunks));
+        if (chain_count == 0) {
+            log_debug(tt::LogOp, "No {} chains", chain_type);
+        } else {
+            log_debug(
+                tt::LogOp,
+                "Total {} chains: {}, DRAM ratio: {}",
+                chain_type,
+                chain_count,
+                dram_ratio_str(total_max_work, total_all_work));
+        }
+
+        return chain_count;
+    };
+
+    // Print V chains grouped by head
+    auto print_chains = [&](const char* pass_name) {
+        log_debug(tt::LogOp, "============================================================");
+        log_debug(tt::LogOp, "V Chains after: {}", pass_name);
+        log_debug(tt::LogOp, "============================================================");
+
+        // Build head_id -> core_indices mapping from head_segments
+        std::map<uint32_t, std::vector<uint32_t>> head_to_cores;
+        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+            for (const auto& seg : head_segments[head_id]) {
+                const auto& chain = v_chain_info[seg.core_idx];
+                if (chain.participates && chain.batch == head_id / NH && chain.head == head_id % NH) {
+                    head_to_cores[head_id].push_back(seg.core_idx);
+                }
+            }
+        }
+
+        print_chain_group(
+            "V", "head", head_to_cores, v_chain_info, [&](uint32_t ci) { return v_chain_info[ci].q_chunk_count; });
     };
 
     // Print K chains (batch-level chains for MLA mode)
@@ -942,47 +965,98 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
         // Group K chain participants by batch
         std::map<uint32_t, std::vector<uint32_t>> batch_to_cores;
-        for (uint32_t i = 0; i < core_k_chain_info.size(); ++i) {
-            if (core_k_chain_info[i].participates) {
-                batch_to_cores[core_k_chain_info[i].batch].push_back(i);
+        for (uint32_t i = 0; i < k_chain_info.size(); ++i) {
+            if (k_chain_info[i].participates) {
+                batch_to_cores[k_chain_info[i].batch].push_back(i);
             }
         }
 
-        uint32_t k_chain_count = 0;
-        for (const auto& [batch, core_indices] : batch_to_cores) {
-            if (core_indices.size() < 2) {
-                continue;
-            }
-            k_chain_count++;
-
-            std::vector<std::tuple<CoreCoord, uint32_t, std::string>> chain_cores;
-            uint32_t total_k_reads = 0;
-            uint32_t max_k_reads = 0;
-
-            for (uint32_t ci : core_indices) {
-                const auto& kc = core_k_chain_info[ci];
-                uint32_t k_reads = core_work[ci].global_q_count;
-                chain_cores.push_back({core_work[ci].logical_core, k_reads, get_role(kc.is_injector, kc.is_sink)});
-                total_k_reads += k_reads;
-                max_k_reads = std::max(max_k_reads, k_reads);
-            }
-
-            log_debug(
-                tt::LogOp,
-                "K-Chain(batch={}: {}, dram_ratio={})",
-                batch,
-                format_chain(chain_cores),
-                dram_ratio_str(max_k_reads, total_k_reads));
-        }
-
-        if (k_chain_count == 0) {
-            log_debug(tt::LogOp, "No K chains (NHK >= NH or insufficient cores)");
-        } else {
-            log_debug(tt::LogOp, "Total K chains: {}", k_chain_count);
-        }
+        print_chain_group(
+            "K", "batch", batch_to_cores, k_chain_info, [&](uint32_t ci) { return core_work[ci].global_q_count; });
     };
 
     // ===== END CHAIN VISUALIZATION HELPERS =====
+
+    // Helper to build a linear chain from sorted core indices.
+    // Takes a configurer callback to set chain-specific fields after common fields are set.
+    // Returns true if a chain was built (injector found), false otherwise.
+    auto build_linear_chain = [&](const std::vector<uint32_t>& sorted_core_indices,
+                                  std::vector<ChainInfo>& chain_info,
+                                  auto&& get_next_q_chunks,  // (uint32_t next_core_idx) -> uint32_t
+                                  auto&& configure_chain     // (ChainInfo& chain, uint32_t core_idx) -> void
+                                  ) -> bool {
+        if (sorted_core_indices.size() < 2) {
+            return false;
+        }
+
+        // Find injector: first core with single head segment (not last, to ensure forward chain)
+        std::optional<std::size_t> injector_idx;
+        for (std::size_t idx = 0; idx + 1 < sorted_core_indices.size(); ++idx) {
+            if (core_work[sorted_core_indices[idx]].head_work.size() == 1) {
+                injector_idx = idx;
+                break;
+            }
+        }
+        if (!injector_idx.has_value()) {
+            return false;
+        }
+
+        // Build chain from injector forward
+        const std::size_t start = injector_idx.value();
+        for (std::size_t idx = start; idx < sorted_core_indices.size(); ++idx) {
+            uint32_t ci = sorted_core_indices[idx];
+            auto& chain = chain_info[ci];
+
+            chain.participates = true;
+            chain.is_injector = (idx == start);
+            chain.is_sink = (idx == sorted_core_indices.size() - 1);
+
+            if (idx > start) {
+                chain.prev_physical = core_work[sorted_core_indices[idx - 1]].physical_core;
+            }
+            if (idx + 1 < sorted_core_indices.size()) {
+                uint32_t next_ci = sorted_core_indices[idx + 1];
+                chain.next_physical = core_work[next_ci].physical_core;
+                chain.next_core_q_chunks = get_next_q_chunks(next_ci);
+            }
+
+            // Apply chain-specific configuration
+            configure_chain(chain, ci);
+        }
+
+        return true;
+    };
+
+    // Helper to push V chain runtime args (14 args total)
+    auto push_v_chain_args = [](std::vector<uint32_t>& args, const ChainInfo& chain) {
+        args.push_back(static_cast<uint32_t>(chain.participates));
+        args.push_back(static_cast<uint32_t>(chain.is_injector));
+        args.push_back(static_cast<uint32_t>(chain.is_sink));
+        args.push_back(chain.batch);
+        args.push_back(chain.head);
+        args.push_back(chain.q_chunk_start);
+        args.push_back(chain.q_chunk_count);
+        args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
+        args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
+        args.push_back(static_cast<uint32_t>(chain.next_physical.x));
+        args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        args.push_back(chain.next_core_q_chunks);
+        args.push_back(chain.mcast_num_dests);
+        args.push_back(chain.mcast_sender_wait);
+    };
+
+    // Helper to push K chain runtime args (9 args total)
+    auto push_k_chain_args = [](std::vector<uint32_t>& args, const ChainInfo& chain) {
+        args.push_back(static_cast<uint32_t>(chain.participates));
+        args.push_back(static_cast<uint32_t>(chain.is_injector));
+        args.push_back(static_cast<uint32_t>(chain.is_sink));
+        args.push_back(chain.batch);
+        args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
+        args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
+        args.push_back(static_cast<uint32_t>(chain.next_physical.x));
+        args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        args.push_back(chain.next_core_q_chunks);
+    };
 
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
@@ -1093,7 +1167,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             const uint32_t core_idx = seg.core_idx;
             const auto& work = core_work.at(core_idx);
             const auto& hw = work.head_work.at(seg.head_work_index);
-            auto& chain = core_chain_info.at(core_idx);
+            auto& chain = v_chain_info.at(core_idx);
 
             chain.participates = true;
             chain.batch = hw.batch;
@@ -1141,9 +1215,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
             std::vector<uint32_t> chain_core_indices;
             for (const auto& seg : segments) {
-                if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
-                    core_chain_info[seg.core_idx].batch == (head_id / NH) &&
-                    core_chain_info[seg.core_idx].head == (head_id % NH)) {
+                if (seg.core_idx < v_chain_info.size() && v_chain_info[seg.core_idx].participates &&
+                    v_chain_info[seg.core_idx].batch == (head_id / NH) &&
+                    v_chain_info[seg.core_idx].head == (head_id % NH)) {
                     chain_core_indices.push_back(seg.core_idx);
                 }
             }
@@ -1203,10 +1277,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             }
 
             // Eligibility condition 3: All chain cores must have the same q_chunk_count.
-            const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+            const uint32_t ref_q_chunks = v_chain_info[chain_core_indices[0]].q_chunk_count;
             bool uniform_q_mcast = true;
             for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
-                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
+                if (v_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
                     uniform_q_mcast = false;
                     break;
                 }
@@ -1231,7 +1305,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 // Find current injector
                 uint32_t injector_idx = cand.core_indices[0];
                 for (const auto& ci : cand.core_indices) {
-                    if (core_chain_info[ci].is_injector) {
+                    if (v_chain_info[ci].is_injector) {
                         injector_idx = ci;
                         break;
                     }
@@ -1245,10 +1319,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     uint32_t best_idx = cand.core_indices[target_offset];
                     if (best_idx != injector_idx) {
                         // Clear old injector, set new one
-                        core_chain_info[injector_idx].is_injector = false;
-                        core_chain_info[injector_idx].is_sink = true;
-                        core_chain_info[best_idx].is_injector = true;
-                        core_chain_info[best_idx].is_sink = false;
+                        v_chain_info[injector_idx].is_injector = false;
+                        v_chain_info[injector_idx].is_sink = true;
+                        v_chain_info[best_idx].is_injector = true;
+                        v_chain_info[best_idx].is_sink = false;
                         injector_idx = best_idx;
                     }
                 }
@@ -1268,7 +1342,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
                 const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
 
-                auto& injector_chain = core_chain_info[injector_idx];
+                auto& injector_chain = v_chain_info[injector_idx];
                 injector_chain.use_mcast = true;
                 injector_chain.prev_physical = rect_start;
                 injector_chain.next_physical = rect_end;
@@ -1280,7 +1354,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     if (ci == injector_idx) {
                         continue;
                     }
-                    auto& receiver_chain = core_chain_info[ci];
+                    auto& receiver_chain = v_chain_info[ci];
                     receiver_chain.use_mcast = true;
                     receiver_chain.prev_physical = core_work[injector_idx].physical_core;
                     receiver_chain.next_physical = CoreCoord{0, 0};
@@ -1328,10 +1402,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
 
         for (auto& [batch, core_indices] : batch_to_cores) {
-            if (core_indices.size() < 2) {
-                continue;
-            }
-
             // Sort by physical core order for linear chain
             std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
                 const auto& pa = core_work[a].physical_core;
@@ -1339,43 +1409,28 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
             });
 
-            // Find injector: first core with single head segment
-            std::optional<std::size_t> injector_idx;
-            for (std::size_t idx = 0; idx + 1 < core_indices.size(); ++idx) {
-                if (core_work[core_indices[idx]].head_work.size() == 1) {
-                    injector_idx = idx;
-                    break;
-                }
-            }
-            if (!injector_idx.has_value()) {
-                continue;
-            }
+            bool built = build_linear_chain(
+                core_indices,
+                k_chain_info,
+                [&](uint32_t next_ci) { return core_work[next_ci].global_q_count; },
+                [batch](ChainInfo& chain, uint32_t /*ci*/) { chain.batch = batch; });
 
-            // Build chain from injector forward
-            for (std::size_t idx = injector_idx.value(); idx < core_indices.size(); ++idx) {
-                uint32_t ci = core_indices[idx];
-                auto& kc = core_k_chain_info[ci];
-                kc.participates = true;
-                kc.batch = batch;
-                kc.is_injector = (idx == injector_idx.value());
-                kc.is_sink = (idx == core_indices.size() - 1);
-
-                if (idx > injector_idx.value()) {
-                    kc.prev_physical = core_work[core_indices[idx - 1]].physical_core;
+            if (built) {
+                // Find injector index for logging
+                std::size_t injector_pos = 0;
+                for (std::size_t idx = 0; idx < core_indices.size(); ++idx) {
+                    if (k_chain_info[core_indices[idx]].is_injector) {
+                        injector_pos = idx;
+                        break;
+                    }
                 }
-                if (idx + 1 < core_indices.size()) {
-                    uint32_t next_ci = core_indices[idx + 1];
-                    kc.next_physical = core_work[next_ci].physical_core;
-                    kc.next_core_q_chunks = core_work[next_ci].global_q_count;
-                }
+                log_debug(
+                    tt::LogOp,
+                    "K chain for batch {}: {} cores, injector at core {}",
+                    batch,
+                    core_indices.size() - injector_pos,
+                    core_indices[injector_pos]);
             }
-
-            log_debug(
-                tt::LogOp,
-                "K chain for batch {}: {} cores, injector at core {}",
-                batch,
-                core_indices.size() - injector_idx.value(),
-                core_indices[injector_idx.value()]);
         }
     }
 
@@ -1436,7 +1491,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_end,
         };
         // Append chain runtime args for store-and-forward
-        const auto& chain = core_chain_info.at(i);
+        const auto& chain = v_chain_info.at(i);
 
         log_debug(
             tt::LogOp,
@@ -1457,32 +1512,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             chain.q_chunk_count,
             chain.next_core_q_chunks);
 
-        reader_args.push_back(static_cast<uint32_t>(chain.participates));
-        reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
-        reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
-        reader_args.push_back(chain.batch);
-        reader_args.push_back(chain.head);
-        reader_args.push_back(chain.q_chunk_start);
-        reader_args.push_back(chain.q_chunk_count);
-        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
-        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
-        reader_args.push_back(chain.next_core_q_chunks);
-        reader_args.push_back(chain.mcast_num_dests);
-        reader_args.push_back(chain.mcast_sender_wait);
+        push_v_chain_args(reader_args, chain);
 
         // K chain runtime args (for MLA mode when K is shared across heads)
-        const auto& k_chain = core_k_chain_info.at(i);
-        reader_args.push_back(static_cast<uint32_t>(k_chain.participates));
-        reader_args.push_back(static_cast<uint32_t>(k_chain.is_injector));
-        reader_args.push_back(static_cast<uint32_t>(k_chain.is_sink));
-        reader_args.push_back(k_chain.batch);
-        reader_args.push_back(static_cast<uint32_t>(k_chain.prev_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(k_chain.prev_physical.y));
-        reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.y));
-        reader_args.push_back(k_chain.next_core_q_chunks);
+        const auto& k_chain = k_chain_info.at(i);
+        push_k_chain_args(reader_args, k_chain);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
