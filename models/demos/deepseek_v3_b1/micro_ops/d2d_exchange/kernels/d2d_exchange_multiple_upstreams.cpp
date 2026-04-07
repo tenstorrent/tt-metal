@@ -192,9 +192,7 @@ void kernel_main() {
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
-#if defined(COMPILE_FOR_BRISC)
     set_sender_socket_page_size(sender_socket, page_size);
-#endif
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
@@ -261,13 +259,8 @@ void kernel_main() {
         uint64_t dst_addr_base;
 #if defined(COMPILE_FOR_BRISC)
         noc_semaphore_set(page_ready_sem, 1);
-        dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
-#elif defined(COMPILE_FOR_NCRISC)
-        {
-            SocketSenderInterface sender_socket_cur = create_sender_socket_interface(sender_socket_config_addr);
-            dst_addr_base = downstream_data_addr + sender_socket_cur.write_ptr;
-        }
 #endif
+        dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
 
         terminated = process_upstream_sockets(
             receiver_sockets,
@@ -291,6 +284,9 @@ void kernel_main() {
         }
 #elif defined(COMPILE_FOR_NCRISC)
         noc_semaphore_set(ncrisc_done_sem, 1);
+        // Used to update NCRISC local copy of write_ptr
+        // Only brisc will update the actual socket config in l1 with the new write_ptr
+        socket_push_pages(sender_socket, 1);
 #endif
     }
 

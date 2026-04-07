@@ -39,7 +39,7 @@ def random_weights(config_only):
     """
     config = config_only
 
-    torch.manual_seed(42)
+    torch.manual_seed(42)  # this is likely tied to already cached reference results, so keep it consistent for now
 
     # Use proper initialization scale from config (typically 0.02)
     std = config.initializer_range
