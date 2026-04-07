@@ -41,6 +41,10 @@ or DEVICE_PRINT — no ``TT_METAL_CHECKPOINT`` needed:
 
 When neither is set, all dump functions and checkpoint macros are no-ops with zero overhead.
 
+.. note::
+   ``TT_METAL_CHECKPOINT`` is read at JIT compile time. If you toggle it, clear the kernel
+   cache to force recompilation: ``rm -rf ~/.cache/tt-metal-cache``
+
 Usage
 -----
 
@@ -299,7 +303,6 @@ state across the entire grid.
     CoreRange cores({0, 0}, {0, 1});  // 2 cores
     uint32_t sem_id = CreateSemaphore(program, cores, 0);
 
-    // Get coordinator's physical coordinates
     // Get coordinator's physical NOC coordinates (for the barrier, not for printing)
     CoreCoord barrier_coord = device->worker_core_from_logical_core({0, 0});
 

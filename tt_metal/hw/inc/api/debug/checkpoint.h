@@ -247,12 +247,19 @@ inline void debug_checkpoint_cross_core_barrier(
     uint32_t sem_addr = get_semaphore(sem_id);
     volatile tt_l1_ptr uint32_t* local_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint64_t coord_noc_addr = get_noc_addr(barrier_coord_x, barrier_coord_y, sem_addr);
+    bool is_coordinator = (my_x[noc_index] == barrier_coord_x && my_y[noc_index] == barrier_coord_y);
+
+    // Reset local semaphore on ALL cores before signaling arrival.
+    // This clears stale values from a previous barrier (the coordinator's copy
+    // accumulated to num_cores last time, and non-coordinator copies hold the
+    // polled value). Without this reset, a subsequent barrier would see the stale
+    // value and skip the wait.
+    noc_semaphore_set(local_sem, 0);
 
     // Signal arrival (atomic increment on coordinator)
     noc_semaphore_inc(coord_noc_addr, 1);
     noc_async_atomic_barrier();
 
-    bool is_coordinator = (my_x[noc_index] == barrier_coord_x && my_y[noc_index] == barrier_coord_y);
     if (is_coordinator) {
         // Coordinator: wait locally for all cores to arrive
         noc_semaphore_wait_min(local_sem, num_cores);
@@ -260,7 +267,6 @@ inline void debug_checkpoint_cross_core_barrier(
         // Non-coordinator: poll coordinator's semaphore via NOC read.
         // Use our local copy of the semaphore as the read destination
         // (it's unused on non-coordinator cores since all increments go to coordinator).
-        *local_sem = 0;
         while (*local_sem < num_cores) {
             noc_async_read(coord_noc_addr, sem_addr, sizeof(uint32_t));
             noc_async_read_barrier();
@@ -314,10 +320,8 @@ inline void debug_checkpoint_global(
     debug_checkpoint_barrier();
 
     // 6. Cross-core: all cores finish dumping before any proceeds
+    //    (the barrier resets all local semaphore copies internally)
 #if defined(KERNEL_BUILD) && defined(COMPILE_FOR_BRISC)
-    // Reset coordinator semaphore for reuse
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
-    noc_semaphore_set(sem_ptr, 0);
     debug_checkpoint_cross_core_barrier(sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 #endif
 
