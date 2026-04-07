@@ -12,10 +12,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 namespace {
 
-constexpr uint32_t TILE = 32;
-constexpr uint32_t GRID_X = 11;  // Blackhole max X
-constexpr uint32_t GRID_Y = 10;  // Blackhole max Y
-
 constexpr uint32_t ceil_div(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 // Largest divisor of n that is <= max_val
@@ -65,17 +61,22 @@ ttnn::Tensor routed_expert_ffn(
     const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& down_program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
+    // Device compute grid
+    const auto grid_size = x.device()->compute_with_storage_grid_size();
+    const uint32_t GRID_X = grid_size.x;
+    const uint32_t GRID_Y = grid_size.y;
+
     // Derive tile dimensions from tensor shapes
     // x: (M, K_gate) -> gate/up output: (M, N_gate) -> down output: (M, N_down)
     const auto& x_shape = x.padded_shape();
     const auto& gate_shape = gate_proj.padded_shape();
     const auto& down_shape = down_proj.padded_shape();
 
-    const uint32_t M_tiles = x_shape[-2] / TILE;          // rows of x
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;     // cols of x = rows of gate/up
-    const uint32_t N_gate_tiles = gate_shape[-1] / TILE;  // cols of gate/up (= hidden_dim)
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;  // rows of down (= hidden_dim)
-    const uint32_t N_down_tiles = down_shape[-1] / TILE;  // cols of down (= emb_dim)
+    const uint32_t M_tiles = x_shape[-2] / ttnn::TILE_SIZE;          // rows of x
+    const uint32_t K_gate_tiles = x_shape[-1] / ttnn::TILE_SIZE;     // cols of x = rows of gate/up
+    const uint32_t N_gate_tiles = gate_shape[-1] / ttnn::TILE_SIZE;  // cols of gate/up (= hidden_dim)
+    const uint32_t K_down_tiles = down_shape[-2] / ttnn::TILE_SIZE;  // rows of down (= hidden_dim)
+    const uint32_t N_down_tiles = down_shape[-1] / ttnn::TILE_SIZE;  // cols of down (= emb_dim)
 
     // --- Gate/Up matmul config ---
     // Grid Y: try per_core_M=4, cap rows at GRID_Y, then recompute per_core_M to cover all M
@@ -112,7 +113,8 @@ ttnn::Tensor routed_expert_ffn(
     };
 
     // Block-sharded L1 output: (per_core_M*32, per_core_N*32) elements per core
-    auto gate_up_shard = tt::tt_metal::ShardSpec(gate_up_grid, {gate_up_per_core_M * TILE, gate_up_per_core_N * TILE});
+    auto gate_up_shard = tt::tt_metal::ShardSpec(
+        gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
     auto effective_gate_config = gate_program_config.value_or(gate_up_config);
