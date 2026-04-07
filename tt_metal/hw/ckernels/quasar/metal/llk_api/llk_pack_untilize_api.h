@@ -4,7 +4,6 @@
 
 #pragma once
 #include "chlkc_list.h"
-#include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -27,7 +26,7 @@
  *
  * @tparam block_ct_dim  Width of a single block in tiles.
  * @tparam full_ct_dim   Total width of the tensor row in tiles (default = block_ct_dim).
- * @param pack_output    Output circular buffer identifier.
+ * @param pack_output    Output DFB identifier.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {

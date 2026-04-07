@@ -14,9 +14,8 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#include "llk_pack_untilize.h"
-#include "experimental/dataflow_buffer.h"
 #include "llk_pack_untilize_api.h"
+#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK
@@ -197,15 +196,6 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
-}
-
-/**
- * @brief Initializes packer dst register offset to 0 and resets dest bank id to 0.
- * Should be called at the beginning of a packing loop to ensure offsets are correct before packing out the first tile.
- */
-inline void llk_init_packer_dest_offset_registers() {
-    _reset_dest_register_offset_();
-    _set_packer_dest_registers_<p_pacr::PACK0, DST_SYNC_MODE>();
 }
 
 /*************************************************************************

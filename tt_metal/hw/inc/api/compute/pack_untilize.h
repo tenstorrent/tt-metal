@@ -5,10 +5,6 @@
 #pragma once
 
 #include "api/compute/common.h"
-
-#ifndef TILE_C_DIM
-#define TILE_C_DIM 32
-#endif
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -66,14 +62,12 @@ template <
     bool dense = false>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
-#endif
-    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-
-#ifndef ARCH_QUASAR
+#endif // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
@@ -81,7 +75,6 @@ ALWI void pack_untilize_dest_init(
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
 #else
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
-    PACK((llk_init_packer_dest_offset_registers()));
 #endif
 }
 
@@ -119,13 +112,13 @@ ALWI void pack_untilize_dest_init(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 #ifndef ARCH_QUASAR
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
 #else
-    UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);

@@ -39,7 +39,6 @@ ALWI void copy_tile_to_dst_init_short(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 #else
-    state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
 #endif
