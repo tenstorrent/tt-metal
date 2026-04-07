@@ -271,7 +271,6 @@ void read_ternary_blocks_sync(
         }
     }
 
-    // ternary_a reading (unchanged): row-by-row
     uint32_t m_id = 0;
     uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
@@ -280,6 +279,10 @@ void read_ternary_blocks_sync(
         uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
+                // Do not move tile data into CB if tile is outside ternary/output tensor.
+                // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+                // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+                // N_block_tiles=4)
                 break;
             }
             if (i < shape.logical_d0) {

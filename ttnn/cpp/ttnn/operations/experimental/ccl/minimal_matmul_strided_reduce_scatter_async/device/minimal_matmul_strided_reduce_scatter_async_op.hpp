@@ -19,7 +19,6 @@
 
 #include <optional>
 #include <vector>
-#include <algorithm>
 
 /* Fusion includes */
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
@@ -71,7 +70,6 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> chunk_width_in_mm_blocks,

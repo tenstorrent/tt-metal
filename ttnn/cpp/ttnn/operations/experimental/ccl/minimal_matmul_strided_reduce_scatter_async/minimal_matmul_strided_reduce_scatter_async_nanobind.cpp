@@ -56,11 +56,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`barrier_semaphore` (Optional[GlobalSemaphore]): Barrier semaphore for RS.
             * :attr:`using_persistent_buffers` (bool): Use persistent buffers. Defaults to False.
             * :attr:`sub_device_id` (Optional[SubDeviceId]): Sub-device ID.
-            * :attr:`chunks_per_sync` (Optional[int]): Chunks per sync for RS.
             * :attr:`num_workers_per_link` (Optional[int]): Workers per link for RS.
             * :attr:`num_buffers_per_channel` (Optional[int]): Buffers per channel for RS.
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.
-            * :attr:`optional_rs_intermediate_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS intermediate.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
             * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
             * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
@@ -87,11 +85,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("barrier_semaphore") = nb::none(),
         nb::arg("using_persistent_buffers") = false,
         nb::arg("sub_device_id") = nb::none(),
-        nb::arg("chunks_per_sync") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
         nb::arg("chunk_width_in_mm_blocks") = nb::none(),
-        nb::arg("optional_rs_intermediate_tensor") = nb::none(),
         nb::arg("optional_rs_output_tensor") = nb::none(),
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("addcmul_input_tensor1") = nb::none(),

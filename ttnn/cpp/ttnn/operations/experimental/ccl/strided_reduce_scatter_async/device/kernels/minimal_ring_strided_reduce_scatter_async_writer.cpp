@@ -243,9 +243,6 @@ void kernel_main() {
             NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
 
-        ASSERT(dim == 3);
-        ASSERT(slice_C == 1);
-
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
         // Use actual row count per core (not padded), so coordinates_to_slice_coordinates
