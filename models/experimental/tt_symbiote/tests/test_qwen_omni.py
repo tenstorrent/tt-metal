@@ -13,7 +13,10 @@ from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneratio
 from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
+    Qwen3OmniMoeCausalConvNet,
+    Qwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeConvNeXtBlock,
     Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
     Qwen3OmniMoeRMSNorm,
@@ -47,13 +50,15 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCo
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
-from models.experimental.tt_symbiote.modules.conv import TTNNQwenOmniConv2dNHWC
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
 from models.experimental.tt_symbiote.modules.activation import (
     TTNNGelu,
+    # TTNNQwen3OmniMoeCausalConvNet,
+    # TTNNQwen3OmniMoeCausalTransConvNet,
     # TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    # TTNNQwen3OmniMoeConvNeXtBlock,
     TTNNSilu,
-    TTNNSnakeBeta,
+    # TTNNSnakeBeta,
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
@@ -72,6 +77,11 @@ from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
 #    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
 #    TTNNQwen3OmniMoeVisionRotaryEmbedding,
 # )
+from models.experimental.tt_symbiote.modules.conv import (
+    # TTNNConv1d,
+    TTNNConv3d,
+    TTNNQwenOmniConv2dNHWC,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -96,8 +106,13 @@ _QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
     torch.nn.LayerNorm: TTNNQwenLayerNorm,
 }
 
+# Thinker vision downsampler uses ``nn.Conv2d`` (NCHW in HF); symbiote runs TTNN NHWC conv.
+# Use :class:`TTNNQwenOmniConv2dNHWC` so tile alignment is handled without altering ``TTNNConv2dNHWC``.
 _QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
+    torch.nn.Conv3d: TTNNConv3d,
+    # torch.nn.Conv1d: TTNNConv1d,
+    # torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
 
 
@@ -206,6 +221,9 @@ NN_TO_TTNN_THINKER = {
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
+    # Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
+    # Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
+    # Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
     # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
@@ -226,7 +244,6 @@ NN_TO_TTNN_TALKER = {
     # Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
-    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 
 # Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
@@ -817,7 +834,7 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
 
-    # assert isinstance(model.thinker.lm_head, TTNNQwenOmniThinkerLmHead)
+    assert isinstance(model.thinker.lm_head, TTNNQwenOmniThinkerLmHead)
 
     n_thinker = len(model.thinker.model.layers)
     for i, layer in enumerate(model.thinker.model.layers):
@@ -968,15 +985,18 @@ def test_qwen_omni(mesh_device):
     DispatchManager.clear_timings()
 
     # Inference: Generation of the output text and audio
-    # Use deterministic talker decoding to make waveform quality reproducible.
+    # Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision:
+    # tiny logit differences can make codec_eos_token_id the argmax on the first step,
+    # producing near-empty audio.  Default to sampling (HF default) for robust TTS output.
     talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
+    talker_do_sample = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_DO_SAMPLE", "1").lower() in ("1", "true", "yes")
     t_start = time.perf_counter()
     text_ids, audio = model.generate(
         **inputs,
         speaker="Ethan",
         thinker_return_dict_in_generate=True,
         use_audio_in_video=USE_AUDIO_IN_VIDEO,
-        talker_do_sample=False,
+        talker_do_sample=talker_do_sample,
         talker_max_new_tokens=talker_max_new_tokens,
     )
     ttnn.synchronize_device(mesh_device)
