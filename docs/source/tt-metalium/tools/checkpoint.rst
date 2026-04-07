@@ -4,6 +4,39 @@ Debug Checkpoints
 .. note::
    Tools are only fully supported on source builds.
 
+Quick Start
+-----------
+
+.. code-block:: bash
+
+    # 1. Enable checkpoints + a print backend
+    export TT_METAL_CHECKPOINT=1
+    export TT_METAL_DPRINT_CORES=0,0
+
+.. code-block:: c++
+
+    // 2. Add to EVERY kernel on the core (reader, writer, compute):
+    #include "api/debug/checkpoint.h"
+
+    void kernel_main() {
+        // ... work ...
+        DEBUG_CHECKPOINT(1);   // all RISCs sync → dump CB state → resume
+        // ... more work ...
+    }
+
+.. code-block:: bash
+
+    # 3. Run your program — CB state is printed at each checkpoint
+
+For standalone dumps (no barrier needed):
+
+.. code-block:: c++
+
+    #include "api/debug/dump.h"
+
+    debug_dump_cb(0, 8);           // CB0 metadata + 8 hex words
+    debug_dump_l1(0x100000, 16);   // 16 words at L1 address
+
 Overview
 --------
 
