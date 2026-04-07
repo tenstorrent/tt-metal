@@ -83,11 +83,9 @@ struct NoPreKBlock {
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
  *   block_w            Inner block dimension in tiles (K-dimension block size).
- *   in0_num_subblocks  Number of sub-blocks along the M dimension.
- *   in1_num_subblocks  Number of sub-blocks along the N dimension.
+ *                      Kept as runtime parameter for compatibility with kernels
+ *                      where the inner dimension may vary.
  *   num_k_blocks       Number of blocks along the K dimension.
- *   out_subblock_h     Output sub-block height in tiles.
- *   out_subblock_w     Output sub-block width in tiles.
  *   batch              Number of independent batch slices (default: 1).
  *   post_compute       PostComputeFn instance (default: {}).
  *   pre_k_block        PreKBlockFn instance (default: {}).
@@ -97,6 +95,10 @@ template <
     uint32_t in1_cb,
     uint32_t out_cb,
     uint32_t interm_cb,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
     bool transpose = false,
     bool packer_l1_acc = false,
     bool pack_last_to_interm = false,
@@ -104,11 +106,7 @@ template <
     typename PreKBlockFn = matmul_block_config::NoPreKBlock>
 ALWI void matmul_block(
     const uint32_t block_w,
-    const uint32_t in0_num_subblocks,
-    const uint32_t in1_num_subblocks,
     const uint32_t num_k_blocks,
-    const uint32_t out_subblock_h,
-    const uint32_t out_subblock_w,
     const uint32_t batch = 1,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {});

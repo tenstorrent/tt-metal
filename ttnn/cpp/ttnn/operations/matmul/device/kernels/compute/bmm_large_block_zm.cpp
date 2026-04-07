@@ -25,6 +25,13 @@ void kernel_main() {
 
     mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
 
-    compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_intermed0>(
-        in0_block_w, in0_num_subblocks, in1_num_subblocks, num_k_blocks, out_subblock_h, out_subblock_w, batch);
+    compute_kernel_lib::matmul_block<
+        cb_in0,
+        cb_in1,
+        cb_out,
+        cb_intermed0,
+        in0_num_subblocks,
+        in1_num_subblocks,
+        out_subblock_h,
+        out_subblock_w>(in0_block_w, num_k_blocks, batch);
 }

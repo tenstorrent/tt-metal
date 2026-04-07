@@ -505,19 +505,14 @@ void kernel_main() {
                         in1_cb_id,
                         matmul_out_cb,
                         mm_partials_cb_id,
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_h,
+                        out_subblock_w,
                         in1_transpose_tile,
                         l1_acc,
                         pack_to_interm,
-                        MatmulPostFn>(
-                        in0_block_w,
-                        in0_num_subblocks,
-                        in1_num_subblocks,
-                        num_blocks_inner_dim,
-                        out_subblock_h,
-                        out_subblock_w,
-                        1,
-                        MatmulPostFn{},
-                        PreFn{});
+                        MatmulPostFn>(in0_block_w, num_blocks_inner_dim, 1, MatmulPostFn{}, PreFn{});
                 }
 #endif  // SKIP_COMPUTE
 

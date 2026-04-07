@@ -22,6 +22,10 @@ template <
     uint32_t in1_cb,
     uint32_t out_cb,
     uint32_t interm_cb,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
     bool transpose,
     bool packer_l1_acc,
     bool pack_last_to_interm,
@@ -29,11 +33,7 @@ template <
     typename PreKBlockFn>
 ALWI void matmul_block(
     const uint32_t block_w,
-    const uint32_t in0_num_subblocks,
-    const uint32_t in1_num_subblocks,
     const uint32_t num_k_blocks,
-    const uint32_t out_subblock_h,
-    const uint32_t out_subblock_w,
     const uint32_t batch,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block) {
@@ -51,25 +51,28 @@ ALWI void matmul_block(
         !(hw_relu && pack_last_to_interm),
         "matmul_block: HwRelu cannot be used with pack_last_to_interm (relu should be applied after bias)");
 
-    // Derive dependent quantities from independent parameters
-    const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
+    // Compile-time derived quantities (subblock dims are now template params)
+    constexpr uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
+    constexpr uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
+    constexpr uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+
+    // Runtime derived quantities (depend on block_w)
     const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;
     const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * in0_num_subblocks;
-    const uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     const uint32_t in1_block_num_tiles = out_subblock_w * block_w * in1_num_subblocks;
-    const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
+
+    // Compile-time validation
+    static_assert(in0_num_subblocks > 0, "matmul_block: in0_num_subblocks must be > 0");
+    static_assert(in1_num_subblocks > 0, "matmul_block: in1_num_subblocks must be > 0");
+    static_assert(out_subblock_h > 0, "matmul_block: out_subblock_h must be > 0");
+    static_assert(out_subblock_w > 0, "matmul_block: out_subblock_w must be > 0");
+    static_assert(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT,
+        "matmul_block: out_subblock_h * out_subblock_w exceeds DST register capacity");
 
     // Runtime validation
     ASSERT(block_w > 0);
-    ASSERT(in0_num_subblocks > 0);
-    ASSERT(in1_num_subblocks > 0);
     ASSERT(num_k_blocks > 0);
-    ASSERT(out_subblock_h > 0);
-    ASSERT(out_subblock_w > 0);
     ASSERT(batch > 0);
-
-    // Verify output sub-block fits in DST registers
-    ASSERT(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
     // Verify CB capacity
     PACK(ASSERT(get_cb_num_pages(in0_cb) >= in0_block_num_tiles));

@@ -76,8 +76,18 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     // ── Path: matmul → pack to interm → bias add → pack to out ──
 
-    compute_kernel_lib::matmul_block<in0_cb, in1_cb, out_cb, interm_cb, xpose, l1_acc, /*pack_last_to_interm=*/true>(
-        in0_block_w, in0_num_subblocks, in1_num_subblocks, num_blocks, out_subblock_h, out_subblock_w, batch);
+    compute_kernel_lib::matmul_block<
+        in0_cb,
+        in1_cb,
+        out_cb,
+        interm_cb,
+        in0_num_subblocks,
+        in1_num_subblocks,
+        out_subblock_h,
+        out_subblock_w,
+        xpose,
+        l1_acc,
+        /*pack_last_to_interm=*/true>(in0_block_w, num_blocks, batch);
 
     // Caller-managed transition between matmul and bias phases
 #ifdef PACKER_L1_ACC
@@ -106,16 +116,19 @@ void kernel_main() {
     using ReluPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
 #endif
 
-    compute_kernel_lib::
-        matmul_block<in0_cb, in1_cb, out_cb, interm_cb, xpose, l1_acc, /*pack_last_to_interm=*/false, ReluPostFn>(
-            in0_block_w,
-            in0_num_subblocks,
-            in1_num_subblocks,
-            num_blocks,
-            out_subblock_h,
-            out_subblock_w,
-            batch,
-            ReluPostFn{});
+    compute_kernel_lib::matmul_block<
+        in0_cb,
+        in1_cb,
+        out_cb,
+        interm_cb,
+        in0_num_subblocks,
+        in1_num_subblocks,
+        out_subblock_h,
+        out_subblock_w,
+        xpose,
+        l1_acc,
+        /*pack_last_to_interm=*/false,
+        ReluPostFn>(in0_block_w, num_blocks, batch, ReluPostFn{});
 
 #endif  // FUSE_BIAS
 }
