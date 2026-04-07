@@ -149,3 +149,92 @@ TEST_F(CheckpointTest, BasicCheckpoint) {
         },
         this->devices_[0]);
 }
+
+// Test checkpoint in a loop (repeated IDs) and DEBUG_CHECKPOINT_EX with dump_dest=true
+static void run_checkpoint_loop_test(
+    DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    CoreCoord core = {0, 0};
+    size_t tile_size = tt::tile_size(ckpt_test::DATA_FORMAT);
+    size_t buffer_size = ckpt_test::NUM_TILES * tile_size;
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    Program program = CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+
+    distributed::DeviceLocalBufferConfig local_config = {.page_size = buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config = {.size = buffer_size};
+    auto input_dram = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    auto output_dram = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+
+    CircularBufferConfig input_cb_config =
+        CircularBufferConfig(buffer_size, {{ckpt_test::INPUT_CB_INDEX, ckpt_test::DATA_FORMAT}})
+            .set_page_size(ckpt_test::INPUT_CB_INDEX, tile_size);
+    CreateCircularBuffer(program_, core, input_cb_config);
+    CircularBufferConfig output_cb_config =
+        CircularBufferConfig(buffer_size, {{ckpt_test::OUTPUT_CB_INDEX, ckpt_test::DATA_FORMAT}})
+            .set_page_size(ckpt_test::OUTPUT_CB_INDEX, tile_size);
+    CreateCircularBuffer(program_, core, output_cb_config);
+
+    auto reader_kernel = CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_checkpoint_loop.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {ckpt_test::INPUT_CB_INDEX}});
+    auto writer_kernel = CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_checkpoint_loop.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {ckpt_test::OUTPUT_CB_INDEX}});
+    CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_checkpoint_loop.cpp",
+        core,
+        ComputeConfig{.compile_args = {static_cast<uint32_t>(ckpt_test::NUM_TILES)}});
+
+    SetRuntimeArgs(
+        program_,
+        reader_kernel,
+        core,
+        {static_cast<uint32_t>(input_dram->address()), 0u, static_cast<uint32_t>(ckpt_test::NUM_TILES)});
+    SetRuntimeArgs(
+        program_,
+        writer_kernel,
+        core,
+        {static_cast<uint32_t>(output_dram->address()), 0u, static_cast<uint32_t>(ckpt_test::NUM_TILES)});
+
+    auto input_data = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -1.0f, 1.0f, ckpt_test::NUM_TILES * 1024);
+    distributed::WriteShard(cq, input_dram, input_data, zero_coord);
+
+    fixture->RunProgram(mesh_device, workload);
+
+    std::vector<uint32_t> output_data;
+    distributed::ReadShard(cq, output_data, output_dram, zero_coord);
+    EXPECT_EQ(input_data, output_data);
+
+    // Verify: checkpoint 1 output (from loop), checkpoint 2 with dest regs
+    EXPECT_TRUE(FileContainsAllStrings(
+        fixture->dprint_file_name,
+        {
+            "=== CKPT 1 CBs ===",        // From the loop (appears 3 times)
+            "=== CKPT 2 dest regs ===",  // From DEBUG_CHECKPOINT_EX with dump_dest=true
+        }));
+}
+
+TEST_F(CheckpointTest, CheckpointLoopAndDumpDest) {
+    this->RunTestOnDevice(
+        [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            run_checkpoint_loop_test(fixture, mesh_device);
+        },
+        this->devices_[0]);
+}
