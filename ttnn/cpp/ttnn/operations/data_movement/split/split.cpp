@@ -90,7 +90,7 @@ std::vector<ttnn::Tensor> split(
     const auto& input_shape = input_tensor.logical_shape();
 
     // Normalize negative dimension to positive index
-    dim = input_shape.get_normalized_index(dim);
+    int64_t normalized_dim = input_shape.get_normalized_index(dim);
 
     // special case to use hardcoded kernel for two chunks sometimes
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -102,9 +102,8 @@ std::vector<ttnn::Tensor> split(
     // (prim::split(input, 2, last_dim)), so we must only enter this path when
     // the two requested chunk sizes are equal and together cover the full
     // dimension.  Unequal sizes (e.g. {300, 420}) would produce wrong results.
-    bool is_equal_two_way_split =
-        split_sizes.size() == detail::TWO_CHUNKS && split_sizes[0] == split_sizes[1] &&
-        static_cast<uint32_t>(split_sizes[0] + split_sizes[1]) == input_shape[dim];
+    bool is_equal_two_way_split = split_sizes.size() == detail::TWO_CHUNKS && split_sizes[0] == split_sizes[1] &&
+                                  static_cast<uint32_t>(split_sizes[0] + split_sizes[1]) == input_shape[normalized_dim];
     // The SplitDeviceOperation kernel also requires the number of output tiles
     // in the split dimension to be even (divisible by TWO_CHUNKS). When the
     // padded tile count is odd (e.g. 23 tiles from a 720-wide tensor padded to
@@ -115,10 +114,9 @@ std::vector<ttnn::Tensor> split(
     // in this case.
     uint32_t padded_tiles_in_split_dim = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     bool output_tiles_evenly_split = (padded_tiles_in_split_dim % detail::TWO_CHUNKS == 0);
-    if (is_equal_two_way_split && dim == input_shape.rank() - 1 &&
-        input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
-        input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2 &&
-        output_tiles_evenly_split) {
+    if (is_equal_two_way_split && normalized_dim == input_shape.rank() - 1 && input_tensor.layout() == Layout::TILE &&
+        input_shape.rank() >= 2 && fits_in_core_grid && input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
+        input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && output_tiles_evenly_split) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
             input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
@@ -138,7 +136,7 @@ std::vector<ttnn::Tensor> split(
         }
         return outputs;
     }
-    return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
+    return detail::split_with_slice_impl(input_tensor, split_sizes, normalized_dim, memory_config);
 }
 
 std::vector<ttnn::Tensor> split(
@@ -152,12 +150,12 @@ std::vector<ttnn::Tensor> split(
 
     // Normalize negative dimension to positive index
     const auto& input_shape = input_tensor.logical_shape();
-    dim = input_shape.get_normalized_index(dim);
+    int64_t normalized_dim = input_shape.get_normalized_index(dim);
 
-    const auto num_chunks = std::ceil(static_cast<float>(input_shape[dim]) / static_cast<float>(split_size));
+    const auto num_chunks = std::ceil(static_cast<float>(input_shape[normalized_dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
-    return ttnn::split(input_tensor, split_sizes, dim, memory_config);
+    return ttnn::split(input_tensor, split_sizes, normalized_dim, memory_config);
 }
 
 }  // namespace ttnn
