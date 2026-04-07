@@ -49,8 +49,8 @@ struct NoPreKBlock {
  *   packer_l1_acc=false: Software spill/reload via interm_cb (default)
  *   packer_l1_acc=true:  Hardware L1 accumulation via packer (avoids spill/reload)
  *
- * PREREQUISITE: Caller must call mm_block_init() before invoking this helper.
- * The helper does NOT call mm_block_init internally.
+ * PREREQUISITE: Caller must call compute_kernel_hw_startup() or mm_block_init()
+ * before invoking this helper. The helper calls mm_block_init_short() internally.
  *
  * Uses 4-phase DST management (tile_regs_acquire/commit/wait/release) for
  * correct MATH-PACK pipelining, matching the production kernel and all other

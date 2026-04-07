@@ -79,6 +79,9 @@ ALWI void matmul_block(
     // Compile-time pack target: last K-block goes to interm or out
     constexpr uint32_t pack_target = pack_last_to_interm ? interm_cb : out_cb;
 
+    // Initialize matmul operation (caller must have called compute_kernel_hw_startup or mm_block_init)
+    mm_block_init_short(in0_cb, in1_cb, transpose, out_subblock_w, out_subblock_h, block_w);
+
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_k_blocks > 1;
         bool enable_reload = false;
