@@ -235,14 +235,99 @@ inline void debug_checkpoint(uint8_t checkpoint_id) {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-core barrier: synchronize BRISC across all tensix cores via NOC
+// semaphore. Uses coordinator pattern from barrier_sync.hpp.
+// Only compiled for BRISC (dataflow RISCs have NOC access).
+// ---------------------------------------------------------------------------
+#if defined(KERNEL_BUILD) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_DM))
+#include "api/dataflow/dataflow_api.h"
+
+inline void debug_checkpoint_cross_core_barrier(
+    uint32_t sem_id, uint32_t coord_x, uint32_t coord_y, uint32_t num_cores, uint32_t scratch_addr) {
+    uint32_t sem_addr = get_semaphore(sem_id);
+    uint64_t coord_noc_addr = get_noc_addr(coord_x, coord_y, sem_addr);
+
+    // Signal arrival (atomic increment on coordinator)
+    noc_semaphore_inc(coord_noc_addr, 1);
+    noc_async_atomic_barrier();
+
+    // Poll coordinator's semaphore until all cores have arrived
+    volatile tt_l1_ptr uint32_t* poll = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
+    *poll = 0;
+    while (*poll < num_cores) {
+        noc_async_read(coord_noc_addr, scratch_addr, sizeof(uint32_t));
+        noc_async_read_barrier();
+    }
+}
+#endif  // KERNEL_BUILD && (COMPILE_FOR_BRISC || COMPILE_FOR_NCRISC || COMPILE_FOR_DM)
+
+// ---------------------------------------------------------------------------
+// Global checkpoint: barrier across all RISCs on all cores, then dump.
+//
+// Sequence:
+//   1. Intra-core barrier (all RISCs on this core arrive)
+//   2. Cross-core barrier (BRISC syncs across all cores via NOC semaphore)
+//   3. Intra-core barrier (BRISC releases other RISCs)
+//   4. CB dump (all RISCs print)
+//   5. Intra-core barrier (all RISCs finish dumping)
+//   6. Cross-core barrier (all cores finish before proceeding)
+//   7. Intra-core barrier (final release)
+//
+// All RISCs on all cores must call this with the same arguments.
+// Non-BRISC RISCs ignore the NOC args but participate in intra-core barriers.
+// ---------------------------------------------------------------------------
+template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
+inline void debug_checkpoint_global(
+    uint8_t checkpoint_id,
+    [[maybe_unused]] uint32_t sem_id,
+    [[maybe_unused]] uint32_t coord_x,
+    [[maybe_unused]] uint32_t coord_y,
+    [[maybe_unused]] uint32_t num_cores,
+    [[maybe_unused]] uint32_t scratch_addr) {
+    WAYPOINT("GCW");  // Global Checkpoint Wait
+
+    // 1. Intra-core: all RISCs on this core synchronize
+    debug_checkpoint_barrier();
+
+    // 2. Cross-core: BRISC on each core synchronizes across all cores
+#if defined(KERNEL_BUILD) && defined(COMPILE_FOR_BRISC)
+    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores, scratch_addr);
+#endif
+
+    // 3. Intra-core: BRISC releases other RISCs after cross-core sync
+    debug_checkpoint_barrier();
+
+    // 4. Dump CB state (all RISCs)
+    debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(checkpoint_id);
+
+    // 5. Intra-core: all RISCs finish dumping
+    debug_checkpoint_barrier();
+
+    // 6. Cross-core: all cores finish dumping before any proceeds
+#if defined(KERNEL_BUILD) && defined(COMPILE_FOR_BRISC)
+    // Reset coordinator semaphore for reuse
+    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+    noc_semaphore_set(sem_ptr, 0);
+    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores, scratch_addr);
+#endif
+
+    // 7. Final intra-core release
+    debug_checkpoint_barrier();
+    WAYPOINT("GCD");  // Global Checkpoint Done
+}
+
+// ---------------------------------------------------------------------------
 // User-facing macros
 // ---------------------------------------------------------------------------
 #define DEBUG_CHECKPOINT(id) debug_checkpoint<>(id)
 #define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest) debug_checkpoint<num_cbs, words_per_cb, dump_dest>(id)
+#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores, scratch_addr) \
+    debug_checkpoint_global<>(id, sem_id, coord_x, coord_y, num_cores, scratch_addr)
 
 #else  // !DEBUG_CHECKPOINT_ENABLED
 
 #define DEBUG_CHECKPOINT(id)
 #define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest)
+#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores, scratch_addr)
 
 #endif  // DEBUG_CHECKPOINT_ENABLED
