@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,7 @@
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -330,6 +331,26 @@ uint32_t finalize_cbs(
     return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
+void finalize_dfb_masks(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers) {
+    for (auto& kg : kernel_groups) {
+        auto kernel_config = kg->launch_msg.view().kernel_config();
+        uint64_t kg_dfb_mask = 0;
+        for (const auto& dfb : dataflow_buffers) {
+            for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
+                if (dfb->core_ranges.intersects(kg_range)) {
+                    kg_dfb_mask |= (uint64_t(1) << dfb->id);
+                    break;
+                }
+            }
+        }
+        if (kg_dfb_mask != 0) {
+            kernel_config.local_cb_mask() = kg_dfb_mask;
+        }
+    }
+}
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,
@@ -583,6 +604,8 @@ struct Transfer {
     // Keep track of what CBs contributed to this transfer, so we can update the data in
     // update_program_dispatch_commands.
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs;
+    // Keep track of what DFBs contributed to this transfer for the same purpose.
+    std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
     size_t end() const { return start + data.size(); }
@@ -1103,6 +1126,90 @@ private:
     std::vector<std::vector<uint32_t>> cb_config_payloads;
 };
 
+class DataflowBufferCommandGenerator {
+public:
+    void construct_commands(
+        IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
+        const auto& dataflow_buffers = program.dataflow_buffers();
+        if (dataflow_buffers.empty()) {
+            return;
+        }
+
+        const auto& hal = MetalContext::instance().hal();
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
+        const auto unique_coreranges = program.dataflow_buffers_unique_coreranges();
+        const uint32_t num_sub_cmds = unique_coreranges.size();
+
+        dfb_config_payloads = std::vector<std::vector<uint8_t>>(
+            num_sub_cmds, std::vector<uint8_t>(program.get_program_config(index).dfb_size, 0));
+
+        if (num_sub_cmds == 0) {
+            return;
+        }
+
+        uint32_t i = 0;
+        for (const CoreRange& core_range : unique_coreranges) {
+            const CoreCoord& virtual_start =
+                device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord& virtual_end =
+                device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+
+            auto& payload = dfb_config_payloads[i];
+            const auto& dfbs_on_corerange = program.dataflow_buffers_on_corerange(core_range);
+
+            // core_lookup_ is keyed by logical coordinates, so pass a logical representative.
+            // All cores in a DFB's range have the same alloc_addr, so any core works.
+            const CoreCoord logical_representative = core_range.start_coord;
+
+            size_t max_byte_end = 0;
+            size_t sequential_byte_offset = 0;
+            for (const auto& dfb : dfbs_on_corerange) {
+                size_t dfb_byte_offset = 0;
+                if (!hal.has_tile_counter_registers()) {
+                    // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
+                    dfb_byte_offset =
+                        static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                } else {
+                    // Quasar: DFBs are laid out sequentially in the dfb config region.
+                    dfb_byte_offset = sequential_byte_offset;
+                    sequential_byte_offset += dfb->serialized_size();
+                }
+
+                auto serialized = dfb->serialize_for_core(logical_representative);
+                TT_ASSERT(serialized.size() == dfb->serialized_size());
+                TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
+                std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
+                max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+            }
+
+            CoreRange virtual_range(virtual_start, virtual_end);
+            auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+            uint32_t start_addr = program.get_program_config(index).dfb_offset;
+
+            LOG_TRACE_LAZY(
+                tt::LogDispatch,
+                "Dataflow Buffers (MCAST): logical_range={}, virtual_range={}, "
+                "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
+                core_range,
+                virtual_range,
+                noc_xy_addr,
+                core_range.size(),
+                start_addr,
+                max_byte_end);
+
+            batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
+                {.start = start_addr,
+                 .data = tt::stl::Span<const uint8_t>(payload.data(), max_byte_end),
+                 .dfbs = dfbs_on_corerange}};
+            i++;
+        }
+    }
+
+private:
+    std::vector<std::vector<uint8_t>> dfb_config_payloads;
+};
+
 class ProgramBinaryCommandGenerator {
 public:
     // Generate kernel_bins_cmds (for multicast) and kernel_bins_unicast_cmds (for unicast) for the binaries in the
@@ -1541,6 +1648,10 @@ public:
                     program_command_sequence.cb_configs_payloads.push_back(
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
+                if (!transfer.dfbs.empty()) {
+                    program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
+                    program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
+                }
                 if (transfer.rta_data) {
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
@@ -1923,6 +2034,13 @@ void assemble_device_commands(
     CircularBufferCommandGenerator circular_buffer_command_generator;
     circular_buffer_command_generator.construct_commands(device, constants, program, batched_transfers);
 
+    TT_ASSERT(
+        program.dataflow_buffers().empty() || !MetalContext::instance().hal().has_tile_counter_registers(),
+        "Dataflow buffers on Quasar are not supported through Fast Dispatch yet. Use Slow Dispatch instead.");
+
+    DataflowBufferCommandGenerator dfb_command_generator;
+    dfb_command_generator.construct_commands(device, constants, program, batched_transfers);
+
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
 
@@ -2211,6 +2329,26 @@ void update_program_dispatch_commands(
         }
         i++;
     }
+
+    {
+        uint32_t dfb_i = 0;
+        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
+            if (!hal.has_tile_counter_registers()) {
+                // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
+                for (const auto& dfb : dfbs_on_core_range) {
+                    uint32_t base_index = dfb->id * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                    uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
+                    words[0] = dfb->uniform_alloc_addr();
+                    words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                    words[2] = dfb->config.num_entries;
+                    words[3] = dfb->config.entry_size;
+                }
+            }
+            dfb_i++;
+        }
+    }
+
     // Update RTAs.
     for (auto& rta_update : cached_program_command_sequence.rta_updates) {
         memcpy(rta_update.dst, rta_update.src, rta_update.size);
