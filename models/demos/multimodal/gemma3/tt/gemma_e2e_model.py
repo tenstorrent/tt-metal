@@ -58,6 +58,25 @@ class TtGemmaModel(Transformer):
             weight_cache_path=weight_cache_path,
         )
 
+    def encode_vision_embeddings_from_pixels(self, pixel_values):
+        """
+        Run only the vision tower and return host patch embeddings for image token positions.
+
+        Prefill should call this (or receive precomputed embeddings from the runner) separately
+        from text embedding, then pass ``vision_embeddings`` into ``prepare_inputs_prefill``.
+        """
+        vision_output = self.compute_vision_token(pixel_values)
+        comp_vision_output = ttnn.to_torch(
+            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )[: vision_output.shape[0], :]
+        return comp_vision_output.squeeze(0)
+
+    def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features: torch.Tensor):
+        special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(tokens_embd)
+        image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+        return tokens_embd.masked_scatter(special_image_mask, image_features)
+
     def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -77,17 +96,17 @@ class TtGemmaModel(Transformer):
         tokens_embd = self.embd(tokens)
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
-        if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
-            vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
-            comp_vision_output = ttnn.to_torch(
-                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            )[: vision_output.shape[0], :]
+        vision_embeddings = kwargs.pop("vision_embeddings", None)
+        pixel_values = kwargs.pop("pixel_values", None)
+        kwargs.pop("image_grid_thw", None)
 
-            image_features = comp_vision_output.squeeze(0)
-            special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(tokens_embd)
-            image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-            tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+        if vision_embeddings is not None:
+            tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
+        elif pixel_values is not None:
+            # Legacy: vision not split at the Generator; still supported for direct calls.
+            tokens_embd = self._fuse_vision_into_text_embeddings(
+                pt_tokens, tokens_embd, self.encode_vision_embeddings_from_pixels(pixel_values)
+            )
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,
