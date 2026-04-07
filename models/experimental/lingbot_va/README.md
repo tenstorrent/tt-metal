@@ -40,12 +40,13 @@ NOTE: Device perf (`test_perf_ttnn_lingbot_va.py`) profiles a single-pass `demo.
 
 ## PyTorch / CPU components
 
-Some steps stay on **CPU via PyTorch / Hugging Face** while the TT demo runs the backbone on Tenstorrent (similar to other `models/experimental/`** stacks that call out non-TTNN paths explicitly):
+Some steps stay on **CPU via PyTorch / Hugging Face** while the TT demo runs the backbone on Tenstorrent (similar to other `models/experimental/` stacks that call out non-TTNN paths explicitly). Initial **Gaussian noise** for video latents and action tokens is also generated on the host: there is no TTNN operation with the same role as **`torch.randn`**, so the demo uses a small helper that samples on CPU and uploads to the mesh (see table).
 
 
-| Component          | Runtime                      | Notes                                                                                                                                                                                                               |
-| ------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Text tokenizer** | **PyTorch (`transformers`)** | `**T5TokenizerFast`** from the checkpoint `tokenizer/` directory, loaded by `load_tokenizer()` in `reference/utils.py`. Runs on **CPU** to produce `input_ids` and attention masks for the **UMT5** encoder (TTNN). |
+| Component                         | Runtime                      | Notes                                                                                                                                                                                                                                                                 |
+| --------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Text tokenizer**                | **PyTorch (`transformers`)** | **`T5TokenizerFast`** from the checkpoint `tokenizer/` directory, loaded by `load_tokenizer()` in `reference/utils.py`. Runs on **CPU** to produce `input_ids` and attention masks for the **UMT5** encoder (TTNN).                                                    |
+| **Gaussian noise (`_randn_ttnn`)** | **PyTorch (`torch.randn`)**  | In **`tests/demo/demo.py`**, **`_randn_ttnn`** draws independent and identically distributed normal samples on the host with **`torch.randn`**, casts to the run dtype (e.g. bfloat16), and materializes them on device with **`ttnn.from_torch`**. TTNN does not offer a direct random-normal primitive equivalent to **`torch.randn`** for this path, so host sampling remains the supported approach. |
 
 
 ## Directory Structure
@@ -255,6 +256,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 5. VAE Decoder pcc is ~0.98.
 6. **`run_inference` and trace:** TTNN trace cannot be enabled for the full **`run_inference`** path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E **`use_trace=True`** single-transformer case.
 7. **Device memory (staged weights):** **Text encoder, VAE encoder, and transformer** device weights **cannot all be loaded at once** on typical configurations—doing so **risks OOM**, so the implementation loads or swaps modules rather than holding every submodule resident simultaneously.
+8. **Cold start vs steady state:** On a fresh run, much of the wall time is **loading weights** and **first-time kernel / graph compilation** for the text encoder, VAE, and transformer—not the denoise or decode loops alone. Expect long gaps before the first meaningful forward completes; per-step cost afterward is usually much smaller in comparison.
 
 ## Model Notes
 
