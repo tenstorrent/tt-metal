@@ -125,18 +125,31 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # nlp_create_qkv_heads_segformer doesn't support sharded output
-    # Force to DRAM interleaved if output is sharded
-    mem_cfg = op_kwargs.get("memory_config", output_memory_config)
+    # nlp_create_qkv_heads_segformer doesn't support sharded output.
+    # build_op_kwargs filters out memory_config, so we must retrieve it from
+    # the raw kwargs and add it back explicitly.
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    raw_mem_cfg = kwargs.get("memory_config", None)
+    if raw_mem_cfg is not None:
+        mem_cfg = parse_dict_value("memory_config", raw_mem_cfg)
+    else:
+        mem_cfg = output_memory_config
+
+    # Determine if the memory config is sharded and override to DRAM if so
+    is_sharded = False
     if isinstance(mem_cfg, dict):
         mem_layout = mem_cfg.get("memory_layout", "")
         if not mem_layout and "data" in mem_cfg:
             mem_layout = mem_cfg.get("data", {}).get("memory_layout", "")
-        if "SHARDED" in str(mem_layout):
-            op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        is_sharded = "SHARDED" in str(mem_layout)
     elif hasattr(mem_cfg, "is_sharded") and callable(mem_cfg.is_sharded):
-        if mem_cfg.is_sharded():
-            op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        is_sharded = mem_cfg.is_sharded()
+
+    if is_sharded or mem_cfg is None:
+        op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        op_kwargs["memory_config"] = mem_cfg
 
     start_time = start_measuring_time()
     q = ttnn.experimental.nlp_create_qkv_heads_segformer(input_tensor_a, **op_kwargs)[0]

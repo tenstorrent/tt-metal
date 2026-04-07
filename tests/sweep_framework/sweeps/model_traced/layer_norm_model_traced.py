@@ -83,6 +83,12 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # layer_norm needs memory_config paired with program_config for the kernel
+    # to compute correct block_w.  build_op_kwargs filters memory_config by
+    # default, so we add it back when a program_config is present.
+    if "program_config" in op_kwargs and output_memory_config is not None:
+        op_kwargs["memory_config"] = output_memory_config
+
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
