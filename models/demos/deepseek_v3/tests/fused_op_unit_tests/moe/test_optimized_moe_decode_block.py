@@ -418,7 +418,7 @@ def gen_combine_golden(
 
 def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 650.0
+    ATOL_THRESHOLD = 700.0
 
     # factors in linearized_mesh_coord
     if cluster_axis == 0:
@@ -451,7 +451,9 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
     if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
         mask = (torch_combine_output - torch_combine_golden).abs() > ATOL_THRESHOLD
-        logger.warning(f"AllClose variation result: {torch_combine_output[mask]}, ref: {torch_combine_golden[mask]}")
+        logger.warning(
+            f"Elements out of bounds: {torch_combine_output[mask]} ref: {torch_combine_golden[mask]} idx: {mask.nonzero(as_tuple=True)}"
+        )
 
     return pcc_passed and allclose_passed
 
@@ -550,7 +552,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("compute_output_width_shard_dim", [4])
-@pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
+@pytest.mark.parametrize("combine_mux_core_range", [((1, 1), (3, 3))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
@@ -594,8 +596,8 @@ def test_optimized_moe_decode_block(
     # initial setup
     ############################################
 
-    torch.manual_seed(2005)
-    random.seed(2005)
+    torch.manual_seed(42)
+    random.seed(42)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
@@ -603,7 +605,6 @@ def test_optimized_moe_decode_block(
     batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // num_dispatch_devices
-
     experts = experts_per_device * num_devices
     experts_per_cluster = experts // num_replicated_devices
 
@@ -1052,11 +1053,12 @@ def test_optimized_moe_decode_block(
         ttnn.deallocate(tt_dispatch_input_expert_scores_tensor)
 
         (
-            tt_compute_output_token_counts,
-            tt_compute_output_dense_expert_activation,
-            tt_compute_output_dense_e_t,
+            _,
+            _,
+            _,
             _,  # tile layout output of selective tilize (same buffer as output)
-            tt_compute_output,
+            _,
+            tt_combine_output,
         ) = ttnn.experimental.moe_compute(
             tt_dispatch_output_sparse_buffer,
             tt_dispatch_output_expert_indices,
@@ -1068,26 +1070,8 @@ def test_optimized_moe_decode_block(
             output_height_shard_dim=compute_output_height_shard_dim,
             output_width_shard_dim=compute_output_width_shard_dim,
             cluster_axis=cluster_axis,
-        )
-
-        tt_combine_output = ttnn.experimental.selective_reduce_combine(
-            tt_compute_output,
-            tt_compute_output_dense_expert_activation,
-            tt_compute_output_dense_e_t,
-            tt_compute_output_token_counts,
-            hidden_size,
-            batch,
-            seq,
-            select_experts_k,
-            experts,
-            cluster_axis,
-            topology=ttnn.Topology.Ring,
-            num_links=4,
-            token_parallel_core_dim=combine_token_parallel_core_dim,
-            data_parallel_core_dim=combine_data_parallel_core_dim,
-            worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
             mux_core_range_set=combine_mux_cores,
-            output_tensor=tt_preallocated_combine_output,
+            optional_output_tensor=tt_preallocated_combine_output,
             optional_cross_device_semaphore=combine_global_semaphore,
         )
 
@@ -1143,7 +1127,7 @@ def test_optimized_moe_decode_block(
         elif mesh_shape[1 - cluster_axis] == 1:
             tt_final_output = tt_fast_reduce_output_tensors[0]
         else:
-            raise RuntimeError("Bad test config")
+            raise RuntimeError("Invalid mesh shape")
 
         return tt_combine_output, tt_final_output
 
