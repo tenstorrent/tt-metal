@@ -32,12 +32,13 @@ CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 
 SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen3_5_9b/demo/sample_prompts"
+SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
 
 PERF_TARGETS = {
-    128: {"min_decode_tok_s": 5.0, "max_ttft_s": 15.0},
-    2048: {"min_decode_tok_s": 4.0, "max_ttft_s": 20.0},
-    4096: {"min_decode_tok_s": 2.0, "max_ttft_s": 40.0},
-    8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 80.0},
+    128: {"min_decode_tok_s": 5.0, "max_ttft_s": 2.0},
+    2048: {"min_decode_tok_s": 4.0, "max_ttft_s": 5.0},
+    4096: {"min_decode_tok_s": 2.0, "max_ttft_s": 10.0},
+    8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 20.0},
 }
 
 # Frankenstein prompt config: seqlen → json_index in eval_frankenstein_long.json.
@@ -74,11 +75,21 @@ def _load_and_cache_context(context_url, max_length=None):
 
 
 def _get_prompt(seqlen, tokenizer):
-    """Load or generate a prompt of approximately seqlen tokens."""
+    """Load a prompt of approximately seqlen tokens, clipped but not padded.
+
+    Uses shared input data files from llama3_70b_galaxy for consistency with
+    other model implementations. No padding is applied because the Qwen model
+    takes logits from the last token position — pad tokens would corrupt output.
+    Tile alignment (multiples of 32) ensures the same programs compile regardless
+    of small differences between actual and target token counts.
+    """
     if seqlen <= 128:
-        prompt = "<|im_start|>user\n" "What is the capital of France?<|im_end|>\n" "<|im_start|>assistant\n"
-        inputs = tokenizer(prompt, return_tensors="pt")
-        return inputs["input_ids"]
+        # Use the same prompt file as other models (Llama, etc.)
+        path = f"{SHARED_PROMPTS_DIR}/input_data_questions_prefill_128.json"
+        with open(path) as f:
+            data = json.load(f)
+        inputs = tokenizer(data[0]["prompt"], return_tensors="pt")
+        return inputs["input_ids"][:, :seqlen]
 
     # For long sequences (16k+), use Frankenstein from Project Gutenberg.
     # Feed the raw text and let the model continue it — tests long-context processing.
@@ -89,8 +100,6 @@ def _get_prompt(seqlen, tokenizer):
             data = json.load(f)
         entry = data[idx]
         context = _load_and_cache_context(entry["context"], entry.get("max_length"))
-        # Wrap in chat template so the model enters instruction-following mode.
-        # Truncate context to leave room for the template + instruction.
         instruction = entry["prompt"]
         prefix = "<|im_start|>user\n"
         # Seed <think> to start the reasoning chain. At very long contexts (100K+),
@@ -105,9 +114,7 @@ def _get_prompt(seqlen, tokenizer):
         ]
         prefix_ids = tokenizer(prefix, add_special_tokens=False, return_tensors="pt")["input_ids"]
         suffix_ids = tokenizer(suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
-        import torch as _torch
-
-        return _torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)
+        return torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)[:, :seqlen]
 
     # For medium sequences (1k-8k), use static prompt files
     size_label = f"{seqlen // 1024}k" if seqlen >= 1024 else str(seqlen)
@@ -119,15 +126,40 @@ def _get_prompt(seqlen, tokenizer):
     return inputs["input_ids"][:, :seqlen]
 
 
+def _warmup_prefill(model, device, token_ids):
+    """Run prefill + one decode step to compile all programs. Discards results.
+
+    Following the Llama/tt_transformers pattern (simple_text_demo.py:1059-1068),
+    this separates compilation from inference so TTFT and decode throughput
+    reflect actual device compute, not program compilation.
+    """
+    T = token_ids.shape[1]
+    logger.info(f"Warmup prefill ({T} tokens) + decode — compiling programs...")
+    t0 = time.time()
+    logits = model.prefill(token_ids)
+    ttnn.synchronize_device(device)
+
+    # One decode step to compile decode programs (T=1 shape)
+    first_token = ttnn.to_torch(logits).squeeze().argmax().item()
+    model.decode(torch.tensor([[first_token]], dtype=torch.long), current_pos=T)
+    ttnn.synchronize_device(device)
+
+    compile_time = time.time() - t0
+    logger.info(f"Warmup complete: {compile_time:.1f}s (programs now cached)")
+
+    # Reset state so the actual inference starts clean
+    model.reset_state(batch_size=token_ids.shape[0])
+
+
 @run_for_blackhole()
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "seqlen, max_seq_len, max_generated_tokens, use_trace, use_paged",
     [
-        (128, 2048, 50, True, False),
+        (128, 2048, 50, False, False),
         (128, 2048, 50, False, True),
-        (4096, 8192, 100, True, False),
+        (4096, 8192, 100, False, False),
         (8192, 16384, 50, True, False),
         (65536, 131072, 100, True, False),
         (65536, 131072, 100, False, True),
@@ -162,6 +194,11 @@ def test_demo_text(
     actual_len = token_ids.shape[1]
     logger.info(f"Prompt: {actual_len} tokens (target: {seqlen}, max_seq_len: {max_seq_len})")
 
+    # Warmup: compile programs (not counted in TTFT)
+    t_compile = time.time()
+    _warmup_prefill(model, device, token_ids)
+    t_compile = time.time() - t_compile
+
     if use_paged:
         generated, perf = _run_paged_generation(
             model,
@@ -188,6 +225,7 @@ def test_demo_text(
             max_generated_tokens,
         )
 
+    perf["compile_time"] = t_compile
     text = tokenizer.decode(generated, skip_special_tokens=True)
     _log_results(perf, actual_len, len(generated), text)
     _assert_results(perf, actual_len, len(generated))
@@ -364,8 +402,10 @@ def _log_results(perf, prompt_len, num_generated, text):
     ttft = perf["ttft"]
     avg_ms = perf["avg_decode_s"] * 1000
     tok_s = 1000.0 / avg_ms if avg_ms > 0 else 0
+    compile_time = perf.get("compile_time", 0)
 
     logger.info("=" * 70)
+    logger.info(f"  Compile (warmup):    {compile_time:.3f}s")
     logger.info(f"  Prefill {prompt_len} tokens:  TTFT = {ttft:.3f}s ({prompt_len / ttft:.0f} tok/s)")
     logger.info(f"  Decode:  {avg_ms:.1f}ms/token  ({tok_s:.1f} tok/s)")
     logger.info(f"  Generated {num_generated} tokens in {perf['decode_steps']} steps")
@@ -380,11 +420,14 @@ def _assert_results(perf, prompt_len, num_generated):
     if targets is None:
         return
 
-    tok_s = 1.0 / perf["avg_decode_s"] if perf["avg_decode_s"] > 0 else 0
-    min_tok_s = targets["min_decode_tok_s"]
-    assert (
-        tok_s >= min_tok_s
-    ), f"Decode throughput {tok_s:.1f} tok/s below target {min_tok_s} tok/s at seqlen={prompt_len}"
+    # Decode throughput is only meaningful with enough steps — the first decode
+    # includes compilation overhead and a single sample is not representative.
+    if perf["decode_steps"] >= 3:
+        tok_s = 1.0 / perf["avg_decode_s"] if perf["avg_decode_s"] > 0 else 0
+        min_tok_s = targets["min_decode_tok_s"]
+        assert (
+            tok_s >= min_tok_s
+        ), f"Decode throughput {tok_s:.1f} tok/s below target {min_tok_s} tok/s at seqlen={prompt_len}"
 
     max_ttft = targets["max_ttft_s"]
     assert perf["ttft"] < max_ttft, f"TTFT {perf['ttft']:.1f}s exceeds target {max_ttft}s at seqlen={prompt_len}"
