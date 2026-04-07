@@ -27,13 +27,17 @@ from models.demos.deepseek_v3_b1.tensor_cache.cache import (
     TensorCache,
 )
 from models.demos.deepseek_v3_b1.tensor_cache.fingerprint import canonical, compute_artifact_id
+from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
 from models.demos.deepseek_v3_b1.tensor_cache.types import (
     CacheContext,
     Fingerprint,
+    FusionGroupSpec,
+    RegionSpec,
     ReplicateMeshMapper,
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
+    SubTensorSpec,
     TensorTarget,
 )
 
@@ -171,6 +175,32 @@ class TestFingerprint:
 
 
 class TestCasLayout:
+    def test_store_uses_local_dump_mode(self, tmp_path, monkeypatch):
+        """_store should call ttnn.dump_tensor with LOCAL mode."""
+        cache = TensorCache(tmp_path)
+        fingerprint = _make_fingerprint()
+        artifact_id = compute_artifact_id(fingerprint)
+        tensor_host = ttnn.from_torch(
+            torch.randn(4, 4, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile((32, 32)),
+        )
+
+        called = {"mode": None}
+
+        def _dump_tensor_spy(file_name, tensor, *, mode):
+            called["mode"] = mode
+            # Write placeholder bytes so _store can hash/stat the file.
+            with open(file_name, "wb") as f:
+                f.write(b"tensorbin-placeholder")
+
+        monkeypatch.setattr(ttnn, "dump_tensor", _dump_tensor_spy)
+        cache._store(artifact_id, fingerprint, tensor_host)
+        assert called["mode"] == ttnn.DumpTensorMode.LOCAL
+
     def test_store_creates_expected_files(self, tmp_path):
         """After _store, the object dir contains data.tensorbin, manifest.json, metadata.json."""
         cache = TensorCache(tmp_path)
@@ -545,3 +575,173 @@ class TestCacheContext:
         fingerprint1 = ctx.fingerprint(source=source, target=target)
         fingerprint2 = ctx.fingerprint(source=source, target=target)
         assert compute_artifact_id(fingerprint1) == compute_artifact_id(fingerprint2)
+
+
+def _sample_fusion_group_spec(**overrides) -> FusionGroupSpec:
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    region = RegionSpec(
+        core_range_set=crs,
+        subtensors=(SubTensorSpec("w", (64, 32), ttnn.bfloat16, (32, 32)),),
+    )
+    defaults = dict(
+        name="test_fusion",
+        regions=(region,),
+        sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        mesh_mapper_config=ReplicateMeshMapper(),
+    )
+    defaults.update(overrides)
+    return FusionGroupSpec(**defaults)
+
+
+UNITTEST_TOY_FUSION_SPEC = FusionGroupSpec(
+    name="_unittest_toy",
+    regions=(),
+    mesh_mapper_config=ReplicateMeshMapper(),
+)
+
+
+class TestFusionGroupFingerprint:
+    def test_fusion_canonical_is_dict(self):
+        fp = _make_fingerprint(target=_sample_fusion_group_spec())
+        c = canonical(fp)
+        assert c["target"]["kind"] == "fusion_group"
+        assert c["target"]["name"] == "test_fusion"
+        assert c["target"]["sharding_strategy"] == "WIDTH_SHARDED"
+
+    def test_fusion_determinism(self):
+        fp1 = _make_fingerprint(target=_sample_fusion_group_spec())
+        fp2 = _make_fingerprint(target=_sample_fusion_group_spec())
+        assert compute_artifact_id(fp1) == compute_artifact_id(fp2)
+
+    def test_fusion_sensitivity_name(self):
+        fp1 = _make_fingerprint(target=_sample_fusion_group_spec(name="a"))
+        fp2 = _make_fingerprint(target=_sample_fusion_group_spec(name="b"))
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
+
+    def test_fusion_sensitivity_sharding_strategy(self):
+        fp1 = _make_fingerprint(
+            target=_sample_fusion_group_spec(sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED)
+        )
+        fp2 = _make_fingerprint(
+            target=_sample_fusion_group_spec(sharding_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+        )
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
+
+    def test_fusion_sensitivity_mesh_mapper(self):
+        fp1 = _make_fingerprint(target=_sample_fusion_group_spec(mesh_mapper_config=ReplicateMeshMapper()))
+        fp2 = _make_fingerprint(target=_sample_fusion_group_spec(mesh_mapper_config=ShardMeshMapper(dim=1)))
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
+
+
+class TestCreateOverlappedTensorUnittestToy:
+    def test_toy_produces_views(self, device):
+        a = torch.randn(32, 32, dtype=torch.bfloat16)
+        b = torch.randn(32, 32, dtype=torch.bfloat16)
+        fused, views = create_overlapped_tensor(
+            UNITTEST_TOY_FUSION_SPEC,
+            {"a": a, "b": b},
+            device,
+            move_to_device=True,
+        )
+        assert "a" in views and "b" in views
+        assert views["a"].byte_offset == 0
+        assert views["b"].byte_offset == views["a"].total_size
+        assert views["a"].fused_tensor is fused
+        ttnn.deallocate(fused, force=True)
+
+
+class TestGetOrCreateFused:
+    @pytest.fixture()
+    def cache_dir(self, tmp_path):
+        return tmp_path / "tensor_cache_fused"
+
+    def test_miss_then_hit(self, cache_dir, device):
+        from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache
+
+        cache = TensorCache(cache_dir)
+        preprocess_calls = [0]
+
+        def preprocess(tensors):
+            preprocess_calls[0] += 1
+            return {"a": tensors["a"].clone(), "b": tensors["b"].clone()}
+
+        ctx = CacheContext(
+            schema_version=1,
+            hf_model_id="deepseek-ai/DeepSeek-V3",
+            hf_revision="d1a891dd58e6bb0a671bfc6f3046e29e3478e924",
+            transform_version=99,
+            mesh_shape=(4, 2),
+        )
+        fingerprint = ctx.fingerprint(
+            source=SourceTensorSelection(names=("src.a", "src.b")),
+            target=UNITTEST_TOY_FUSION_SPEC,
+        )
+
+        raw_a = torch.randn(32, 32, dtype=torch.bfloat16)
+        raw_b = torch.randn(32, 32, dtype=torch.bfloat16)
+
+        v1 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"a": raw_a, "b": raw_b},
+        )
+        assert preprocess_calls[0] == 1
+        assert set(v1.keys()) == {"a", "b"}
+
+        v2 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"a": raw_a, "b": raw_b},
+        )
+        assert preprocess_calls[0] == 1
+
+        ttnn.deallocate(v1["a"].fused_tensor, force=True)
+        ttnn.deallocate(v2["a"].fused_tensor, force=True)
+
+    def test_corrupt_fused_recovery(self, cache_dir, device):
+        from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache
+
+        cache = TensorCache(cache_dir)
+        ctx = CacheContext(
+            schema_version=1,
+            hf_model_id="m",
+            hf_revision="r",
+            transform_version=1,
+            mesh_shape=(4, 2),
+        )
+        fingerprint = ctx.fingerprint(
+            source=SourceTensorSelection(names=("x",)),
+            target=UNITTEST_TOY_FUSION_SPEC,
+        )
+        raw_a = torch.randn(32, 32, dtype=torch.bfloat16)
+        raw_b = torch.randn(32, 32, dtype=torch.bfloat16)
+
+        v1 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=lambda d: {"a": d["a"], "b": d["b"]},
+            raw_tensors=lambda: {"a": raw_a, "b": raw_b},
+        )
+        ttnn.deallocate(v1["a"].fused_tensor, force=True)
+
+        artifact_id = compute_artifact_id(fingerprint)
+        data_path = cache._content_addressed_paths(artifact_id).data_path
+        assert data_path.is_file()
+        data_path.unlink()
+
+        preprocess_calls = [0]
+
+        def counting_preprocess(d):
+            preprocess_calls[0] += 1
+            return {"a": d["a"], "b": d["b"]}
+
+        v2 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=counting_preprocess,
+            raw_tensors=lambda: {"a": raw_a, "b": raw_b},
+        )
+        assert preprocess_calls[0] == 1
+        ttnn.deallocate(v2["a"].fused_tensor, force=True)

@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.tensor_cache.types import FusionGroupSpec, RegionSpec, Shard2dMeshMapper, SubTensorSpec
 
 
 def shuffle_weights_for_interleaved_qnope_qrope(
@@ -600,6 +601,175 @@ class DOWN_PROJ_SingleDeviceSpec:
 
 
 DOWN_PROJ_SINGLE_DEVICE_SPEC = DOWN_PROJ_SingleDeviceSpec()
+
+
+# --- Content-addressed cache: FusionGroupSpec templates (tensor_cache Phase 2) ---
+# mesh_mapper_config matches BlitzDecodeWeights for 4x2 mesh (mla_tp/moe_tp > 1).
+# For single-device caches, build a copy with ReplicateMeshMapper().
+
+_QAB_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+Q_AB_KV_A_SPEC = FusionGroupSpec(
+    name="q_ab_kv_a",
+    regions=(
+        RegionSpec(
+            core_range_set=_QAB_SPEC.q_ab_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "q_a_proj",
+                    (_QAB_SPEC.packed_h, _QAB_SPEC.packed_w),
+                    ttnn.bfloat8_b,
+                    (_QAB_SPEC.tile_h, _QAB_SPEC.tile_w),
+                ),
+                SubTensorSpec(
+                    "q_b_proj",
+                    _QAB_SPEC.q_b_proj_shape,
+                    ttnn.bfloat8_b,
+                    (_QAB_SPEC.tile_h, _QAB_SPEC.tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_QAB_SPEC.kv_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "kv_a_proj",
+                    _QAB_SPEC.kv_a_proj_shape,
+                    ttnn.bfloat8_b,
+                    (_QAB_SPEC.tile_h, _QAB_SPEC.tile_w),
+                ),
+            ),
+        ),
+    ),
+    sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    mesh_mapper_config=Shard2dMeshMapper(dims=(None, 1)),
+)
+
+_OV_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+O_PROJ_GATE_MM_NORMS_SPEC = FusionGroupSpec(
+    name="o_proj_gate_mm_norms",
+    regions=(
+        RegionSpec(
+            core_range_set=_OV_SPEC.o_proj_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "o_proj",
+                    _OV_SPEC.o_proj_shape,
+                    ttnn.bfloat8_b,
+                    (_OV_SPEC.tile_h, _OV_SPEC.tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_OV_SPEC.gate_mm_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "gate_mm",
+                    _OV_SPEC.gate_mm_shape,
+                    ttnn.bfloat16,
+                    (_OV_SPEC.tile_h, _OV_SPEC.tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_OV_SPEC.gamma_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "attn_norm",
+                    _OV_SPEC.attn_norm_shape,
+                    ttnn.bfloat16,
+                    (_OV_SPEC.gamma_tile_h, _OV_SPEC.gamma_tile_w),
+                ),
+                SubTensorSpec(
+                    "q_norm",
+                    _OV_SPEC.q_norm_shape,
+                    ttnn.bfloat16,
+                    (_OV_SPEC.gamma_tile_h, _OV_SPEC.gamma_tile_w),
+                ),
+                SubTensorSpec(
+                    "ffn_norm",
+                    _OV_SPEC.ffn_norm_shape,
+                    ttnn.bfloat16,
+                    (_OV_SPEC.gamma_tile_h, _OV_SPEC.gamma_tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_OV_SPEC.kv_norm_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "kv_norm",
+                    _OV_SPEC.kv_norm_shape,
+                    ttnn.bfloat16,
+                    (_OV_SPEC.gamma_tile_h, _OV_SPEC.gamma_tile_w),
+                ),
+            ),
+        ),
+    ),
+    sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    mesh_mapper_config=Shard2dMeshMapper(dims=(None, 1)),
+)
+
+_KVB_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+KV_B12_SPEC = FusionGroupSpec(
+    name="kv_b12",
+    regions=(
+        RegionSpec(
+            core_range_set=_KVB_SPEC.kv_b1_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "kv_b1_proj",
+                    _KVB_SPEC.kv_b1_proj_shape,
+                    ttnn.bfloat8_b,
+                    (_KVB_SPEC.tile_h, _KVB_SPEC.tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_KVB_SPEC.kv_b2_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "kv_b2_proj",
+                    _KVB_SPEC.kv_b2_proj_shape,
+                    ttnn.bfloat8_b,
+                    (_KVB_SPEC.tile_h, _KVB_SPEC.tile_w),
+                ),
+            ),
+        ),
+    ),
+    sharding_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    mesh_mapper_config=Shard2dMeshMapper(dims=(None, 0)),
+)
+
+_GU_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+GATE_UP_SPEC = FusionGroupSpec(
+    name="gate_up",
+    regions=(
+        RegionSpec(
+            core_range_set=_GU_SPEC.gate_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "shared_gate_proj",
+                    _GU_SPEC.gate_proj_shape,
+                    ttnn.bfloat4_b,
+                    (_GU_SPEC.tile_h, _GU_SPEC.tile_w),
+                ),
+            ),
+        ),
+        RegionSpec(
+            core_range_set=_GU_SPEC.up_core_range_set,
+            subtensors=(
+                SubTensorSpec(
+                    "shared_up_proj",
+                    _GU_SPEC.up_proj_shape,
+                    ttnn.bfloat4_b,
+                    (_GU_SPEC.tile_h, _GU_SPEC.tile_w),
+                ),
+            ),
+        ),
+    ),
+    sharding_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
+)
 
 
 @dataclass
@@ -1383,7 +1553,8 @@ class BlitzDecodeWeights:
         expert as ``base_addr + expert_idx * expert_size_bytes`` using the first tensor's
         ``buffer_address()`` as ``base_addr``. The inner ``upload()`` loop allocates all
         experts of one projection before the next, which guarantees contiguity. Any code
-        that loads these weights from cache (e.g. ``load_moe_routed_experts``) must use the
+        that loads these weights from cache (e.g. ``prepare_routed_expert_weights`` or
+        ``CacheWeightProvider.load_moe_layer``) must use the
         same per-projection allocation order (all gates, then all ups, then all downs).
         """
         device = self._device
@@ -1560,6 +1731,64 @@ class BlitzDecodeWeights:
             )
 
         return upload(gate_experts), upload(up_experts), upload(down_experts)
+
+    def shared_down_torch_for_cache(self, down_proj_weights: torch.Tensor) -> torch.Tensor:
+        """Same ``torch`` tensor as ``dp_combined`` before ``from_torch`` in shared expert down path.
+
+        Used by :mod:`prepare_weights` TensorCache preprocess for ``shared_down_proj``.
+        """
+        dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
+        K_down_per_device = 256
+        N_per_core = 64
+        N_down = N_per_core * dp_spec.NUM_MATMUL_CORES
+        moe_tp = self.moe_tp
+        expected_down_shape = (K_down_per_device * moe_tp, N_down)
+        assert (
+            tuple(down_proj_weights.shape) == expected_down_shape
+        ), f"down_proj_weights must be {expected_down_shape}, got {tuple(down_proj_weights.shape)}"
+        if moe_tp == 1:
+            return down_proj_weights.contiguous()
+        mesh_rows = self._device.shape[0]
+        mesh_cols = self._device.shape[1]
+        return (
+            down_proj_weights.reshape(mesh_rows, mesh_cols, K_down_per_device, N_down)
+            .permute(0, 2, 1, 3)
+            .reshape(mesh_rows * K_down_per_device, mesh_cols * N_down)
+        ).contiguous()
+
+    def moe_routed_expert_torch_for_cache(self, w: torch.Tensor) -> torch.Tensor:
+        """Match the tensor passed to ``from_torch`` for one MoE routed expert (one projection).
+
+        Shape ``(1, 1, K, N_padded)``; used by TensorCache preprocess per expert.
+        """
+        device = self._device
+        tile_w = 32
+        num_banks = device.dram_grid_size().x
+        K, N = w.shape
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        if N_padded != N:
+            w = torch.nn.functional.pad(w, (0, N_padded - N))
+        w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
+        return w_shuffled.reshape(1, 1, K, N_padded).contiguous()
+
+    def mlp_routed_dense_stacked_torch_for_cache(self, experts: torch.Tensor) -> torch.Tensor:
+        """Stacked torch before ``from_torch`` in dense MLP routed ``upload`` (all experts on mesh)."""
+        device = self._device
+        tile_w = 32
+        num_banks = device.dram_grid_size().x
+        mesh_rows = device.shape[0]
+        mesh_cols = device.shape[1]
+        n_exp, K, N = experts.shape
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        processed = []
+        for i in range(n_exp):
+            w = experts[i]
+            if N_padded != N:
+                w = torch.nn.functional.pad(w, (0, N_padded - N))
+            w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
+            processed.append(w_shuffled.reshape(K, N_padded))
+        stacked = torch.stack(processed).reshape(mesh_rows, mesh_cols, K, N_padded)
+        return stacked.contiguous()
 
     # ------------------------------------------------------------------
     # Internal helpers
