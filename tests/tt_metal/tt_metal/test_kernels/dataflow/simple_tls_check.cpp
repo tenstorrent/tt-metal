@@ -7,7 +7,7 @@
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;
-thread_local uint32_t thread_local_var;
+thread_local uint32_t thread_local_var = 10;
 thread_local uint32_t uninitialized_thread_local_var;
 
 void kernel_main() {

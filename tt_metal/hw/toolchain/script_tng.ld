@@ -141,7 +141,7 @@ SECTIONS {
     . = ALIGN(4);
     __ldm_tdata_init = .;
     *-crt0-tls.o(.tdata.start) /* define __tdata_start as TLS symbol) */
-    *(EXCLUDE_FILE (*-crt0-tls.o) .tdata .tdata.* .gnu.linkonce.td.*)
+    *(.tdata EXCLUDE_FILE (*-crt0-tls.o) .tdata.* .gnu.linkonce.td.*)
     . = ALIGN(4);
     *-crt0-tls.o(.tdata.end)
   } :tdata :tls
@@ -149,7 +149,7 @@ SECTIONS {
   : IF_KERNEL(LOAD_AFTER_ALIGN(.tbss, .tdata))
   {
     *-crt0-tls.o(.tbss.start) /* define __tbss_start as TLS symbol) */
-    *(EXCLUDE_FILE (*-crt0-tls.o).tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
+    *(.tbss EXCLUDE_FILE (*-crt0-tls.o) .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
     *-crt0-tls.o(.tbss.end)
   } :tdata :tls

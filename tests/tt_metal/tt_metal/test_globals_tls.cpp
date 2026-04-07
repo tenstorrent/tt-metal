@@ -275,6 +275,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         thread_local_addrs.insert(slot_thread_local_addr(dm));
     }
     EXPECT_EQ(thread_local_addrs.size(), NUM_DM_CORES) << "All thread local addresses should be unique";
+
+    std::cout << "DONE Testing Globals and TLS" << std::endl;
 }
 
 // Quasar compute: 4 Tensix engines per cluster, 4 TRISCs per engine = 16 slots.
