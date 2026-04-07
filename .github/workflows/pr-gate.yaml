@@ -423,6 +423,9 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         clang_tidy_fixes: clang-tidy-result/fixes.yml
+        # Explicitly pass PR number — auto-detection fails inside Docker containers
+        # because the action can't reliably read GITHUB_EVENT_PATH from within the container.
+        pull_request_id: ${{ github.event.pull_request.number }}
         request_changes: false
         suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
         # Pip fails if the action attempts to install its own Python; Sidestep that
