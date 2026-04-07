@@ -41,6 +41,7 @@ void kernel_main() {
     uint32_t do_col_receive = get_arg_val<uint32_t>(rt++);
     uint32_t do_col_send = get_arg_val<uint32_t>(rt++);
     uint32_t is_origin = get_arg_val<uint32_t>(rt++);
+    uint32_t eps_u32 = get_arg_val<uint32_t>(rt++);
 
     constexpr uint32_t accum_reg = 0;
     constexpr uint32_t work_reg = 1;
@@ -164,14 +165,9 @@ void kernel_main() {
         sqrt_tile_init();
         sqrt_tile(0);
 
-        // eps tile from reader in cb_sq_acc (repurposed)
-        cb_wait_front(cb_sq_acc, 1);
-        copy_tile_init(cb_sq_acc);
-        copy_tile(cb_sq_acc, 0, 1);
-        cb_pop_front(cb_sq_acc, 1);
-
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+        // Add epsilon via SFPU scalar add (no CB needed)
+        binop_with_scalar_tile_init();
+        add_unary_tile(0, eps_u32);
 
         recip_tile_init();
         recip_tile(0);

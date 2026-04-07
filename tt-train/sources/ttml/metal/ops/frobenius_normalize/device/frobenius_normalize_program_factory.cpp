@@ -142,9 +142,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
     std::map<std::string, std::string> defines;
 
-    // Reader compile-time args: [0] = packed_eps, then TensorAccessorArgs for input
-    uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
-    std::vector<uint32_t> reader_ct_args{packed_eps};
+    // Reader compile-time args: TensorAccessorArgs for input (eps moved to compute runtime args)
+    std::vector<uint32_t> reader_ct_args;
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
 
     auto reader_kernel = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
@@ -269,7 +268,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
             program,
             compute_handle,
             logical_core,
-            {do_row_receive, do_row_send, do_col_receive, do_col_send, is_origin});
+            {do_row_receive, do_row_send, do_col_receive, do_col_send, is_origin,
+             std::bit_cast<uint32_t>(args.epsilon)});
 
         tiles_written += tiles_this_core;
     }

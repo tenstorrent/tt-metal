@@ -35,7 +35,7 @@ void kernel_main() {
     uint32_t num_active_cores = get_arg_val<uint32_t>(rt++);
 
     // ---- Compile-time args ----
-    constexpr uint32_t packed_eps = get_compile_time_arg_val(0);
+    // packed_eps removed — eps now passed as compute runtime arg
 
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
     constexpr uint32_t cb_sq_acc = tt::CBIndex::c_1;
@@ -46,7 +46,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_input);
     const uint32_t fp32_tile_bytes = get_tile_size(cb_scalar);
 
-    constexpr auto input_args = TensorAccessorArgs<1>();
+    constexpr auto input_args = TensorAccessorArgs<0>();
     const auto input_addr_gen = TensorAccessor(input_args, input_addr, tile_bytes);
 
     uint32_t chain_sem_addr = get_semaphore(chain_sem_id);
@@ -115,13 +115,7 @@ void kernel_main() {
         cb_pop_front(cb_scalar, 1);
     }
 
-    // =========================================================================
-    // Origin: generate eps tile for compute Phase 5 (in cb_sq_acc, repurposed)
-    // =========================================================================
-    if (is_origin) {
-        uint32_t eps_fp32_bits = (packed_eps >> 16) << 16;
-        generate_tile_with_uint32_value(cb_sq_acc, eps_fp32_bits);
-    }
+    // eps is now passed as a compute runtime arg — no tile generation needed
 
     // =========================================================================
     // Norm broadcast: origin extracts scalar, fills a full FP32 tile.
