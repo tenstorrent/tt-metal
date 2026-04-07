@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
-import os, random
+import math
+import os
+import random
 from time import time
+
 import numpy as np
 import ttnn
 import ttml
@@ -129,11 +132,72 @@ class PerformanceMeter:
         return samples_per_second, tokens_per_second
 
 
-def summary(model) -> None:
+def _mesh_axis_sizes(mesh_device) -> list[int]:
+    ms = mesh_device.shape
+    if hasattr(ms, "dims"):
+        return [int(ms[i]) for i in range(ms.dims())]
+    return [int(x) for x in ms]
+
+
+def _global_numel_from_shard_shape_and_layout(
+    local_shape: tuple[int, ...],
+    layout,
+    mesh_device,
+) -> int:
+    """Invert ``Layout.shard_shape``: recover global element count from shard-local logical shape.
+
+    For each ``Shard(dim)`` on mesh axis ``a``, multiplies ``local_shape[dim]`` by
+    ``mesh_shape[a]``. Replicated axes leave sizes unchanged.
+    """
+    from ttml.distributed.layout import Shard
+
+    if layout is None or mesh_device is None:
+        return math.prod(local_shape)
+    mesh_sizes = _mesh_axis_sizes(mesh_device)
+    rank = len(local_shape)
+    g = list(local_shape)
+    for mesh_axis, placement in enumerate(layout.placements):
+        if mesh_axis >= len(mesh_sizes):
+            break
+        if isinstance(placement, Shard):
+            dim = placement.dim if placement.dim >= 0 else rank + placement.dim
+            n = mesh_sizes[mesh_axis]
+            if n > 1:
+                g[dim] *= n
+    return math.prod(g)
+
+
+def parameter_count_stats_from_sharding(model, mesh_device) -> tuple[int, int]:
+    """Sum over ``model.parameters()``: (local_shard_numel, global_unique_numel).
+
+    ``local_shard_numel`` is ``sum(prod(t.shape()))`` as reported by the runtime.
+    ``global_unique_numel`` applies the mesh × ``Layout`` shard inverse (same convention
+    as ``Layout.shard_shape``) so TP-sharded weights count once at full width.
+    """
+    local_total = 0
+    global_total = 0
+    for _name, t in model.parameters().items():
+        sh = tuple(int(x) for x in t.shape())
+        local_total += math.prod(sh)
+        from ttml.distributed.layout import get_layout
+
+        layout = get_layout(t)
+        global_total += _global_numel_from_shard_shape_and_layout(sh, layout, mesh_device)
+    return local_total, global_total
+
+
+def summary(model, mesh_device=None) -> None:
     """Print a torchsummary-style overview of model parameters.
 
     Parameters are grouped: trainable first, then non-trainable.
+    When running on a mesh device, also prints global (unsharded) parameter
+    counts and memory estimates.
     """
+    if mesh_device is None:
+        try:
+            mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        except Exception:
+            pass
     params = model.parameters()
 
     trainable = []
@@ -181,11 +245,18 @@ def summary(model) -> None:
     total = sum(e[2] for e in entries)
     total_train = sum(e[2] for e in trainable)
     total_frozen = total - total_train
+    bytes_per_param = 2  # bfloat16
 
     lines.append(sep)
-    lines.append(f"Total params:          {total:,}")
-    lines.append(f"Trainable params:      {total_train:,}")
-    lines.append(f"Non-trainable params:  {total_frozen:,}")
+    lines.append(f"Total params (local):         {total:,} ({total * bytes_per_param / (1024**2):.1f} MB)")
+    lines.append(f"  Trainable:                  {total_train:,}")
+    lines.append(f"  Non-trainable:              {total_frozen:,}")
+
+    if mesh_device is not None:
+        local_p, global_p = parameter_count_stats_from_sharding(model, mesh_device)
+        lines.append(f"Local memory (per device):    {local_p * bytes_per_param / (1024**2):.1f} MB")
+        lines.append(f"Total params (global unique): {global_p:,} ({global_p * bytes_per_param / (1024**2):.1f} MB)")
+
     lines.append(thin_sep)
 
     print("\n".join(lines))
