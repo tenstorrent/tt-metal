@@ -274,12 +274,23 @@ void kernel_main() {
         false;
 #endif
 
-    // PACK_RELU without bias: helper handles it via HwRelu PostComputeFn.
-    // PACK_RELU with bias: caller manages RELU config between matmul and bias phases.
-#if defined(PACK_RELU) && !defined(FUSE_BIAS)
-    using ReluPostFn = compute_kernel_lib::matmul_block_config::HwRelu;
+    // Matmul output CB and post-compute activation depend on the FUSE_BIAS path.
+    // With bias: pack to interm for the bias phase, no activation on the matmul output.
+    // Without bias: pack directly to output with optional RELU or SFPU activation.
+#ifdef FUSE_BIAS
+    constexpr uint32_t matmul_out_cb = out_cb_id;
+    constexpr bool pack_to_interm = true;
+    using MatmulPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
 #else
-    using ReluPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
+    constexpr uint32_t matmul_out_cb = untilize_mode_out_cb_id;
+    constexpr bool pack_to_interm = false;
+#if defined(SFPU_OP_INIT_ACTIVATION)
+    using MatmulPostFn = PostMatmulSFPU;
+#elif defined(PACK_RELU)
+    using MatmulPostFn = compute_kernel_lib::matmul_block_config::HwRelu;
+#else
+    using MatmulPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
+#endif
 #endif
 
     mm_block_init(
@@ -489,16 +500,15 @@ void kernel_main() {
                     // Select PreKBlockFn at compile time
                     using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreFn>;
 
-#ifdef FUSE_BIAS
-                    // Pack last K-block to interm for bias phase
                     compute_kernel_lib::matmul_block<
                         in0_cb_id,
                         in1_cb_id,
-                        out_cb_id,
+                        matmul_out_cb,
                         mm_partials_cb_id,
                         in1_transpose_tile,
                         l1_acc,
-                        /*pack_last_to_interm=*/true>(
+                        pack_to_interm,
+                        MatmulPostFn>(
                         in0_block_w,
                         in0_num_subblocks,
                         in1_num_subblocks,
@@ -506,40 +516,8 @@ void kernel_main() {
                         out_subblock_h,
                         out_subblock_w,
                         1,
-                        compute_kernel_lib::matmul_block_config::NoPostCompute{},
+                        MatmulPostFn{},
                         PreFn{});
-#else
-                    // Pack last K-block directly to output
-                    compute_kernel_lib::matmul_block<
-                        in0_cb_id,
-                        in1_cb_id,
-                        mm_out_cb_id,
-                        mm_partials_cb_id,
-                        in1_transpose_tile,
-                        l1_acc,
-                        /*pack_last_to_interm=*/false
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        ,
-                        PostMatmulSFPU
-#else
-                        ,
-                        ReluPostFn
-#endif
-                        >(
-                        in0_block_w,
-                        in0_num_subblocks,
-                        in1_num_subblocks,
-                        num_blocks_inner_dim,
-                        out_subblock_h,
-                        out_subblock_w,
-                        1,
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        PostMatmulSFPU{},
-#else
-                        ReluPostFn{},
-#endif
-                        PreFn{});
-#endif  // FUSE_BIAS
                 }
 #endif  // SKIP_COMPUTE
 
