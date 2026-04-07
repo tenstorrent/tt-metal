@@ -165,7 +165,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "tilize_and_pack_bfp8_b",
-        [](nb::ndarray<float, nb::c_contig> data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
+        [](const nb::ndarray<float, nb::c_contig>& data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
@@ -180,7 +180,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "tilize_and_pack_bfp4_b",
-        [](nb::ndarray<float, nb::c_contig> data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
+        [](const nb::ndarray<float, nb::c_contig>& data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
