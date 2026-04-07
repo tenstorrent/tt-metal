@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,21 @@ def test_dump_and_load(tmp_path, height, width, layout):
     torch_tensor = torch.rand((height, width), dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_tensor, layout=layout)
     ttnn.dump_tensor(file_name, tensor)
+
+    loaded_tensor = ttnn.load_tensor(file_name)
+    loaded_torch_tensor = ttnn.to_torch(loaded_tensor)
+    assert torch.allclose(torch_tensor, loaded_torch_tensor)
+
+
+@pytest.mark.parametrize("height", [1024])
+@pytest.mark.parametrize("width", [1024])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_dump_and_load_local_mode(tmp_path, height, width, layout):
+    file_name = tmp_path / pathlib.Path("tensor.tensorbin")
+
+    torch_tensor = torch.rand((height, width), dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(torch_tensor, layout=layout)
+    ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
 
     loaded_tensor = ttnn.load_tensor(file_name)
     loaded_torch_tensor = ttnn.to_torch(loaded_tensor)

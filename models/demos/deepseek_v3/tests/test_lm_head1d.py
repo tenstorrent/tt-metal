@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -50,6 +50,7 @@ class DeepseekV3LMHead(nn.Module):
     "mode, batch_size_per_row",
     [
         ("decode", 32),
+        ("decode", 8),
         ("prefill", 1024),
     ],
 )

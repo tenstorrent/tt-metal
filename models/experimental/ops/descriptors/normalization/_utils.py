@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,29 +6,16 @@
 Internal utilities for normalization descriptors.
 """
 
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-
-
-def _build_layernorm_io_tensors(
-    tensor_args: "ttnn.LayerNormInputs",
-    output_tensor: "ttnn.Tensor",
-) -> Tuple[List["ttnn.Tensor"], List["ttnn.Tensor"]]:
-    """Build the input and output tensors for a layernorm/rmsnorm operation."""
-    inputs = [tensor_args.input]
-    if tensor_args.residual_input_tensor is not None:
-        inputs.append(tensor_args.residual_input_tensor)
-    if tensor_args.weight is not None:
-        inputs.append(tensor_args.weight)
-    if tensor_args.bias is not None:
-        inputs.append(tensor_args.bias)
-    if tensor_args.recip_tensor is not None:
-        inputs.append(tensor_args.recip_tensor)
-    outputs = [output_tensor]
-    return inputs, outputs
+from models.experimental.ops.descriptors.op_descriptor import (
+    OpDescriptor,
+    LazyOutputList,
+    core_range_set_fusion_key,
+    extend_branch_program_cache_key,
+)
 
 
 def _create_layernorm_op_descriptor(
@@ -43,11 +30,24 @@ def _create_layernorm_op_descriptor(
     epsilon: float = 1e-12,
     program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
 ) -> "OpDescriptor":
-    """Create a layernorm/rmsnorm op descriptor."""
+    """Create a normalization branch descriptor with deferred ``ProgramDescriptor``.
 
+    ``program_cache_key`` is based on :meth:`ttnn.LayerNormDeviceOperation.compute_program_hash`
+    (device program cache). For **interleaved** inputs, ``core_range_set`` is not part of that
+    hash but is passed into ``create_descriptor`` — we mix it in via
+    :func:`~models.experimental.ops.descriptors.op_descriptor.extend_branch_program_cache_key`
+    with :func:`~models.experimental.ops.descriptors.op_descriptor.core_range_set_fusion_key`.
+    Computed without running the program factory. The factory runs only on ``.descriptor``
+    access (e.g. fusion cache miss).
+
+    **Output tensor allocation is lazy** — ``output_tensors`` is a
+    :class:`LazyOutputList` whose slots start as ``None``. Reading a slot
+    (e.g. ``op.output_tensors[0]``) triggers ``create_output_tensors`` once.
+    Slice-assigning from cache (``output_tensors[:] = [...]``) wires in
+    cached tensors without triggering allocation.
+    """
     device = input_tensor.device()
 
-    # Determine core_range_set if not provided
     if core_range_set is None:
         if input_tensor.is_sharded():
             core_range_set = input_tensor.memory_config().shard_spec.grid
@@ -57,26 +57,21 @@ def _create_layernorm_op_descriptor(
     if compute_kernel_config is None:
         raise ValueError("compute_kernel_config is required")
 
-    # Use input's memory config if not provided
     output_mem_config = memory_config if memory_config is not None else input_tensor.memory_config()
 
-    # Create appropriate program config based on input tensor if not provided
     if program_config is None:
         shard_spec = input_tensor.memory_config().shard_spec if input_tensor.is_sharded() else None
         program_config = ttnn.create_layernorm_program_config(shard_spec)
 
-    # Check if Welford is enabled and create reciprocal tensor if needed
     recip_tensor = None
-    use_welford = program_config.use_welford
-    if use_welford:
+    if program_config.use_welford:
         if input_tensor.is_sharded():
-            shard_spec = input_tensor.memory_config().shard_spec
-            W = shard_spec.shape[1]  # shard width
+            W = input_tensor.memory_config().shard_spec.shape[1]
         else:
-            W = input_tensor.shape[-1]  # full tensor width
-
+            W = input_tensor.shape[-1]
         recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, W)
 
+    # Build C++ params + tensor_args for the factory (captured by closure)
     operation_params = ttnn.LayerNormParams()
     operation_params.norm_type = norm_type
     operation_params.distributed_norm_stage = ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED
@@ -85,9 +80,7 @@ def _create_layernorm_op_descriptor(
     operation_params.program_config = program_config
     operation_params.compute_kernel_config = compute_kernel_config
 
-    # Create LayerNormInputs
-    tensor_args = ttnn.LayerNormInputs()
-    tensor_args.input = input_tensor
+    tensor_args = ttnn.LayerNormInputs(input_tensor)
     if residual_input_tensor is not None:
         tensor_args.residual_input_tensor = residual_input_tensor
     if weight is not None:
@@ -97,18 +90,43 @@ def _create_layernorm_op_descriptor(
     if recip_tensor is not None:
         tensor_args.recip_tensor = recip_tensor
 
-    # Create output tensor using the device operation's create_output_tensors
-    output_tensor = ttnn.LayerNormDeviceOperation.create_output_tensors(operation_params, tensor_args)
+    h = ttnn.LayerNormDeviceOperation.compute_program_hash(operation_params, tensor_args)
+    base_key = int(h) & ((1 << 64) - 1)
+    # Interleaved: core_range_set is ``cr_arg`` to create_descriptor and can be absent from ``h``.
+    # Sharded: core grid is already reflected in tensor memory_config / ``h``.
+    if input_tensor.is_sharded():
+        program_cache_key = base_key
+    else:
+        program_cache_key = extend_branch_program_cache_key(base_key, core_range_set_fusion_key(core_range_set))
 
-    # Select the appropriate factory and create descriptor
-    factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
-    # Sharded LN: factory derives core range from shard_spec.grid (None = use default).
-    # Interleaved LN: factory needs explicit core range.
+    # Build input list
+    inputs = [tensor_args.input]
+    if tensor_args.residual_input_tensor is not None:
+        inputs.append(tensor_args.residual_input_tensor)
+    if tensor_args.weight is not None:
+        inputs.append(tensor_args.weight)
+    if tensor_args.bias is not None:
+        inputs.append(tensor_args.bias)
+    if tensor_args.recip_tensor is not None:
+        inputs.append(tensor_args.recip_tensor)
+
+    def _alloc_outputs(slots):
+        slots[0] = ttnn.LayerNormDeviceOperation.create_output_tensors(operation_params, tensor_args)
+
+    outputs = LazyOutputList([None], _alloc_outputs)
+
+    op_name = "rms_norm" if norm_type == ttnn.LayerNormType.RMSNORM else "layer_norm"
     cr_arg = None if input_tensor.is_sharded() else core_range_set
-    program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, cr_arg)
 
-    # Build input and output tensors
-    inputs, outputs = _build_layernorm_io_tensors(tensor_args, output_tensor)
+    def _run_factory():
+        out = outputs[0]
+        factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
+        return factory.create_descriptor(operation_params, tensor_args, out, cr_arg)
 
-    name = "rms_norm" if norm_type == ttnn.LayerNormType.RMSNORM else "layer_norm"
-    return OpDescriptor(program_descriptor, inputs, outputs, name)
+    return OpDescriptor(
+        factory_fn=_run_factory,
+        input_tensors=inputs,
+        output_tensors=outputs,
+        name=op_name,
+        program_cache_key=program_cache_key,
+    )

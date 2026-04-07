@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1081,10 +1081,6 @@ def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
 
 def skip_with_llk_assert(reason_str="Test is not passing with LLK asserts enabled"):
     return ti_skip(is_llk_assert_enabled(), reason=reason_str)
-
-
-def skip_for_simulator(reason_str="Test is not supported on simulator (tt-sim)"):
-    return ti_skip(os.environ.get("TT_METAL_SIMULATOR") is not None, reason=reason_str)
 
 
 def run_for_blackhole(reason_str="only runs for Blackhole"):

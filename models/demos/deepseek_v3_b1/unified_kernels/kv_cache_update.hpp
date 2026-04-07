@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -50,19 +50,20 @@ struct KVCacheUpdate {
     // CB indices etc. filled in kernel via get_named_compile_time_arg_val
     // ========================================================================
     struct WriterArgs {
+        static constexpr uint32_t MAX_MLA_CORES_PER_HEAD = 8;
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
         uint32_t kv_cache_intermed_cb;
+        uint32_t kv_cache_intermed_sync_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_rmsnorm_output_cb;
         uint32_t krope_output_cb;
         uint32_t grid_start_y;
-        uint32_t full_grid_mcast_start_x;
-        uint32_t full_grid_mcast_start_y;
-        uint32_t full_grid_mcast_end_x;
-        uint32_t full_grid_mcast_end_y;
-        uint32_t full_grid_mcast_num_dests;
         uint32_t kv_cache_cur_pos_ready_semaphore_addr;
+        uint32_t k_chunk_size;
+        uint32_t num_cores_per_head;
+        uint32_t mla_sender_noc_x[MAX_MLA_CORES_PER_HEAD];
+        uint32_t mla_sender_noc_y[MAX_MLA_CORES_PER_HEAD];
     };
     struct ReaderArgs {
         uint32_t kv_cache_buffer_base_addr;
@@ -74,6 +75,7 @@ struct KVCacheUpdate {
         uint32_t kv_cache_input_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_cache_intermed_cb;
+        uint32_t kv_cache_intermed_sync_cb;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<WriterArgs, ReaderArgs, ComputeArgs>;
@@ -96,18 +98,15 @@ struct KVCacheUpdate {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
                 static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
-                constexpr uint8_t MCAST_NOC = 0;
-                uint64_t sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
-                    args.full_grid_mcast_start_x,
-                    args.full_grid_mcast_start_y,
-                    args.full_grid_mcast_end_x,
-                    args.full_grid_mcast_end_y,
-                    args.kv_cache_cur_pos_ready_semaphore_addr);
-                noc_semaphore_inc_multicast(sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
-                volatile tt_l1_ptr uint32_t* sem_addr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
-                __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
-                noc_async_atomic_barrier(MCAST_NOC);
+                constexpr uint8_t WRITE_NOC = 0;
+                uint32_t target_core_idx = (args.local_cur_pos / args.k_chunk_size) % args.num_cores_per_head;
+                uint64_t sem_noc_addr = get_noc_addr(
+                    args.mla_sender_noc_x[target_core_idx],
+                    args.mla_sender_noc_y[target_core_idx],
+                    args.kv_cache_cur_pos_ready_semaphore_addr,
+                    WRITE_NOC);
+                noc_semaphore_inc(sem_noc_addr, 1, WRITE_NOC);
+                noc_async_atomic_barrier(WRITE_NOC);
             }
 #endif
         }
@@ -120,7 +119,8 @@ struct KVCacheUpdate {
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
-                constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
+                constexpr uint32_t CHUNK_SIZE = IsRopeCore ? 1 : 8;
+                constexpr uint32_t NUM_CHUNKS = IsRopeCore ? 1 : 2;
 
                 uint32_t cur_pos = args.local_cur_pos;
 
@@ -135,94 +135,111 @@ struct KVCacheUpdate {
                 }
 
 #if defined(COMPILE_FOR_BRISC)
-                // BRISC: stream existing KV cache pages from DRAM into kv_cache_input_cb
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
 
-                cb_reserve_back(kv_cache_input_cb, kv_cache_num_tiles);
-                uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
-                for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
-                    noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
+                for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    DeviceZoneScopedN("READ_FROM_DRAM");
+                    uint32_t tile_offset = chunk * CHUNK_SIZE;
+                    cb_reserve_back(kv_cache_input_cb, CHUNK_SIZE);
+                    uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
+                    for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+                        noc_async_read_page(kv_cache_page_id_start + tile_offset + i, kv_tensor_accessor, cb_addr);
+                        cb_addr += kv_tensor_accessor.get_aligned_page_size();
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(kv_cache_input_cb, CHUNK_SIZE);
                 }
-                noc_async_read_barrier();
-
-                cb_push_back(kv_cache_input_cb, kv_cache_num_tiles);
 #elif defined(COMPILE_FOR_NCRISC)
-                // NCRISC: wait on compute, patch new data, wait on compute, write back to DRAM
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
+                uint32_t kv_cache_intermed_sync_cb = args.kv_cache_intermed_sync_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
                 uint32_t new_cache_cb = IsRopeCore ? args.krope_output_cb : args.kv_rmsnorm_output_cb;
                 uint32_t offset_in_page = cur_pos % CACHES_PER_BLOCK;
-                uint32_t num_bytes_per_core = IsRopeCore ? 64 : 1024;
 
-                // 1. Wait for TRISC to finish untilize into kv_cache_intermed_cb
-                cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles);
+                constexpr uint32_t num_bytes_per_chunk = IsRopeCore ? 64 : (CHUNK_SIZE * 32 * 2);
 
-                // 2. Wait for new cache data and update into kv_cache_intermed_cb
                 cb_wait_front(new_cache_cb, 1);
+                uint32_t src_addr = get_read_ptr(new_cache_cb);
+                uint32_t write_addr_offset = offset_in_page * num_bytes_per_chunk;
 
-                uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + offset_in_page * num_bytes_per_core;
-                uint32_t new_cache_addr = get_read_ptr(new_cache_cb);
-                {
-                    uint32_t words_per_face = (num_bytes_per_core >> 2);
-                    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(new_cache_addr);
-                    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-                    for (uint32_t i = 0; i < words_per_face; ++i) {
-                        dst[i] = src[i];
+                for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    {
+                        DeviceZoneScopedN("WAIT_UNTILIZE");
+                        cb_reserve_back(kv_cache_intermed_sync_cb, CHUNK_SIZE);
+                        cb_wait_front(kv_cache_intermed_cb, CHUNK_SIZE);
+                    }
+
+                    {
+                        DeviceZoneScopedN("UPDATE_NEW_CACHE");
+                        uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + write_addr_offset;
+                        noc_async_write(src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
+                        noc_async_write_barrier();
+                    }
+
+                    cb_push_back(kv_cache_intermed_sync_cb, CHUNK_SIZE);
+                    cb_pop_front(kv_cache_intermed_cb, CHUNK_SIZE);
+
+                    src_addr += num_bytes_per_chunk;
+                }
+
+                cb_pop_front(new_cache_cb, 1);
+
+                // Phase 2: Wait for tilize to complete, write to DRAM
+                for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    {
+                        DeviceZoneScopedN("WAIT_TILIZE");
+                        cb_wait_front(kv_cache_output_cb, CHUNK_SIZE);
+                    }
+
+                    {
+                        DeviceZoneScopedN("WRITE_TO_DRAM");
+                        uint32_t tile_offset = chunk * CHUNK_SIZE;
+                        uint32_t cb_addr = get_read_ptr(kv_cache_output_cb);
+                        for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+                            noc_async_write_page(kv_cache_page_id_start + tile_offset + i, kv_tensor_accessor, cb_addr);
+                            cb_addr += kv_tensor_accessor.get_aligned_page_size();
+                        }
+                        noc_async_write_barrier();
+                        cb_pop_front(kv_cache_output_cb, CHUNK_SIZE);
                     }
                 }
-                cb_pop_front(new_cache_cb, 1);
-                cb_push_back(kv_cache_intermed_cb, 1);
-
-                // 3. Wait for TRISC to finish tilize into kv_cache_output_cb and write out to DRAM
-                cb_wait_front(kv_cache_output_cb, kv_cache_num_tiles);
-
-                uint32_t cb_addr = get_read_ptr(kv_cache_output_cb);
-                for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
-                    noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
-                }
-                noc_async_write_barrier();
-                cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
 #endif
             }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsNopeCore || IsRopeCore) {
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
+                uint32_t kv_cache_intermed_sync_cb = args.kv_cache_intermed_sync_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                // half dest calculations
                 constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
-                constexpr uint32_t full_ct_dim = IsRopeCore ? 1 : 16;
-                constexpr uint32_t block_ct_dim = IsRopeCore ? 1 : 8;
+                constexpr uint32_t CHUNK_SIZE = IsRopeCore ? 1 : 8;
+                constexpr uint32_t NUM_CHUNKS = kv_cache_num_tiles / CHUNK_SIZE;
 
+                // Phase 1: Untilize into intermed_cb, pushing each chunk of CHUNK_SIZE
                 reconfig_data_format_srca<false, true>(kv_cache_input_cb);
                 pack_reconfig_data_format<true>(kv_cache_intermed_cb);
-                cb_wait_front(kv_cache_input_cb, kv_cache_num_tiles);
-                cb_reserve_back(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
-                pack_untilize_init<block_ct_dim, full_ct_dim>(kv_cache_input_cb, kv_cache_intermed_cb);
-                pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 0);
-                cb_pop_front(kv_cache_input_cb, block_ct_dim);  // consume first 8 so second block reads tiles 8-15
-                if (IsNopeCore) {
-                    pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 1);
-                    cb_pop_front(kv_cache_input_cb, kv_cache_num_tiles - block_ct_dim);  // pop remaining 8
+                pack_untilize_init<CHUNK_SIZE, CHUNK_SIZE>(kv_cache_input_cb, kv_cache_intermed_cb);
+                for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    cb_reserve_back(kv_cache_intermed_cb, CHUNK_SIZE);
+                    cb_wait_front(kv_cache_input_cb, CHUNK_SIZE);
+                    pack_untilize_block<CHUNK_SIZE, CHUNK_SIZE>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 0);
+                    cb_push_back(kv_cache_intermed_cb, CHUNK_SIZE);
+                    cb_pop_front(kv_cache_input_cb, CHUNK_SIZE);
                 }
                 pack_untilize_uninit(kv_cache_intermed_cb);
 
-                // Push back to unblock ncrisc to update kv cache with new data
-                cb_push_back(kv_cache_intermed_cb, kv_cache_num_tiles);
-
-                // Waits for ncrisc to push one more "tile"
-                cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
-                cb_reserve_back(kv_cache_output_cb, kv_cache_num_tiles);
-
-                reconfig_data_format_srca<false, true>(kv_cache_intermed_cb);
+                // Phase 2: Tilize each chunk after NCRISC signals via sync CB
+                reconfig_data_format_srca<false, true>(kv_cache_intermed_sync_cb);
                 pack_reconfig_data_format<true>(kv_cache_output_cb);
-                tilize_init(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
-                tilize_block(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
-                tilize_uninit(kv_cache_intermed_cb, kv_cache_output_cb);
-                cb_push_back(kv_cache_output_cb, kv_cache_num_tiles);
-                cb_pop_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
+                tilize_init(kv_cache_intermed_sync_cb, CHUNK_SIZE, kv_cache_output_cb);
+                for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    cb_reserve_back(kv_cache_output_cb, CHUNK_SIZE);
+                    cb_wait_front(kv_cache_intermed_sync_cb, CHUNK_SIZE);
+                    tilize_block(kv_cache_intermed_sync_cb, CHUNK_SIZE, kv_cache_output_cb);
+                    cb_push_back(kv_cache_output_cb, CHUNK_SIZE);
+                    cb_pop_front(kv_cache_intermed_sync_cb, CHUNK_SIZE);
+                }
+                tilize_uninit(kv_cache_intermed_sync_cb, kv_cache_output_cb);
             }
 #endif
         }

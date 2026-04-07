@@ -1,14 +1,12 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 
 
 def adjust_shapes_for_testing(config, mesh_device):
-    """Scale input dimensions for smaller meshes to preserve per-device shapes."""
-    n_sp_devices, n_tp_devices = mesh_device.shape
-    if n_sp_devices != 32:
-        config.max_seq_len = config.max_seq_len // (32 // n_sp_devices)
+    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
+    _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
 
@@ -24,12 +22,3 @@ def get_input_mem_config(config, mesh_shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-
-
-def calculate_average_recall(predicted_experts, reference_experts):
-    recall = 0
-    for i in range(predicted_experts.shape[0]):
-        pred_set = set(e.item() for e in predicted_experts[i])
-        ref_set = set(e.item() for e in reference_experts[i])
-        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
-    return recall / predicted_experts.shape[0]
