@@ -104,9 +104,6 @@ bool single_core_compute_kernel_sentinel(
     defines["FORCE_WATCHER_OFF"] = "1";
     defines["LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
     defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED"] = "1";
-    defines["REDUCE_OP"] = "PoolType::SUM";
-    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-
     auto compute_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/compute_kernel_sentinel.cpp",

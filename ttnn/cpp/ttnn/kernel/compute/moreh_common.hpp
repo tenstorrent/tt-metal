@@ -8,14 +8,6 @@
 
 #include <cstdint>
 
-#ifndef REDUCE_OP
-#define REDUCE_OP PoolType::SUM
-#endif
-
-#ifndef REDUCE_DIM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#endif
-
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
