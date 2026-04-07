@@ -52,7 +52,7 @@ def run_granite_ttm_demo(
         model_name,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     )
     with torch.no_grad():
         from models.demos.granite_ttm_r1.reference.preprocess import build_reference_inputs

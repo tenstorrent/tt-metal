@@ -33,7 +33,7 @@ def load_granite_ttm_reference_model(
     model_name: str = DEFAULT_MODEL_NAME,
     *,
     cache_dir: str | None = None,
-    torch_dtype: torch.dtype = torch.bfloat16,
+    dtype: torch.dtype = torch.bfloat16,
     local_files_only: bool | None = None,
 ):
     if local_files_only is None:
@@ -43,7 +43,7 @@ def load_granite_ttm_reference_model(
         model_name,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
     )
     return model.eval()
 

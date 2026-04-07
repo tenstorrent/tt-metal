@@ -31,7 +31,7 @@ PCC_THRESHOLD = 0.99
 def test_pcc_embedding(device, batch_size):
     hf_config = load_granite_ttm_config(DEFAULT_MODEL_NAME)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=1)
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     # Parameters for backbone.encoder.patcher
     parameters = preprocess_parameters(hf_model, device)

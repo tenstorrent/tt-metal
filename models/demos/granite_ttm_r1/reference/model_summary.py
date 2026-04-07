@@ -35,7 +35,7 @@ def main():
             print(f"  {key}: {val!r}")
 
     print(f"\nLoading model ...")
-    model = TinyTimeMixerForPrediction.from_pretrained(MODEL_NAME, torch_dtype=torch.float32).eval()
+    model = TinyTimeMixerForPrediction.from_pretrained(MODEL_NAME, dtype=torch.float32).eval()
 
     print("\nModule tree:")
     print(model)

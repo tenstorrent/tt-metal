@@ -41,7 +41,7 @@ def test_pcc_full_model(device, batch_size):
     num_channels = infer_num_channels(hf_config)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
 
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     example = create_synthetic_example(
         batch_size=batch_size,

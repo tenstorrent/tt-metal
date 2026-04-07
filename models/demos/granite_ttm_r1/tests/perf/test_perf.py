@@ -50,7 +50,7 @@ def _build_model_and_example(device, batch_size=1):
     num_channels = infer_num_channels(hf_config)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
 
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
     parameters = preprocess_parameters(hf_model, device)
 
     ttnn_model = TtnnGraniteTTMModel(
@@ -76,7 +76,7 @@ def _build_model_and_example(device, batch_size=1):
 
 def test_model_size():
     """Verify total parameter count is below 1M."""
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
     n_params = sum(p.numel() for p in hf_model.parameters())
     assert n_params < PARAM_LIMIT, f"Model has {n_params:,} parameters, exceeds limit of {PARAM_LIMIT:,}"
 
@@ -288,7 +288,7 @@ def test_multi_model_serving(device):
     num_channels = infer_num_channels(hf_config)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
 
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     # Pre-process weights ONCE
     parameters = preprocess_parameters(hf_model, device)

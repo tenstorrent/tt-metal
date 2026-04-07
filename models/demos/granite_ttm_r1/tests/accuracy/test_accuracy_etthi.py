@@ -103,7 +103,7 @@ def test_accuracy_etthi(device):
     hf_config = load_granite_ttm_config(DEFAULT_MODEL_NAME)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
 
-    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, torch_dtype=torch.float32)
+    hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
     parameters = preprocess_parameters(hf_model, device)
 
     ttnn_model = TtnnGraniteTTMModel(
