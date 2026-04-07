@@ -6,17 +6,20 @@
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
-@pytest.mark.parametrize(
-    "batch_size, expected_perf",
-    [
-        [1, 236.95],
-    ],
-)
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_yolov8l(batch_size, expected_perf):
+def test_perf_device_yolov8l(batch_size):
+    if is_wormhole_b0():
+        expected_perf = 236.5
+    elif is_blackhole():
+        expected_perf = 158.5
+    else:
+        pytest.skip("yolov8l device perf targets are only defined for wormhole_b0 and blackhole")
+
     subdir = "ttnn_yolov8l"
     num_iterations = 1
     margin = 0.05
