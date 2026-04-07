@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlapEntry, overlap_tensors
-from models.demos.deepseek_v3_b1.tensor_cache.types import FusionGroupSpec
+from models.demos.deepseek_v3_b1.weights.cache.types import FusionGroupSpec
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, overlap_tensors
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensor
+    from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 
 
-def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, OverlappedTensor]) -> None:
+def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, "OverlappedTensor"]) -> None:
     """Assert produced OverlappedTensor views are consistent with the FusionGroupSpec regions.
 
     Catches drift between the preprocessing output and the FusionGroupSpec used for fingerprinting.

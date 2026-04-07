@@ -22,11 +22,7 @@ _STR_TO_DTYPE: dict[str, ttnn.DataType] = {v: k for k, v in _DTYPE_TO_STR.items(
 
 
 def core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
-    """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]].
-
-    Range order follows ``crs.ranges()`` (not sorted). Fingerprint canonicalization sorts ranges
-    for deterministic hashing; here we preserve spec order for round-trip view metadata.
-    """
+    """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]]."""
     result = []
     for r in crs.ranges():
         start, end = r.start, r.end
@@ -62,9 +58,9 @@ def overlapped_tensor_to_view_dict(ot: "OverlappedTensor") -> dict:
     }
 
 
-def overlapped_tensor_from_view_dict(fused_tensor: ttnn.Tensor, d: dict) -> OverlappedTensor:
+def overlapped_tensor_from_view_dict(fused_tensor: ttnn.Tensor, d: dict) -> "OverlappedTensor":
     """Reconstruct OverlappedTensor from loaded fused tensor and view dict."""
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+    from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 
     dtype = _STR_TO_DTYPE.get(d["dtype"])
     if dtype is None:
@@ -84,5 +80,5 @@ def overlapped_tensor_from_view_dict(fused_tensor: ttnn.Tensor, d: dict) -> Over
     )
 
 
-def views_dict_from_overlapped(views: dict[str, OverlappedTensor]) -> dict[str, dict]:
+def views_dict_from_overlapped(views: dict[str, "OverlappedTensor"]) -> dict[str, dict]:
     return {name: overlapped_tensor_to_view_dict(ot) for name, ot in views.items()}

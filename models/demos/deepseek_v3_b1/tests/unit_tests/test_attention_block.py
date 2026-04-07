@@ -17,13 +17,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
-    fuse_kv_b12,
-    fuse_o_proj_gate_mm_norms,
-    fuse_q_ab_kv_a,
-)
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
@@ -31,6 +24,15 @@ from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
+    fuse_q_ab_kv_a,
+)
 
 
 @pytest.mark.parametrize(

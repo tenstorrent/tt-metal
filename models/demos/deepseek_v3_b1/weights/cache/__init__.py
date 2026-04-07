@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.demos.deepseek_v3_b1.tensor_cache.cache import EphemeralTensorCache, TensorCache, TensorCacheProtocol
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec
-from models.demos.deepseek_v3_b1.tensor_cache.types import (
+from models.demos.deepseek_v3_b1.weights.cache.cache import EphemeralTensorCache, TensorCache, TensorCacheProtocol
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
+from models.demos.deepseek_v3_b1.weights.cache.types import (
     ArtifactTarget,
     CacheContext,
     Fingerprint,
@@ -26,9 +26,9 @@ from models.demos.deepseek_v3_b1.tensor_cache.types import (
 
 
 def __getattr__(name: str):
-    """Lazy export of ``create_overlapped_tensor`` to avoid import cycles with ``blitz_decode_weights``."""
+    """Lazy export of ``create_overlapped_tensor`` to avoid import cycles."""
     if name == "create_overlapped_tensor":
-        from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor as _cot
+        from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor as _cot
 
         return _cot
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

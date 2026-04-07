@@ -19,16 +19,14 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec
-from models.demos.deepseek_v3_b1.tensor_cache.cache import (
+from models.demos.deepseek_v3_b1.weights.cache.cache import (
     AbsentCacheEntry,
     CorruptCacheEntry,
     PresentCacheEntry,
     TensorCache,
 )
-from models.demos.deepseek_v3_b1.tensor_cache.fingerprint import canonical, compute_artifact_id
-from models.demos.deepseek_v3_b1.tensor_cache.types import (
+from models.demos.deepseek_v3_b1.weights.cache.fingerprint import canonical, compute_artifact_id
+from models.demos.deepseek_v3_b1.weights.cache.types import (
     CacheContext,
     Fingerprint,
     FusionGroupSpec,
@@ -39,6 +37,8 @@ from models.demos.deepseek_v3_b1.tensor_cache.types import (
     SourceTensorSelection,
     TensorTarget,
 )
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 
 def _make_fingerprint(**overrides) -> Fingerprint:
@@ -657,7 +657,7 @@ def _create_overlapped_tensor_fused_with_toy(
     """Wrapper that handles _unittest_toy locally, delegates production specs to the library."""
     if spec.name == "_unittest_toy":
         return _create_unittest_toy(preprocessed, device, move_to_device)
-    from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
+    from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor
 
     return create_overlapped_tensor(spec, preprocessed, device, move_to_device=move_to_device)
 
@@ -703,7 +703,7 @@ class TestCreateOverlappedTensorUnittestToy:
         assert "a" in views and "b" in views
         assert views["a"].byte_offset == 0
         assert views["b"].byte_offset == views["a"].total_size
-        assert views["a"].fused_tensor is fused
+        assert views["a"].fused_tensor == fused
         ttnn.deallocate(fused, force=True)
 
 
@@ -715,12 +715,12 @@ class TestGetOrCreateFused:
     @pytest.fixture(autouse=True)
     def _patch_fuse(self, monkeypatch):
         """Route _unittest_toy through the local factory instead of the library fuse module."""
-        import models.demos.deepseek_v3_b1.tensor_cache.cache as _cache_mod
+        import models.demos.deepseek_v3_b1.weights.cache.cache as _cache_mod
 
         monkeypatch.setattr(_cache_mod, "_create_overlapped_tensor_fused", _create_overlapped_tensor_fused_with_toy)
 
     def test_miss_then_hit(self, cache_dir, device):
-        from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache
+        from models.demos.deepseek_v3_b1.weights.cache.cache import TensorCache
 
         cache = TensorCache(cache_dir)
         preprocess_calls = [0]
@@ -765,7 +765,7 @@ class TestGetOrCreateFused:
         ttnn.deallocate(v2["a"].fused_tensor, force=True)
 
     def test_corrupt_fused_recovery(self, cache_dir, device):
-        from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache
+        from models.demos.deepseek_v3_b1.weights.cache.cache import TensorCache
 
         cache = TensorCache(cache_dir)
         ctx = CacheContext(

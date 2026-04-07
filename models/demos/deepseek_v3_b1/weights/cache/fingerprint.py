@@ -14,8 +14,7 @@ import hashlib
 import json
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec
-from models.demos.deepseek_v3_b1.tensor_cache.types import (
+from models.demos.deepseek_v3_b1.weights.cache.types import (
     Fingerprint,
     FusionGroupSpec,
     RegionSpec,
@@ -23,6 +22,7 @@ from models.demos.deepseek_v3_b1.tensor_cache.types import (
     ShardMeshMapper,
     TensorTarget,
 )
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 
 def _canonical_mesh_mapper(mapper_config) -> dict:

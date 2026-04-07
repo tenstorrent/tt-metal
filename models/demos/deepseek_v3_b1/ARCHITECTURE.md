@@ -216,7 +216,7 @@ The design is built around three ideas:
    `TensorTarget` (dtype, layout, memory config, tile shape, mesh
    mapping strategy). Fusion group layouts are expressed as
    `FusionGroupSpec` data, and a single generic function
-   (`tensor_cache/fuse.py:create_overlapped_tensor`) packs any spec
+   (`weights/cache/fuse.py:create_overlapped_tensor`) packs any spec
    into a fused buffer — no per-group dispatch or bespoke methods.
 
 3. **Two-tier storage.** HuggingFace safetensors live on shared NFS
@@ -276,7 +276,7 @@ only invoked on a cache miss.
 ```
 HF safetensors (NFS)
   │
-  │  prepare_weights.py
+  │  weights/prepare.py
   │  ┌──────────────────────────────────────────────────────────────────┐
   │  │  _preprocess_* closures                                         │
   │  │  ┌──────────────────────────────────────────────────────────┐    │
@@ -292,7 +292,7 @@ HF safetensors (NFS)
   │  └──────────────────────────┬───────────────────────────────────────┘
   │                             │
   ▼                             ▼
-  TensorCache (tensor_cache/)
+  TensorCache (weights/cache/)
   ┌────────────────────────────────────────────────────────────────┐
   │  fingerprint → artifact_id = sha256(canonical(fingerprint))    │
   │  lookup on local NVMe                                          │
@@ -311,9 +311,9 @@ HF safetensors (NFS)
 
 ### Fusion group packing (generic)
 
-`tensor_cache/fuse.py` contains a single `create_overlapped_tensor`
+`weights/cache/fuse.py` contains a single `create_overlapped_tensor`
 function that reads `FusionGroupSpec.regions` to build `OverlapEntry`
-objects, then delegates to `blitz_overlap_tensors.overlap_tensors`.
+objects, then delegates to `weights.overlap.packing.overlap_tensors`.
 There is no per-group dispatch — the spec *is* the layout recipe.
 
 ```python
@@ -335,9 +335,9 @@ def create_overlapped_tensor(spec, preprocessed, device, *, move_to_device=True)
 
 ### Types (standalone tensors)
 
-Standalone and fusion-group types live in `tensor_cache/types.py`.
+Standalone and fusion-group types live in `weights/cache/types.py`.
 View metadata for fusion entries is serialized to JSON in
-`metadata.json` via `tensor_cache/overlapped_metadata.py`.
+`metadata.json` via `weights/cache/overlapped_metadata.py`.
 
 ```python
 @dataclass(frozen=True)
@@ -435,7 +435,7 @@ CacheEntry = AbsentCacheEntry | PresentCacheEntry | CorruptCacheEntry
 
 `FusionGroupSpec` declaratively describes the complete packing layout
 for a fused (overlapped) tensor group. It directly embeds
-`OverlappedTensorSpec` instances (from `blitz_overlap_tensors.py`) as
+`OverlappedTensorSpec` instances (from `weights/overlap/spec.py`) as
 subtensors — the same type used at runtime for buffer packing.
 
 ```python
@@ -820,7 +820,7 @@ GATE_UP_SPEC = FusionGroupSpec(
 
 ## Cache Interface
 
-`TensorCache` and `EphemeralTensorCache` in `tensor_cache/cache.py`
+`TensorCache` and `EphemeralTensorCache` in `weights/cache/cache.py`
 implement `get_or_create` for both `TensorTarget` (returns
 `ttnn.Tensor`) and `FusionGroupSpec` (returns
 `dict[str, OverlappedTensor]`).
@@ -869,7 +869,7 @@ Key design decisions:
 
 ## Fingerprint Canonicalization
 
-Implemented in `tensor_cache/fingerprint.py` for both `TensorTarget`
+Implemented in `weights/cache/fingerprint.py` for both `TensorTarget`
 and `FusionGroupSpec`. Each `FusionGroupSpec` is canonicalized by
 serializing its regions, subtensors (`OverlappedTensorSpec` name,
 shape, dtype, tile shape), sharding strategy, and mesh mapper config
@@ -936,7 +936,7 @@ For standalone tensors (`TensorTarget`), the hit path is a single
 `ttnn.load_tensor` call — no view reconstruction. For fusion groups
 (`FusionGroupSpec`), the hit path loads the fused `data.tensorbin` and
 reconstructs `OverlappedTensor` views from the `views` field in
-`metadata.json` (see `tensor_cache/overlapped_metadata.py`).
+`metadata.json` (see `weights/cache/overlapped_metadata.py`).
 
 ## Write Path (cache miss)
 
@@ -955,15 +955,20 @@ preprocessed = preprocess(tensors)         # model-specific torch transforms
 
 | File | Role |
 |---|---|
-| `blitz_overlap_tensors.py` | `OverlappedTensorSpec` dataclass, `OverlapEntry`, `overlap_tensors` — low-level buffer packing |
-| `blitz_decode_weights.py` | `*_SingleDeviceOverlapSpec` dataclasses, `FusionGroupSpec` constants (`Q_AB_KV_A_SPEC`, etc.), shared preprocessing functions (`preprocess_q_ab_kv_a`, `preprocess_kv_b12`, `preprocess_gate_up`), standalone `fuse_*` functions (for tests), non-fusion utilities (`shuffle_dram_tiles`, `shared_down_torch_for_cache`, etc.) |
-| `prepare_weights.py` | Production entry point: `prepare_*` functions orchestrate state-dict extraction (Phase A), delegate to shared preprocessing (Phase B), route through `cache.get_or_create`; defines `TensorTarget` builders and weight dataclasses |
-| `tensor_cache/types.py` | `TensorTarget`, `FusionGroupSpec`, `RegionSpec`, `Fingerprint`, `CacheContext`, `MeshMapperConfig` variants |
-| `tensor_cache/fingerprint.py` | Deterministic canonicalization + SHA-256 artifact ID for both `TensorTarget` and `FusionGroupSpec` |
-| `tensor_cache/cache.py` | `TensorCache` (NVMe-backed), `EphemeralTensorCache` (in-memory), `get_or_create` dispatching on target type |
-| `tensor_cache/fuse.py` | Generic `create_overlapped_tensor(spec, preprocessed, device)` — reads `FusionGroupSpec` regions, builds `OverlapEntry` objects, calls `overlap_tensors` |
-| `tensor_cache/overlapped_metadata.py` | Serialize/deserialize `OverlappedTensor` view metadata to/from JSON for cache persistence |
-| `tensor_cache/__init__.py` | Re-exports, `CacheConfig` dataclass |
+| `weights/overlap/spec.py` | `OverlappedTensorSpec` dataclass, `max_shard_bytes` — sub-tensor layout description |
+| `weights/overlap/packing.py` | `OverlapEntry`, `overlap_tensors`, tilization — low-level buffer packing |
+| `weights/cache/types.py` | `TensorTarget`, `FusionGroupSpec`, `RegionSpec`, `Fingerprint`, `CacheContext`, `MeshMapperConfig` variants |
+| `weights/cache/fingerprint.py` | Deterministic canonicalization + SHA-256 artifact ID |
+| `weights/cache/cache.py` | `TensorCache` (NVMe-backed), `EphemeralTensorCache` (in-memory), `get_or_create` |
+| `weights/cache/fuse.py` | Generic `create_overlapped_tensor(spec, preprocessed, device)` — reads `FusionGroupSpec` regions |
+| `weights/cache/overlapped_metadata.py` | Serialize/deserialize `OverlappedTensor` view metadata to/from JSON |
+| `weights/cache/__init__.py` | Re-exports, `CacheConfig` dataclass |
+| `weights/specs/overlap_configs.py` | `*_SingleDeviceOverlapSpec` dataclasses, singleton instances, weight shuffle methods |
+| `weights/specs/fusion_groups.py` | `FusionGroupSpec` constants (`Q_AB_KV_A_SPEC`, etc.), `_build_fusion_group_spec` |
+| `weights/transforms/attention.py` | Shared preprocessing (`preprocess_q_ab_kv_a`, `preprocess_kv_b12`), `fuse_*` helpers |
+| `weights/transforms/moe.py` | `_tp_factors`, `shuffle_dram_tiles`, `preprocess_gate_up`, `fuse_gate_up`, routed expert utilities |
+| `weights/prepare.py` | Production entry point: `prepare_*` functions, weight dataclasses, `TensorTarget` builders |
+| `weights/versioning.py` | `CURRENT_TRANSFORM_VERSION` constant |
 | `scripts/generate_cache.py` | Offline CAS warm; calls `prepare_*` with disk-backed `CacheConfig` |
 | `demo/weight_provider.py` | `CacheWeightProvider`, `SyntheticWeightProvider`, `StateDictWeightProvider` |
 
@@ -973,16 +978,16 @@ preprocessed = preprocess(tensors)         # model-specific torch transforms
 demo/weight_provider.py
   │  calls prepare_* with CacheConfig
   ▼
-prepare_weights.py
+weights/prepare.py
   │  Phase A: extract + torch transforms (inline closures)
   │  Phase B: delegates to shared preprocess_* functions
   │  routes each artifact through cache.get_or_create()
   │
-  ├── blitz_decode_weights.py
+  ├── weights/transforms/attention.py + moe.py
   │     preprocess_q_ab_kv_a(), preprocess_kv_b12(), preprocess_gate_up()
   │     (shuffle, TP-concat, mesh-reshape — single source of truth)
   │
-  └── tensor_cache/cache.py
+  └── weights/cache/cache.py
         │  get_or_create(fingerprint, preprocess, raw_tensors)
         │
         ├── HIT: load data.tensorbin + views from NVMe
@@ -993,10 +998,10 @@ prepare_weights.py
               ├── TensorTarget: ttnn.from_torch → store → load
               │
               └── FusionGroupSpec:
-                    tensor_cache/fuse.py
+                    weights/cache/fuse.py
                       create_overlapped_tensor(spec, preprocessed)
                         │
-                        └── blitz_overlap_tensors.py
+                        └── weights/overlap/packing.py
                               overlap_tensors(lanes, device)
 ```
 
@@ -1004,13 +1009,13 @@ prepare_weights.py
 
 ## Model-Level Usage
 
-`prepare_weights.py` routes **all** weight artifacts (standalone
+`weights/prepare.py` routes **all** weight artifacts (standalone
 tensors, fusion groups, per-expert routed weights) through
 `cache_config.cache.get_or_create(...)`. When `cache_config` is
 omitted, `prepare_*` uses `CacheConfig.ephemeral()` so there is a
 single code path with no disk persistence.
 
-A `CURRENT_TRANSFORM_VERSION` constant in `prepare_weights.py` is
+A `CURRENT_TRANSFORM_VERSION` constant in `weights/prepare.py` is
 bumped when preprocessing logic changes, invalidating cached artifacts.
 
 ```python
@@ -1027,7 +1032,7 @@ every `get_or_create` call site. `CacheConfig` pairs it with the
 `TensorCache` instance:
 
 ```python
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 
 cache_config = CacheConfig(
     cache=TensorCache(Path("/local_nvme/deepseek_v3_cache")),
@@ -1081,7 +1086,7 @@ truth for the transformation sequence.
 
 ### Phase A — State dict extraction and torch transforms
 
-Implemented as inline closures (`_preprocess_*`) inside `prepare_weights.py`.
+Implemented as inline closures (`_preprocess_*`) inside `weights/prepare.py`.
 Responsible for:
 
 - Extracting the relevant tensors from the HF state dict
@@ -1092,8 +1097,8 @@ Responsible for:
 
 ### Phase B — Shuffle, TP-concat, mesh-reshape
 
-Implemented as three shared module-level functions in
-`blitz_decode_weights.py`:
+Implemented as shared module-level functions in
+`weights/transforms/attention.py` and `weights/transforms/moe.py`:
 
 | Function | Inputs | Outputs |
 |----------|--------|---------|
@@ -1101,8 +1106,8 @@ Implemented as three shared module-level functions in
 | `preprocess_kv_b12(kv_b1, kv_b2, mla_tp)` | Split b1/b2 | `{kv_b1_proj, kv_b2_proj}` — kv_b2 shuffled + TP-concatenated |
 | `preprocess_gate_up(gate, up, moe_tp, rows, cols)` | Transposed, trimmed | `{shared_gate_proj, shared_up_proj}` — reshuffled + mesh-stacked |
 
-Both `prepare_weights._preprocess_*` (production path) and
-`blitz_decode_weights.fuse_*` (test path) delegate to these shared
+Both `weights/prepare._preprocess_*` (production path) and
+`weights/transforms/*.fuse_*` (test path) delegate to these shared
 functions for Phase B, ensuring the shuffle/TP-concat/mesh-reshape
 logic is defined exactly once.
 
@@ -1110,7 +1115,7 @@ logic is defined exactly once.
 
 ```
 *_SingleDeviceOverlapSpec          OverlappedTensorSpec
-  (blitz_decode_weights.py)          (blitz_overlap_tensors.py)
+  (weights/specs/overlap_configs.py)  (weights/overlap/spec.py)
   Per-group configuration             Per-sub-tensor layout
   with shuffle methods                (core range, shape, dtype,
   and shape constants                  tile, sharding, tp_dim)
@@ -1118,7 +1123,7 @@ logic is defined exactly once.
            │ fields                              │ embedded in
            ▼                                    ▼
    _build_fusion_group_spec()  ──────►  FusionGroupSpec
-                                          (tensor_cache/types.py)
+                                          (weights/cache/types.py)
                                           │
                     ┌─────────────────────┴──────────────────┐
                     │                                        │
@@ -1182,8 +1187,8 @@ predate CAS.
 - **Preprocessing logic** — the transformations themselves (transpose,
   deinterleave, shuffle, TP-concat) are unchanged from the pre-CAS
   layout. They are now organized into Phase A (inline in
-  `prepare_weights.py`) and Phase B (shared functions in
-  `blitz_decode_weights.py`), routed through `get_or_create` instead
+  `weights/prepare.py`) and Phase B (shared functions in
+  `weights/transforms/`), routed through `get_or_create` instead
   of being called directly.
 
 ---

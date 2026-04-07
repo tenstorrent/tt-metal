@@ -16,9 +16,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
@@ -37,7 +38,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
 
 def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights) -> None:

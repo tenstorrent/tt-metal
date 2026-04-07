@@ -17,7 +17,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlapEntry, OverlappedTensorSpec, overlap_tensors
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, overlap_tensors
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 OverlappedTensor = ttnn.OverlappedTensor
 
