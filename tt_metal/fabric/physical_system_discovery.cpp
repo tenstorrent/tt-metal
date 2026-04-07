@@ -48,7 +48,10 @@ TrayID get_tray_id_for_chip(
         {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
     };
 
-    if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
+    if (using_mock_cluster_desc) {
+        return TrayID{0};
+    }
+    if (!mobo_to_bus_ids.contains(mobo_name)) {
         auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
         log_warning(
             tt::LogAlways,
