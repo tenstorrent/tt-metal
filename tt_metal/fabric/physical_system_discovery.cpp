@@ -12,7 +12,6 @@
 #include <unistd.h>
 #include <climits>
 #include <fstream>
-#include <iostream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
@@ -49,20 +48,19 @@ TrayID get_tray_id_for_chip(
         {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
     };
 
-    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
-    std::cout << "[get_tray_id_for_chip] chip_id=" << chip_id
-              << " mobo_name='" << mobo_name << "'"
-              << " bus_id=0x" << std::hex << bus_id << std::dec
-              << " using_mock=" << using_mock_cluster_desc
-              << " mobo_known=" << mobo_to_bus_ids.contains(mobo_name)
-              << std::endl;
     if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
-        std::cout << "[get_tray_id_for_chip] DEFAULTING tray_id=0 for chip_id=" << chip_id
-                  << " (mobo='" << mobo_name << "', mock=" << using_mock_cluster_desc << ")"
-                  << std::endl;
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        log_warning(
+            tt::LogAlways,
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+            mobo_name,
+            chip_id,
+            bus_id);
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
@@ -76,20 +74,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     auto* cluster_desc = cluster.get_cluster_description();
-    auto board_type = cluster_desc->get_board_type(chip_id);
-    auto arch = cluster_desc->get_arch(chip_id);
-    auto board_id = cluster_desc->get_board_id_for_chip(chip_id);
-    uint64_t upi = (board_id >> 36) & 0xFFFFF;
-    std::cout << "[get_asic_position] chip_id=" << chip_id
-              << " arch=" << tt::arch_to_str(arch)
-              << " board_type=" << static_cast<uint32_t>(board_type)
-              << " (" << tt::board_type_to_string(board_type) << ")"
-              << " board_id=0x" << std::hex << board_id
-              << " upi=0x" << upi << std::dec
-              << " using_mock=" << using_mock_cluster_desc
-              << std::endl;
-    if (board_type == BoardType::UBB_WORMHOLE ||
-        board_type == BoardType::UBB_BLACKHOLE) {
+    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
+        cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(
@@ -98,14 +84,11 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
-        std::cout << "[get_asic_position] result: chip_id=" << chip_id
-                  << " tray_id=" << ubb_id.tray_id
-                  << " asic_location=" << ubb_id.asic_id
-                  << " (UBB path)" << std::endl;
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
     auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
     ASICLocation asic_location;
+    tt::ARCH arch = cluster_desc->get_arch(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Derive ASIC Location based on the tunnel depth for Wormhole systems
         // TODO: Remove this once UMD populates the ASIC Location for WH systems.
@@ -125,11 +108,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     } else {
         TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
     }
-    std::cout << "[get_asic_position] result: chip_id=" << chip_id
-              << " tray_id=" << *tray_id
-              << " asic_location=" << *asic_location
-              << " (non-UBB path, arch=" << tt::arch_to_str(arch) << ")"
-              << std::endl;
     return {tray_id, asic_location};
 }
 
