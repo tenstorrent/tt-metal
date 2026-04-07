@@ -24,15 +24,10 @@ struct KernelSource {
     KernelSource(const std::string& source, const SourceType& source_type);
 
     std::string name() const {
-        std::string name;
         if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
-            const std::size_t pos_of_dot = this->source_.rfind('.');
-            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
-        } else {
-            name = "Kernel_Source_Code";
+            return this->path_.stem().string();
         }
-        return name;
+        return "Kernel_Source_Code";
     }
 
     // Returns the actual source code (file content or source string)

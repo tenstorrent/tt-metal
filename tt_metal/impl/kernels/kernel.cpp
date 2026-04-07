@@ -878,7 +878,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     if (config_.is_legacy_kernel) {
-        for (int i = 0; i < this->dm_processors_.size(); ++i) {
+        for (std::size_t i = 0; i < this->dm_processors_.size(); ++i) {
             const DataMovementProcessor& processor = this->dm_processors_[i];
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
             auto load_type =
@@ -974,7 +974,7 @@ void QuasarComputeKernel::read_binaries(IDevice* device) {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (int i = 0; i < this->compute_processors_.size(); ++i) {
+    for (std::size_t i = 0; i < this->compute_processors_.size(); ++i) {
         const QuasarComputeProcessor& processor = this->compute_processors_[i];
         const int trisc_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(processor);
         auto load_type = MetalContext::instance()
