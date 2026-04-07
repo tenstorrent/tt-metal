@@ -211,6 +211,10 @@ void JitBuildEnv::init(
         }
     }
 
+    if (rtoptions.get_checkpoint_enabled()) {
+        this->defines_ += "-DDEBUG_CHECKPOINT_ENABLED ";
+    }
+
     if (rtoptions.get_record_noc_transfers()) {
         this->defines_ += "-DNOC_LOGGING_ENABLED ";
     }

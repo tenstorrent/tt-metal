@@ -15,6 +15,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tensix_dest.cpp
     device_print/test_print_tile.cpp
     device_print/test_print_tiles_multiple.cpp
+    device_print/test_checkpoint.cpp
     dprint/test_dprint_mesh_coords.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
