@@ -101,16 +101,51 @@ class WarmupForwardMixin:
         logger.info(f"Start pos shape: {start_pos.shape}")
         logger.info(f"Page table shape: {page_table.shape}")
 
-        for param in sampling_params:
-            logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
-                tokens=tokens,
-                start_pos=start_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                enable_trace=enable_trace,
-                read_from_device=True,
-                sampling_params=param,
-            )
+        trace_values = [False, True] if enable_trace else [False]
+        for trace_value in trace_values:
+            for param in sampling_params:
+                # summarize sampling params for simple logging
+                if param is None:
+                    param_summary = "None"
+                else:
+                    temp0 = (
+                        param.temperature[0]
+                        if isinstance(param.temperature, list) and len(param.temperature) > 0
+                        else param.temperature
+                    )
+                    topk0 = param.top_k[0] if isinstance(param.top_k, list) and len(param.top_k) > 0 else param.top_k
+                    topp0 = param.top_p[0] if isinstance(param.top_p, list) and len(param.top_p) > 0 else param.top_p
+                    penalties_on = any(
+                        x is not None
+                        and (
+                            (isinstance(x, list) and len(x) > 0 and x[0] not in (0.0, 1.0))
+                            or (not isinstance(x, list) and x not in (0.0, 1.0, None))
+                        )
+                        for x in (param.presence_penalty, param.frequency_penalty, param.repetition_penalty)
+                    )
+                    log_probs_on = (
+                        any(param.enable_log_probs)
+                        if isinstance(param.enable_log_probs, list)
+                        else bool(param.enable_log_probs)
+                    )
+                    param_summary = (
+                        f"temperature={temp0}, top_k={topk0}, top_p={topp0}, "
+                        f"penalties_on={penalties_on}, log_probs_on={log_probs_on}"
+                    )
+
+                warmup_mode = not trace_value
+                logger.info(
+                    f"Warming up decode for sampling params: {param_summary} with enable_trace={trace_value} and warmup_mode={warmup_mode}"
+                )
+                self.decode_forward(
+                    tokens=tokens,
+                    start_pos=start_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=trace_value,
+                    read_from_device=True,
+                    sampling_params=param,
+                    warmup_mode=warmup_mode,
+                )
 
         logger.info("Decode warmup completed")

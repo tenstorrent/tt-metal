@@ -54,7 +54,8 @@ void bind_scatter(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("reduce") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 void bind_scatter_add(nb::module_& mod) {
@@ -71,6 +72,7 @@ void bind_scatter_add(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): specifies which cores scatter should run on. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor with scattered values.
@@ -89,7 +91,8 @@ void bind_scatter_add(nb::module_& mod) {
         nb::arg("src").noconvert(),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

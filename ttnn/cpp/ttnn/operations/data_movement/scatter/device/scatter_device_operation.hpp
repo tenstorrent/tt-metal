@@ -49,5 +49,6 @@ ttnn::Tensor scatter(
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
     const ttnn::operations::data_movement::scatter::ScatterReductionType& opt_reduction,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

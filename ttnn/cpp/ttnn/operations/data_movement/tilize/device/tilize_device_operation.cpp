@@ -69,6 +69,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
+    const auto& output_tensor = tensor_args.optional_output_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
@@ -110,11 +111,26 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             alignment_requirement);  // The shard width must be an aligned size, or we will face alignment issues
                                      // when the reader tries to write to the CB.
     }
+
+    if (output_tensor.has_value()) {
+        TT_FATAL(output_tensor->storage_type() == StorageType::DEVICE, "Preallocated output tensor must be on device");
+        TT_FATAL(output_tensor->layout() == Layout::TILE, "Preallocated output tensor must be in TILE layout");
+        TT_FATAL(
+            output_tensor->logical_shape() == input_tensor_a.logical_shape(),
+            "Preallocated output tensor logical shape must match input");
+        TT_FATAL(
+            output_tensor->dtype() == operation_attributes.output_dtype,
+            "Preallocated output tensor dtype must match requested output dtype");
+    }
 }
 
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor->tensor_spec();
+    }
+
     const auto& input_tensor = tensor_args.input_tensor;
     if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
         log_warning(
@@ -207,6 +223,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
     const TilizeDeviceOperation::operation_attributes_t& args,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
@@ -218,7 +237,8 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& output_tensor) {
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -229,6 +249,6 @@ ttnn::Tensor tilize(
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,
         },
-        TilizeInputs{input_tensor, std::nullopt});
+        TilizeInputs{input_tensor, output_tensor});
 }
 }  // namespace ttnn::prim

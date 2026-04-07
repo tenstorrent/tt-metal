@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -137,6 +138,7 @@ class TTPenalties(LightweightModule):
         self._shard_dims_gathered = shard_dims_gathered
 
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        self.prompt_counts = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
@@ -144,6 +146,8 @@ class TTPenalties(LightweightModule):
             host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         self.zeros = self._alloc_int_buffer(shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.scatter_add_output = self._alloc_int_buffer(shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.tilize_output = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.presence_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.frequency_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
@@ -240,7 +244,13 @@ class TTPenalties(LightweightModule):
             return tokens_2d[: self._total_batch]
         return tokens_2d
 
-    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
+    def reset_prompt_tokens(
+        self,
+        prompt_tokens: torch.Tensor,
+        *,
+        prompt_tokens_tt: Optional[ttnn.Tensor] = None,
+        src_tt: Optional[ttnn.Tensor] = None,
+    ):
         # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
@@ -248,19 +258,59 @@ class TTPenalties(LightweightModule):
         src_host = (prompt_tokens_2d != -1).to(torch.int32)
         idx_host = torch.where(prompt_tokens_2d == -1, torch.zeros_like(prompt_tokens_2d), prompt_tokens_2d)
 
-        prompt_tokens_tt = self._alloc_int_buffer(
-            host=idx_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+        using_preallocated_buffers = prompt_tokens_tt is not None and src_tt is not None
+        if using_preallocated_buffers:
+            logger.info(f"using preallocated buffers")
+            mapper = (
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape)
+                if self._sampling_dp > 1
+                else None
+            )
+            idx_host_tt = ttnn.from_torch(
+                idx_host,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            src_host_tt = ttnn.from_torch(
+                src_host,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            ttnn.copy_host_to_device_tensor(idx_host_tt, prompt_tokens_tt)
+            ttnn.copy_host_to_device_tensor(src_host_tt, src_tt)
+        else:
+            logger.info(f"allocating prompt_tokens_tt")
+            prompt_tokens_tt = self._alloc_int_buffer(
+                host=idx_host,
+                shard_dims=self._shard_dims_gathered,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            logger.info(f"allocating src_tt")
+            src_tt = self._alloc_int_buffer(
+                host=src_host,
+                shard_dims=self._shard_dims_gathered,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        logger.info(f"token_bin_counts_and_mask")
+        self.token_bin_counts_and_mask(
+            new_tokens=prompt_tokens_tt,
+            src=src_tt,
+            counts_sliced=self.prompt_counts,
+            mask=self.prompt_mask,
+            deallocate_new_tokens=not using_preallocated_buffers,
         )
-        src_tt = self._alloc_int_buffer(
-            host=src_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
 
-    def reset_output_tokens(self, tokens=None):
+    def reset_output_tokens(
+        self,
+        tokens=None,
+        *,
+        output_tokens_tt: Optional[ttnn.Tensor] = None,
+        src_tt: Optional[ttnn.Tensor] = None,
+    ):
         # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
         # This ensures penalty statistics are cleared between prefill and decode phases
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
@@ -277,34 +327,62 @@ class TTPenalties(LightweightModule):
             src_host = (tokens_2d != -1).to(torch.int32)
             idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
 
-            mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape)
-                if self._sampling_dp > 1
-                else None
-            )
-            tokens_tt = ttnn.from_torch(
-                idx_host,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            src_tt = ttnn.from_torch(
-                src_host,
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
+            using_preallocated_buffers = output_tokens_tt is not None and src_tt is not None
+            if using_preallocated_buffers:
+                logger.info(f"using preallocated output buffers")
+                mapper = (
+                    ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape
+                    )
+                    if self._sampling_dp > 1
+                    else None
+                )
+                idx_host_tt = ttnn.from_torch(
+                    idx_host,
+                    device=None,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mapper,
+                )
+                src_host_tt = ttnn.from_torch(
+                    src_host,
+                    device=None,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mapper,
+                )
+                ttnn.copy_host_to_device_tensor(idx_host_tt, output_tokens_tt)
+                ttnn.copy_host_to_device_tensor(src_host_tt, src_tt)
+            else:
+                mapper = (
+                    ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape
+                    )
+                    if self._sampling_dp > 1
+                    else None
+                )
+                output_tokens_tt = ttnn.from_torch(
+                    idx_host,
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mapper,
+                )
+                src_tt = ttnn.from_torch(
+                    src_host,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mapper,
+                )
             self.token_bin_counts_and_mask(
-                new_tokens=tokens_tt,
+                new_tokens=output_tokens_tt,
                 counts=self.output_counts_gathered,
                 src=src_tt,
                 counts_sliced=self.output_counts,
                 mask=self.output_mask,
+                deallocate_new_tokens=not using_preallocated_buffers,
             )
-            tokens_tt.deallocate()
-            src_tt.deallocate()
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.
@@ -330,18 +408,44 @@ class TTPenalties(LightweightModule):
             mask=self.output_mask,
         )
 
-    def token_bin_counts_and_mask(self, new_tokens, src, counts=None, mask=None, counts_sliced=None):
-        counts_new = ttnn.scatter_add(self.zeros, 1, new_tokens, src, **self._op_kwargs)
-
-        new_tokens.deallocate()
-        # need to use use_low_perf because llama galaxy runs out of L1 otherwise
-        counts_new = ttnn.tilize(
-            counts_new, **self._op_kwargs, use_low_perf=True if self.sub_core_grids is not None else False
+    def token_bin_counts_and_mask(
+        self,
+        new_tokens,
+        src,
+        counts=None,
+        mask=None,
+        counts_sliced=None,
+        *,
+        deallocate_new_tokens: bool = True,
+    ):
+        logger.info(f"scatter_add")
+        counts_new = ttnn.scatter_add(
+            self.zeros,
+            1,
+            new_tokens,
+            src,
+            output_tensor=self.scatter_add_output,
+            **self._op_kwargs,
         )
+        logger.info(f"scatter_add completed")
+        if deallocate_new_tokens:
+            new_tokens.deallocate()
+        # need to use use_low_perf because llama galaxy runs out of L1 otherwise
+        logger.info(f"tilizing counts_new")
+        counts_new = ttnn.tilize(
+            counts_new,
+            output_tensor=self.tilize_output,
+            **self._op_kwargs,
+            use_low_perf=True if self.sub_core_grids is not None else False,
+        )
+        logger.info(f"tilizing counts_new completed")
         if counts:
+            logger.info(f"adding counts")
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **self._op_kwargs)
         else:
+            logger.info(f"no counts, setting counts to counts_new")
             counts = counts_new
+        logger.info(f"slicing counts")
         counts_sliced = ttnn.slice(
             counts,
             self.slice_start,
@@ -351,8 +455,9 @@ class TTPenalties(LightweightModule):
             num_devices=self.num_devices,
             **self._op_kwargs,
         )
-
+        logger.info(f"slicing counts completed")
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
+        logger.info(f"gt completed")
         return counts, mask
 
     def apply(self, tt_logits: ttnn.Tensor) -> ttnn.Tensor:

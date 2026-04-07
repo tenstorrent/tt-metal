@@ -79,6 +79,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
+        positional_arg_names = [f"arg{i}" for i in range(len(args))]
+        logger.info(f"prefill_forward positional arg names: {positional_arg_names}, keyword arg names: {kwargs.keys()}")
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
@@ -112,11 +114,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
         num_of_users = tokens.shape[0]
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device)
+            logger.info("Validating and initializing sampling")
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=False,
+                warmup_mode=False,
+            )
 
         user_outputs = []
         for i in range(num_of_users):
             user_id = empty_slots[i] if empty_slots is not None else i
+            logger.info(f"Processing user {user_id}")
             prompt_len = int(lengths[i])
             if prompt_len == 0:
                 if sample_on_device:
@@ -173,6 +182,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return prefill_output
 
     def decode_forward(self, *args, **kwargs):
+        positional_arg_names = [f"arg{i}" for i in range(len(args))]
+        logger.info(f"decode_forward positional arg names: {positional_arg_names}, keyword arg names: {kwargs.keys()}")
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
         page_tables = kwargs.get("page_table", None)
@@ -180,24 +191,40 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         enable_trace = kwargs.get("enable_trace", False)
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
+        warmup_mode = kwargs.get("warmup_mode", False)
         sample_on_device = bool(sampling_params is not None)
+        logger.info(
+            f"decode_forward sample_on_device: {sample_on_device}, warmup_mode: {warmup_mode} enable_trace: {enable_trace}"
+        )
+
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
+            logger.info("decode_forward: Validating and initializing sampling")
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=enable_trace,
+                warmup_mode=warmup_mode,
+            )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,
+            warmup_mode=warmup_mode,
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(decode_step_output, enable_trace=enable_trace)
+            decode_output = self._sample_tokens_device(
+                decode_step_output,
+                enable_trace=enable_trace,
+                warmup_mode=warmup_mode,
+            )
             if read_from_device:
                 decode_output = self._tokens_from_device(
                     decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row

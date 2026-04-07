@@ -26,6 +26,7 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& src_tensor{tensor_args.src_tensor};
+    const auto& preallocated_output_tensor{tensor_args.preallocated_output};
     const auto& input_dtype{input_tensor.dtype()};
     const auto& index_dtype{index_tensor.dtype()};
     const auto& src_dtype{src_tensor.dtype()};
@@ -53,10 +54,31 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be allocated on a device.");
     TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Index tensor must be allocated on a device.");
     TT_FATAL(src_tensor.storage_type() == StorageType::DEVICE, "Src tensor must be allocated on a device.");
+
+    if (preallocated_output_tensor.has_value()) {
+        TT_FATAL(
+            preallocated_output_tensor.value().storage_type() == StorageType::DEVICE,
+            "Preallocated output tensor must be allocated on a device.");
+        TT_FATAL(
+            preallocated_output_tensor.value().logical_shape() == input_tensor.logical_shape(),
+            "Preallocated output tensor must match input logical shape.");
+        TT_FATAL(
+            preallocated_output_tensor.value().dtype() == input_tensor.dtype(),
+            "Preallocated output tensor dtype must match input dtype.");
+        TT_FATAL(
+            preallocated_output_tensor.value().layout() == Layout::ROW_MAJOR,
+            "Preallocated output tensor must be ROW_MAJOR layout.");
+        TT_FATAL(
+            preallocated_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Preallocated output tensor must use INTERLEAVED memory layout.");
+    }
 }
 
 ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output->tensor_spec();
+    }
     using namespace tt::tt_metal;
     return TensorSpec{
         tensor_args.input_tensor.logical_shape(),
@@ -65,6 +87,9 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
 
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
@@ -85,11 +110,12 @@ ttnn::Tensor scatter(
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
     const operations::data_movement::scatter::ScatterReductionType& reduction,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& preallocated_output_tensor) {
     using OperationType = ttnn::prim::ScatterDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
-        OperationType::tensor_args_t{input_tensor, index_tensor, source_tensor});
+        OperationType::tensor_args_t{input_tensor, index_tensor, source_tensor, preallocated_output_tensor});
 }
 
 }  // namespace ttnn::prim

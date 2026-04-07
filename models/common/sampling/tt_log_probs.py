@@ -294,6 +294,7 @@ class LogProbsCalculator:
                 and the rest of the batch retains its previous values.
         """
         if empty_slots is not None:
+            logger.info(f"setting log_probs_mode: partial update")
             # Partial update: only modify the specified batch positions
             if isinstance(enable_log_probs, list):
                 for i, slot in enumerate(empty_slots):
@@ -310,6 +311,7 @@ class LogProbsCalculator:
                     for slot in empty_slots:
                         self.num_logprobs[slot] = num_logprobs
         else:
+            logger.info(f"setting log_probs_mode: full batch update")
             # Full batch update
             if isinstance(enable_log_probs, list):
                 self.logprobs_enabled = list(enable_log_probs)
@@ -325,11 +327,14 @@ class LogProbsCalculator:
                 self.num_logprobs = [0] * self.batch_size
 
         # Recompute derived flags from the full arrays
+        logger.info(f"recomputing derived flags from the full arrays")
         self.enable_log_probs = any(self.logprobs_enabled)
         # Top-K computation is needed whenever logprobs are enabled (even with
         # num_logprobs=0) because the sampled token's logprob is extracted from
         # the top-K results in the new path.
+        logger.info(f"topk_logprobs_needed: {self.topk_logprobs_needed}")
         self.topk_logprobs_needed = self.enable_log_probs
+        logger.info(f"now topk_logprobs_needed: {self.topk_logprobs_needed}")
 
     def _compute_global_stats(
         self,

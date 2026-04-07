@@ -25,6 +25,7 @@ struct ScatterInputs {
     const Tensor& input_tensor;
     const Tensor& index_tensor;
     const Tensor& src_tensor;
+    std::optional<Tensor> preallocated_output;
 };
 
 }  // namespace ttnn::prim

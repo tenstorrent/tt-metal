@@ -13,6 +13,7 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
     bool use_low_perf = false,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn

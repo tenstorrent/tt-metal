@@ -276,7 +276,8 @@ Tensor scatter(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<std::string>& opt_reduction_string,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& output_tensor) {
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
@@ -309,6 +310,12 @@ Tensor scatter(
     Tensor transformed_source_tensor = pre_scatter_transform_tensor(
         source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, index_tensor.logical_shape());
 
+    std::optional<Tensor> transformed_output_tensor = std::nullopt;
+    if (output_tensor.has_value()) {
+        transformed_output_tensor = pre_scatter_transform_tensor(
+            output_tensor.value(), dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    }
+
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
 
@@ -321,7 +328,8 @@ Tensor scatter(
         transformed_source_tensor,
         final_memory_config,
         reduction,
-        sub_core_grid);
+        sub_core_grid,
+        transformed_output_tensor);
     output = post_scatter_transform_tensor(
         output,
         after_transpose_shape,
@@ -338,9 +346,17 @@ Tensor scatter_add(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& output_tensor) {
     return scatter(
-        input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
+        input_tensor,
+        dim,
+        index_tensor,
+        source_tensor,
+        output_memory_config,
+        std::make_optional("add"),
+        sub_core_grid,
+        output_tensor);
 }
 
 }  // namespace ttnn

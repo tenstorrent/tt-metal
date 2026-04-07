@@ -44,7 +44,12 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& output_tensor) {
+    TT_FATAL(
+        !output_tensor.has_value() || input_tensor.logical_shape().rank() <= 4,
+        "tilize with preallocated output_tensor currently supports rank <= 4 only");
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
@@ -71,7 +76,8 @@ ttnn::Tensor tilize(
             enough_space_width,
             enough_space_height,
             use_low_perf,
-            sub_core_grids);
+            sub_core_grids,
+            output_tensor);
     };
 
     return ttnn::operations::data_movement::build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);
