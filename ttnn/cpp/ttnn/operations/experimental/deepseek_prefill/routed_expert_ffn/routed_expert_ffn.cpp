@@ -20,14 +20,15 @@ ttnn::Tensor routed_expert_ffn(
     const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& down_program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
-    // Move x to L1 so both matmuls read from L1 instead of DRAM
+    // x: (1024, 7168) [32x224 tiles] bfloat8_b DRAM
+    //   -> x_l1: (1024, 7168) [32x224 tiles] bfloat8_b L1 interleaved
+    // Move x to L1 so both gate/up matmuls read from L1 instead of DRAM
     auto x_l1 = ttnn::to_memory_config(x, ttnn::L1_MEMORY_CONFIG);
 
-    // 11×8 grid = 88 cores (Blackhole). 32 M-tiles / 4 per_core = 8 rows needed.
-    // X: (1024, 7168) = 32×224 tiles, W: (7168, 2048) = 224×64 tiles, Out: 32×64 tiles
+    // Grid: 11x8 = 88 cores (Blackhole). 32 M-tiles / 4 per_core = 8 rows needed.
     // per_core_M = 32/8 = 4, per_core_N = ceil(64/11) = 6
     // Sharded output constraint: out_subblock_w == per_core_N OR out_subblock_h == 1
-    //   → subblock(1, 6): 6 tiles in dest
+    //   -> subblock(1, 6): 6 tiles in dest
     constexpr uint32_t TILE = 32;
     constexpr uint32_t GRID_X = 11;
     constexpr uint32_t GATE_UP_GRID_Y = 8;      // 32 M-tiles / 4 per_core_M
@@ -60,7 +61,11 @@ ttnn::Tensor routed_expert_ffn(
     auto effective_gate_config = gate_program_config.value_or(gate_up_config);
     auto effective_up_config = up_program_config.value_or(gate_up_config);
 
-    // gate_out = silu(x @ gate_proj)
+    // gate matmul:
+    //   x_l1:      (1024, 7168) [32x224 tiles] bfloat8_b L1 interleaved
+    //   gate_proj:  (7168, 2048) [224x64 tiles] bfloat4_b DRAM
+    //   -> gate_result: (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
+    // + SiLU applied as separate post-op
     auto gate_result = ttnn::matmul(
         x_l1,
         gate_proj,
@@ -72,7 +77,10 @@ ttnn::Tensor routed_expert_ffn(
         /*activation=*/std::string("silu"),
         compute_kernel_config);
 
-    // up_out = x @ up_proj
+    // up matmul:
+    //   x_l1:     (1024, 7168) [32x224 tiles] bfloat8_b L1 interleaved
+    //   up_proj:   (7168, 2048) [224x64 tiles] bfloat4_b DRAM
+    //   -> up_result: (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
     auto up_result = ttnn::matmul(
         x_l1,
         up_proj,
@@ -84,12 +92,14 @@ ttnn::Tensor routed_expert_ffn(
         /*activation=*/std::nullopt,
         compute_kernel_config);
 
-    // activated = gate_out * up_out (element-wise), stays block-sharded in L1
+    // multiply:
+    //   gate_result: (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
+    //   up_result:   (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
+    //   -> activated: (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
     auto activated =
         ttnn::multiply(gate_result, up_result, /*output_dtype=*/std::nullopt, /*memory_config=*/gate_up_mem);
 
-    // down matmul config: activated(32×64) @ down(64×224) → (32×224)
-    // Optimal from sweep: in0_block_w=16, subblock(1,7)
+    // down matmul config: in0_block_w=16, subblock(1,7)
     auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {GRID_X, DOWN_GRID_Y},
         .in0_block_w = 16,
@@ -105,11 +115,16 @@ ttnn::Tensor routed_expert_ffn(
 
     auto effective_down_config = down_program_config.value_or(down_config);
 
-    // Reshard activated from block-sharded (4×6 tiles/core) to L1 interleaved
-    // so down matmul can read full K=64 tile rows
+    // reshard:
+    //   activated: (1024, 2048) [32x64 tiles] bfloat8_b block-sharded L1
+    //   -> activated_reshard: (1024, 2048) [32x64 tiles] bfloat8_b L1 interleaved
+    // Block-sharded has 6 K-tiles/core; down matmul needs full K=64 rows per core
     auto activated_reshard = ttnn::to_memory_config(activated, ttnn::L1_MEMORY_CONFIG);
 
-    // output = activated @ down_proj
+    // down matmul:
+    //   activated_reshard: (1024, 2048) [32x64 tiles] bfloat8_b L1 interleaved
+    //   down_proj:         (2048, 7168) [64x224 tiles] bfloat4_b DRAM
+    //   -> output:         (1024, 7168) [32x224 tiles] bfloat8_b DRAM
     return ttnn::matmul(
         activated_reshard,
         down_proj,
