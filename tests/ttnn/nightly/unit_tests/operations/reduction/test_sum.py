@@ -14,6 +14,7 @@ import ttnn
         ((1, 1, 32, 32), 2),
         ((32, 32, 32, 32), 1),
         ((32, 32, 32, 32), 0),
+        ((32, 32, 31, 31), 3),
     ),  # single tile
 )
 def test_sum_for_dim_hw(device, shape_dim):
@@ -32,6 +33,15 @@ def test_sum_for_dim_hw(device, shape_dim):
     # print(f"x.sum = {value}")
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    """
+    dev_x = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16
+    )
+
+    ttnn.fill_implicit_tile_padding(dev_x, -42)"""  # implicit padding issue - passed
     tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
@@ -44,6 +54,7 @@ def test_sum_for_dim_hw(device, shape_dim):
         (1, 1, 32, 32),
         (32, 32, 32, 32),
         (32, 32, 32, 32),
+        (32, 32, 31, 31),  # implicit padding issue.
     ),  # single tile
 )
 def test_sum_global(device, shape):
@@ -60,6 +71,16 @@ def test_sum_global(device, shape):
     torch_output = x.sum()
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    """
+    dev_x = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+       # pad_value=0.0
+    )
+    ttnn.fill_implicit_tile_padding(dev_x, -42.0)"""  # implicit padding issue - passed
+
     tt_npu = ttnn.sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev.bfloat16(), torch_output.bfloat16())

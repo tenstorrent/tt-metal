@@ -12,8 +12,6 @@ import ttnn
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_equal
 
-TEST_PADDING_VALUE = -42
-
 
 @pytest.mark.parametrize(
     argnames="tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype",
@@ -54,6 +52,7 @@ TEST_PADDING_VALUE = -42
         ([50, 100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
         ([25, 50, 100], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.uint8),
         ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
+        ([16, 32, 33, 63], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),  # implicit padding issue.
     ],
 )
 def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
@@ -80,11 +79,13 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
     if dtype == torch.uint8:  # PyTorch does not have uint32/uint16, so we use uint8
         ttnn_dtype = ttnn.uint32
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype, layout=tensor_layout)
-        ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
+        if tensor_layout == ttnn.TILE_LAYOUT:
+            ttnn.fill_implicit_tile_padding(ttnn_tensor, -42)
 
     else:
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=tensor_layout)
-        ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
+        if tensor_layout == ttnn.TILE_LAYOUT:
+            ttnn.fill_implicit_tile_padding(ttnn_tensor, -42)
     torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
 
     # Run on both and flag exceptions

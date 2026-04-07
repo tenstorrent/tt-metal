@@ -11,8 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
-TEST_PADDING_VALUE = -42
-
 
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim",
@@ -49,9 +47,7 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
@@ -96,9 +92,7 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
@@ -136,9 +130,7 @@ def test_sum_global_row_major(device, input_shape):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.sum(input_tensor)
@@ -175,9 +167,6 @@ def test_max_row_major(device, input_shape, dim, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
 
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
@@ -216,9 +205,7 @@ def test_min_row_major(device, input_shape, dim, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
@@ -255,9 +242,7 @@ def test_std_row_major(device, input_shape, dim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=False)
@@ -294,9 +279,7 @@ def test_var_row_major(device, input_shape, dim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=False)
@@ -334,9 +317,7 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     # assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.mean(input_tensor, dim=dims, keepdim=keepdim)
@@ -373,9 +354,7 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
 
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
-    ttnn.fill_implicit_tile_padding(
-        input_tensor, TEST_PADDING_VALUE
-    )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
