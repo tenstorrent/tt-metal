@@ -273,15 +273,14 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
         detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
     // Calculate number of mul/add operations
-    // TODO: add bias modeling
     int64_t num_mul_adds_per_elem =
         static_cast<int64_t>(C_in) * filter_t * filter_h * filter_w * 2;  // 1 multiply and 1 add per element
     int64_t num_mul_adds = num_mul_adds_per_elem * T_out * H_out * W_out * args.output_channels * batch_size;
 
     int ideal_dev_clock_cycles = std::ceil(
-        ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
-        (float)tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(
-            get_math_fidelity(args.compute_kernel_config)));
+        (static_cast<float>(num_mul_adds) / static_cast<float>(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        static_cast<float>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(
+            get_math_fidelity(args.compute_kernel_config))));
 
     Tensors input_tensors = {tensor_args.input_tensor, tensor_args.weight_tensor};
     if (tensor_args.bias_tensor.has_value()) {
