@@ -63,13 +63,13 @@ inline void _llk_pack_dest_dvalid_section_done_()
     }
     else
     {
-        TT_ZEROACC(ZEROACC_CLR_MODE, EN_32BIT_DEST, 0, ADDR_MOD_0, dest_register_offset != 0);
+        TT_ZEROACC(ZEROACC_CLR_MODE, EN_32BIT_DEST, 0, ADDR_MOD_0, ckernel::pack::clear_dest_bank_id);
     }
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::PACK, 0);
 
     if constexpr (DST == DstSync::SyncHalf)
     {
-        _update_dest_register_offset_<EN_32BIT_DEST>();
+        ckernel::pack::_update_clear_dest_bank_id_();
     }
 }
 

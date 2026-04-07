@@ -72,6 +72,7 @@ constexpr std::uint32_t TILE_C_DIM = TILE_WIDTH;
 
 constexpr std::uint32_t TILE_NUM_FACES = ((TILE_R_DIM * TILE_C_DIM) / (FACE_R_DIM * FACE_C_DIM));
 
+// Number of 32x32 tiles that fit in 16bit mode dest register for DstSync::Full and DstSync::Half
 constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DEST_FACE_WIDTH) / (TILE_HEIGHT * TILE_HEIGHT);
 constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
