@@ -94,7 +94,8 @@ def run(
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     if input_a_dtype == ttnn.uint16:
-        torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32).clamp(0, 65535)
+        # ttnn.from_torch expects torch.int16 for uint16 (see gen_func_with_cast_tt)
+        torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32).clamp(0, 65535).to(torch.int16)
     elif input_a_dtype == ttnn.uint32:
         torch_input_tensor_a = torch.randint(0, 2**32, shape, dtype=torch.int64)
     else:
@@ -116,7 +117,11 @@ def run(
         else:
             torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1).to(torch.int64)
     elif output_dtype == ttnn.int32:
-        torch_output_tensor = torch_input_tensor_a.to(torch.int32)
+        # For uint16→int32, interpret as unsigned: mask with 0xFFFF to get unsigned value
+        if input_a_dtype == ttnn.uint16:
+            torch_output_tensor = torch_input_tensor_a.to(torch.int32) & 0xFFFF
+        else:
+            torch_output_tensor = torch_input_tensor_a.to(torch.int32)
     else:
         torch_output_tensor = torch_input_tensor_a.to(torch.float32)
 

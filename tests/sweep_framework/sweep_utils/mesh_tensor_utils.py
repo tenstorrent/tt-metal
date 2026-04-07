@@ -202,6 +202,11 @@ def create_tensor_on_mesh(
         if isinstance(mesh_shape_raw, str):
             mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
         mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+        # Default empty/short mesh_shape to (1, 1)
+        if len(mesh_shape_tuple) == 0:
+            mesh_shape_tuple = (1, 1)
+        elif len(mesh_shape_tuple) == 1:
+            mesh_shape_tuple = (mesh_shape_tuple[0], 1)
 
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
