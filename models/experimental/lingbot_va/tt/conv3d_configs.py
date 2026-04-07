@@ -15,7 +15,6 @@ weight loading (``load_torch_state_dict`` / ``load_model``).
 from __future__ import annotations
 
 import ttnn
-from loguru import logger
 
 from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
 
@@ -64,16 +63,6 @@ def override_conv3d_configs(module) -> None:
                     H_out_block=H,
                     W_out_block=W,
                     compute_with_storage_grid_size=child.mesh_device.compute_with_storage_grid_size(),
-                )
-                logger.debug(
-                    "Overrode conv3d config for {} ({}): C_in={}, C_out={}, T={}, H={}, W={}",
-                    name,
-                    key,
-                    C_in,
-                    C_out,
-                    T,
-                    H,
-                    W,
                 )
         else:
             override_conv3d_configs(child)
