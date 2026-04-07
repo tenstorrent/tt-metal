@@ -119,3 +119,13 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 #endif  // LIGHTWEIGHT_KERNEL_ASSERTS / ENABLE_LLK_ASSERT
 
 #endif  // WATCHER_ENABLED
+
+#ifdef ENABLE_LLK_ASSERT_HW
+
+#define LLK_ASSERT_HW(condition, ...) \
+    do {                              \
+        if (!(condition))             \
+            asm volatile("ebreak");   \
+    } while (0)
+
+#endif  // ENABLE_LLK_ASSERT_HW

@@ -251,6 +251,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (rtoptions.get_llk_asserts_hw()) {
+        this->defines_ += "-DENABLE_LLK_ASSERT_HW ";
+    }
+
     if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
         this->defines_ += "-DENV_LLK_INFRA ";

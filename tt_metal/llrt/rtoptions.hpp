@@ -178,6 +178,7 @@ class RunTimeOptions {
     bool lightweight_kernel_asserts = false;
 
     bool enable_llk_asserts = false;
+    bool enable_llk_asserts_hw = false;
 
     bool disable_sfploadmacro = false;
 
@@ -424,6 +425,9 @@ public:
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_llk_asserts_hw() const { return enable_llk_asserts_hw; }
+    void set_llk_asserts_hw(bool enabled) { enable_llk_asserts_hw = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 

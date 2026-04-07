@@ -193,7 +193,8 @@ enum class EnvVarID {
     // ========================================
     // LLK ASSERTIONS
     // ========================================
-    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+    TT_METAL_LLK_ASSERTS,     // Enable LLK assertions
+    TT_METAL_LLK_ASSERTS_HW,  // Enable LLK HW assertions
 
     // ========================================
     // DEVICE MANAGER
@@ -1341,6 +1342,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_LLK_ASSERTS=1
         case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
 
+        // TT_METAL_LLK_ASSERTS_HW
+        // Enables LLK HW assertions (hardware configuration validation in pack/unpack).
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS_HW=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS_HW: this->enable_llk_asserts_hw = true; break;
+
         // ========================================
         // DEVICE MANAGER
         // ========================================
@@ -1894,6 +1901,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     hash_str += std::to_string(get_llk_asserts());
+    hash_str += std::to_string(get_llk_asserts_hw());
     return hash_str;
 }
 
