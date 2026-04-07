@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -647,6 +648,10 @@ void JitBuildState::weaken(const string& out_dir) const {
     std::string pathname_in = out_dir + target_name_ + ".elf";
     jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
 
+    // The output directory may differ from out_dir when firmware_binary_root_
+    // points to a pre-compiled directory that lacks this target's subdirectory.
+    fs::create_directories(fs::path(out_file.path()).parent_path());
+
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
@@ -660,7 +665,12 @@ void JitBuildState::weaken(const string& out_dir) const {
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
+    // Mutex to serialize concurrent writes to the shared zone src locations log file.
+    // Multiple kernels are compiled in parallel; without serialization their grep outputs
+    // interleave in the file, producing corrupted lines that fail to parse.
+    static std::mutex zone_log_mutex;
     if (env_.get_rtoptions().get_profiler_enabled()) {
+        std::lock_guard<std::mutex> lk(zone_log_mutex);
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
             std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }

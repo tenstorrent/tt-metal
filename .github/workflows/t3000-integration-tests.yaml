@@ -28,6 +28,7 @@ on:
           - mistral
           - wan2.2
           - mochi
+          - deepseek-modules
       platform:
         required: false
         type: choice

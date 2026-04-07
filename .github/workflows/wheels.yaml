@@ -77,12 +77,16 @@ jobs:
           fetch-tags: true # Need tags for `git describe`
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        id: cpm-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .cpmcache
-          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
-          restore-keys: |
-            cpm-
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: 📦 Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       # Python for driving the build; not the version the wheel targets
       - name: Set up Python 3.12
@@ -91,6 +95,7 @@ jobs:
           python-version: '3.12'
 
       - name: 🐍 Build wheel
+        id: build-wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
           CIBW_BUILD: "cp${{ steps.format_python_version.outputs.python_version_nodot }}-manylinux_x86_64*"
@@ -107,6 +112,18 @@ jobs:
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+      - name: 📦 Pack CPM cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+
+      - name: 📦 Save CPM source cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: Set wheel artifact name
         id: set_artifact_name

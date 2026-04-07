@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -112,9 +112,11 @@ inline void llk_math_wait_for_dest_available() {
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  */
+template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**

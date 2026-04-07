@@ -1,2 +1,3 @@
 pycapnp==2.0.0
-tt-exalens==0.3.11
+mpi4py>=4.1.1
+tt-exalens==0.3.13; platform_machine == "x86_64"

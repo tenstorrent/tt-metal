@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -20,6 +20,7 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
+DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
@@ -790,6 +791,16 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    cache_path = (
+        path if path.name.endswith(TENSOR_CACHE_EXTENSION) else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    )
+    if cache_path.exists():
+        logger.info(f"Cache file already exists, skipping shard_and_save: {cache_path}")
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        return SavedWeight(Path(relative_cache_path), memory_config)
+
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -819,8 +830,6 @@ def shard_and_save(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.exists():
-        logger.warning(f"Overwriting existing cache file: {path}")
     record = {
         "event": "deepseek_v3.cache_tensor_spec",
         "pid": os.getpid(),
@@ -1120,7 +1129,7 @@ def _shard_device_impl(
         mesh_mapper=mesh_mapper,
         device=mesh_device,
         dtype=dtype,
-        fast_approx=True,
+        enable_bfloat_opt=True,
     )
 
     assert memory_config == ttnn_tensor.memory_config()

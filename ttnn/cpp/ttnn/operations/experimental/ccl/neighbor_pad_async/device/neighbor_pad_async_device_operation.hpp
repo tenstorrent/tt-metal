@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,6 @@
 
 #include "neighbor_pad_async_device_operation_types.hpp"
 #include "neighbor_pad_async_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 

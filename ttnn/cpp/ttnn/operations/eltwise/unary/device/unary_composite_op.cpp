@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,19 +27,8 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
-// TODO: In future will uplift the op once the floor and tan has supported.
-// digamma support for the range of (1, inf)
-Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::detail::unary_impl(
-        x,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LGAMMA}},
-        output_mem_config,
-        std::nullopt,
-        std::nullopt);
-}
-
-// Existing implementation of lgamma.
-// TODO: Remove this once the lgamma kernel for float32 is supported.
+// Existing implementation of _lgamma.
+// TODO: Remove this once the multigammaln is uplifted.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -486,27 +475,21 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
-// polygamma support for the range of input(1, 10) and n(1, 10)
+// polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
+// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
+// tail correction term to approximate the infinite remainder Σ_{k=11}^{∞} 1/(x + k)^(n+1), rather than
+// performing a hard truncation at k = 10. This is a single kernel dispatch instead of 11+ composite ops.
 Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
-    float k_der = 1.0f + k;
-    float fact_val = std::tgamma(k_der);
-    float pos_neg = 1.0f;
-    if (k == 2 || k == 4 || k == 6 || k == 8 || k == 10) {
-        pos_neg = -1.0f;
-    }
-    Tensor temp(input_a);
-    {
-        Tensor z1 = ttnn::reciprocal(ttnn::power(input_a, k_der, output_mem_config), output_mem_config);
-        temp = z1;
-        for (int idx = 1; idx < 11; idx++) {
-            z1 = ttnn::reciprocal(
-                ttnn::power(ttnn::add(input_a, idx, std::nullopt, output_mem_config), k_der, output_mem_config),
-                output_mem_config);
-            temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-        }
-    }
-    fact_val *= pos_neg;
-    return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
+    // Range includes k=11 to support polygamma_bw which computes polygamma(input, n+1)
+    TT_FATAL(k >= 1 && k <= 11, "polygamma order must be in range [1, 11], got {}", k);
+    float n = static_cast<float>(k);
+    float fact_val = std::tgamma(1.0f + k);       // k!
+    float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
+    float scale = fact_val * pos_neg;
+    return ttnn::detail::unary_impl(
+        input_a,
+        {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
+        output_mem_config);
 }
 
 // // tanhshrink(x) = x - tanh(x)
@@ -524,11 +507,6 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
 }
 
-// frac(x) = x - trunc(x), fractional part
-Tensor frac(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::subtract(x, ttnn::trunc(x, output_mem_config), std::nullopt, output_mem_config);
-}
-
 }  // namespace ttnn::operations::unary
 
 namespace ttnn {
@@ -536,13 +514,6 @@ namespace ttnn {
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     return detail::_make_global_from_hw_impl(normalize_hw, y, output_mem_config);
-}
-
-Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
-    if (t.dtype() == DataType::BFLOAT16) {
-        return detail::_lgamma_fast(t, m);
-    }
-    return detail::_lgamma(t, m);
 }
 
 }  // namespace ttnn

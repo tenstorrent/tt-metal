@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,10 @@ bool is_cpu_tensor(const Tensor& tensor);
 
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
+
+// Returns the optimal worker cores for a sharded tensor.
+std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
+    const Tensor& tensor, NOC noc = NOC::RISCV_0_default);
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
