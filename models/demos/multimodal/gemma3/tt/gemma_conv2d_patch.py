@@ -82,13 +82,22 @@ class TtGemmaConv2dPatch(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        if mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+            self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+        else:
+            self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def forward(self, x: torch.Tensor):
         x = self._unfold(x)
