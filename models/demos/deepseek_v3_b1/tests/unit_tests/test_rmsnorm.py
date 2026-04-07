@@ -99,6 +99,15 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
         numel=torch_input.numel(),
         fp32_dest_acc_en=use_fp32,
     )
+    ttnn.synchronize_device(device)
+    ttnn_result = RMSNormSingleCore.op(
+        ttnn_input,
+        ttnn_gamma,
+        ttnn_output,
+        epsilon=epsilon,
+        numel=torch_input.numel(),
+        fp32_dest_acc_en=use_fp32,
+    )
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)

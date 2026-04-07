@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/experimental/pack_block.h"
 #include "api/compute/eltwise_binary.h"
 #endif
 
@@ -87,6 +88,7 @@ struct GatherReduce {
     static inline void add_half_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         reconfig_data_format<false, true>(in_cb, in_cb);
         pack_reconfig_data_format<true>(out_cb);
+        pack_block_contiguous_init(out_cb);
         add_tiles_init(in_cb, in_cb);
         cb_wait_front(in_cb, 2 * num_tiles);
         cb_reserve_back(out_cb, num_tiles);
@@ -98,9 +100,7 @@ struct GatherReduce {
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            pack_tile(i, out_cb);
-        }
+        pack_block_contiguous(0, out_cb, num_tiles);
         cb_push_back(out_cb, num_tiles);
         tile_regs_release();
 

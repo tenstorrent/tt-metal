@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/experimental/pack_block.h"
 #include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
@@ -121,9 +122,14 @@ struct Matmul {
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
+            constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
 
             reconfig_data_format<false, true>(args.in1, args.in0);
             pack_reconfig_data_format<true>(args.out);
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            if constexpr (!fuse_activation) {
+                pack_block_contiguous_init(args.out);
+            }
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
@@ -137,9 +143,7 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
-
-            if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
+            if constexpr (fuse_activation) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<CTArgs::fused_activation_approx_mode>()));
@@ -186,9 +190,7 @@ struct Matmul {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
-                    pack_tile(dst_idx, args.out, dst_idx);
-                }
+                pack_block_contiguous(0, args.out, out_w);
                 tile_regs_release();
             }
 

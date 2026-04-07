@@ -17,6 +17,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -275,11 +276,17 @@ struct DRAMStreamingExpertsMatmul {
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                if constexpr (!CTArgs::fuse_silu) {
+                    pack_block_contiguous_init(CTArgs::cb_out);
+                }
             } else {
                 reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                if constexpr (!CTArgs::fuse_silu) {
+                    pack_block_contiguous_init(CTArgs::cb_out);
+                }
             }
 
             if constexpr (CTArgs::fuse_silu) {
@@ -366,9 +373,7 @@ struct DRAMStreamingExpertsMatmul {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
-                        pack_tile(w, CTArgs::cb_out, w);
-                    }
+                    pack_block_contiguous(0, CTArgs::cb_out, CTArgs::subblock_w);
                     tile_regs_release();
                 }
 
