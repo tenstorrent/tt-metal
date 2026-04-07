@@ -67,7 +67,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, input_cb_page_size);
@@ -134,18 +134,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
-            case UnaryOpType::LOGIT: {
-                const auto eps = *ops_chain[0].get_param_if<float>(0);
-                if (eps >= 0.0f) {
-                    // Ensure correct clamp bounds [min(eps, 1-eps), max(eps, 1-eps)]
-                    const auto lo = std::min(eps, 1.0f - eps);
-                    const auto hi = std::max(eps, 1.0f - eps);
-                    packed_scalar1 = utils::pack_scalar_runtime_arg_impl(lo, input.dtype());
-                    packed_scalar2 = utils::pack_scalar_runtime_arg_impl(hi, input.dtype());
-                    unary_defines["CLAMP"] = "clamp_tile";
-                }
-                break;
-            }
             default: break;
         }
     }

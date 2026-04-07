@@ -88,7 +88,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -160,17 +160,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
-            case UnaryOpType::LOGIT: {
-                const auto eps = *ops_chain[0].get_param_if<float>(0);
-                if (eps >= 0.0f) {
-                    const auto lo = std::min(eps, 1.0f - eps);
-                    const auto hi = std::max(eps, 1.0f - eps);
-                    packed_scalar1 = utils::pack_scalar_runtime_arg_impl(lo, input.dtype());
-                    packed_scalar2 = utils::pack_scalar_runtime_arg_impl(hi, input.dtype());
-                    unary_defines["CLAMP"] = "clamp_tile";
-                }
-                break;
-            }
             default: break;
         }
     }
