@@ -5,6 +5,7 @@
 #include "groupnorm_sharded_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
 
+#include <bit>
 #include <string>
 #include <optional>
 
@@ -874,11 +875,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", num_rows_per_batch_per_core);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
@@ -1003,7 +1000,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t input_mask_tile_start_id = 0;
     for (auto core : core_coords) {
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(e.u);
+        writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(input_mask_dram_addr);
