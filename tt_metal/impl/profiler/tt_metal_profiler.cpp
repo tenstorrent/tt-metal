@@ -1132,7 +1132,7 @@ bool ShouldProfileChip(uint32_t device_id) {
     if (!profiler_chip_filter_enabled) {
         return true;
     }
-    return profiler_chip_filter_set.count(device_id) > 0;
+    return profiler_chip_filter_set.contains(device_id);
 }
 
 constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
