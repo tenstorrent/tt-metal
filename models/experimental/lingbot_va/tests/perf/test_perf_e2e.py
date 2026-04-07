@@ -133,7 +133,7 @@ def _host_input_tensor_for_pipeline(mesh_device):
     [
         {
             "l1_small_size": 16384,
-            "trace_region_size": 7800000,
+            "trace_region_size": 8136352,
             "num_command_queues": 2,
         }
     ],

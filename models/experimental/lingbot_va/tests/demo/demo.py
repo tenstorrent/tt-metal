@@ -34,6 +34,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # -----------------------------------------------------------------------------
 import argparse
 import gc
+import math
 import time
 from copy import deepcopy
 
@@ -621,16 +622,37 @@ def _timesteps_1d_ttnn(mesh_device, num_frames: int, t_val: float, *, zero_first
 
 
 def _action_channel_mask_ttnn(mesh_device, num_channels: int, action_mask: ttnn.Tensor) -> ttnn.Tensor:
-    """Broadcast mask ``[C]`` (TTNN 0/1) to ``[1, C, 1, 1, 1]`` float (1 = keep, 0 = zero)."""
-    am = ttnn.to_torch(action_mask).detach().cpu().numpy().squeeze() > 0.5
-    m = np.ones((1, num_channels, 1, 1, 1), dtype=np.float32)
-    m[0, ~am, 0, 0, 0] = 0.0
-    return ttnn.from_torch(
-        torch.from_numpy(m),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.float32,
-        device=mesh_device,
-    )
+    """Broadcast mask ``[C]`` (TTNN per-channel weights) to ``[1, C, 1, 1, 1]`` float32.
+
+    Matches the previous host semantics: channel ``c`` is kept iff ``mask[c] > 0.5``, else 0.
+
+    Row-major ``typecast`` on Wormhole requires the last dimension to be a multiple of 32; we pad
+    to ``pad_to``, compare, then slice back to ``num_channels`` (same pattern as
+    :func:`_ttnn_action_channel_mask_vector`).
+    """
+    n = int(math.prod(int(s) for s in action_mask.shape))
+    if n != num_channels:
+        raise ValueError(
+            f"_action_channel_mask_ttnn: action_mask has {n} elements, expected num_channels={num_channels}"
+        )
+    pad_to = ((n + 31) // 32) * 32
+    kw = dict(device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    flat = ttnn.reshape(action_mask, (n,))
+    if pad_to > n:
+        tail = ttnn.zeros(
+            (pad_to - n,),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=flat.dtype,
+        )
+        flat_pad = ttnn.concat([flat, tail], dim=0)
+    else:
+        flat_pad = flat
+    am_f = ttnn.typecast(flat_pad, ttnn.float32)
+    half = ttnn.full((pad_to,), 0.5, **kw)
+    bin_pad = ttnn.typecast(ttnn.gt(am_f, half), ttnn.float32)
+    binary = ttnn.slice(bin_pad, [0], [n])
+    return ttnn.reshape(binary, (1, num_channels, 1, 1, 1))
 
 
 def _prepare_latent_input_ttnn(
@@ -877,9 +899,7 @@ def _reset_state(models, state, prompt):
     transformer = models["transformer"]
     # TT VAE encoder may already be freed after ``_encode_obs_ttnn`` (full demo pipeline); optional for prepared runs.
     streaming_vae = models.get("streaming_vae")
-    device = models["device"]
     mesh_device = models["mesh_device"]
-    dtype = models["dtype"]
     cache_name = models["cache_name"]
 
     state["use_cfg"] = False
@@ -911,8 +931,6 @@ def _reset_state(models, state, prompt):
         config.attn_window,
         latent_token_per_chunk,
         action_token_per_chunk,
-        dtype=dtype,
-        device=device,
         batch_size=2 if state["use_cfg"] else 1,
     )
 
@@ -1625,7 +1643,6 @@ def run_generate(
     if log_time:
         gen_timings.append(("load_vae_decoder", time.perf_counter() - t0_dec))
 
-    models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
     if log_time:
         t0_dv = time.perf_counter()
     decoded_video = None
