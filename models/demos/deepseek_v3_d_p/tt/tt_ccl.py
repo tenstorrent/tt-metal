@@ -74,7 +74,7 @@ class TT_CCL:
             }
         )
 
-        self.ring_attention_ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+        self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
         )

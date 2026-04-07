@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -82,8 +82,8 @@ class ttMLA:
         )
 
         self.ring_sdpa_compute_grid = (
-            mesh_device.compute_with_storage_grid_size().x,
-            mesh_device.compute_with_storage_grid_size().y - 1,
+            mesh_device.compute_with_storage_grid_size().x - 1,
+            mesh_device.compute_with_storage_grid_size().y,
         )
 
         # Create CCL object for semaphore management
@@ -510,6 +510,7 @@ class ttMLA:
             topology=self.ccl_topology,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
             is_causal=True,
             scale=self.scale,
             is_balanced=self.is_balanced,
