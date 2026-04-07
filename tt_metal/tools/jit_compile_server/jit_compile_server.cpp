@@ -22,6 +22,9 @@
 
 // Remote JIT compile server
 //
+// WARNING: Experimental feature with security implications. Do not use in production.
+// WARNING: The server can execute arbitrary code.  Make sure not to expose the RPC endpoint to untrusted clients.
+//
 // TODO 1:
 // The compile/link logic below currently duplicates the core of
 // `jit_build/build.cpp` (compile_one, link_one, dependency checks). Two reasons:
