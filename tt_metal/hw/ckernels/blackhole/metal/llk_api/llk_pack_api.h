@@ -108,7 +108,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
@@ -167,7 +167,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
@@ -191,7 +191,7 @@ inline void llk_pack_untilize_init(
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
 
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
@@ -229,7 +229,7 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
@@ -284,7 +284,7 @@ inline void llk_pack_rows(
 
     // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
     // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
             pack_src_format[output_id], pack_dst_format[output_id])),
         "");
@@ -306,7 +306,7 @@ inline void llk_matmul_pack(
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");

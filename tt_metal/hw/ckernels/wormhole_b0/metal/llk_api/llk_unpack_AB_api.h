@@ -21,6 +21,17 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    LLK_ASSERT_HW(
+        (are_unpackers_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[get_operand_id(operandB)],
+            unpack_dst_format[get_operand_id(operandB)],
+            get_operand_face_r_dim(operandA_id),
+            get_operand_face_r_dim(get_operand_id(operandB)),
+            get_operand_num_faces(operandA_id),
+            get_operand_num_faces(get_operand_id(operandB)))),
+        "");
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
 
@@ -40,7 +51,7 @@ inline void llk_unpack_AB(
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    LLK_ASSERT(
+    LLK_ASSERT_HW(
         (are_unpackers_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
