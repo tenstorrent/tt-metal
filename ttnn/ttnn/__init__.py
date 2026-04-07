@@ -227,6 +227,7 @@ from ttnn.types import (
     corerange_to_cores,
     get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,

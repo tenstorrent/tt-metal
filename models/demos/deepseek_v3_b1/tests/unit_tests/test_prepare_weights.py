@@ -14,7 +14,6 @@ Tests for prepare_weights: per-layer prepare/save/load on 4x2 mesh.
 """
 
 import time
-from dataclasses import fields as dataclass_fields
 
 import pytest
 import torch
@@ -22,11 +21,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
+
+OverlappedTensor = ttnn.OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
-    CURRENT_TRANSFORM_VERSION,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -79,7 +79,7 @@ def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWei
     ):
         ot = getattr(layer, f, None)
         if ot is not None and hasattr(ot, "fused_tensor"):
-            fid = id(ot.fused_tensor)
+            fid = ot.fused_tensor.tensor_id
             if fid not in seen:
                 seen.add(fid)
                 ttnn.deallocate(ot.fused_tensor, force=True)
@@ -103,9 +103,6 @@ def _core_range_set_to_tuples(crs):
     return sorted(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in crs.ranges())
 
 
-_OVERLAPPED_TENSOR_SKIPPED_FIELDS = {"fused_tensor"}
-
-
 def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -> None:
     """Assert two OverlappedTensors have matching metadata (not fused_tensor identity)."""
     assert a.tensor_shape == b.tensor_shape
@@ -115,10 +112,6 @@ def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -
     assert a.byte_offset == b.byte_offset
     assert a.total_size == b.total_size
     assert _core_range_set_to_tuples(a.core_range_set) == _core_range_set_to_tuples(b.core_range_set)
-    checked = {"tensor_shape", "shard_shape", "dtype", "tile_shape", "byte_offset", "total_size", "core_range_set"}
-    all_fields = {f.name for f in dataclass_fields(OverlappedTensor)}
-    unchecked = all_fields - checked - _OVERLAPPED_TENSOR_SKIPPED_FIELDS
-    assert not unchecked, f"OverlappedTensor has new fields not covered by assertion: {unchecked}"
 
 
 def _assert_on_device(tensor: ttnn.Tensor) -> None:
@@ -147,14 +140,12 @@ def _test_cache_context(mesh_shape: tuple[int, int] = (4, 2)) -> CacheContext:
         schema_version=1,
         hf_model_id="test-model",
         hf_revision="test-rev",
-        transform_version=CURRENT_TRANSFORM_VERSION,
+        transform_version=1,
         mesh_shape=mesh_shape,
     )
 
 
 # Expected placements for 4x2 mesh (mla_tp=2, moe_tp=8)
-_PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]
-_PLACEMENTS_SHARD_NONE_0 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
 _PLACEMENTS_SHARD_0_1 = [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
 _PLACEMENTS_REPLICATE = [ttnn.PlacementReplicate()]
 
@@ -177,25 +168,25 @@ def _assert_layer_on_device_with_topology(
     # Check fusion groups via one representative OverlappedTensor per group
     # q_ab_kv_a
     _assert_on_device(layer.q_a_proj.fused_tensor)
-    fid = id(layer.q_a_proj.fused_tensor)
+    fid = layer.q_a_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1)
+        _assert_topology(layer.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # o_proj_gate_mm_norms
     _assert_on_device(layer.o_proj.fused_tensor)
-    fid = id(layer.o_proj.fused_tensor)
+    fid = layer.o_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.o_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1)
+        _assert_topology(layer.o_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # kv_b12
     _assert_on_device(layer.kv_b1_proj.fused_tensor)
-    fid = id(layer.kv_b1_proj.fused_tensor)
+    fid = layer.kv_b1_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_0)
+        _assert_topology(layer.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # gate_up
     _assert_on_device(layer.shared_gate_proj.fused_tensor)
-    fid = id(layer.shared_gate_proj.fused_tensor)
+    fid = layer.shared_gate_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         _assert_topology(layer.shared_gate_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
@@ -813,11 +804,11 @@ def test_save_load_dense_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert layer.routed_up_proj.shape == orig.routed_up_proj.shape
     assert layer.routed_down_proj.shape == orig.routed_down_proj.shape
 
-    assert id(layer.q_a_proj.fused_tensor) == id(layer.q_b_proj.fused_tensor)
-    assert id(layer.q_b_proj.fused_tensor) == id(layer.kv_a_proj.fused_tensor)
-    assert id(layer.o_proj.fused_tensor) == id(layer.attn_norm.fused_tensor)
-    assert id(layer.kv_b1_proj.fused_tensor) == id(layer.kv_b2_proj.fused_tensor)
-    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    assert layer.q_a_proj.fused_tensor.tensor_id == layer.q_b_proj.fused_tensor.tensor_id
+    assert layer.q_b_proj.fused_tensor.tensor_id == layer.kv_a_proj.fused_tensor.tensor_id
+    assert layer.o_proj.fused_tensor.tensor_id == layer.attn_norm.fused_tensor.tensor_id
+    assert layer.kv_b1_proj.fused_tensor.tensor_id == layer.kv_b2_proj.fused_tensor.tensor_id
+    assert layer.shared_gate_proj.fused_tensor.tensor_id == layer.shared_up_proj.fused_tensor.tensor_id
     _assert_layer_on_device_with_topology(layer)
 
 
@@ -965,7 +956,7 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
         assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
 
-    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    assert layer.shared_gate_proj.fused_tensor.tensor_id == layer.shared_up_proj.fused_tensor.tensor_id
     _assert_layer_on_device_with_topology(layer)
 
 

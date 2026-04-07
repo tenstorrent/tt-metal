@@ -457,22 +457,22 @@ def test_pre_sdpa(
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
     # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
     bdw = BlitzDecodeWeights(submesh)
-    (
-        matmul_weights_overlapped,
-        matmul2_weights_overlapped,
-        dkv_matmul_weights_overlapped,
-    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
         torch_matmul_weights,
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
     )
+    matmul_weights_overlapped = qab_kva["q_a_proj"]
+    matmul2_weights_overlapped = qab_kva["q_b_proj"]
+    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
 
     # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_weights_overlapped, _ = bdw.get_tt_kv_b12_proj_weights(
+    kv_b12 = bdw.get_tt_kv_b12_proj_weights(
         torch_matmul3_weights_flat,
         torch_kv_b2_proj_weights,
     )
+    matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # After 3-phase CreateQHeads tilization:
@@ -572,14 +572,7 @@ def test_pre_sdpa(
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
     # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    (
-        _,  # o_proj
-        _,  # gate_mm
-        gamma_overlapped,
-        rmsnorm2_gamma_overlapped,
-        dkv_rmsnorm_gamma_overlapped,
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_gamma,
@@ -587,6 +580,9 @@ def test_pre_sdpa(
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
     )
+    gamma_overlapped = o_norms["attn_norm"]
+    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
