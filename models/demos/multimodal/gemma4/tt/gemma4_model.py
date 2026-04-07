@@ -10,17 +10,15 @@ Extends the base Transformer with:
 - Logit softcapping after LM head
 """
 
-import math
 
 import torch
 from tqdm import tqdm
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
@@ -54,9 +52,21 @@ class Gemma4Transformer(Transformer):
         rope_setup_class=None,
         prefetcher=None,
     ):
-        # We override __init__ to use Gemma4TransformerBlock
-        # Call grandparent __init__ (LightweightModule) to skip base Transformer __init__
-        LightweightModule.__init__(self)
+        # Call Transformer.__init__ to ensure proper base class initialization,
+        # then override layer setup with Gemma4-specific components below.
+        Transformer.__init__(
+            self,
+            args=args,
+            dtype=dtype,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            paged_attention_config=paged_attention_config,
+            use_paged_kv_cache=use_paged_kv_cache,
+            attention_class=attention_class,
+            rope_setup_class=rope_setup_class,
+            prefetcher=prefetcher,
+        )
 
         self.args = args
         self.vocab_size = args.vocab_size
@@ -204,9 +214,7 @@ class Gemma4Transformer(Transformer):
 
         # On-device sampling
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = (
-            prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
-        )
+        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -243,12 +251,18 @@ class Gemma4Transformer(Transformer):
 
         # Store on device
         self.cos_global_hf = ttnn.from_torch(
-            cos_hf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cos_hf,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         self.sin_global_hf = ttnn.from_torch(
-            sin_hf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            sin_hf,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, **kwargs):
@@ -259,7 +273,6 @@ class Gemma4Transformer(Transformer):
         # Replace global rot_mats with HF-format cos/sin
         trace_enabled = kwargs.get("trace_enabled", False)
         S = tokens.shape[-1] if tokens.dim() == 2 else tokens.shape[-1]
-        seq_len = kwargs.get("last_token_idx", S - 1) + 1 if kwargs.get("last_token_idx") is not None else S
         prefill_start_pos = 0 if trace_enabled else start_pos
         slice_end = self.args.max_seq_len if trace_enabled else min(self.cos_global_hf.shape[2], start_pos + S)
 

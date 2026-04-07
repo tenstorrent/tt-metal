@@ -10,20 +10,19 @@ Extends the base TransformerBlock with:
 - is_sliding attribute on attention for RoPE selection in the decoder forward
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
-
-import os
-
-from .gemma4_attention import Gemma4Attention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
+from .gemma4_attention import Gemma4Attention
 from .gemma4_layer_config import Gemma4LayerConfig
 
 
@@ -106,9 +105,6 @@ class Gemma4TransformerBlock(LightweightModule):
             # Apply RoPE to first rotary_dim dims, pass through the rest unchanged.
             rotary_dim = int(args.global_head_dim * args.partial_rotary_factor)  # 512 * 0.25 = 128
             full_head_dim = args.global_head_dim  # 512
-
-            # Get global transformation matrices for partial RoPE (head_dim=128)
-            global_trans_mats = transformation_mats_global if transformation_mats_global else transformation_mats
 
             # TEMPORARY: Skip RoPE for full attention layers to isolate the error source
             skip_full_attn_rope = os.environ.get("GEMMA4_SKIP_FULL_ROPE", "0") == "1"
@@ -204,7 +200,6 @@ class Gemma4TransformerBlock(LightweightModule):
         )
 
         # Pre-feedforward norm
-        prefix = args.get_state_dict_prefix("", layer_num)
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(
                 RMSNorm(

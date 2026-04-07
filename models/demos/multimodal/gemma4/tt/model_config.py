@@ -15,7 +15,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     split_hf_keys,
     standardize_hf_keys_multimodal,
 )
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 
 
@@ -69,9 +69,8 @@ class ModelArgs(TTModelArgs):
 
         # Override precision: generic accuracy config already sets WQKV/WO/KV_CACHE=BF16
         # and attention ops to HIFI4. Additionally force BF16 activations and MLP.
-        from models.tt_transformers.tt.model_config import (
-            TensorGroup, PrecisionSetting, OpGroup, MathFidelitySetting,
-        )
+        from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup, PrecisionSetting, TensorGroup
+
         opt = self.optimizations.decoder_optimizations[0]
         opt._opt_settings["TensorPrecision"][TensorGroup.ACTIVATION] = PrecisionSetting.BF16
         opt._opt_settings["TensorPrecision"][TensorGroup.FF1_FF3] = PrecisionSetting.BF16
@@ -92,7 +91,6 @@ class ModelArgs(TTModelArgs):
         self.num_global_kv_heads = 4
         self.attention_k_eq_v = True
         self.final_logit_softcapping = 30.0
-
 
     def _set_model_specific_params(self):
         self.rms_norm_add_unit_offset = False  # Gemma 4 uses weight*x, no (1+weight)*x
@@ -181,6 +179,7 @@ class ModelArgs(TTModelArgs):
         """Override for decode: use L1 interleaved (Gemma4's 1344/dev doesn't
         shard cleanly with the base config's grid)."""
         from models.tt_transformers.tt.common import Mode
+
         if mode == Mode.DECODE:
             return ttnn.L1_MEMORY_CONFIG
         return super().get_residual_mem_config(mode, prefetcher)
@@ -193,6 +192,7 @@ class ModelArgs(TTModelArgs):
         """For non-standard head_dim: auto shard. For batch>16 with standard head_dim:
         use rectangular grid (paged_update_cache's fill_pad_writer overflows with non-rectangular grids)."""
         from models.tt_transformers.tt.common import Mode
+
         hd = head_dim if head_dim is not None else self.head_dim
         if mode == Mode.DECODE and prefetcher is None:
             if hd != self.head_dim:
@@ -241,11 +241,6 @@ class ModelArgs(TTModelArgs):
             return []
 
     def _set_hf_params(self, checkpoint_dir):
-        def merge_text_config(base_config):
-            text_config = base_config.get("text_config", {})
-            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
-            return text_config
-
         from transformers import AutoConfig
 
         if self.dummy_weights:
@@ -355,7 +350,7 @@ class ModelArgs(TTModelArgs):
                         if wv_key not in state_dict:
                             new_state_dict[wv_key] = v.clone()
                 except (ValueError, IndexError):
-                    pass
+                    logger.debug(f"Could not parse layer index from key: {k}")
 
             new_state_dict[k] = v
 
@@ -370,7 +365,7 @@ class ModelArgs(TTModelArgs):
                     if layer_idx >= self.n_layers:
                         keys_to_remove.append(k)
                 except (ValueError, IndexError):
-                    pass
+                    logger.debug(f"Could not parse layer index from key: {k}")
         for k in keys_to_remove:
             state_dict.pop(k)
 
@@ -406,14 +401,15 @@ class ModelArgs(TTModelArgs):
         model = self.reference_transformer(wrap=False)
         layer = model.model.language_model.layers[i]
         rotary_emb = model.model.language_model.rotary_emb
-        wrapper = HfGemma4DecoderWrapper(layer, self.head_dim, rotary_emb, self.layer_types[i] if self.layer_types else "sliding_attention")
+        wrapper = HfGemma4DecoderWrapper(
+            layer, self.head_dim, rotary_emb, self.layer_types[i] if self.layer_types else "sliding_attention"
+        )
         return wrapper
 
     def reference_attention(self, layer_idx=0):
         model = self.reference_transformer(wrap=False)
         layer = model.model.language_model.layers[layer_idx].self_attn
         rotary_emb = model.model.language_model.rotary_emb
-        layer_type = self.layer_types[layer_idx] if self.layer_types else "sliding_attention"
         wrapper = HfAttentionWrapper(layer, self.get_layer_head_dim(layer_idx), rotary_emb)
         return wrapper
 
