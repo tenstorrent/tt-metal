@@ -57,10 +57,14 @@ TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return tt::tt_metal::TensorSpec(
+    return TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+        TensorLayout::fromPaddedShape(
+            args.output_dtype,
+            PageConfig(input_tensor.layout()),
+            args.output_mem_config,
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()));
 }
 
 Tensor ShardedToInterleavedDeviceOperation::create_output_tensors(

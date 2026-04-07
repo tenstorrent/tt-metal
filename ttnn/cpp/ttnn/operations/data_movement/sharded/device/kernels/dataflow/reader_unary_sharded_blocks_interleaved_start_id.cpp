@@ -32,7 +32,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;
