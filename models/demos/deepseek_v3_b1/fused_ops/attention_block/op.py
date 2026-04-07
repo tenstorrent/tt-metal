@@ -559,7 +559,7 @@ class AttentionBlock:
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
@@ -1665,6 +1665,7 @@ class AttentionBlock:
             ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_num_mcast_dests", num_mcast_dests),
         ]
         mla_trisc_named_compile_time_args = [
             ("St", St),
@@ -3019,6 +3020,8 @@ class AttentionBlock:
                         is_mcast_sender,
                         mcast_start_x,
                         mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
                         vc,
                     ],
                 )

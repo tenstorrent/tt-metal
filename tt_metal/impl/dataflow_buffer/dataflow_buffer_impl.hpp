@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
@@ -78,6 +80,13 @@ struct DataflowBufferImpl {
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
+
+    // Returns the L1 data-buffer base address, which is identical for every core in the
+    // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).
+    uint32_t uniform_alloc_addr() const {
+        TT_ASSERT(!core_lookup_.empty(), "DFB {} needs to be finalized before accessing the allocated address", id);
+        return core_lookup_.begin()->second.second;
+    }
 };
 
 class TileCounterAllocator {

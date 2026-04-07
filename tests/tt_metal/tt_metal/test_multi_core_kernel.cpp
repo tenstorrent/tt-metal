@@ -99,7 +99,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
     auto src_dram_buffer = CreateBuffer(dram_config);
     auto dst_dram_buffer = CreateBuffer(dram_config);
 
-    vector<uint32_t> compute_kernel_args = {uint(num_tiles)};
+    vector<uint32_t> compute_kernel_args = {uint(num_tiles), /*use_dfbs=*/false};
 
     auto [program, reader_kernel_id, writer_kernel_id] =
         create_program(dev, single_tile_size, all_cores, compute_kernel_args);
