@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Union
 
 import ttnn
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,31 @@ class TensorTarget:
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
 
 
-ArtifactTarget = TensorTarget  # Will become TensorTarget | FusionGroupSpec in Phase 2
+@dataclass(frozen=True)
+class RegionSpec:
+    """Sub-tensors sharing a core range, stacked per core.
+
+    Each subtensor is an :class:`OverlappedTensorSpec` with its ``name``
+    field set.  The ``core_range_set`` on the region groups subtensors
+    that share the same cores.
+    """
+
+    core_range_set: ttnn.CoreRangeSet
+    subtensors: tuple[OverlappedTensorSpec, ...]
+
+
+@dataclass(frozen=True)
+class FusionGroupSpec:
+    """Complete packing layout for an overlapped (fused) tensor group."""
+
+    kind: Literal["fusion_group"] = "fusion_group"
+    name: str = ""
+    regions: tuple[RegionSpec, ...] = ()
+    sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
+
+
+ArtifactTarget = TensorTarget | FusionGroupSpec
 
 
 @dataclass(frozen=True)

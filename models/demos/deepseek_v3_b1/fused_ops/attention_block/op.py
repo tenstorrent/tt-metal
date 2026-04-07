@@ -8,10 +8,6 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SingleDeviceOverlapSpec,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
-)
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
@@ -35,6 +31,10 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedKernelDescriptor,
 )
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    KVB12_PROJ_SingleDeviceOverlapSpec,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
+)
 
 
 def extend_fabric_args(existing_rt_args, fabric_args):
@@ -559,7 +559,7 @@ class AttentionBlock:
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
