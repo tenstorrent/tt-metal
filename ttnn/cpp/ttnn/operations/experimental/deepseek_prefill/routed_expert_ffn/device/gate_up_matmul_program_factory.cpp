@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include "hostdevcommon/common_values.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -114,6 +115,13 @@ static void create_cbs(
 // ── Kernel creation per quadrant group ───────────────────────────────────────
 // Creates sender BRISC (x=0 cores), optional receiver BRISC (x>0 cores),
 // NCRISC (all cores), and TRISC (all cores).
+//
+// When n_n_cores == 1: no mcast, sender kernel reads DRAM on all cores.
+// When n_n_cores  > 1 and x0 == 0:
+//   - reader_x_mcast_sender.cpp on x=0 column (num_mcast_dests = n_n_cores-1)
+//   - reader_x_mcast_receiver.cpp on x=1..x1 columns
+// When n_n_cores  > 1 and x0 > 0 (TR/BR quadrant, no sender in this group):
+//   - reader_x_mcast_receiver.cpp on all cores in the quadrant
 static KernelGroupInfo create_kernels_for_group(
     tt::tt_metal::Program& program,
     const CoreRangeSet& full_core_set,
@@ -134,38 +142,60 @@ static KernelGroupInfo create_kernels_for_group(
     KernelGroupInfo kg;
 
     // ── Separate sender (x=0) from receiver (x>0) cores ──────────────────────
-    // Sender column exists in this quadrant only when x0 == 0.
     bool has_sender = (x0 == 0);
-    bool has_receiver = (x1 > 0) && (n_n_cores > 1);  // x>0 cols exist in quadrant
-
-    // Sender cores: x=0, y=[y0,y1] — only if x0==0.
-    if (has_sender) {
-        CoreRangeSet sender_set(CoreRange({0, y0}, {0, y1}));
-        kg.sender_cores = flatten(sender_set);
-    }
-
-    // Receiver cores: x=[max(x0,1), x1], y=[y0,y1] — only if x1>0.
-    if (has_receiver) {
-        uint32_t rx0 = (x0 == 0) ? 1 : x0;
-        CoreRangeSet receiver_set(CoreRange({rx0, y0}, {x1, y1}));
-        kg.receiver_cores = flatten(receiver_set);
-    }
+    uint32_t num_mcast_dests = n_n_cores - 1;  // 0 when n_n_cores == 1
 
     // All cores in this quadrant.
     kg.all_cores = flatten(full_core_set);
 
-    // ── reader_x (BRISC, all cores) ──────────────────────────────────────────
-    {
-        std::vector<uint32_t> rx_ct = {K_num_blocks, m_blocks_local, p.M_block_size, p.K_block_size, in0_tile_size};
-        tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(rx_ct);
+    // Compile-time args shared by both sender variants (and also the receiver).
+    // Layout: [K_num_blocks, m_blocks_local, Mt_block_size, Kt_block_size, in0_tile_size, num_mcast_dests]
+    std::vector<uint32_t> rx_ct_base = {
+        K_num_blocks, m_blocks_local, p.M_block_size, p.K_block_size, in0_tile_size, num_mcast_dests};
 
+    if (num_mcast_dests == 0) {
+        // Single-column grid (n_n_cores == 1): all cores are senders reading x from DRAM.
+        // Or: mcast disabled — each core reads x independently (same as original reader_x.cpp).
+        std::vector<uint32_t> sender_ct = rx_ct_base;
+        tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(sender_ct);
         kg.sender_x_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
-            "reader_x.cpp",
+            "reader_x_mcast_sender.cpp",
             full_core_set,
-            tt::tt_metal::ReaderDataMovementConfig(rx_ct, {}));
+            tt::tt_metal::ReaderDataMovementConfig(sender_ct, {}));
         kg.sender_cores = flatten(full_core_set);
+    } else {
+        // ── reader_x_mcast_sender (BRISC, x=0 column if present) ─────────────────
+        if (has_sender) {
+            std::vector<uint32_t> sender_ct = rx_ct_base;
+            tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(sender_ct);
+
+            CoreRangeSet sender_core_set(CoreRange({0, y0}, {0, y1}));
+            kg.sender_x_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
+                "reader_x_mcast_sender.cpp",
+                sender_core_set,
+                tt::tt_metal::ReaderDataMovementConfig(sender_ct, {}));
+            kg.sender_cores = flatten(sender_core_set);
+        }
+
+        // ── reader_x_mcast_receiver (BRISC, x>0 cores in this quadrant) ──────────
+        bool has_receiver_here = (x1 > 0 || (!has_sender));
+        if (has_receiver_here) {
+            uint32_t rx0 = has_sender ? 1 : x0;  // first receiver x in this group
+            if (rx0 <= x1) {
+                CoreRangeSet receiver_core_set(CoreRange({rx0, y0}, {x1, y1}));
+                kg.receiver_x_id = tt::tt_metal::CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
+                    "reader_x_mcast_receiver.cpp",
+                    receiver_core_set,
+                    tt::tt_metal::ReaderDataMovementConfig(rx_ct_base, {}));
+                kg.receiver_cores = flatten(receiver_core_set);
+            }
+        }
     }
 
     // ── reader_weights_writer_outputs (NCRISC, all cores) ────────────────────
@@ -252,10 +282,12 @@ CreatedProgram create_program(const GateUpMatmulParams& p, const GateUpMatmulInp
 
     // ── 2-D core grid: x-axis = N split, y-axis = M split ────────────────────
     auto* device = inputs.x.device();
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    // CoreCoord grid = device->compute_with_storage_grid_size();
 
-    uint32_t n_n_cores = std::min(N_num_blocks, (uint32_t)grid.x);
-    uint32_t n_m_cores = std::min(M_num_blocks, (uint32_t)grid.y);
+    uint32_t n_n_cores = 8;
+    // uint32_t n_n_cores = std::min(N_num_blocks, (uint32_t)grid.x);
+    uint32_t n_m_cores = 8;
+    // uint32_t n_m_cores = std::min(M_num_blocks, (uint32_t)grid.y);
 
     uint32_t n_b1 = (N_num_blocks + n_n_cores - 1) / n_n_cores;
     uint32_t n_b2 = N_num_blocks / n_n_cores;
@@ -265,7 +297,16 @@ CreatedProgram create_program(const GateUpMatmulParams& p, const GateUpMatmulInp
     uint32_t m_b2 = M_num_blocks / n_m_cores;
     uint32_t n_m_g1 = M_num_blocks % n_m_cores;
 
-    // (No semaphores — reader_x reads X independently on every core.)
+    // ── Semaphores for mcast synchronisation ─────────────────────────────────
+    // sender_semaphore: receivers atomically increment this; sender waits for
+    //   the count to reach num_mcast_dests, then resets it to 0.
+    // receiver_semaphore: sender multicasts VALID into this; receiver waits
+    //   for VALID then resets to INVALID before the next block.
+    // Both are created on all cores so every core has the same L1 offset.
+    // When n_n_cores == 1 (no mcast), these semaphores are unused.
+    CoreRangeSet all_core_set(CoreRange({0, 0}, {n_n_cores - 1, n_m_cores - 1}));
+    uint32_t sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_core_set, 0);
+    uint32_t receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_core_set, INVALID);
 
     // ── Build kernels per quadrant ────────────────────────────────────────────
     struct GroupDef {
@@ -350,10 +391,40 @@ CreatedProgram create_program(const GateUpMatmulParams& p, const GateUpMatmulInp
                  n_tile_start});
         }
 
-        // ── reader_x RT args: rt[0]=x_addr, rt[1]=m_tile_start ──────────────
+        // ── Sender runtime args ───────────────────────────────────────────────
+        // rt[0]=x_addr, rt[1]=m_tile_start
+        // If num_mcast_dests > 0:
+        //   rt[2..5]=mcast dest NOC coords, rt[6]=sender_sem_id, rt[7]=recv_sem_id
+        uint32_t num_mcast_dests = n_n_cores - 1;
         for (const auto& core : kg.sender_cores) {
             uint32_t m_tile_start = tile_start(core.y, n_m_g1, m_b1, m_b2, p.M_block_size);
-            tt::tt_metal::SetRuntimeArgs(program, kg.sender_x_id, core, {inputs.x.buffer()->address(), m_tile_start});
+            std::vector<uint32_t> sender_rt = {inputs.x.buffer()->address(), m_tile_start};
+
+            if (num_mcast_dests > 0) {
+                // Physical coords of first receiver (logical (1, core.y)) and
+                // last receiver (logical (n_n_cores-1, core.y)) in this M-row.
+                CoreCoord recv_start_phys = device->worker_core_from_logical_core({1, core.y});
+                CoreCoord recv_end_phys = device->worker_core_from_logical_core({n_n_cores - 1, core.y});
+                sender_rt.push_back(recv_start_phys.x);
+                sender_rt.push_back(recv_start_phys.y);
+                sender_rt.push_back(recv_end_phys.x);
+                sender_rt.push_back(recv_end_phys.y);
+                sender_rt.push_back(sender_semaphore_id);
+                sender_rt.push_back(receiver_semaphore_id);
+            }
+
+            tt::tt_metal::SetRuntimeArgs(program, kg.sender_x_id, core, sender_rt);
+        }
+
+        // ── Receiver runtime args ─────────────────────────────────────────────
+        // rt[0]=sender_noc_x, rt[1]=sender_noc_y, rt[2]=sender_sem_id, rt[3]=recv_sem_id
+        for (const auto& core : kg.receiver_cores) {
+            CoreCoord sender_phys = device->worker_core_from_logical_core({0, core.y});
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                kg.receiver_x_id,
+                core,
+                {(uint32_t)sender_phys.x, (uint32_t)sender_phys.y, sender_semaphore_id, receiver_semaphore_id});
         }
 
         sv.groups.push_back(std::move(kg));
@@ -404,7 +475,10 @@ void GateUpMatmulProgramFactory::override_runtime_arguments(
                 auto& sx_args = GetRuntimeArgs(program, group.sender_x_id, core);
                 sx_args[0] = inputs.x.buffer()->address();
                 // sx_args[1] = m_tile_start — unchanged
+                // sx_args[2..7] = mcast coords and semaphore IDs — unchanged
             }
+
+            // Receiver cores (group.receiver_cores): no buffer addresses to update.
         }
     }
 }

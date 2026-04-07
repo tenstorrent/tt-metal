@@ -83,8 +83,8 @@ ttnn::Tensor gate_up_matmul(
 
     constexpr uint32_t K_block_size = 4;
     constexpr uint32_t N_block_size = 4;
-    constexpr uint32_t M_block_size = 1;
-    constexpr uint32_t subblock_h = 1;
+    constexpr uint32_t M_block_size = 4;
+    constexpr uint32_t subblock_h = 1;  // keep at 1 (proven correct); M inner loop runs 4x
     constexpr uint32_t subblock_w = 4;
 
     Op::operation_attributes_t attrs{
