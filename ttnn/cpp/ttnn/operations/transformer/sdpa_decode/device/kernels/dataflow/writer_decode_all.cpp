@@ -203,7 +203,7 @@ void kernel_main() {
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
-        ckernel::PoolType::SUM,
+        ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
