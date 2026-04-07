@@ -413,7 +413,8 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t positions_to_fill,
-    uint32_t reduce_factor>
+    uint32_t reduce_factor,
+    bool compute_uses_reduce_tile>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
 
     // -------------------------------------------------------------------------
@@ -439,14 +440,10 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Fill the CB with the computed scaler, using correct axis for reduce_dim
+    // 2. Fill the CB with the computed scaler, using pool-type-aware layout
+    //    dispatch (col-0 fill for matmul path, row-0 fill for reduce_tile path)
     // -------------------------------------------------------------------------
-    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-        prepare_reduce_scaler_rows<cb_id, positions_to_fill>(scaler_f);
-    } else {
-        // REDUCE_ROW: column-axis fill; REDUCE_SCALAR: full fill only
-        prepare_reduce_scaler<cb_id, positions_to_fill>(scaler_f);
-    }
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, positions_to_fill, compute_uses_reduce_tile>(scaler_f);
 }
 
 // =============================================================================
@@ -496,7 +493,8 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t partial_positions,
-    uint32_t reduce_factor>
+    uint32_t reduce_factor,
+    bool compute_uses_reduce_tile>
 FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR,
@@ -507,10 +505,10 @@ FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
         "partial_positions must be in range [1, TILE_WIDTH-1]. "
         "If the reduce dimension is tile-aligned (partial == 0), use single calculate_and_prepare_reduce_scaler instead.");
 
-    // Tile 0: full scaler — all positions filled (correct for both axes)
-    calculate_and_prepare_reduce_scaler<cb_id, pool_type, reduce_dim, tt::constants::TILE_WIDTH, reduce_factor>();
-    // Tile 1: partial scaler — dispatches to correct axis fill based on reduce_dim
-    calculate_and_prepare_reduce_scaler<cb_id, pool_type, reduce_dim, partial_positions, reduce_factor>();
+    // Tile 0: full scaler — all positions filled
+    calculate_and_prepare_reduce_scaler<cb_id, pool_type, reduce_dim, tt::constants::TILE_WIDTH, reduce_factor, compute_uses_reduce_tile>();
+    // Tile 1: partial scaler — pool-type-aware layout dispatch
+    calculate_and_prepare_reduce_scaler<cb_id, pool_type, reduce_dim, partial_positions, reduce_factor, compute_uses_reduce_tile>();
 }
 
 // =============================================================================
@@ -534,13 +532,13 @@ FORCE_INLINE void prepare_partial_reduce_scalers_rows(float scaler_f) {
 // Pool-type-aware prepare_reduce_scaler — auto-dispatches to matmul (col-0) or reduce_tile (row-0) layout
 // =============================================================================
 
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t positions_to_fill>
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t positions_to_fill, bool compute_uses_reduce_tile>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR || positions_to_fill == tt::constants::TILE_WIDTH,
         "REDUCE_SCALAR does not support partial positions");
 
-    constexpr bool use_matmul = reduce_uses_matmul<pool_type, reduce_dim>();
+    constexpr bool use_matmul = !compute_uses_reduce_tile && reduce_uses_matmul<pool_type, reduce_dim>();
 
     if constexpr (use_matmul) {
         // Matmul path: col-0 fill. W positions map to rows of the scaler tile.
@@ -557,7 +555,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
 // Pool-type-aware prepare_partial_reduce_scalers — auto-dispatches layout
 // =============================================================================
 
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions, bool compute_uses_reduce_tile>
 FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR,
@@ -566,7 +564,7 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
         partial_positions > 0 && partial_positions < tt::constants::TILE_WIDTH,
         "partial_positions must be in range [1, TILE_WIDTH-1].");
 
-    constexpr bool use_matmul = reduce_uses_matmul<pool_type, reduce_dim>();
+    constexpr bool use_matmul = !compute_uses_reduce_tile && reduce_uses_matmul<pool_type, reduce_dim>();
 
     if constexpr (use_matmul) {
         // Matmul path: col-0 fill. W positions map to rows.
@@ -577,38 +575,6 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
         // REDUCE_ROW (non-matmul, e.g. MAX): column-axis fill
         prepare_partial_reduce_scalers<cb_id, partial_positions>(scaler_f);
     }
-}
-
-// =============================================================================
-// Pool-type-aware calculate_and_prepare_partial_reduce_scalers
-// =============================================================================
-
-template <
-    uint32_t cb_id,
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t partial_positions,
-    uint32_t reduce_factor>
-FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers_poolaware() {
-    static_assert(
-        reduce_dim != ReduceDim::REDUCE_SCALAR,
-        "Partial scalers are not supported for REDUCE_SCALAR.");
-    static_assert(
-        partial_positions > 0 && partial_positions < tt::constants::TILE_WIDTH,
-        "partial_positions must be in range [1, TILE_WIDTH-1].");
-
-    // Compute scaler value
-    float scaler_f;
-    if constexpr (pool_type == PoolType::AVG) {
-        scaler_f = 1.0f / static_cast<float>(reduce_factor);
-    } else {
-        scaler_f = 1.0f;
-    }
-
-    // Tile 0: full scaler
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, tt::constants::TILE_WIDTH>(scaler_f);
-    // Tile 1: partial scaler
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, partial_positions>(scaler_f);
 }
 
 }  // namespace dataflow_kernel_lib

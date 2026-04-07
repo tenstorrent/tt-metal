@@ -3,9 +3,9 @@
 
 // Unified reader for toy_reduce_partial.
 //
-// Generates scaler tile(s) and reads input tiles. Uses pool-type-aware
-// prepare_partial_reduce_scalers overload which automatically selects the
-// correct scaler layout (col-0 for matmul path, row-0 for reduce_tile path).
+// Generates scaler tile(s) and reads input tiles. The pool-type-aware
+// overloads automatically select the correct scaler layout (col-0 for
+// matmul path, row-0 for reduce_tile path).
 
 #include <stdint.h>
 
@@ -28,24 +28,14 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = 2;
 
     constexpr auto reduce_dim = reduce_row_mode ? ckernel::ReduceDim::REDUCE_ROW : ckernel::ReduceDim::REDUCE_COL;
+    constexpr auto pool_type = pool_type_sum ? ckernel::PoolType::SUM : ckernel::PoolType::MAX;
 
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
 
-    if constexpr (pool_type_sum) {
-        // Pool-type-aware: auto-dispatches to col-0 fill for SUM REDUCE_ROW (matmul path)
-        if constexpr (has_partial) {
-            dataflow_kernel_lib::
-                prepare_partial_reduce_scalers<cb_scaler, ckernel::PoolType::SUM, reduce_dim, partial_dim>(scaler_f);
-        } else {
-            dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, reduce_dim>(scaler_f);
-        }
+    if constexpr (has_partial) {
+        dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, pool_type, reduce_dim, partial_dim>(scaler_f);
     } else {
-        // MAX always uses reduce_tile layout — dimension-aware overload handles axis dispatch
-        if constexpr (has_partial) {
-            dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, reduce_dim, partial_dim>(scaler_f);
-        } else {
-            dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_f);
-        }
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, pool_type, reduce_dim>(scaler_f);
     }
 
     // Stream input tiles

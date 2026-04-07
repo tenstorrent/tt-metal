@@ -97,13 +97,15 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  * @tparam positions_to_fill Number of positions along the reduce dimension (1-32, default 32).
  * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG; not used for MAX and SUM.
+ * @tparam compute_uses_reduce_tile When true, forces reduce_tile layout. See prepare_reduce_scaler.
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t positions_to_fill = tt::constants::TILE_WIDTH,
-    uint32_t reduce_factor = 1>
+    uint32_t reduce_factor = 1,
+    bool compute_uses_reduce_tile = false>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler();
 
 // =============================================================================
@@ -165,13 +167,15 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL). REDUCE_SCALAR not supported.
  * @tparam partial_positions Number of valid positions in the last tile (origin_dim % TILE_DIM)
  * @tparam reduce_factor Number of elements being reduced (N). Required for AVG.
+ * @tparam compute_uses_reduce_tile When true, forces reduce_tile layout. See prepare_reduce_scaler.
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t partial_positions,
-    uint32_t reduce_factor = 1>
+    uint32_t reduce_factor = 1,
+    bool compute_uses_reduce_tile = false>
 FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers();
 
 // =============================================================================
@@ -243,18 +247,31 @@ FORCE_INLINE void prepare_partial_reduce_scalers_col0(float scaler_f);
 
 /**
  * @brief Pool-type-aware: prepares a CB tile with correct layout for the pool/dim combination
+ *
+ * @tparam compute_uses_reduce_tile When true, forces reduce_tile layout (row-0 fill) even for
+ *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
+ *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
+ *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t positions_to_fill = tt::constants::TILE_WIDTH>
+    uint32_t positions_to_fill = tt::constants::TILE_WIDTH,
+    bool compute_uses_reduce_tile = false>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**
  * @brief Pool-type-aware: generate two scaler tiles (full + partial) with correct layout
+ *
+ * @tparam compute_uses_reduce_tile When true, forces reduce_tile layout. See prepare_reduce_scaler.
  */
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    bool compute_uses_reduce_tile = false>
 FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
 
 }  // namespace dataflow_kernel_lib

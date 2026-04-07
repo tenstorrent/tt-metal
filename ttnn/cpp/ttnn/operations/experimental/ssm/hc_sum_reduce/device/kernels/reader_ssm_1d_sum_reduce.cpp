@@ -15,8 +15,13 @@ void kernel_main() {
     uint32_t input_total_blocks_w = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id_in2 = 2;
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_id_in2,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        1,
+        true>();
 
     constexpr uint32_t cb_id_in0 = 0;
 
