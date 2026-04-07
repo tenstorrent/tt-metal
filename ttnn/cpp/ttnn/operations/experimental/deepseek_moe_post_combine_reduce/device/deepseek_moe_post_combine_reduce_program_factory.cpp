@@ -138,7 +138,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
+            .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .compile_args = compute_compile_time_args,
         });
