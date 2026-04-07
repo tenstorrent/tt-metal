@@ -117,6 +117,14 @@ class PipelineStageSync:
                 ]
             )
 
+        signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
+        signalling_core_noc_x_addr = signalling_core_phys.x
+        signalling_core_noc_y_addr = signalling_core_phys.y
+
+        stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
+        stalling_core_noc_x_addr = stalling_core_phys.x
+        stalling_core_noc_y_addr = stalling_core_phys.y
+
         # semaphores
         global_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores_core_range_set, 0)
         semaphore_l1_addr = ttnn.get_global_semaphore_address(global_semaphore)
@@ -138,14 +146,6 @@ class PipelineStageSync:
                 is_signalling_to_intermediate_signaller = (
                     mesh_coord in signalling_devices and target_device in intermediate_signalling_devices
                 )
-
-                signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
-                signalling_core_noc_x_addr = signalling_core_phys.x
-                signalling_core_noc_y_addr = signalling_core_phys.y
-
-                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
-                stalling_core_noc_x_addr = stalling_core_phys.x
-                stalling_core_noc_y_addr = stalling_core_phys.y
 
                 fabric_arg_base = 0
                 reader_named_ct_args = [

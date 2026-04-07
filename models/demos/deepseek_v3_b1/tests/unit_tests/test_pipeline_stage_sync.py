@@ -99,6 +99,22 @@ from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import Pipelin
             ttnn.CoreCoord(1, 1),
             False,
         ),  # backwards across rows
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((0, 1)),
+            ttnn.CoreCoord(1, 1),
+            False,
+        ),  # just col traversal, left to right
+        (
+            ttnn.MeshCoordinate((0, 1)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(1, 1),
+            False,
+        ),  # just col traversal, right to left
     ],
 )
 @pytest.mark.parametrize("num_iterations", [50])
