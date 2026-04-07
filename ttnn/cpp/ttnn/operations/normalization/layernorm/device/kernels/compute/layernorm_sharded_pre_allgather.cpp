@@ -135,8 +135,6 @@ void kernel_main() {
         cb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_in
-    // Next op: mul_tiles(cb_in, cb_in) — need both A and B as cb_in
     reconfig_data_format(cb_in, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -182,7 +180,6 @@ void kernel_main() {
             cb_ex_partial2,
             compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
             compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_x2 — restore reduce convention
     reconfig_data_format(cb_x2, cb_scaler);
     cb_pop_front(cb_x2, num_tiles_per_block);
 

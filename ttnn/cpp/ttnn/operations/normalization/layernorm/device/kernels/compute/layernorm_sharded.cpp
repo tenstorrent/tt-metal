@@ -174,8 +174,6 @@ void kernel_main() {
         cb_ex_partial,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_in
-    // Set up for global reduce (cb_ex_external on SRCA) and restore SRCB=cb_scaler
     reconfig_data_format(cb_ex_external, cb_scaler);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
@@ -286,7 +284,6 @@ void kernel_main() {
         cb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_xmm2 — restore reduce convention
     reconfig_data_format(cb_xmm2, cb_scaler);
     cb_pop_front(cb_xmm2, num_tiles_per_block);
 
