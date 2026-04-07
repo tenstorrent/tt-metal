@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <optional>
 
 namespace tt::tt_metal::inspector {
 
@@ -18,7 +19,7 @@ public:
     ~Data();
 
 private:
-    Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(std::optional<int> rank);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
