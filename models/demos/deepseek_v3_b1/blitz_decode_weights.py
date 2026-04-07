@@ -17,9 +17,12 @@ This module provides:
   fields and shuffle/preprocessing methods.
 - ``FusionGroupSpec`` constants (``Q_AB_KV_A_SPEC``, ``KV_B12_SPEC``,
   ``O_PROJ_GATE_MM_NORMS_SPEC``, ``GATE_UP_SPEC``).
+- Shared preprocessing functions (``preprocess_q_ab_kv_a``,
+  ``preprocess_kv_b12``, ``preprocess_gate_up``) — single source of
+  truth for the shuffle/TP-concat/mesh-reshape orchestration.
 - Standalone fusion functions (``fuse_q_ab_kv_a``, ``fuse_kv_b12``,
   ``fuse_o_proj_gate_mm_norms``, ``fuse_gate_up``,
-  ``create_moe_routed_expert_tensors``, ``create_mlp_routed_expert_tensors``).
+  ``create_moe_routed_expert_tensors``).
 - Standalone non-fusion utilities (``shuffle_dram_tiles``,
   ``shared_down_torch_for_cache``, ``moe_routed_expert_torch_for_cache``,
   ``mlp_routed_dense_stacked_torch_for_cache``).
@@ -818,6 +821,117 @@ def mlp_routed_dense_stacked_torch_for_cache(
     return stacked.contiguous()
 
 
+# ---------------------------------------------------------------------------
+# Shared preprocessing functions (Phase B)
+#
+# These are the single source of truth for the shuffle/TP-concat/mesh-reshape
+# orchestration that converts logical torch tensors into fusion-ready form.
+# Both prepare_weights._preprocess_* and the fuse_* helpers below delegate
+# to these.
+# ---------------------------------------------------------------------------
+
+
+def preprocess_q_ab_kv_a(
+    q_a: torch.Tensor,
+    q_b: torch.Tensor,
+    kv_a: torch.Tensor,
+    mesh_shape: tuple[int, int],
+) -> dict[str, torch.Tensor]:
+    """Shuffle and TP-concat q_a/q_b/kv_a into fusion-ready tensors.
+
+    Args:
+        q_a: Transposed q_a_proj weight ``(K, N)``.
+        q_b: Deinterleaved q_b_proj weight ``(K, N)`` (full or TP1-trimmed).
+        kv_a: Transposed kv_a_proj weight ``(K, N)``.
+        mesh_shape: ``(rows, cols)`` of the device mesh, ``(1, 1)`` for single device.
+
+    Returns:
+        Dict with keys ``q_a_proj``, ``q_b_proj``, ``kv_a_proj`` — shuffled,
+        TP-concatenated torch tensors ready for tilization.
+    """
+    cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    q_a_packed = cfg.shuffle_q_a(q_a)
+    q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
+    q_b_slices = [cfg.shuffle_q_b(cfg.get_q_b_slice(q_b, i, mesh_shape)) for i in range(q_b_tp)]
+    q_b_pre = torch.cat(q_b_slices, dim=1) if q_b_tp > 1 else q_b_slices[0]
+    kv_reordered = cfg.shuffle_kv_a(kv_a)
+    return {"q_a_proj": q_a_packed, "q_b_proj": q_b_pre, "kv_a_proj": kv_reordered}
+
+
+def preprocess_kv_b12(
+    kv_b1: torch.Tensor,
+    kv_b2: torch.Tensor,
+    mla_tp: int,
+) -> dict[str, torch.Tensor]:
+    """Shuffle and TP-concat kv_b1/kv_b2 into fusion-ready tensors.
+
+    Args:
+        kv_b1: kv_b1 projection weight ``(H, W)`` (already split from kv_b_proj).
+        kv_b2: kv_b2 projection weight ``(H, W)`` (already split, full TP width).
+        mla_tp: MLA tensor-parallel factor (1 for single device, 2 for 4x2 mesh).
+
+    Returns:
+        Dict with keys ``kv_b1_proj``, ``kv_b2_proj`` — kv_b2 is shuffled
+        and TP-concatenated along dim 0.
+    """
+    cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    per_device_b2_w = cfg.kv_b2_proj_shape[1]
+    b2_shuffled = [cfg.shuffle_kv_b2(kv_b2[:, i * per_device_b2_w : (i + 1) * per_device_b2_w]) for i in range(mla_tp)]
+    kv_b2_pre = torch.cat(b2_shuffled, dim=0) if mla_tp > 1 else b2_shuffled[0]
+    return {"kv_b1_proj": kv_b1, "kv_b2_proj": kv_b2_pre}
+
+
+def preprocess_gate_up(
+    gate: torch.Tensor,
+    up: torch.Tensor,
+    moe_tp: int,
+    mesh_rows: int,
+    mesh_cols: int,
+) -> dict[str, torch.Tensor]:
+    """Reshuffle and TP-stack gate/up into fusion-ready tensors.
+
+    Args:
+        gate: Shared gate projection ``(K, N)`` (transposed, TP-trimmed if needed).
+        up: Shared up projection ``(K, N)`` (transposed, TP-trimmed if needed).
+        moe_tp: MoE tensor-parallel factor (1 for single device, 8 for 4x2 mesh).
+        mesh_rows: Number of mesh rows (1 for single device).
+        mesh_cols: Number of mesh columns (1 for single device).
+
+    Returns:
+        Dict with keys ``shared_gate_proj``, ``shared_up_proj`` — reshuffled
+        from block to height-sharded layout, with multi-device stack/permute
+        applied when ``moe_tp > 1``.
+    """
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    per_device_n = cfg.gate_proj_shape[1]
+    stacked_h, stacked_w = cfg.stacked_shape
+    gate_list, up_list = [], []
+    for tp_idx in range(moe_tp):
+        gate_list.append(
+            cfg.reshuffle_block_to_height_sharded(
+                gate[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n], cfg.gate_core_range_set
+            )
+        )
+        up_list.append(
+            cfg.reshuffle_block_to_height_sharded(
+                up[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n], cfg.up_core_range_set
+            )
+        )
+
+    def _stack(lst):
+        if moe_tp == 1:
+            return lst[0]
+        return (
+            torch.stack(lst)
+            .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
+            .permute(0, 2, 1, 3)
+            .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
+            .contiguous()
+        )
+
+    return {"shared_gate_proj": _stack(gate_list), "shared_up_proj": _stack(up_list)}
+
+
 def fuse_q_ab_kv_a(
     q_a_proj_weights: torch.Tensor,
     q_b_proj_weights: torch.Tensor,
@@ -830,14 +944,10 @@ def fuse_q_ab_kv_a(
     """Fuse q_a, q_b, and kv_a projection weights into one overlapped buffer."""
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
-    q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
-
-    q_a_packed = cfg.shuffle_q_a(q_a_proj_weights)
-    q_b_shuffled_slices = [
-        cfg.shuffle_q_b(cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)) for tp_idx in range(q_b_tp)
-    ]
-    q_b_pre = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
-    kv_reordered = cfg.shuffle_kv_a(kv_a_proj_weights)
+    preprocessed = preprocess_q_ab_kv_a(q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mesh_shape)
+    q_a_packed = preprocessed["q_a_proj"]
+    q_b_pre = preprocessed["q_b_proj"]
+    kv_reordered = preprocessed["kv_a_proj"]
 
     return overlap_tensors(
         [
@@ -914,21 +1024,17 @@ def fuse_kv_b12(
     """Fuse kv_b1 and kv_b2 projection weights into one overlapped buffer."""
     cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
     mla_tp, _ = _tp_factors(device)
-
-    per_device_b2_w = cfg.kv_b2_proj_shape[1]
-    b2_shuffled = []
-    for tp_idx in range(mla_tp):
-        b2_slice = kv_b2_proj_weights[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
-        b2_shuffled.append(cfg.shuffle_kv_b2(b2_slice))
-    kv_b2_pre = torch.cat(b2_shuffled, dim=0) if mla_tp > 1 else b2_shuffled[0]
+    preprocessed = preprocess_kv_b12(kv_b1_proj_weights, kv_b2_proj_weights, mla_tp)
+    kv_b1 = preprocessed["kv_b1_proj"]
+    kv_b2_pre = preprocessed["kv_b2_proj"]
 
     return overlap_tensors(
         [
             [
                 OverlapEntry(
                     "kv_b1_proj",
-                    kv_b1_proj_weights,
-                    replace(cfg.kv_b1_shard_spec, raw_tensor_shape=tuple(kv_b1_proj_weights.shape), dtype=dtype),
+                    kv_b1,
+                    replace(cfg.kv_b1_shard_spec, raw_tensor_shape=tuple(kv_b1.shape), dtype=dtype),
                 ),
             ],
             [
@@ -964,35 +1070,10 @@ def fuse_gate_up(
 
     mesh_rows = device.shape[0] if device.get_num_devices() > 1 else 1
     mesh_cols = device.shape[1] if device.get_num_devices() > 1 else 1
-    per_device_n = cfg.gate_proj_shape[1]
-    stacked_h, stacked_w = cfg.stacked_shape
 
-    gate_stacked_list = []
-    up_stacked_list = []
-    for tp_idx in range(moe_tp):
-        gate_slice = gate_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-        up_slice = up_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-        gate_stacked_list.append(cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set))
-        up_stacked_list.append(cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set))
-
-    if moe_tp == 1:
-        gate_preprocessed = gate_stacked_list[0]
-        up_preprocessed = up_stacked_list[0]
-    else:
-        gate_preprocessed = (
-            torch.stack(gate_stacked_list)
-            .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-            .permute(0, 2, 1, 3)
-            .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-            .contiguous()
-        )
-        up_preprocessed = (
-            torch.stack(up_stacked_list)
-            .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-            .permute(0, 2, 1, 3)
-            .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-            .contiguous()
-        )
+    preprocessed = preprocess_gate_up(gate_proj_weights, up_proj_weights, moe_tp, mesh_rows, mesh_cols)
+    gate_preprocessed = preprocessed["shared_gate_proj"]
+    up_preprocessed = preprocessed["shared_up_proj"]
 
     gate_up_dict = overlap_tensors(
         [
@@ -1116,69 +1197,3 @@ def create_moe_routed_expert_tensors(
         return tensors
 
     return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
-
-
-def create_mlp_routed_expert_tensors(
-    gate_proj_weights: torch.Tensor,
-    up_proj_weights: torch.Tensor,
-    down_proj_weights: torch.Tensor,
-    device,
-    *,
-    dtype: ttnn.DataType = ttnn.bfloat4_b,
-    move_to_device: bool = True,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Upload dense-layer routed MLP expert gate/up/down weights as DRAM-sharded tensors."""
-    shared_n = 2048
-    num_routed = 8
-    expert_n = 2048
-
-    K_gate = gate_proj_weights.shape[0]
-    N_down = down_proj_weights.shape[1]
-
-    gate_experts = gate_proj_weights[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
-    up_experts = up_proj_weights[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
-    down_experts = down_proj_weights[shared_n:, :].reshape(num_routed, expert_n, N_down).contiguous()
-
-    tile_w = 32
-    num_banks = device.dram_grid_size().x
-    mesh_rows = device.shape[0] if device.get_num_devices() > 1 else 1
-    mesh_cols = device.shape[1] if device.get_num_devices() > 1 else 1
-    mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
-    device_for_torch = device if move_to_device else None
-
-    def upload(experts: torch.Tensor) -> ttnn.Tensor:
-        n_exp, K, N = experts.shape
-        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-        per_core_N = N_padded // num_banks
-
-        processed = []
-        for i in range(n_exp):
-            w = experts[i]
-            if N_padded != N:
-                w = torch.nn.functional.pad(w, (0, N_padded - N))
-            w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
-            processed.append(w_shuffled.reshape(K, N_padded))
-
-        stacked = torch.stack(processed).reshape(mesh_rows, mesh_cols, K, N_padded)
-
-        dram_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                )
-            }
-        )
-        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-        return ttnn.from_torch(
-            stacked.contiguous(),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device_for_torch,
-            memory_config=mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
-    return upload(gate_experts), upload(up_experts), upload(down_experts)
