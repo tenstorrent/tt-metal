@@ -7,9 +7,9 @@ import pytest
 import ttnn
 from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov11s.reference import yolov11s
+from models.demos.yolov11s.tests.pcc.pcc_logging import log_assert_with_pcc
 from models.demos.yolov11s.tt import ttnn_yolov11s
 from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_input_tensors, create_yolov11s_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -55,4 +55,6 @@ def test_yolov11s(device, reset_seeds, resolution, use_pretrained_weights, model
     ttnn_model = ttnn_yolov11s.TtnnYoloV11s(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    log_assert_with_pcc(
+        f"YOLOv11s full model (pretrained_weights={use_pretrained_weights})", torch_output, ttnn_output, 0.99
+    )

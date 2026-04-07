@@ -7,9 +7,9 @@ import pytest
 import ttnn
 from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 from models.demos.yolov11s.reference.yolov11s import SPPF as torch_sppf
+from models.demos.yolov11s.tests.pcc.pcc_logging import log_assert_with_pcc
 from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_input_tensors, create_yolov11s_model_parameters
 from models.demos.yolov11s.tt.ttnn_yolov11s_sppf import TtnnSPPF as ttnn_sppf
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -49,4 +49,4 @@ def test_yolo_v11_sppf(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    log_assert_with_pcc("YOLOv11s SPPF", torch_output, ttnn_output, 0.99)
