@@ -533,6 +533,8 @@ class GeneratorNSF:
         x = self.conv_pre(x)
         if conditioning is not None:
             x = ttnn.add(x, self.cond_linear(conditioning), output_tensor=x)
+        # before upscalin they neede to loaded to DRAM since up scaling creates large size tensors that cannot fit in L1
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
             x = ups(x)
@@ -628,9 +630,6 @@ class SynthesizerTrnMsNSF:
             * 0.66666
         )
         latent_flow = self.flow(latent, conditioning)
-        # up until this part, the computation is in l1
-        # now up scaling has to be inside dram since it is getting to large when getting closer to audio dims
-        latent_flow = ttnn.to_memory_config(latent_flow, ttnn.DRAM_MEMORY_CONFIG)
         out = self.dec(latent_flow, nsf_f0, conditioning)
         return out
 

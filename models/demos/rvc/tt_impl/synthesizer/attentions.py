@@ -108,9 +108,9 @@ class MultiHeadAttention:
             rel_logits = ttnn.matmul(q_scaled, key_relative_embeddings, transpose_b=True)
             scores_local = self._relative_to_absolute_position(rel_logits)
             scores = ttnn.add(scores, scores_local, output_tensor=scores)
-
+        scores = ttnn.to_memory_config(scores, ttnn.L1_MEMORY_CONFIG)
         attn_weights = ttnn.softmax_in_place(scores, dim=-1)
-        out = ttnn.matmul(attn_weights, v)
+        out = ttnn.matmul(attn_weights, v, memory_config=ttnn.L1_MEMORY_CONFIG)
         if self.window_size is not None:
             assert self.emb_rel_v is not None
             relative_weights = self._absolute_to_relative_position(attn_weights)
