@@ -579,7 +579,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
      {PerfCounterType::ETH_L1_2_PORT_13_GRANT, 261},
      {PerfCounterType::ETH_L1_2_PORT_14_GRANT, 262},
      {PerfCounterType::ETH_L1_2_PORT_15_GRANT, 263}}};
-#else
+#elif defined(ARCH_BLACKHOLE)
 // Tensix L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
     {{PerfCounterType::L1_2_NOC_RING2_PORT_0, 0},
@@ -620,7 +620,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
      {PerfCounterType::ETH_L1_3_PORT_21_GRANT, 261},
      {PerfCounterType::ETH_L1_3_PORT_22_GRANT, 262},
      {PerfCounterType::ETH_L1_3_PORT_23_GRANT, 263}}};
-#else
+#elif defined(ARCH_BLACKHOLE)
 // Tensix L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
     {{PerfCounterType::L1_3_NOC_RING3_PORT_0, 0},
@@ -642,6 +642,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
 #endif
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
+#if defined(ARCH_BLACKHOLE)
 // L1 bank 4 counters (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
     {{PerfCounterType::L1_4_MISC_PORT_0, 0},
@@ -662,6 +663,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
      {PerfCounterType::L1_4_MISC_PORT_6_GRANT, 262},
      {PerfCounterType::L1_4_MISC_PORT_7_GRANT, 263}}};
 constexpr size_t NUM_L1_4_COUNTERS = 16;
+#endif
 
 // INSTRN counters (61 counters)
 // INSTRN_THREAD counter_sel mapping (verified against tt_instruction_thread.sv RTL).
@@ -974,9 +976,13 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
         case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
         case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
+#if defined(ARCH_BLACKHOLE) || defined(COMPILE_FOR_ERISC)
         case PerfCounterGroup::L1_2: num_counters = NUM_L1_2_COUNTERS; break;
         case PerfCounterGroup::L1_3: num_counters = NUM_L1_3_COUNTERS; break;
+#endif
+#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_4: num_counters = NUM_L1_4_COUNTERS; break;
+#endif
         default: {
             ASSERT(false);
             break;
@@ -994,9 +1000,13 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
         case PerfCounterGroup::L1_0: return l1_0_counters.data();
         case PerfCounterGroup::L1_1: return l1_1_counters.data();
         case PerfCounterGroup::INSTRN: return instrn_counters.data();
+#if defined(ARCH_BLACKHOLE) || defined(COMPILE_FOR_ERISC)
         case PerfCounterGroup::L1_2: return l1_2_counters.data();
         case PerfCounterGroup::L1_3: return l1_3_counters.data();
+#endif
+#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_4: return l1_4_counters.data();
+#endif
         default: {
             ASSERT(false);
             return fpu_counters.data();
