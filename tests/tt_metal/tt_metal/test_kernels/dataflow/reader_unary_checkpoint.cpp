@@ -29,6 +29,6 @@ void kernel_main() {
         src_addr += ublock_size_bytes;
     }
 
-    // Participate in checkpoint barrier at micro-op boundary
+    // Participate in checkpoint barrier
     DEBUG_CHECKPOINT(1);
 }

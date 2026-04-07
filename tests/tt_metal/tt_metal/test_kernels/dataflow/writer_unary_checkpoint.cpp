@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = get_tile_size(cb_id);
 
-    // Participate in checkpoint barrier at micro-op boundary
+    // Participate in checkpoint barrier
     // (compute kernel hasn't packed output yet, so we checkpoint first)
     DEBUG_CHECKPOINT(1);
 

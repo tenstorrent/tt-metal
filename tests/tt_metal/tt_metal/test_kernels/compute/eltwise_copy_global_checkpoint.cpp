@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute kernel with global (cross-core) checkpoint support.
-// Copies tiles with a global checkpoint at the micro-op boundary.
+// Copies tiles with a global checkpoint between stages of a large op.
 
 #include <cstdint>
 

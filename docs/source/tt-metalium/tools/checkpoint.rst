@@ -8,12 +8,14 @@ Overview
 --------
 
 Debug checkpoints provide synchronized inspection points for fused kernels. When a checkpoint is
-hit, all active RISCs on a core (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) halt together, dump
-circular buffer state via DPRINT, then proceed in unison.
+hit, all active RISCs halt together, dump circular buffer state via DPRINT, then proceed in
+unison. Two levels are available:
+
+- **Single-core** (``DEBUG_CHECKPOINT``): synchronizes all 5 RISCs on one core.
+- **Global** (``DEBUG_CHECKPOINT_GLOBAL``): synchronizes all RISCs on all tensix cores.
 
 This generalizes ``dprint_tensix_dest_regs``, which only synchronizes the three TRISC cores and
-only dumps destination registers. Checkpoints synchronize all five RISCs and dump the full
-circular buffer state visible to each one.
+only dumps destination registers.
 
 Enabling
 --------
@@ -45,12 +47,15 @@ When neither is set, all dump functions and checkpoint macros are no-ops with ze
    ``TT_METAL_CHECKPOINT`` is read at JIT compile time. If you toggle it, clear the kernel
    cache to force recompilation: ``rm -rf ~/.cache/tt-metal-cache``
 
+Single-Core Checkpoints
+-----------------------
+
 Usage
------
+^^^^^
 
 Include ``api/debug/checkpoint.h`` in every kernel (reader, writer, and compute) that
 participates in the checkpoint. All active RISCs must call ``DEBUG_CHECKPOINT`` with the same ID
-at the corresponding micro-op boundary.
+at the corresponding point within the op.
 
 **Compute kernel:**
 
@@ -94,7 +99,7 @@ Every active RISC must call the checkpoint. If a RISC is active but does not cal
 ``DEBUG_CHECKPOINT``, the barrier will hang.
 
 Knobs
------
+^^^^^
 
 ``DEBUG_CHECKPOINT_EX`` provides compile-time knobs to control what gets dumped:
 
@@ -135,6 +140,182 @@ Examples:
 
     // Dump first 4 CBs, 8 words of L1 data each, plus dest registers
     DEBUG_CHECKPOINT_EX(2, 4, 8, true);
+
+How it works
+^^^^^^^^^^^^
+
+**L1 state.** Before each kernel launch, BRISC writes a 20-byte checkpoint struct to
+``MEM_LLK_DEBUG_BASE`` in L1 (shared by all RISCs on the core):
+
+.. code-block:: text
+
+    participant_mask = 0x1F     // bits 0-4: BRISC, NCRISC, TRISC0, TRISC1, TRISC2
+    proceed          = 0        // monotonically increasing epoch counter
+    arrived[0..4]    = 0        // per-RISC arrival flag (one byte each)
+    orchestrator_idx = 0        // lowest active RISC (BRISC)
+
+**Entry barrier.** Each RISC hits ``debug_checkpoint_barrier()`` at its own pace:
+
+1. Each RISC reads the current ``proceed`` epoch (0) and computes ``next_epoch = 1``.
+2. Each RISC writes ``arrived[my_idx] = 1`` — its own byte, no contention with other RISCs.
+3. The **orchestrator** (lowest active RISC, typically BRISC) polls all ``arrived[]`` bytes,
+   spinning with ``invalidate_l1_cache()`` until all match ``next_epoch``.
+4. All **other RISCs** spin on ``proceed``, waiting for it to equal ``next_epoch``.
+5. Once the orchestrator sees all arrivals, it sets ``proceed = 1``, releasing everyone.
+
+At this point all RISCs are synchronized — no RISC proceeds until every active RISC has arrived.
+
+**Dump.** Each RISC prints its local CB state via DPRINT or DEVICE_PRINT:
+
+- **BRISC, NCRISC, TRISC0, TRISC2** read their own ``get_local_cb_interface(cb_id)`` struct
+  and print metadata (size, read/write pointers, acked/received counts). Optionally hex-dump
+  L1 data at the read pointer. Each RISC has its own 204-byte DPRINT buffer; if it fills,
+  DPRINT automatically waits for the host server to drain before continuing.
+- **TRISC1 (Math)** cannot access CB interfaces (hardware limitation). It prints a skip
+  marker, or if ``dump_dest=true``, reads destination register contents via debug hardware
+  registers.
+
+The dump is purely local — each RISC reads its own L1 CB interface struct. No NOC reads, no
+remote access.
+
+**Exit barrier.** Same mechanism with ``next_epoch = 2``. This ensures no RISC moves past the
+checkpoint until every RISC has finished printing — without it, a fast RISC could modify CBs
+before a slow RISC finishes reading them.
+
+**Why per-byte flags (not a shared bitmask).** The original design used
+``arrived_mask |= (1 << my_idx)`` — a read-modify-write on a shared ``uint32_t``. If two RISCs
+read the same stale value from L1 cache, they overwrite each other's bit. Per-byte flags avoid
+this: each RISC writes only ``arrived[my_idx]``, a distinct byte. The orchestrator reads all
+bytes but never writes to another RISC's byte.
+
+**Why an epoch counter (not a simple flag).** If we used a 0/1 flag, the exit barrier would see
+``proceed`` already at 1 (from the entry barrier) and skip the wait. The monotonically increasing
+epoch (0 → 1 → 2 → ...) ensures each barrier waits for a unique value.
+
+Global Checkpoints (Cross-Core)
+-------------------------------
+
+``DEBUG_CHECKPOINT_GLOBAL`` extends checkpoints to synchronize **all RISCs on all tensix cores**.
+This is needed when a fused kernel spans multiple cores and you want a consistent snapshot of CB
+state across the entire grid.
+
+Usage
+^^^^^
+
+.. code-block:: c++
+
+    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Description
+   * - ``id``
+     - Checkpoint identifier (for DPRINT output labeling)
+   * - ``sem_id``
+     - Semaphore ID allocated by host via ``CreateSemaphore``
+   * - ``barrier_coord_x``, ``barrier_coord_y``
+     - Physical NOC coordinates of the coordinator core for the cross-core barrier.
+       These only affect synchronization, not what gets printed.
+   * - ``num_cores``
+     - Total number of cores participating
+
+**Host setup:**
+
+.. code-block:: c++
+
+    // Allocate semaphore on all participating cores
+    CoreRange cores({0, 0}, {0, 1});  // 2 cores
+    uint32_t sem_id = CreateSemaphore(program, cores, 0);
+
+    // Get coordinator's physical NOC coordinates (for the barrier, not for printing)
+    CoreCoord barrier_coord = device->worker_core_from_logical_core({0, 0});
+
+    // Pass to all kernels as runtime args
+    SetRuntimeArgs(program, kernel, core, {
+        ...,
+        sem_id, barrier_coord.x, barrier_coord.y, num_cores
+    });
+
+**Kernel usage** (all RISCs on all cores must call with the same args):
+
+.. code-block:: c++
+
+    #include "api/debug/checkpoint.h"
+
+    void kernel_main() {
+        uint32_t sem_id = get_arg_val<uint32_t>(3);
+        uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);
+        uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
+        uint32_t num_cores = get_arg_val<uint32_t>(6);
+
+        // ... work ...
+
+        // All cores synchronize here, then each core prints its OWN local CB state
+        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
+    }
+
+How it works
+^^^^^^^^^^^^
+
+The global checkpoint layers a cross-core NOC semaphore barrier around the single-core
+intra-core barriers described above:
+
+.. code-block:: text
+
+    DEBUG_CHECKPOINT_GLOBAL:
+      ┌─ intra-core barrier ──── all 5 RISCs on THIS core sync ─────┐
+      │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
+      │  │                        (NOC semaphore)                 │  │
+      │  └────────────────────────────────────────────────────────┘  │
+      ├─ intra-core barrier ──── BRISC releases other RISCs ────────┤
+      │                                                              │
+      │  DUMP: each RISC prints its own local CB state               │
+      │                                                              │
+      ├─ intra-core barrier ──── all 5 RISCs finish dumping ────────┤
+      │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
+      │  └────────────────────────────────────────────────────────┘  │
+      └─ intra-core barrier ──── final release ─────────────────────┘
+
+The single-core ``DEBUG_CHECKPOINT`` is the same structure but without the cross-core
+barrier steps. Only BRISC participates in the NOC cross-core operations — TRISC and NCRISC
+threads wait via the intra-core barriers that bracket the cross-core phase.
+
+**Step-by-step (example with 2 cores):**
+
+1. **Intra-core barrier.** Each core runs the single-core barrier independently
+   (per-byte ``arrived[]`` flags + epoch counter at ``MEM_LLK_DEBUG_BASE``). After this,
+   all 5 RISCs on each core are halted together — but the two cores are NOT yet
+   synchronized with each other.
+
+2. **Cross-core barrier (BRISC only).** Only BRISC on each core participates. The other
+   4 RISCs are blocked at the next intra-core barrier (step 3), waiting for BRISC.
+
+   - Both BRISCs reset their local semaphore to 0 (clears stale values from any
+     previous global checkpoint).
+   - Both BRISCs atomically increment the **coordinator's** semaphore via NOC:
+     ``noc_semaphore_inc(coordinator_sem_addr, 1)``. Both target the same physical L1
+     address on the coordinator core. ``noc_semaphore_inc`` is a hardware atomic.
+   - **Coordinator BRISC:** Its local semaphore IS the one being incremented.
+     Calls ``noc_semaphore_wait_min(local_sem, num_cores)`` — a local spin, no NOC reads.
+   - **Non-coordinator BRISC:** Polls the coordinator's semaphore via
+     ``noc_async_read`` into its own local semaphore copy, checking until the value
+     reaches ``num_cores``.
+
+3. **Intra-core barrier.** BRISC has returned from the cross-core barrier. The other
+   4 RISCs were spinning here. BRISC's arrival advances the epoch, releasing them.
+   All 10 RISCs (5 per core × 2 cores) are now synchronized.
+
+4. **Dump.** Every RISC prints its own local CB state. Core 0's RISCs print core 0's CBs.
+   Core 1's RISCs print core 1's CBs. No cross-core reads — the dump is purely local.
+
+5. **Intra-core barrier.** Ensures all RISCs on each core finish printing.
+
+6. **Cross-core barrier.** Same mechanism as step 2. Ensures core 0 doesn't proceed
+   past the checkpoint while core 1 is still printing.
+
+7. **Final intra-core barrier.** Releases all RISCs after the cross-core exit barrier.
 
 Output Format
 -------------
@@ -268,98 +449,7 @@ Comparison with dprint_tensix_dest_regs
 
 Use ``dprint_tensix_dest_regs`` when you only need to inspect compute output in dest registers.
 Use ``DEBUG_CHECKPOINT`` when you need a consistent snapshot of the entire dataflow + compute
-pipeline at a micro-op boundary.
-
-Global Checkpoints (Cross-Core)
--------------------------------
-
-``DEBUG_CHECKPOINT_GLOBAL`` extends checkpoints to synchronize **all RISCs on all tensix cores**.
-This is needed when a fused kernel spans multiple cores and you want a consistent snapshot of CB
-state across the entire grid.
-
-.. code-block:: c++
-
-    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
-
-.. list-table::
-   :header-rows: 1
-
-   * - Parameter
-     - Description
-   * - ``id``
-     - Checkpoint identifier (for DPRINT output labeling)
-   * - ``sem_id``
-     - Semaphore ID allocated by host via ``CreateSemaphore``
-   * - ``barrier_coord_x``, ``barrier_coord_y``
-     - Physical NOC coordinates of the coordinator core for the cross-core semaphore barrier. These do NOT affect what gets printed — each core's CB dump is always local.
-   * - ``num_cores``
-     - Total number of cores participating
-
-**Host setup:**
-
-.. code-block:: c++
-
-    // Allocate semaphore on all participating cores
-    CoreRange cores({0, 0}, {0, 1});  // 2 cores
-    uint32_t sem_id = CreateSemaphore(program, cores, 0);
-
-    // Get coordinator's physical NOC coordinates (for the barrier, not for printing)
-    CoreCoord barrier_coord = device->worker_core_from_logical_core({0, 0});
-
-    // Pass to all kernels as runtime args
-    SetRuntimeArgs(program, kernel, core, {
-        ...,
-        sem_id, barrier_coord.x, barrier_coord.y, num_cores
-    });
-
-**Kernel usage** (all RISCs on all cores must call with the same args):
-
-.. code-block:: c++
-
-    #include "api/debug/checkpoint.h"
-
-    void kernel_main() {
-        uint32_t sem_id = get_arg_val<uint32_t>(3);
-        uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);  // coordinator for barrier (not for printing)
-        uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
-        uint32_t num_cores = get_arg_val<uint32_t>(6);
-
-        // ... work ...
-
-        // All cores synchronize here, then each core prints its OWN local CB state
-        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
-    }
-
-**How it works:**
-
-1. Intra-core barrier — all RISCs on each core arrive
-2. Cross-core barrier — BRISC on each core does ``noc_semaphore_inc`` to the coordinator
-   core (identified by ``barrier_coord_x/y``), then polls until all cores have arrived
-3. Intra-core barrier — BRISC releases other RISCs
-4. CB dump — all RISCs print their own **local** CB state (no remote reads — each core
-   only inspects its own CB interfaces)
-5. Exit barriers — intra-core + cross-core ensure all cores finish before proceeding
-
-The ``barrier_coord_x/y`` parameters only affect synchronization (which core accumulates
-the semaphore). They do not affect what gets printed — the dump is always local to each core.
-
-Only BRISC participates in the NOC cross-core operations. TRISC and NCRISC threads wait via
-the intra-core barriers that bracket the cross-core phase.
-
-How It Works (Single-Core)
---------------------------
-
-1. **Firmware init**: Before each kernel launch, BRISC writes the ``enables`` bitmask (which
-   RISCs are active) to a 20-byte struct at ``MEM_LLK_DEBUG_BASE`` in L1.
-
-2. **Entry barrier**: Each RISC writes its arrival epoch to its own byte. The orchestrator
-   (lowest active RISC) polls all arrival bytes, then increments the proceed epoch.
-   Subordinates spin on the proceed epoch.
-
-3. **Dump**: Each RISC prints its CB state via DPRINT. DPRINT's built-in back-pressure
-   handles the 204-byte-per-thread buffer limit automatically.
-
-4. **Exit barrier**: A second barrier ensures all RISCs finish dumping before any proceeds.
+pipeline at a specific point within a large op.
 
 Files
 -----

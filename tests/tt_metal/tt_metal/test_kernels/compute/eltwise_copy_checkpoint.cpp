@@ -4,7 +4,7 @@
 
 // Test kernel for debug checkpoints in fused kernels.
 // Copies tiles from input CB to output CB with a checkpoint between two stages,
-// simulating a micro-op boundary in a fused kernel.
+// with a checkpoint between stages for fine-grain debugging of a large op.
 
 #include <cstdint>
 
@@ -28,7 +28,7 @@ void kernel_main() {
         copy_tile(tt::CBIndex::c_0, b, b);
     }
 
-    // Checkpoint at micro-op boundary: all RISCs synchronize and dump CB state
+    // Checkpoint between stages: all RISCs synchronize and dump CB state
     DEBUG_CHECKPOINT(1);
 
     // Stage 2: Pack tiles from dest registers to output CB
