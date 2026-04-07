@@ -43,7 +43,7 @@ def open_mesh_device():
         worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
-        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "3000000"
     num_procs = int(ttnn.distributed_context_get_size())
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
