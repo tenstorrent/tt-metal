@@ -166,7 +166,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("json_path", type=Path, help="Reconstructed master JSON to check")
-    parser.add_argument("--allow-partial", action="store_true", help="Continue when some (but not all) hashes changed")
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Continue when any hashes changed, including when all hashes changed",
+    )
     parser.add_argument("--report", type=Path, help="Write markdown report to file (in addition to stdout)")
     args = parser.parse_args()
 
