@@ -17,10 +17,29 @@ class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
         self.conv1 = TtnnConv(
-            device, parameters.conv_args[0], parameters.model[0], deallocate_activation=True, shard_layout=None
+            device,
+            parameters.conv_args[0],
+            parameters.model[0],
+            deallocate_activation=True,
+            shard_layout=None,
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
         )
-        self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
-        self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
+        self.conv2 = TtnnConv(
+            device,
+            parameters.conv_args[1],
+            parameters.model[1],
+            deallocate_activation=True,
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
+        )
+        self.c3k2_1 = TtnnC3k2(
+            device,
+            parameters.conv_args[2],
+            parameters.model[2],
+            is_bk_enabled=False,
+            reshard=True,
+            cv1_shard_layout=None,
+            cv1_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+        )
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=False)
         self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], deallocate_activation=True)
@@ -52,9 +71,12 @@ class TtnnYoloV11:
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
+        # Avoid carrying an incompatible upstream shard spec into c3k2_1.cv1.
+        # Let conv2d_DRAM slicing pick a consistent sharding program.
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.c3k2_1(self.device, x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)

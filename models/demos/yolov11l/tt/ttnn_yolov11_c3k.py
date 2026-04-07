@@ -10,9 +10,31 @@ from models.demos.yolov11l.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 class TtnnC3K:
     def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
-        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3, reshard=True)
+        inner_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8)
+        self.cv1 = TtnnConv(
+            device,
+            parameter.cv1,
+            conv_pt.cv1,
+            shard_layout=None,
+            reshard=True,
+            slice_config=inner_slice_config,
+        )
+        self.cv2 = TtnnConv(
+            device,
+            parameter.cv2,
+            conv_pt.cv2,
+            shard_layout=None,
+            reshard=True,
+            slice_config=inner_slice_config,
+        )
+        self.cv3 = TtnnConv(
+            device,
+            parameter.cv3,
+            conv_pt.cv3,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            reshard=True,
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+        )
         self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
         self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
 
@@ -27,6 +49,8 @@ class TtnnC3K:
             x = sharded_concat([k2, x2], to_interleaved=False)
         else:
             x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Avoid carrying concat-produced shard specs into cv3 matmul path.
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.cv3(device, x)
         deallocate_tensors(x1, x2, k1, k2)
         return x

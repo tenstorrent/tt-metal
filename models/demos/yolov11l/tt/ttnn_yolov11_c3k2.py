@@ -10,17 +10,42 @@ from models.demos.yolov11l.tt.ttnn_yolov11_c3k import TtnnC3K
 
 
 class TtnnC3k2:
-    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False):
+    def __init__(
+        self,
+        device,
+        parameter,
+        conv_pt,
+        is_bk_enabled=False,
+        reshard=False,
+        cv1_slice_config=ttnn.Conv2dL1FullSliceConfig,
+        cv1_shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ):
         self.is_bk_enabled = is_bk_enabled
         self.parameter = parameter
         n_inner = len(conv_pt.m)
 
         if is_bk_enabled:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
+            self.cv1 = TtnnConv(
+                device,
+                parameter.cv1,
+                conv_pt.cv1,
+                reshard=reshard,
+                deallocate_activation=True,
+                shard_layout=cv1_shard_layout,
+                slice_config=cv1_slice_config,
+            )
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
             self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
         else:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
+            self.cv1 = TtnnConv(
+                device,
+                parameter.cv1,
+                conv_pt.cv1,
+                reshard=reshard,
+                deallocate_activation=True,
+                shard_layout=cv1_shard_layout,
+                slice_config=cv1_slice_config,
+            )
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
             self.inner = [TtnnC3K(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
 
@@ -33,7 +58,10 @@ class TtnnC3k2:
         branches = [y1, y2]
         chain = y2
         for mod in self.inner:
-            chain = mod(device, chain)
+            # Inner C3K blocks can inherit incompatible sharded layouts.
+            # Normalize to DRAM so each block picks a consistent program/shard spec.
+            chain = ttnn.to_memory_config(chain, ttnn.DRAM_MEMORY_CONFIG)
+            chain = mod(device, chain, use_shard_concat=False)
             branches.append(chain)
 
         for i, t in enumerate(branches):

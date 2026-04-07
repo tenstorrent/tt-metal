@@ -8,8 +8,23 @@ from models.demos.yolov11l.tt.common import TtnnConv
 
 class TtnnBottleneck:
     def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
+        inner_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8)
+        self.cv1 = TtnnConv(
+            device,
+            parameter.cv1,
+            conv_pt.cv1,
+            shard_layout=None,
+            reshard=True,
+            slice_config=inner_slice_config,
+        )
+        self.cv2 = TtnnConv(
+            device,
+            parameter.cv2,
+            conv_pt.cv2,
+            shard_layout=None,
+            reshard=True,
+            slice_config=inner_slice_config,
+        )
 
     def __call__(self, device, x, tile_shape=32):
         input = x
