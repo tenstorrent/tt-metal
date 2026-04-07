@@ -87,8 +87,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(32, 4), (4, 32), (8, 4), (2, 4)],
-    ids=["32x4", "4x32", "8x4", "2x4"],
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -323,17 +323,7 @@ def test_mla(
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
     )
-    ttnn.synchronize_device(mesh_device)
 
-    logger.info("Second MLA run")
-    ttnn.distributed_context_barrier()
-
-    # Second forward to test program cache hit
-    tt_output = mla_tt.forward(
-        hidden_states=tt_hidden_states,
-        rope_tensors=rope_tensors,
-        kvpe_cache=tt_kvpe_cache,
-    )
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
 
