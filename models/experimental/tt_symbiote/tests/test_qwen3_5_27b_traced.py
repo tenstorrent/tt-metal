@@ -138,15 +138,9 @@ DEVICE_PARAMS = {
 @pytest.fixture(scope="module")
 def qwen_model():
     """Load Qwen3.5-27B-FP8 with 4 hidden layers (module-scoped for reuse)."""
-    from transformers import AutoModelForCausalLM
-    from models.experimental.tt_symbiote.tests.test_qwen3_5_27b_modules import _dequantize_fp8_weights
+    from models.experimental.tt_symbiote.tests.test_qwen3_5_27b_modules import load_model
 
-    model_name = "Qwen/Qwen3.5-27B-FP8"
-    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, num_hidden_layers=4)
-    _dequantize_fp8_weights(model, model_name)
-    model = model.to(torch.bfloat16)
-    model.eval()
-    torch.set_grad_enabled(False)
+    model, config = load_model(num_hidden_layers=4)
     return model
 
 
