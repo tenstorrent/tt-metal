@@ -44,6 +44,34 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         super().__init__()
 
+    def parallelize(self, mesh_device, tp_axis, cp_axis=None):
+        from functools import partial
+
+        mesh_shape = mesh_device.shape
+
+        if tp_axis is not None:
+            tp_size = mesh_shape[tp_axis]
+            if self.num_heads % tp_size != 0:
+                raise ValueError(f"num_heads ({self.num_heads}) must be divisible by tp_size ({tp_size})")
+            if self.num_groups % tp_size != 0:
+                raise ValueError(f"num_groups ({self.num_groups}) must be divisible by tp_size ({tp_size})")
+            self.num_heads = self.num_heads // tp_size
+            self.num_groups = self.num_groups // tp_size
+
+        if cp_axis is not None:
+            cp_size = mesh_shape[cp_axis]
+            if cp_size > 1:
+                old_params = self.rope_params
+                new_params = ttml.ops.rope.build_rope_params(
+                    old_params.sequence_length,
+                    old_params.head_dim,
+                    old_params.theta,
+                    old_params.rope_scaling_params,
+                    cp_axis=cp_axis,
+                )
+                self.rope_params = new_params
+                self.sdpa = partial(ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis)
+
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)

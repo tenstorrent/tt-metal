@@ -8,17 +8,8 @@ entry points are replaced with dispatch-wrapped versions that automatically
 handle tensor redistribution based on sharding rules.
 
 Usage:
-    import ttml
-    import ttml.distributed  # activates dispatch
-
-    mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
-    model = MyLlama(config)
-    model = ttml.distributed.parallelize_module(
-        model, mesh_device,
-        {r".*\.w1": ColwiseParallel(), r".*\.w2": RowwiseParallel()},
-        tp_axis=0,
-    )
-    # from here on, ttml.ops.linear.linear etc. go through dispatch
+    model = Llama(config, mesh_device=mesh, tp_plan=TpPlan({...}, tp_axis=1))
+    # TransformerBase materializes weights and parallelizes automatically
 """
 
 from .layout import DistributedLayout, Shard, Replicate, get_layout, set_layout
@@ -37,19 +28,14 @@ from .rules.registry import (
     OptionalCCL,
     register_rule,
     get_rule,
-    register_module_rule,
-    get_module_rule,
 )
 from .debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
-from .training import parallelize_module
 from .style import ParallelStyle, TpPlan, ColwiseParallel, RowwiseParallel
 from ._register_ops import init_ops
 
-from . import module_rules as _module_rules  # register module rules  # noqa: F401
-
 __all__ = [
     "DistributedLayout",
-    "Layout",  # backward-compat alias
+    "Layout",
     "Shard",
     "Replicate",
     "get_layout",
@@ -68,13 +54,9 @@ __all__ = [
     "OptionalCCL",
     "register_rule",
     "get_rule",
-    "register_module_rule",
-    "get_module_rule",
     "DispatchTracer",
     "DispatchTraceCallback",
     "dispatch_trace",
-    "parallelize_module",
-    "sync_gradients",
     "ParallelStyle",
     "TpPlan",
     "ColwiseParallel",

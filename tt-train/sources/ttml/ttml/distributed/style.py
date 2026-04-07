@@ -62,11 +62,12 @@ class TpPlan:
         model = Llama(config, mesh_device=mesh, tp_plan=plan)
     """
 
-    __slots__ = ("styles", "tp_axis")
+    __slots__ = ("styles", "tp_axis", "cp_axis")
 
-    def __init__(self, styles: dict[str, ParallelStyle], tp_axis: int = 0) -> None:
+    def __init__(self, styles: dict[str, ParallelStyle], tp_axis: int = 0, cp_axis: int | None = None) -> None:
         self.styles = styles
         self.tp_axis = tp_axis
+        self.cp_axis = cp_axis
 
     def resolve(self, mesh_device) -> dict:
         """Convert styles to a ``{pattern: Layout}`` dict for materialization."""

@@ -149,6 +149,14 @@ class AbstractModuleBase(CppModuleBase):
         """Return state dictionary."""
         return {**dict(self.named_parameters()), **dict(self.named_buffers())}
 
+    def parallelize(self, mesh_device, tp_axis: int, cp_axis: Optional[int] = None) -> None:
+        """Hook for modules to adjust themselves for tensor/context parallelism.
+
+        Override in subclasses that need TP/CP adjustments (e.g. head counts, rope).
+        Default is no-op.
+        """
+        pass
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke forward(). Subclasses implement forward()."""
         from ttml.distributed.debug import dispatch_trace
@@ -193,16 +201,13 @@ class TransformerBase(AbstractModuleBase):
                 tp_plan = kw.pop("tp_plan", None)
                 on_device_init = kw.pop("on_device_init", False)
                 object.__setattr__(self, "_mesh_device", mesh_device)
-                object.__setattr__(
-                    self,
-                    "_tp_plan",
-                    tp_plan.resolve(mesh_device) if tp_plan is not None else None,
-                )
+                object.__setattr__(self, "_tp_plan", tp_plan)
                 object.__setattr__(self, "_on_device_init", on_device_init)
                 _orig(self, *args, **kw)
                 if not hasattr(self, "_buffers"):
                     AbstractModuleBase.__init__(self)
                 self._materialize_tree()
+                self._parallelize_modules()
 
             cls.__init__ = wrapped
 
@@ -212,22 +217,25 @@ class TransformerBase(AbstractModuleBase):
 
     def _materialize_tree(self) -> None:
         """Walk the full module tree and materialize all TensorMetadata Parameters."""
+        resolved = self._tp_plan.resolve(self._mesh_device) if self._tp_plan is not None else None
         for prefix, module in self.named_modules():
             if isinstance(module, AbstractModuleBase):
-                self._materialize_module_params(module, prefix)
+                self._materialize_module_params(module, prefix, resolved)
 
-    def _materialize_module_params(self, module: AbstractModuleBase, prefix: str) -> None:
+    def _materialize_module_params(self, module: AbstractModuleBase, prefix: str, resolved) -> None:
         """Materialize a single module's own TensorMetadata Parameters."""
         for name in list(vars(module)):
             attr = getattr(module, name, None)
             if isinstance(attr, Parameter) and isinstance(attr.tensor, TensorMetadata):
                 full_path = f"{prefix}.{name}" if prefix else name
-                self._materialize_param(module, name, attr, full_path)
+                self._materialize_param(module, name, attr, full_path, resolved)
 
-    def _materialize_param(self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str) -> None:
+    def _materialize_param(
+        self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str, resolved
+    ) -> None:
         """Convert a single TensorMetadata Parameter into a device tensor."""
         metadata = param.tensor
-        layout = _match_policy(full_path, self._tp_plan)
+        layout = _match_policy(full_path, resolved)
 
         tensor = metadata.init_fn(
             metadata.shape,
@@ -238,6 +246,61 @@ class TransformerBase(AbstractModuleBase):
         tensor.set_requires_grad(metadata.requires_grad)
         param.tensor = tensor
         module._bind_parameter(tensor, name)
+
+    # ------------------------------------------------------------------
+    # Parallelization
+    # ------------------------------------------------------------------
+
+    def _parallelize_modules(self) -> None:
+        """Walk the module tree and apply parallelization after materialization."""
+        if self._tp_plan is None and self._mesh_device is None:
+            return
+
+        tp_plan = self._tp_plan
+        if tp_plan is None:
+            return
+
+        from ttml.distributed.style import ParallelStyle
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed._register_ops import init_ops
+
+        tp_axis = tp_plan.tp_axis
+        cp_axis = tp_plan.cp_axis
+        mesh_device = self._mesh_device
+
+        runtime = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, cp_axis=cp_axis)
+        init_ops()
+        set_runtime(runtime)
+
+        styles = tp_plan.styles
+
+        def _apply_recursive(module: AbstractModuleBase, prefix: str) -> None:
+            # Let the module adjust itself for TP/CP
+            module.parallelize(mesh_device, tp_axis, cp_axis)
+
+            # Match a style for forward hooks (broadcast/all_reduce)
+            style = _match_style(prefix, styles)
+            if style is not None:
+                style._apply(module, mesh_device, tp_axis)
+                return
+
+            for name, child in module.named_children():
+                if isinstance(child, AbstractModuleBase):
+                    child_prefix = f"{prefix}.{name}" if prefix else name
+                    _apply_recursive(child, child_prefix)
+
+        def _match_style(name: str, plan: dict) -> Optional[ParallelStyle]:
+            if name in plan:
+                return plan[name]
+            for pattern, style in plan.items():
+                try:
+                    if re.fullmatch(pattern, name):
+                        return style
+                except re.error:
+                    continue
+            return None
+
+        _apply_recursive(self, "")
 
 
 class ModuleList(AbstractModuleBase):

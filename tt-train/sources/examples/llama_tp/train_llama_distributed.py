@@ -39,7 +39,6 @@ from ttml.datasets import Batch, InMemoryDataloader
 
 # Layout-aware dispatch layer
 from ttml.distributed import (
-    parallelize_module,
     TpPlan,
     ColwiseParallel,
     RowwiseParallel,
@@ -535,11 +534,12 @@ def main():
     if args.track_memory:
         model_guard = MemoryUsageTracker.begin_capture()
 
-    # Build model — when TP is enabled, pass a TpPlan so TransformerBase
-    # creates weights directly sharded on device (no allocate-full → scatter).
-    tp_plan = TpPlan(LLAMA_TP_STYLES, tp_axis=tp_axis) if tp_axis is not None else None
-    if tp_plan is not None:
-        print(f"   Using lazy init with {len(tp_plan)} tp_plan patterns")
+    # Build model — TpPlan triggers lazy init + parallelization automatically.
+    tp_plan = None
+    if tp_axis is not None or cp_axis is not None:
+        tp_plan = TpPlan(LLAMA_TP_STYLES, tp_axis=tp_axis, cp_axis=cp_axis)
+        print(f"   TP axis={tp_axis}, CP axis={cp_axis}, {len(tp_plan)} style patterns")
+
     model = Llama(llama_config, mesh_device=mesh_device, tp_plan=tp_plan, on_device_init=args.on_device_init)
 
     print(
@@ -547,44 +547,6 @@ def main():
         f"{llama_config.num_attention_heads} heads, {llama_config.num_key_value_heads} kv_heads"
     )
     summary(model)
-
-    if args.track_memory:
-        MemoryUsageTracker.end_capture("MODEL_CREATION")
-        print_memory_stats("MODEL_CREATION")
-
-    # Install forward collective hooks (all_reduce / all_gather / ring_sdpa).
-    # Weights are already sharded from lazy init; parallelize_module only patches
-    # module.forward here (skips distribute_tensor for already-distributed tensors).
-    if tp_axis is not None or cp_axis is not None:
-        print("\n4. Installing distributed forward hooks...")
-        if tp_axis is not None:
-            print(f"   TP enabled on axis {tp_axis}")
-            print(f"   Plan: {len(LLAMA_TP_STYLES)} module patterns (ColwiseParallel / RowwiseParallel)")
-        if cp_axis is not None:
-            print(f"   CP enabled on axis {cp_axis}")
-
-        if args.track_memory:
-            dist_guard = MemoryUsageTracker.begin_capture()
-
-        if tp_axis is not None:
-            model = parallelize_module(
-                model,
-                mesh_device,
-                LLAMA_TP_STYLES,
-                tp_axis=tp_axis,
-                cp_axis=cp_axis,
-            )
-        else:
-            # CP only: parallelize_module with empty plan still runs GQA rule (cp_axis)
-            model = parallelize_module(model, mesh_device, {}, tp_axis=None, cp_axis=cp_axis)
-
-        if args.track_memory:
-            MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")
-            print_memory_stats("MODEL_DISTRIBUTION")
-
-        print("   Model distributed.")
-    else:
-        print("\n4. TP/CP not enabled, skipping distribution...")
 
     # Create dataloader with distributed collate function
     print("\n5. Creating dataloader...")
