@@ -23,18 +23,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol, Union, runtime_checkable
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+    from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.tensor_cache.fingerprint import canonical, compute_artifact_id
-from models.demos.deepseek_v3_b1.tensor_cache.overlapped_metadata import (
+from models.demos.deepseek_v3_b1.weights.cache.fingerprint import canonical, compute_artifact_id
+from models.demos.deepseek_v3_b1.weights.cache.overlapped_metadata import (
     overlapped_tensor_from_view_dict,
     views_dict_from_overlapped,
 )
-from models.demos.deepseek_v3_b1.tensor_cache.types import (
+from models.demos.deepseek_v3_b1.weights.cache.types import (
     Fingerprint,
     FusionGroupSpec,
     ReplicateMeshMapper,
@@ -89,7 +89,7 @@ class TensorCacheProtocol(Protocol):
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, OverlappedTensor]:
+    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
         ...
 
 
@@ -112,9 +112,9 @@ def _create_overlapped_tensor_fused(
     device,
     *,
     move_to_device: bool = False,
-) -> tuple[ttnn.Tensor, dict[str, OverlappedTensor]]:
+) -> tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]:
     """Lazy import of :mod:`fuse` to keep top-level import graph acyclic."""
-    from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
+    from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor
 
     return create_overlapped_tensor(spec, preprocessed, device, move_to_device=move_to_device)
 
@@ -146,9 +146,6 @@ class TensorCache:
             manifest.json
             metadata.json
             data.tensorbin
-
-    Note: current implementation writes directly into the final object directory
-    (no separate staging directory yet).
     """
 
     def __init__(self, local_root: Path):
@@ -174,12 +171,6 @@ class TensorCache:
         fingerprint: Fingerprint,
         tensor_host: ttnn.Tensor,
     ) -> tuple[ContentAddressedStoragePaths, str, int]:
-        """Write ``data.tensorbin`` and ``manifest.json``; return paths and stats for ``metadata.json``.
-
-        TODO: Publish atomically (stage under a unique temporary directory, then rename
-        into ``objects/``) for crash safety and to avoid concurrent writers corrupting
-        the same artifact.
-        """
         dest = self._content_addressed_paths(artifact_id)
         dest.object_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,7 +214,7 @@ class TensorCache:
         artifact_id: str,
         fingerprint: Fingerprint,
         fused_host: ttnn.Tensor,
-        views: dict[str, OverlappedTensor],
+        views: dict[str, "OverlappedTensor"],
     ) -> ContentAddressedStoragePaths:
         """Persist fused host tensor and per-view metadata (OverlappedTensor, without device)."""
         dest, content_hash, size_bytes = self._write_artifact_blob_and_manifest(artifact_id, fingerprint, fused_host)
@@ -245,7 +236,7 @@ class TensorCache:
         device,
         *,
         meta: dict | None = None,
-    ) -> dict[str, OverlappedTensor]:
+    ) -> dict[str, "OverlappedTensor"]:
         fused = ttnn.load_tensor(paths.data_path, device=device)
         if meta is None:
             with open(paths.object_dir / "metadata.json") as f:
@@ -253,7 +244,7 @@ class TensorCache:
         views_raw = meta.get("views")
         if not views_raw:
             raise ValueError(f"Missing views in metadata for fusion artifact: {paths.object_dir}")
-        out: dict[str, OverlappedTensor] = {}
+        out: dict[str, "OverlappedTensor"] = {}
         for name, d in views_raw.items():
             out[name] = overlapped_tensor_from_view_dict(fused, d)
         return out
@@ -265,22 +256,8 @@ class TensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, OverlappedTensor]:
-        """Load from cache or build, then return a device tensor or overlapped views.
-
-        Dispatches on ``fingerprint.target``:
-
-        * :class:`TensorTarget` — returns ``ttnn.Tensor`` (standalone artifact).
-        * :class:`FusionGroupSpec` — returns ``dict[str, OverlappedTensor]`` (fused buffer + views).
-
-        On hit: load ``data.tensorbin`` from NVMe; fusion entries also read ``views`` from
-        ``metadata.json``.
-
-        On miss: ``raw_tensors()`` (optional lazy) → ``preprocess()`` → build host tensor(s),
-        persist to disk, load to device.
-
-        ``raw_tensors`` may be a callable so HF weights are not read on a warm cache.
-        """
+    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
+        """Load from cache or build, then return a device tensor or overlapped views."""
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec)):
             raise TypeError(
@@ -367,7 +344,7 @@ class EphemeralTensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, OverlappedTensor]:
+    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec)):
             raise TypeError(

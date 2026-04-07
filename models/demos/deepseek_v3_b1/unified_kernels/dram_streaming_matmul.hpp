@@ -154,7 +154,7 @@ struct DRAMStreamingMatmul {
             // Contract: for a given projection (gate/up/down), all expert weight tensors must
             // be packed contiguously in DRAM starting at in1_tensor_addr (base of expert 0).
             // expert_offset_bytes = expert_idx * expert_size_bytes; see Python
-            // MoERoutedExpertWeights.validate_contiguous_dram / routed expert load order in prepare_weights.
+            // MoERoutedExpertWeights.validate_contiguous_dram / routed expert load order in weights/prepare.py.
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready

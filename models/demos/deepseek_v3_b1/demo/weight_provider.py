@@ -20,7 +20,8 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     CURRENT_TRANSFORM_VERSION,
     NUM_ROUTED_EXPERTS,
@@ -40,7 +41,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
 
 class WeightProvider(Protocol):

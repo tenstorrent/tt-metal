@@ -44,17 +44,19 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    fuse_gate_up,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_kv_b12,
     fuse_o_proj_gate_mm_norms,
     fuse_q_ab_kv_a,
 )
-from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
+from models.demos.deepseek_v3_b1.weights.transforms.moe import fuse_gate_up
 
 
 # ---------------------------------------------------------------------------

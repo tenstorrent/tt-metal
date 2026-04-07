@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3_b1.prepare_weights import SharedExpertWeights, prepare_shared_expert_weights
+from models.demos.deepseek_v3_b1.weights.prepare import SharedExpertWeights, prepare_shared_expert_weights
 
 # If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
 USE_RANDOM_WEIGHTS = True

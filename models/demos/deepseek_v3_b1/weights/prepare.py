@@ -3,15 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Prepare DeepSeek V3 fused (blitz decode) weights from a state dict.
+Prepare DeepSeek V3 fused weights from a state dict.
 
 Takes full HuggingFace state dict tensors (full logical shapes for the target
 mesh), applies key mapping, transpose, kv_b split, shuffling, and TP-concat,
 then fuses via ``overlap_tensors`` onto the device mesh.
 
-For on-disk persistence use :class:`~models.demos.deepseek_v3_b1.tensor_cache.TensorCache`
-with :class:`~models.demos.deepseek_v3_b1.tensor_cache.CacheConfig` and the ``prepare_*`` functions
-(see ``demo/weight_provider.py``). Legacy ``layer_NNN/manifest.json`` layouts are not supported.
+For on-disk persistence use :class:`~weights.cache.cache.TensorCache`
+with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
+(see ``demo/weight_provider.py``).
 """
 
 from __future__ import annotations
@@ -24,30 +24,31 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    DOWN_PROJ_SINGLE_DEVICE_SPEC,
-    GATE_UP_SPEC,
-    KV_B12_SPEC,
-    O_PROJ_GATE_MM_NORMS_SPEC,
-    Q_AB_KV_A_SPEC,
-    OverlappedTensor,
-    _tp_factors,
-    mlp_routed_dense_stacked_torch_for_cache,
-    moe_routed_expert_torch_for_cache,
-    preprocess_gate_up,
-    preprocess_kv_b12,
-    preprocess_q_ab_kv_a,
-    shared_down_torch_for_cache,
-    shuffle_dram_tiles,
-)
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
-from models.demos.deepseek_v3_b1.tensor_cache import (
+from models.demos.deepseek_v3_b1.weights.cache import (
     CacheConfig,
     ReplicateMeshMapper,
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
     TensorTarget,
+)
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+from models.demos.deepseek_v3_b1.weights.specs.fusion_groups import (
+    GATE_UP_SPEC,
+    KV_B12_SPEC,
+    O_PROJ_GATE_MM_NORMS_SPEC,
+    Q_AB_KV_A_SPEC,
+)
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import DOWN_PROJ_SINGLE_DEVICE_SPEC
+from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
+from models.demos.deepseek_v3_b1.weights.transforms.moe import (
+    _tp_factors,
+    mlp_routed_dense_stacked_torch_for_cache,
+    moe_routed_expert_torch_for_cache,
+    preprocess_gate_up,
+    shared_down_torch_for_cache,
+    shuffle_dram_tiles,
 )
 
 CURRENT_TRANSFORM_VERSION = 1
