@@ -32,3 +32,4 @@ jobs:
       ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL_ID: "C0APK6215B5"
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
