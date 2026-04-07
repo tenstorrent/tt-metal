@@ -89,6 +89,9 @@ std::vector<ttnn::Tensor> split(
         split_sizes);
     const auto& input_shape = input_tensor.logical_shape();
 
+    // Normalize negative dimension to positive index
+    dim = input_shape.get_normalized_index(dim);
+
     // special case to use hardcoded kernel for two chunks sometimes
     tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t grid_size_x = device->compute_with_storage_grid_size().x + 1;  // total size of grid in x direction
@@ -145,8 +148,11 @@ std::vector<ttnn::Tensor> split(
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    const auto num_chunks =
-        std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
+    // Normalize negative dimension to positive index
+    const auto& input_shape = input_tensor.logical_shape();
+    dim = input_shape.get_normalized_index(dim);
+
+    const auto num_chunks = std::ceil(static_cast<float>(input_shape[dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     return ttnn::split(input_tensor, split_sizes, dim, memory_config);

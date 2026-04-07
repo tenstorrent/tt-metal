@@ -126,3 +126,68 @@ def test_split_large_inner_dims(device, layout, dtype, shape, chunksize, dim):
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
         assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize("layout", layouts)
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize(
+    "shape,chunksize,dim,expected_positive_dim",
+    [
+        ((4, 128), 32, -1, 1),  # Reproducer from issue #41248
+        ((4, 128), 2, -2, 0),  # Negative dim for first dimension
+        ((2, 3, 4), 2, -1, 2),  # 3D tensor, last dim
+        ((2, 3, 4), 1, -2, 1),  # 3D tensor, middle dim
+        ((2, 3, 4), 1, -3, 0),  # 3D tensor, first dim
+        ((1, 2, 3, 4), 2, -1, 3),  # 4D tensor
+    ],
+)
+def test_split_negative_dim(device, layout, dtype, shape, chunksize, dim, expected_positive_dim):
+    """
+    Regression test for GitHub issue #41248.
+    Verifies that negative dimension values work correctly with ttnn.split.
+    """
+    torch_input_tensor = torch.rand(shape, dtype=dtype)
+
+    # Verify negative dim produces same result as equivalent positive dim
+    torch_results_neg = torch.split(torch_input_tensor, chunksize, dim=dim)
+    torch_results_pos = torch.split(torch_input_tensor, chunksize, dim=expected_positive_dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+
+    # Test with negative dim
+    outputs = ttnn.split(input_tensor, chunksize, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results_neg)
+    for output, torch_result in zip(outputs, torch_results_neg):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+        assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize("layout", layouts)
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_split_negative_dim_with_split_sizes_list(device, layout, dtype):
+    """
+    Regression test for GitHub issue #41248.
+    Verifies negative dim works with list of split_sizes (the original reproducer).
+    """
+    shape = (4, 128)
+    split_sizes = [32, 32, 32, 32]
+    dim = -1
+
+    torch_input_tensor = torch.rand(shape, dtype=dtype)
+    torch_results = torch.split(torch_input_tensor, split_sizes, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+
+    outputs = ttnn.split(input_tensor, split_sizes, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+        assert_with_pcc(torch_result, output, 0.9999)
