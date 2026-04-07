@@ -96,13 +96,18 @@ def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[T
     return None
 
 
-def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] = None) -> ttnn.MeshDevice:
+def create_mesh_device(
+    mesh_shape: Tuple[int, int],
+    device_ids: Optional[list] = None,
+    l1_small_size: int = 79104,
+) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
 
     Args:
         mesh_shape: Tuple of (rows, cols) for mesh shape
         device_ids: Optional list of device IDs (deprecated, not used by API)
+        l1_small_size: L1 small buffer size (default 79104 to prevent OOM in model-traced sweeps)
 
     Returns:
         ttnn.MeshDevice instance
@@ -111,6 +116,7 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
     # The API automatically selects available devices based on the mesh shape
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=l1_small_size,
         dispatch_core_config=ttnn.DispatchCoreConfig(),
     )
 
