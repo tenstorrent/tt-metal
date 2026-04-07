@@ -33,7 +33,6 @@ extern "C" [[gnu::section(".start")]] void _start(uint32_t) {
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    RecordPerfCounters();
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
     WAYPOINT("K");
     kernel_main();

@@ -328,7 +328,10 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-bit");
 
-#if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_ERISC))
+// ERISC perf counters disabled: the MMIO readback path is hardwired to 0 in both
+// WH and BH RTL (i_l1_perf_cnt_out(64'h0) in tt_eth_core.sv). The counters run
+// but software cannot read the values. Enable ERISC support when RTL is fixed.
+#if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1)
 
 #include "kernel_profiler.hpp"
 #include "api/debug/assert.h"
