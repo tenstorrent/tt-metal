@@ -364,20 +364,15 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
-        # Step 5: Reduce (weighted sum over topk + reduce-scatter for TP sharding)
+        # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
         # ========================================
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
-        #                  (1, 1, 256, 4, 2048) per device - 5D tensor!
+        #                  (1, 1, 256, 4, 2048) per device - 5D tensor, ROW_MAJOR
         #
-        # TtReduceModule does:
-        # 1. Apply weights: weights * combined_output (broadcast multiply)
-        # 2. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
-        # 3. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        # combined_output_tiled is too big to fit L1; keep in DRAM for now
-        combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"[TtMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
-
-        routed_output = self.reduce_module(combined_output_tiled, weights=weights)
+        # TtReduceModule uses fused deepseek_moe_post_combine_reduce kernel:
+        # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
+        # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
+        routed_output = self.reduce_module(combined_output, weights=weights)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
