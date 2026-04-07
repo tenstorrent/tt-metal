@@ -250,7 +250,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Matmul-based reduce uses col-0 fill; reduce LLK uses row-0 fill
     constexpr bool use_matmul = !compute_uses_reduce_tile && reduce_uses_matmul<pool_type, reduce_dim>();
 
-    experimental::CircularBuffer cb(cb_id);
+    ::experimental::CircularBuffer cb(cb_id);
 
     cb.reserve_back(1);
     uint32_t write_addr = cb.get_write_ptr();
