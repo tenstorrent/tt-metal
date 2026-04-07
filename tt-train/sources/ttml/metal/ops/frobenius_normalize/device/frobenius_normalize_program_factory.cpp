@@ -32,7 +32,7 @@ constexpr auto kCbScalar = tt::CBIndex::c_2;
 constexpr auto kCbRecv = tt::CBIndex::c_3;
 constexpr auto kCbNorm = tt::CBIndex::c_4;
 constexpr auto kCbOutput = tt::CBIndex::c_5;
-constexpr auto kCbScaler = tt::CBIndex::c_6;
+// c_6 unused — was for reduce_tile scaler
 
 // Runtime arg indices for reader
 constexpr uint32_t kReaderInputAddrIdx = 0;
@@ -96,8 +96,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         create_circular_buffer(program, all_cores, kCbNorm, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kCbOutput, bf16_format, bf16_tile_size, output_double_buf);
-    [[maybe_unused]] auto cb_scaler =
-        create_circular_buffer(program, all_cores, kCbScaler, bf16_format, bf16_tile_size, 1);
+    // c_6 (scaler) removed — not needed with sfpu_reduce
 
     // -------------------------------------------------------------------------
     // 4) Create semaphore (one per core, same L1 address on all cores)
@@ -134,9 +133,13 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
     auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    // Compute kernels — UnpackToDestFp32 for cb_sq_acc (required for sfpu_reduce)
+    // UnpackToDestFp32: bypass srcA/B TF32 truncation for FP32 CBs.
+    // cb_sq_acc: required for sfpu_reduce
+    // cb_scalar, cb_recv: FP32 chain adds via copy_tile + add_binary_tile
     std::vector<UnpackToDestMode> unpack_to_dest(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest[kCbSqAcc] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest[kCbScalar] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest[kCbRecv] = UnpackToDestMode::UnpackToDestFp32;
 
     auto make_compute_config = [&](const std::vector<uint32_t>& args) {
         return tt::tt_metal::ComputeConfig{
