@@ -15,6 +15,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tensix_dest.cpp
     device_print/test_print_tile.cpp
     device_print/test_print_tiles_multiple.cpp
+    device_print/test_checkpoint.cpp
     dprint/test_dprint_mesh_coords.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
@@ -24,9 +25,6 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_all_harts.cpp
     dprint/test_print_before_finish.cpp
     dprint/test_print_prepend_device_core_risc.cpp
-    dprint/test_checkpoint.cpp
-    dprint/test_checkpoint_global.cpp
-    dprint/test_dump.cpp
     dprint/test_print_tensix_dest.cpp
     dprint/test_print_tile.cpp
     dprint/test_print_tiles_multiple.cpp
