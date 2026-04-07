@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 import numpy as np
 import pytest
+import ttnn
 
 from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
 
@@ -74,10 +76,13 @@ def _run_lingbot_va_ttnn_forward() -> None:
         action_num_inference_steps=config.action_num_inference_steps,
     )
 
-    assert isinstance(out, dict), "run_inference returns {'action': ndarray}"
+    assert isinstance(out, dict), "run_inference returns {'action': ttnn.Tensor, ...}"
     assert "action" in out, "Expected 'action' in run_inference output"
-    assert out["action"] is not None
-    assert getattr(out["action"], "size", 0) > 0
+    action = out["action"]
+    assert isinstance(action, ttnn.Tensor), "Expected 'action' to be a ttnn.Tensor"
+    assert action is not None
+    # ``ttnn.Tensor`` has no ``.size`` (unlike numpy); use logical shape product.
+    assert math.prod(int(s) for s in action.shape) > 0
 
 
 @pytest.mark.timeout(600)
