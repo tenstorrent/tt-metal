@@ -908,6 +908,20 @@ def _ttnn_quantile_table_c11(mesh_device, values) -> ttnn.Tensor:
     return out
 
 
+def _ttnn_latents_mean_std_bcthw(mesh_device, channel_values, z_dim: int) -> ttnn.Tensor:
+    """``(1, z_dim, 1, 1, 1)`` bfloat16 on mesh from per-channel floats; ``ttnn.full`` + ``concat`` only."""
+    if z_dim < 1:
+        raise ValueError("_ttnn_latents_mean_std_bcthw: z_dim must be >= 1")
+    kw = dict(device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    out = ttnn.full((1, 1, 1, 1, 1), float(channel_values[0]), **kw)
+    for i in range(1, z_dim):
+        out = ttnn.concat(
+            [out, ttnn.full((1, 1, 1, 1, 1), float(channel_values[i]), **kw)],
+            dim=1,
+        )
+    return out
+
+
 def _reset_state(models, state, prompt):
     config = models["config"]
     transformer = models["transformer"]
@@ -996,7 +1010,13 @@ def _reset_state(models, state, prompt):
 
 
 def _infer_impl(models, state, obs, frame_st_id=0):
-    """Video + action denoise loops; returns postprocessed actions and ``torch`` latents."""
+    """Video + action denoise loops.
+
+    Returns ``(actions_tt, latents_tt)``: both are ``ttnn.Tensor`` on ``models['mesh_device']``.
+    ``latents_tt`` is normalized BCTHW. ``actions_tt`` has the action-channel mask applied (still in
+    model sample space). For host numpy in simulation scale, use :func:`ttnn.to_torch` then
+    :func:`_postprocess_action`.
+    """
     config = models["config"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
@@ -1206,24 +1226,8 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     ch_mask = _action_channel_mask_ttnn(mesh_device, int(actions_tt.shape[1]), action_mask)
     actions_tt = ttnn.multiply(actions_tt, ch_mask)
 
-    actions = ttnn.to_torch(actions_tt).to(dtype)
-    latents = ttnn.to_torch(latents_tt).to(dtype)
-    actions_out = _postprocess_action(models, state, actions)
-    return actions_out, latents
-
-
-def _infer_entry(models, state, obs):
-    """Dispatch: reset, compute_kv_cache, or infer one chunk. Returns result dict."""
-    reset = obs.get("reset", False)
-    prompt = obs.get("prompt", None)
-
-    if reset:
-        logger.info("Reset server")
-        _reset_state(models, state, prompt=prompt)
-        return {}
-    logger.info("Infer one chunk")
-    action, _ = _infer_impl(models, state, obs, frame_st_id=state["frame_st_id"])
-    return {"action": action}
+    # Masked on-device action samples; :func:`run_inference` returns this tensor as ``action`` unchanged.
+    return actions_tt, latents_tt
 
 
 def _load_tt_vae_decoder_into_models(models: dict, config) -> None:
@@ -1256,22 +1260,44 @@ def _free_tt_vae_decoder_from_models(models: dict) -> None:
     logger.info("Freed TT VAE decoder from device.")
 
 
-def _decode_one_video(models, latents, output_type="np"):
+def _decode_one_video(models, latents: ttnn.Tensor, output_type="np"):
+    """Decode latents to RGB video.
+
+    ``latents`` must be a **normalized** ``ttnn.Tensor`` ``(B, C, T, H, W)`` on ``models['mesh_device']``,
+    same scale as :func:`_infer_impl` / encoder output. Denormalizes on device with ``ttnn`` (same math as
+    ``latents / (1/latents_std) + latents_mean``), then :class:`~models.experimental.lingbot_va.tt.utils.WanVAEDecoderWrapper.decode`.
+
+    Mean/std broadcast tensors are built with ``ttnn.full`` / ``ttnn.concat`` only (no ``numpy`` or ``torch`` here).
+    Diffusers :class:`~diffusers.video_processor.VideoProcessor` still consumes the decoder's ``torch.Tensor`` output.
+    """
+    if not isinstance(latents, ttnn.Tensor):
+        raise TypeError(f"_decode_one_video expects ttnn.Tensor latents (BCTHW), got {type(latents).__name__}")
+
     vae = models["vae"]
     vae_decoder_tt = models.get("vae_decoder_tt")
     if vae_decoder_tt is None:
         raise RuntimeError("TT VAE decoder required: call _load_tt_vae_decoder_into_models before _decode_one_video")
 
-    latents = latents.to(vae.dtype)
-    latents_mean = (
-        torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-    )
-    latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(
-        latents.device, latents.dtype
-    )
-    latents = latents / latents_std + latents_mean
+    mesh_device = models["mesh_device"]
+    z_dim = int(vae.config.z_dim)
+    # Encoder uses (x - mean) * (1/std); decoder inverse is x * std + mean with config latents_std per channel.
+    mean_tt = _ttnn_latents_mean_std_bcthw(mesh_device, vae.config.latents_mean, z_dim)
+    std_tt = _ttnn_latents_mean_std_bcthw(mesh_device, vae.config.latents_std, z_dim)
 
-    video = vae_decoder_tt.decode(latents)
+    x = latents
+    if latents.dtype != ttnn.bfloat16:
+        x = ttnn.typecast(latents, ttnn.bfloat16)
+
+    denorm_tt = ttnn.add(ttnn.multiply(x, std_tt), mean_tt)
+    _safe_deallocate_tensor(mean_tt, "_decode_one_video mean_tt")
+    _safe_deallocate_tensor(std_tt, "_decode_one_video std_tt")
+    if x is not latents:
+        _safe_deallocate_tensor(x, "_decode_one_video latents typecast")
+
+    try:
+        video = vae_decoder_tt.decode(denorm_tt)
+    finally:
+        _safe_deallocate_tensor(denorm_tt, "_decode_one_video denorm_tt")
 
     video_processor = VideoProcessor(vae_scale_factor=1)
     video = video_processor.postprocess_video(video, output_type=output_type)
@@ -1323,7 +1349,7 @@ def run_inference(
     If ``prepared`` is ``(models, state, init_obs)`` from a prior load (e.g. perf ``TtLingbotVA.prepare``),
     skips Phases 1–3 and only runs ``_reset_state`` + ``_infer_impl``. ``checkpoint_path`` must match
     ``models['config'].wan22_pretrained_model_name_or_path``. When ``return_latents`` is True, the return
-    dict also includes ``latents`` (``torch.Tensor``).
+    dict also includes ``latents`` (``ttnn.Tensor`` BCTHW, normalized).
     """
     t0 = time.perf_counter()
     start_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -1567,19 +1593,18 @@ def run_generate(
     _reset_state(models, state, prompt)
 
     pred_latent_lst = []
-    pred_action_lst = []
     logger.info("Generating %s chunks", config.num_chunks_to_infer)
     t0_chunks = time.perf_counter()
     for chunk_id in range(config.num_chunks_to_infer):
-        actions, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
-        actions = torch.from_numpy(actions)
+        actions_tt, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
         pred_latent_lst.append(latents)
-        pred_action_lst.append(actions)
+        _safe_deallocate_tensor(actions_tt, f"run_generate actions_tt chunk {chunk_id}")
     gen_timings.append(("infer_chunks_total", time.perf_counter() - t0_chunks))
 
-    pred_latent = torch.cat(pred_latent_lst, dim=2)
+    pred_latent = pred_latent_lst[0] if len(pred_latent_lst) == 1 else ttnn.concat(pred_latent_lst, dim=2)
 
-    # Teardown transformer + TT VAE encoders, then reopen mesh so the decoder has a clean device.
+    # Teardown transformer + streaming VAE encoder on the **same** mesh (do not close/reopen mesh here).
+    # ``pred_latent`` stays valid on device; TT VAE decoder loads next on this mesh for ``_decode_one_video``.
     transformer = models.get("transformer")
     if transformer is not None:
         _release_ttnn_runtime_configs(transformer)
@@ -1610,26 +1635,16 @@ def run_generate(
     models.pop("text_encoder", None)
     _release_ttnn_runtime_configs(models)
     gc.collect()
-    _close_lingbot_mesh_stack(models)
-    opened_mesh = _open_lingbot_mesh_device()
-    mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
-    models["mesh_device"] = mesh_device
-    models["mesh_device_parent"] = mesh_parent
-    models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
     t0_dec = time.perf_counter()
     _load_tt_vae_decoder_into_models(models, config)
     gen_timings.append(("load_vae_decoder", time.perf_counter() - t0_dec))
 
-    decoded_video = None
-    if getattr(config, "enable_offload", True):
-        models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
-        t0_dv = time.perf_counter()
-        decoded_video = _decode_one_video(models, pred_latent, "np")[0]
-        gen_timings.append(("decode_one_video", time.perf_counter() - t0_dv))
-        _free_tt_vae_decoder_from_models(models)
-    else:
-        gen_timings.append(("decode_one_video", None))
+    models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
+    t0_dv = time.perf_counter()
+    decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+    gen_timings.append(("decode_one_video", time.perf_counter() - t0_dv))
+    _free_tt_vae_decoder_from_models(models)
 
     _log_phase_timings_table("run_generate phase timings", gen_timings)
 

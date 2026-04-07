@@ -228,12 +228,14 @@ class TtLingbotVA:
             prepared=(self.models, self.state, self._init_obs),
             return_latents=True,
         )
-        latents_torch = result["latents"]
+        lat = result["latents"]
+        if isinstance(lat, ttnn.Tensor):
+            return lat
         mesh_device = self.models["mesh_device"]
         dtype = self.models["dtype"]
         tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
         return ttnn.from_torch(
-            latents_torch.detach().contiguous(),
+            lat.detach().contiguous(),
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=tt_dtype,
