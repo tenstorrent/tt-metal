@@ -28,7 +28,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         return_intermediate=None,
     ):
         super().__init__()
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
 
         self.image_size = configuration.vision_chunk_size
@@ -36,12 +35,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
 
         self.width = configuration.vision_dim
         self.layers = configuration.vision_n_layers
-        self.heads = configuration.vision_attn_n_heads
-        self.mlp_ratio = configuration.vision_mlp_ratio
-        self.act_layer = configuration.vision_act_layer
         self.in_channels = configuration.vision_in_channels
-        self.n_global_layers = configuration.vision_n_global_layers
-        self.return_intermediate = return_intermediate
 
         self.embeddings = TtSiglipVisionEmbeddings(
             mesh_device=mesh_device,
@@ -68,8 +62,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             block_key="layers",
         )
 
-        self.prepare_residual_tensor_prefill = configuration.prepare_residual_tensor_prefill
-
         self.ln_post = TtLayerNorm(
             device=mesh_device,
             dim=self.width,
@@ -85,7 +77,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
 
-        bsz, in_channel, h, w = images.shape
+        bsz = images.shape[0]
 
         x = self.embeddings(images)
         attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])

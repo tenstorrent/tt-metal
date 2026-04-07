@@ -30,7 +30,7 @@ from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (128,),  # Short seq len for this unit test
 )
 def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_scaled_embedding):
     dtype = ttnn.bfloat16
@@ -39,7 +39,6 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
-    tokenizer = model_args.tokenizer
 
     if use_scaled_embedding:
         model_args.embed_scale = model_args.dim**0.5

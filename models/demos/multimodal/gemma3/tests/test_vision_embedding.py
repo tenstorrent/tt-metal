@@ -40,7 +40,6 @@ def test_vision_embedding_integration(
     image_size = model_args.vision_chunk_size
     patch_size = model_args.vision_patch_size
     hidden_dim = model_args.vision_dim
-    dim = model_args.vision_dim
     in_channels = 3
 
     input_tensor = torch.randn((bsz, in_channels, image_size, image_size))
@@ -61,13 +60,11 @@ def test_vision_embedding_integration(
     )
 
     embeddings = vision_embed(input_tensor)
-    ##### Check the outputs #####
-    logger.info("Checking outputs")
     out = ttnn.from_device(embeddings)
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     # Only select output from one device
-    tt_output_torch = tt_output_torch[..., :dim]
+    tt_output_torch = tt_output_torch[..., :hidden_dim]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     # To get RTOL values

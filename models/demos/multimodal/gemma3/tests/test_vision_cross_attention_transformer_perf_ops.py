@@ -25,7 +25,7 @@ from models.perf.device_perf_utils import run_device_perf
 
 def compare_with_target(kernel_duration_per_instance_averaged_dict, perf_targets, margins):
     passing = True
-    for op_index, op_code_with_id in enumerate(kernel_duration_per_instance_averaged_dict.keys()):
+    for op_code_with_id in kernel_duration_per_instance_averaged_dict:
         if op_code_with_id in perf_targets:
             avg_kernel_duration = kernel_duration_per_instance_averaged_dict[op_code_with_id]
 
@@ -91,7 +91,6 @@ def target_maker():
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
-    profiler.start("MAKING OP TO OP TARGETS")
 
     all_results_average = []
     all_results_max = []
@@ -192,7 +191,7 @@ def test_op_to_op_perf_gemma_vision():
     if make_new_targets:
         logger.info("Started making new performance targets...")
         target_maker()
-        logger.info("Finished` making new performance targets...")
+        logger.info("Finished making new performance targets...")
 
     logger.info("Started testing performance against targets...")
 
@@ -222,8 +221,6 @@ def test_op_to_op_perf_gemma_vision():
     # Average over all iterations of each op instance (in this specific case it is the same)
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
 
-    expected_perf_cols = {}
-    margins = {}
     with open(
         f"models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
     ) as f:

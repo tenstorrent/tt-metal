@@ -14,10 +14,7 @@ from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-@pytest.mark.parametrize(
-    "batch, num_chunks",
-    ((1, 4),),
-)
+@pytest.mark.parametrize("batch", (1,))
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -28,7 +25,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
+def test_attention_inference(batch, mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
@@ -43,9 +40,6 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     reference_model = model_args.reference_vision_attention()
     reference_model.eval()
 
-    hidden_size = model_args.vision_dim
-    n_heads = model_args.vision_attn_n_heads
-    head_dim = hidden_size // n_heads
     seq_len = model_args.vision_chunk_ntok
 
     tt_model = TtGemmaImageAttention(

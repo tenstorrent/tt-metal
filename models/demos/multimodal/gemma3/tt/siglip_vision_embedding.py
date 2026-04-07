@@ -30,16 +30,11 @@ class TtSiglipVisionEmbeddings(LightweightModule):
     ):
         super().__init__()
 
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.hidden_dim = hidden_dim
-        self.num_channels = num_channels
-        self.mesh_device = mesh_device
+        num_patches = (image_size // patch_size) ** 2
+        position_ids = ttnn.arange(0, num_patches, 1, dtype=ttnn.uint32, device=mesh_device)
+        self.position_ids = ttnn.reshape(position_ids, (1, -1))
 
-        self.num_patches = (self.image_size // self.patch_size) ** 2
-        self.num_positions = self.num_patches
-        self.position_ids = ttnn.arange(0, self.num_positions, 1, dtype=ttnn.uint32, device=self.mesh_device)
-        self.position_ids = ttnn.reshape(self.position_ids, (1, -1))
+        self.hidden_dim = hidden_dim
 
         self.patch_embed = TtGemmaConv2dPatch(
             mesh_device=mesh_device,
@@ -53,16 +48,15 @@ class TtSiglipVisionEmbeddings(LightweightModule):
             bias=bias,
         )
 
-        # Positional embedding
         positional_embedding = state_dict[f"{state_dict_prefix}position_embedding.positional_embedding"]
 
         self.pos_emb_weights = ttnn.as_tensor(
             positional_embedding,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     def forward(self, pixel_values: torch.Tensor) -> ttnn.Tensor:

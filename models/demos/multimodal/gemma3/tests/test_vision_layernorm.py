@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025vTenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
+from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # 
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("layer_name", [("layer_norm1"), ("layer_norm2")])
+@pytest.mark.parametrize("layer_name", ["layer_norm1", "layer_norm2"])
 def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
     dtype = ttnn.bfloat16
 
@@ -82,7 +82,7 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
     tt_outputs = torch.chunk(tt_output_torch, model_args.num_devices, dim=-1)
     # Compare outputs
     pcc_required = 0.99
-    for idx, tt_output_torch in enumerate(tt_outputs):
+    for tt_output_torch in tt_outputs:
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")

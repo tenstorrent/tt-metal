@@ -16,10 +16,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @pytest.mark.parametrize(
-    "batch, num_chunks",
-    ((1, 4),),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -29,7 +25,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_image_transformer_inference(batch, num_chunks, mesh_device):
+def test_image_transformer_inference(mesh_device):
     pcc_required = 0.99
 
     model_args = ModelArgs(mesh_device)
@@ -37,7 +33,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     n_layers = model_args.vision_n_layers
     first_layer_prefix = "model.vision_tower.vision_model.encoder."
 
@@ -46,8 +41,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     reference_model = model_args.reference_vision_encoder()
     reference_model.eval()
-
-    all_tests_pass = True
 
     tt_model = TtGemmaImageTransformer(
         mesh_device,
@@ -61,9 +54,8 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
         block_key="layers",
     )
 
-    # Create PT input
-    pt_attention_input = torch.randn(batch, seq_len, dim)
-    attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
+    pt_attention_input = torch.randn(1, seq_len, dim)
+    attention_mask = torch.zeros(1, 1, seq_len, seq_len)
 
     attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input,
@@ -98,6 +90,4 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
 
-        all_tests_pass = all_tests_pass and passing
-
-        assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
+        assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

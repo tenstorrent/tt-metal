@@ -29,10 +29,6 @@ class TtGemmaImageTransformer(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
-        self.mesh_device = mesh_device
-        self.gated = gated
-
         self.resblocks = [
             TtGemmaImageTransformerBlock(
                 mesh_device=mesh_device,
@@ -44,7 +40,7 @@ class TtGemmaImageTransformer(LightweightModule):
                 configuration=configuration,
                 gated=gated,
             )
-            for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
+            for i in tqdm(range(layers), desc="Loading vision transformer layers")
         ]
 
     def forward(self, x, return_intermediate=None, mask=None):

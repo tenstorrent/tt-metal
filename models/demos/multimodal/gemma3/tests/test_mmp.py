@@ -35,7 +35,6 @@ from models.demos.multimodal.gemma3.tt.multi_modal_projector import TtGemma3Mult
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     dtype = ttnn.bfloat16
-    mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
         device,
@@ -73,7 +72,7 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
         hidden_size=tt_model_args.vision_hidden_dim,
         mm_tokens_per_image=tt_model_args.mm_tokens_per_image,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        layer_norm_eps=1e-06,  # layer_norm_eps
+        layer_norm_eps=1e-06,
         dtype=dtype,
         configuration=tt_model_args,
     )

@@ -74,9 +74,9 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
     )
 
-    logger.info(f"Run reference...")
+    logger.info("Run reference...")
     reference_output = reference_model(torch_input)
-    logger.info(f"Run reference... done")
+    logger.info("Run reference... done")
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -86,7 +86,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
             dims=(None, 3) if model_args.is_galaxy else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         memory_config=model_args.get_mlp_input_mem_config(mode),
         layout=ttnn.TILE_LAYOUT,
     )

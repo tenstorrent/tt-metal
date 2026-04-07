@@ -47,14 +47,9 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
     state_dict = tt_model_args.load_state_dict()
 
     reference_model = tt_model_args.reference_vision_rms_norm()  # Gemma3 RMSNorm
-    first_layer_prefix = "model.multi_modal_projector.mm_soft_emb_norm."
 
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
-    # reference_model.load_state_dict(partial_state_dict)
-
+    # Gemma3 model_config does not define Galaxy-only keys like SHARDED_ATTN_INPUT_MEMCFG.
+    # With default forward (out_sharded=False), sharded_output_config is unused.
     tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=1152,
@@ -63,8 +58,7 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         weight_key="model.multi_modal_projector.mm_soft_emb_norm",
         weight_dtype=dtype,
         is_distributed=False,
-        sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        sharded_output_config=None,
     )
 
     # Wrap it in DistributedNorm
@@ -83,7 +77,9 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
         memory_config=(
-            tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            (tt_model_args.get_model_config().get("DECODE_RESIDUAL_MEMCFG") or ttnn.DRAM_MEMORY_CONFIG)
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG
         ),
     )
 
@@ -123,7 +119,6 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
 def test_llama_rms_norm(mesh_device):
     from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
-    mode = "prefill"
     tt_model_args = ModelArgs(
         mesh_device,
     )

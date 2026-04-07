@@ -12,8 +12,7 @@ We have handled the unit offset addition in the RMSNorm implementation directly 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-TILE = 32
-SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
+SHARD_HEIGHT = 32  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
 
 class RMSNorm(LightweightModule):
@@ -80,7 +79,7 @@ class RMSNorm(LightweightModule):
         if add_unit_offset:
             torch_weight = torch_weight + 1.0
 
-        # # Add offset before caching
+        # Add offset before caching
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
         # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)

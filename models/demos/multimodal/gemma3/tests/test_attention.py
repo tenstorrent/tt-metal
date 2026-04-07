@@ -218,62 +218,60 @@ def test_attention_inference(
             ),
         )
 
-        check_kv_cache = True
-        if check_kv_cache:
-            # PyTorch output --------------------------------------------------------------------
-            pytorch_layer_present = [
-                reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-            ]
-            # TT hardware execution -------------------------------------------------------------
-            if paged_attention:
-                tt_layer_present = [
-                    (
-                        ttnn.to_torch(
-                            cache,
-                            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                mesh_device,
-                                dims=(1, 3) if model_args.is_galaxy else (0, 1),
-                                mesh_shape=model_args.cluster_shape,
-                            ),
-                        )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                        .reshape(
-                            model_args.max_batch_size,
-                            paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                            model_args.n_kv_heads,
-                            paged_attention_config.block_size,
-                            model_args.head_dim,
-                        )
-                        .transpose(1, 2)
-                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                            :batch_size, ...
-                        ]
-                    )
-                    for cache in tt_model.layer_past
-                ]
-            else:
-                tt_layer_present = [
+        # PyTorch output --------------------------------------------------------------------
+        pytorch_layer_present = [
+            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+        ]
+        # TT hardware execution -------------------------------------------------------------
+        if paged_attention:
+            tt_layer_present = [
+                (
                     ttnn.to_torch(
                         cache,
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device,
-                            dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
                             mesh_shape=model_args.cluster_shape,
                         ),
-                    )[:batch_size, :, :, :]
-                    for cache in tt_model.layer_past
-                ]
-            for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
-                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
-                cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-                logger.info(f"{label} cache output: {output_pcc}")
-                if does_pass:
-                    logger.info(f"{label} cache Passed!")
-                else:
-                    logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
-                    all_tests_pass = False
+                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                    .reshape(
+                        model_args.max_batch_size,
+                        paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                        model_args.n_kv_heads,
+                        paged_attention_config.block_size,
+                        model_args.head_dim,
+                    )
+                    .transpose(1, 2)
+                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                        :batch_size, ...
+                    ]
+                )
+                for cache in tt_model.layer_past
+            ]
+        else:
+            tt_layer_present = [
+                ttnn.to_torch(
+                    cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[:batch_size, :, :, :]
+                for cache in tt_model.layer_past
+            ]
+        for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
+            cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+            logger.info(f"{label} cache output: {output_pcc}")
+            if does_pass:
+                logger.info(f"{label} cache Passed!")
+            else:
+                logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
+                all_tests_pass = False
 
     if all_tests_pass:
         logger.info("Attention output Passed!")

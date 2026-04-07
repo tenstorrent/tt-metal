@@ -16,10 +16,6 @@ from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoder
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
-# file names for performance and accuracy mode override files
-PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
-ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
 
 def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
     """Power-of-2 token K-chunk for paged decode SDPA (Metal requires multiple of 32)."""
@@ -188,20 +184,6 @@ class ModelArgs(TTModelArgs):
         self.rms_norm_add_unit_offset = True
         self.embed_scale = self.dim**0.5
 
-    # def _set_vision_params(self, vision_config):
-    #     self.vision_dim = vision_config.get("hidden_size", 1280)
-    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
-    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
-    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
-    #     self.vision_patch_size = vision_config.get("patch_size", 14)
-    #     self.vision_in_channels = vision_config.get("num_channels", 3)
-    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
-    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-    #     self.vision_max_num_tiles = 4
-    #     self.vision_n_global_layers = 8
-
     def _set_vision_params(self, vision_config):
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
@@ -232,12 +214,6 @@ class ModelArgs(TTModelArgs):
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
     def _set_hf_params(self, checkpoint_dir):
-        def merge_text_config(base_config):
-            text_config = base_config.get("text_config", {})
-            # Merge non-nested keys into text_config
-            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
-            return text_config
-
         def merge_vision_config(base_config):
             vision_config = base_config.get("vision_config", {})
             # Merge non-nested keys into vision_config
@@ -288,8 +264,6 @@ class ModelArgs(TTModelArgs):
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            from transformers import AutoModelForCausalLM
-
             raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:
             from transformers import AutoModelForCausalLM
@@ -406,8 +380,6 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        pass
-
         if self.dummy_weights and not load_checkpoint:
             raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:

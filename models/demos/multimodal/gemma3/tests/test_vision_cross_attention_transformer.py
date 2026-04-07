@@ -36,13 +36,6 @@ def test_gemma_vision(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    vision_first_layer_prefix = "model.vision_tower.vision_model."
-    vision_partial_state_dict = {
-        k[len(vision_first_layer_prefix) :]: v
-        for k, v in state_dict.items()
-        if (k.startswith(vision_first_layer_prefix))
-    }
-
     reference_vision_model = model_args.reference_vision_model()
 
     image_size = model_args.vision_chunk_size
@@ -65,7 +58,6 @@ def test_gemma_vision(
         state_dict_prefix="model.vision_tower.vision_model.",
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 

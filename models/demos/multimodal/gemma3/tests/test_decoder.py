@@ -29,14 +29,8 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        True,
-        # False
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention"
-    ),
+    (True,),
+    ids=("paged_attention",),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -148,8 +142,6 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    freqs_cis = None
-
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
@@ -165,7 +157,6 @@ def test_decoder_inference(
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
-        # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
                 batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
@@ -197,11 +188,8 @@ def test_decoder_inference(
         )
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
-        # In this test all users have the same position
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
-        # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input, current_pos[0], None, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 

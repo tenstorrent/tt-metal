@@ -30,14 +30,8 @@ from models.tt_transformers.tt.rope import get_rot_mats
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        True,
-        # False
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention"
-    ),
+    (True,),
+    ids=("paged_attention",),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -84,7 +78,6 @@ def test_decoder_inference(
 
     reference_model.load_state_dict(partial_state_dict)
 
-    generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
@@ -225,7 +218,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All decode iterations Passed!")
+        logger.info("All decode iterations Passed!")
     else:
         logger.warning("One or more iterations of decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"

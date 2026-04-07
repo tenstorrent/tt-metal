@@ -36,15 +36,9 @@ class TtGemma3MultiModalProjector(LightweightModule):
         self.patches_per_image = int(image_size // patch_size)
         self.tokens_per_side = int(mm_tokens_per_image**0.5)
         self.kernel_size = self.patches_per_image // self.tokens_per_side
-        self.hidden_size = hidden_size
 
         weight_key = state_dict_prefix + ".mm_input_projection_weight"
         weight = state_dict[weight_key]
-
-        if configuration.dummy_weights or (weight_cache_path is None):
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")
 
         # Pad dimensions to multiples of 32
         padded_vision_size = ((hidden_size + 31) // 32) * 32
@@ -60,10 +54,8 @@ class TtGemma3MultiModalProjector(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # cache_file_name=cache_name("mm_input_projection_weight"), # pcc drop fix later
         )
 
-        # # Create RMSNorm layer
         weight_key = state_dict_prefix + ".mm_soft_emb_norm"
         self.mm_soft_emb_norm = RMSNorm(
             device=mesh_device,
@@ -73,8 +65,6 @@ class TtGemma3MultiModalProjector(LightweightModule):
             weight_key=weight_key,
             weight_dtype=dtype,
             is_distributed=False,
-            # sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-            # sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
     def forward(self, vision_outputs: ttnn.Tensor) -> ttnn.Tensor:
@@ -108,7 +98,6 @@ class TtGemma3MultiModalProjector(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
-        # transpose
         HOUT = ((in_h - self.kernel_size) // self.kernel_size) + 1
         WOUT = ((in_w - self.kernel_size) // self.kernel_size) + 1
         pooled_vision_outputs = ttnn.reshape(pooled_vision_outputs, (in_n, HOUT, WOUT, in_c))
@@ -121,7 +110,6 @@ class TtGemma3MultiModalProjector(LightweightModule):
 
         pooled_vision_outputs = ttnn.to_layout(pooled_vision_outputs, ttnn.TILE_LAYOUT)
 
-        # # Flatten(2)
         pooled_vision_outputs = ttnn.transpose(pooled_vision_outputs, 1, 2)
         normed_vision_outputs = self.mm_soft_emb_norm(pooled_vision_outputs, mode=mode)
         projected_vision_outputs = ttnn.matmul(normed_vision_outputs, self.mm_input_projection_weight)

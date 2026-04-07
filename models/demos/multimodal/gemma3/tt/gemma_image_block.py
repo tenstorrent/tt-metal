@@ -11,8 +11,6 @@ TtGemmaImageAttention and TtGemmaImageFeedForward
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.multimodal.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
-
-# from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.demos.multimodal.gemma3.tt.gemma_image_mlp import TtGemmaImageFeedForward
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
@@ -34,7 +32,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-        self.num_devices = configuration.num_devices
         self.hidden_size = configuration.vision_dim
         self.gated = gated
 

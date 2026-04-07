@@ -44,14 +44,9 @@ class TtGemmaImageAttention(LightweightModule):
 
         self.dtype = dtype
 
-        self.grid_size = configuration.max_grid_size
-
-        self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
         self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
         self.configuration = configuration
-
-        self.model_config = configuration.get_model_config()
 
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -94,8 +89,6 @@ class TtGemmaImageAttention(LightweightModule):
         wq_chunked, wk_chunked, wv_chunked = (
             torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
-
-        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: None
 
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -229,11 +222,6 @@ class TtGemmaImageAttention(LightweightModule):
         if len(x_11SH.shape) == 3:
             x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
-        MAX_MM_SEQ_LEN = seq_len
-
-        if seq_len > MAX_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -241,7 +229,7 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,
         )
         ttnn.deallocate(x_11SH)
 
@@ -283,22 +271,14 @@ class TtGemmaImageAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(
-                attn_output_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1]
-            )
-
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,
         )
-        if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:

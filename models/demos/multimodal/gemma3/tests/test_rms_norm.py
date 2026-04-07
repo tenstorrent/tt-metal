@@ -8,12 +8,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+
+PCC_REQUIRED = 0.9999
 
 
 @torch.no_grad()
@@ -53,7 +55,7 @@ def test_rms_norm_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
-    # Create the inner RMSNormxw
+    # Create the inner RMSNorm
     tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
@@ -107,7 +109,7 @@ def test_rms_norm_inference(
         ),
     )[:1, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=PCC_REQUIRED)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -117,4 +119,4 @@ def test_rms_norm_inference(
     else:
         logger.warning("rms_norm Failed!")
 
-    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+    assert passing, f"rms_norm output does not meet PCC requirement {PCC_REQUIRED}."

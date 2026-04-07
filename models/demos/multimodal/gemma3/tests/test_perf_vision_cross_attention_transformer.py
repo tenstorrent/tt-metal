@@ -51,18 +51,25 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
 
     measurement_keys = {k for _, k in profiler.start_times.keys()}
 
-    measurements = dict()
-    for k in measurement_keys:
-        measurements[k] = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
-        logger.info(f"measurement {k}: {measurements[k]}")
+    def log_measurement(k):
+        duration = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
+        logger.info(f"measurement {k}: {duration}")
+        return duration
+
+    if SAVE_NEW_PERF_TARGETS:
+        measurements = {k: log_measurement(k) for k in measurement_keys}
+    else:
+        for k in measurement_keys:
+            log_measurement(k)
 
     model_name = get_model_name()
+    device_name = determine_device_name(mesh_device)
 
-    targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
+    targets = load_targets(TARGETS_JSON_FILENAME, device_type=device_name, model_name=model_name)
 
     if SAVE_NEW_PERF_TARGETS:
         helper_write_to_json(
-            determine_device_name(mesh_device),
+            device_name,
             measurements["model_forward_inference"],
             output_filename=TARGETS_JSON_FILENAME,
             model_name=model_name,
@@ -113,7 +120,6 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
         state_dict_prefix="model.vision_tower.vision_model.",
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     profiler.end("weight_transfer_to_device_and_model_initialization")
 
@@ -132,26 +138,25 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     profiler.start("postprocessing_and_transfer")
     out = ttnn.from_device(test_output)
 
-    tt_output_torch = ttnn.to_torch(
+    ttnn.to_torch(
         out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    )[0, :, :, :]
+    )
     profiler.end("postprocessing_and_transfer")
-
-    return tt_output_torch
 
 
 def load_targets(filename, device_type, model_name):
     if not os.path.exists(filename):
-        logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
-        return []
+        raise FileNotFoundError(
+            f"Perf targets file missing: {filename}. "
+            "Run once with SAVE_NEW_PERF_TARGETS=True to record baselines, or add the file."
+        )
 
     with open(filename, "r") as f:
         try:
             targets = json.load(f)
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
-            return []
+            raise ValueError(f"Invalid JSON in perf targets file {filename}: {e}") from e
 
     dict_targets = targets[model_name][device_type]
 
