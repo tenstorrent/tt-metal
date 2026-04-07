@@ -8,11 +8,9 @@
 constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_weights = tt::CBIndex::c_1;
 
-constexpr bool combine_is_dram = get_compile_time_arg_val(0) == 1;
-constexpr bool weight_is_dram = get_compile_time_arg_val(1) == 1;
-constexpr uint32_t num_experts = get_compile_time_arg_val(2);
-constexpr uint32_t emb_dim = get_compile_time_arg_val(3);
-constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(4);
+constexpr uint32_t num_experts = get_compile_time_arg_val(0);
+constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t weight_page_size = get_compile_time_arg_val(2);
 
 constexpr uint32_t TOKENS_PER_CORE = 32;
 
@@ -21,15 +19,12 @@ void kernel_main() {
     uint32_t weight_addr = get_arg_val<uint32_t>(1);
     uint32_t token_start_idx = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t tile_size = 2048;
-    constexpr uint32_t combine_page_size = emb_dim * 2;
-    constexpr uint32_t weight_page_size = 64;  // minmum DRAM bank page offset on BlackHole
+    constexpr uint32_t tile_size = get_tile_size(cb_combine_input);
+    constexpr uint32_t combine_page_size = emb_dim_tiles * tile_size;
 
-    const InterleavedAddrGen<combine_is_dram> combine_addrg = {
-        .bank_base_address = combine_addr, .page_size = combine_page_size};
+    const InterleavedAddrGen<true> combine_addrg = {.bank_base_address = combine_addr, .page_size = combine_page_size};
 
-    const InterleavedAddrGen<weight_is_dram> weight_addrg = {
-        .bank_base_address = weight_addr, .page_size = weight_page_size};
+    const InterleavedAddrGen<true> weight_addrg = {.bank_base_address = weight_addr, .page_size = weight_page_size};
 
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;

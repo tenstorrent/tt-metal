@@ -59,6 +59,7 @@ void kernel_main() {
             tile_regs_wait();
 
             for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+                // accumulate data in ROW_MAJOR CB of size 32x7168
                 pack_tile<true>(j, cb_rowmajor, i * emb_dim_tiles + j);
             }
 

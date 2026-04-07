@@ -108,15 +108,10 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     auto* weight_buffer = weights.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    bool combine_is_dram = combine_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool weight_is_dram = weight_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(combine_is_dram),
-        static_cast<uint32_t>(weight_is_dram),
         num_experts,
-        emb_dim,
         emb_dim_tiles,
+        static_cast<uint32_t>(weight_buffer->page_size()),
     };
 
     std::vector<uint32_t> compute_compile_time_args = {
