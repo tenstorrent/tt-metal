@@ -132,7 +132,7 @@ def test_kv_chunk_address_table(mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [3 * 1024, 100 * 1024], ids=["seq3k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [3 * 1024, 100 * 1024, 4 * 3 * 1024], ids=["seq3k", "seq100k", "seq12k"])
 def test_kv_cache_address_table(mesh_device, seq_len):
     sp_axis = 0
     kvpe_cache_head_dim = 576
@@ -242,54 +242,54 @@ def test_kv_cache_address_table(mesh_device, seq_len):
             f"Token positions for device group index: Rank = {rank}, Device group index = {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
 
-    # layer = 0
-    # slot = 0
-    # current_position = 0  # Must be chunk-aligned
-    # chunks_per_device_group = num_chunks_in_strip * 2
-    # logger.info("chunks_per_device_group = ", chunks_per_device_group)
+    layer = 0
+    slot = 0
+    current_position = 0  # Must be chunk-aligned
+    chunks_per_device_group = num_chunks_in_strip * 2
+    logger.info("chunks_per_device_group = ", chunks_per_device_group)
 
-    # dram_bank_0_addr = tt_kvpe_cache.buffer_address()
-    # for row in range(len(device_group_idx_per_row)):
-    #     group_idx = device_group_idx_per_row[row]
-    #     curr_bank_id = 0
-    #     curr_bank_offset = 0
+    dram_bank_0_addr = tt_kvpe_cache.buffer_address()
+    for row in range(len(device_group_idx_per_row)):
+        group_idx = device_group_idx_per_row[row]
+        curr_bank_id = 0
+        curr_bank_offset = 0
 
-    #     logger.info(
-    #         f"Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
-    #     )
-    #     (current_position, max_position) = device_position_indices_low_strip[row]
-    #     for chunk in range(chunks_per_device_group):
-    #         location = ttnn.experimental.disaggregation.KvCacheLocation()
+        logger.info(
+            f"Rank: {rank} Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
+        )
+        (current_position, max_position) = device_position_indices_low_strip[row]
+        for chunk in range(chunks_per_device_group):
+            location = ttnn.experimental.disaggregation.KvCacheLocation()
 
-    #         # This needs proper handling in KvCacheLocation(), just add it up atm
-    #         noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
-    #         location.noc_addr = noc_addr
-    #         location.size_bytes = CHUNK_SIZE_BYTES
-    #         location.device_group_index = group_idx
-    #         lookup_table.set(layer, current_position, slot, location)
-    #         logger.info(
-    #             f"Set location for (layer={layer}, pos={current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
-    #         )
+            # This needs proper handling in KvCacheLocation(), just add it up atm
+            noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
+            location.noc_addr = noc_addr
+            location.size_bytes = CHUNK_SIZE_BYTES
+            location.device_group_index = group_idx
+            lookup_table.set(layer, current_position, slot, location)
+            logger.info(
+                f"Rank: {rank} Set location for (layer={layer}, pos={current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
+            )
 
-    #         curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
-    #         # move to next chunk offset
-    #         if curr_bank_id == 0:
-    #             curr_bank_offset += CHUNK_SIZE_BYTES
-    #         current_position += NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    #         if chunk == num_chunks_in_strip - 1:
-    #             # switch to high chunk
-    #             assert (
-    #                 current_position == max_position + 1
-    #             ), f"Missmatch in position calculation. Expected current_position to be {max_position + 1}, but it is: {current_position}"
-    #             (current_position, max_position) = device_position_indices_high_strip[row]
+            curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+            # move to next chunk offset
+            if curr_bank_id == 0:
+                curr_bank_offset += CHUNK_SIZE_BYTES
+            current_position += NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+            if chunk == num_chunks_in_strip - 1:
+                # switch to high chunk
+                assert (
+                    current_position == max_position + 1
+                ), f"Missmatch in position calculation. Expected current_position to be {max_position + 1}, but it is: {current_position}"
+                (current_position, max_position) = device_position_indices_high_strip[row]
 
-    # # 5. Lookup the location
-    # for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-    #     retrieved = lookup_table.lookup(layer, position, slot)
-    #     logger.info(
-    #         f"Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
-    #         f"size={retrieved.size_bytes}, group_idx={int(retrieved.device_group_index)}"
-    #     )
+    # 5. Lookup the location
+    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        retrieved = lookup_table.lookup(layer, position, slot)
+        logger.info(
+            f"Rank: {rank} Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
+            f"size={retrieved.size_bytes}, group_idx={int(retrieved.device_group_index)}"
+        )
 
 
 @pytest.mark.parametrize(
