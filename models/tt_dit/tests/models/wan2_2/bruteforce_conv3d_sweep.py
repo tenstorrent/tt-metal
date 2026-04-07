@@ -135,6 +135,11 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
 # BH p150b L1 size = 1,572,864 bytes. Reserve 200KB for kernel code/stack.
 L1_BUDGET = 1_572_864 - 200 * 1024  # ~1,372 KB
 
+# Fabric cores reserved by CCLManager._init_subdevice for the halo NP sub-device (SD0).
+# Always 4: 1 effective link × 2 dirs (send+recv) × 2 dims (H+W).
+# Conv3d runs on SD1 = all_cores - NP_FABRIC_CORES, so subtract this from num_cores.
+NP_FABRIC_CORES = 4
+
 
 def compute_parallelism(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, H, W, T, C_in, C_out, num_cores=120):
     """Return the number of cores used by this blocking configuration."""
@@ -468,6 +473,97 @@ def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc
     return us
 
 
+def _run_with_np(
+    device, tt_np_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc, ccl_manager, h_pad, w_pad, h_axis, w_axis
+):
+    """Run NeighborPad halo-only concurrently with conv3d, matching the production sub-device path.
+
+    tt_np_input shape: (1, T, H_raw, W_raw, C_in) — WITHOUT halo padding.
+    NP writes a compact halo buffer; conv3d reads interior from tt_np_input + halos from buffer.
+    Both are dispatched to CQ0: NP→SD0 (4 fabric cores), conv3d→SD1 (remaining cores).
+    """
+    dims, pad_left, pad_right, axes, neighbor_sems, links = [], [], [], [], [], []
+
+    if h_pad > 0:
+        dims.append(2)
+        pad_left.append(h_pad)
+        pad_right.append(h_pad)
+        axes.append(h_axis)
+        neighbor_sems.append(ccl_manager.get_np_ping_pong_semaphore(h_axis))
+        upper_h = tt_np_input.shape[0] * tt_np_input.shape[1]
+        links.append(min(upper_h, ccl_manager.num_links))
+    if w_pad > 0:
+        dims.append(3)
+        pad_left.append(w_pad)
+        pad_right.append(w_pad)
+        axes.append(w_axis)
+        neighbor_sems.append(ccl_manager.get_np_ping_pong_semaphore(w_axis))
+        upper_w = tt_np_input.shape[0] * tt_np_input.shape[1] * tt_np_input.shape[2]
+        links.append(min(upper_w, ccl_manager.num_links))
+
+    t_batch_size = cfg.input_progress_t_batch_size  # 0 if T_out_block == 1
+    progress_sem = None
+    if t_batch_size > 0:
+        progress_sem = ccl_manager.get_np_progress_semaphore(axes[0])
+        ttnn.reset_global_semaphore_value(progress_sem, 0)
+
+    t0 = time.perf_counter()
+
+    # Dispatch NP halo-only on CQ0 targeting SD0 (fabric cores).
+    # Returns a compact halo buffer that conv3d will read from.
+    halo_tensor = ccl_manager.neighbor_pad_halo_only(
+        tt_np_input,
+        dims=dims,
+        pad_left=pad_left,
+        pad_right=pad_right,
+        padding_mode="zeros",
+        axes=axes,
+        neighbor_sems=neighbor_sems,
+        num_links=links,
+        progress_semaphore=progress_sem,
+        progress_t_batch_size=t_batch_size,
+    )
+
+    # Wire halo buffer address into conv3d config.
+    H_dev = tt_np_input.shape[2]
+    W_dev = tt_np_input.shape[3]
+    T_dev = tt_np_input.shape[1]
+    cfg.h_halo_buffer_addr = halo_tensor.buffer_address()
+    cfg.h_halo_outer_dim_size = T_dev
+    cfg.h_halo_H = H_dev + 2 * h_pad
+    cfg.h_halo_W = W_dev
+    cfg.h_halo_padding_h = h_pad
+    cfg.h_halo_padding_w = w_pad
+    if progress_sem is not None:
+        cfg.input_progress_sem_addr = ttnn.get_global_semaphore_address(progress_sem)
+
+    # Set sub_device_id lazily on first use (persists across calls for same config).
+    if cfg.sub_device_id is None:
+        cfg.sub_device_id = ccl_manager._conv3d_sd_id
+
+    # Dispatch conv3d on CQ0 targeting SD1 (compute cores).
+    # Runs concurrently with NP on SD0 — same CQ, different core sets.
+    o = ttnn.experimental.conv3d(
+        input_tensor=tt_np_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        config=cfg,
+        output_channels=C_out,
+        kernel_size=kernel_size,
+        stride=(1, 1, 1),
+        padding=(0, 0, 0),
+        padding_mode="zeros",
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ckc,
+    )
+    ttnn.synchronize_device(device)
+    us = (time.perf_counter() - t0) * 1e6
+
+    ccl_manager.deactivate_halo_sub_devices()
+    ttnn.deallocate(o)
+    return us
+
+
 def main():
     parser = argparse.ArgumentParser(description="In-process brute-force conv3d blocking sweep")
     parser.add_argument("--C_in", type=int, required=True)
@@ -491,6 +587,19 @@ def main():
         default=None,
         help="Previous sweep JSON. Combos > 2× that best_us are skipped immediately.",
     )
+    parser.add_argument(
+        "--with-np",
+        action="store_true",
+        help=(
+            "Run NeighborPad concurrently with conv3d (halo sub-device path). "
+            "Requires --mesh. Subtracts NP_FABRIC_CORES from num_cores and runs NP+conv3d "
+            "as in production: NP on SD0 (4 cores), conv3d on SD1 (remaining cores), both on CQ0."
+        ),
+    )
+    parser.add_argument("--h-pad", type=int, default=1, help="H halo padding per side for --with-np (default: 1)")
+    parser.add_argument("--w-pad", type=int, default=1, help="W halo padding per side for --with-np (default: 1)")
+    parser.add_argument("--h-axis", type=int, default=0, help="Mesh axis for H parallelism (default: 0)")
+    parser.add_argument("--w-axis", type=int, default=1, help="Mesh axis for W parallelism (default: 1)")
     args = parser.parse_args()
 
     TIMEOUT_S = args.timeout
@@ -505,17 +614,29 @@ def main():
     else:
         _num_cores = 120
 
+    # When NP is active, 4 fabric cores are reserved for SD0 and unavailable to conv3d (SD1).
+    if args.with_np:
+        assert args.mesh, "--with-np requires --mesh (NP needs a multi-chip device)"
+        _num_cores -= NP_FABRIC_CORES
+
     combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, fast=args.fast)
     print(f"Shape: C_in={C_in} C_out={C_out} kernel={kernel_size} T={T} H={H} W={W}")
     print(f"Grid: {args.grid_size or 'auto'}")
     print(f"Mesh: {args.mesh or 'single device'}")
+    print(
+        f"With NP: {args.with_np}{f' (h_pad={args.h_pad} w_pad={args.w_pad} h_axis={args.h_axis} w_axis={args.w_axis})' if args.with_np else ''}"
+    )
+    print(f"Effective num_cores for conv3d: {_num_cores}")
     print(f"Total valid combos: {len(combos)}")
 
     mesh_device = None
     if args.mesh:
         mr, mc = (int(x) for x in args.mesh.split("x"))
-        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT)
-        mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mr, mc))
+        # VAE uses Linear topology → FABRIC_1D (not RING).
+        # num_command_queues=1: only CQ0 is used (NP and conv3d both dispatched on CQ0).
+        # The old 2-CQ setup (NP on CQ1, conv3d on CQ0) is dead code.
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mr, mc), num_command_queues=1)
         device = mesh_device
     else:
         device = ttnn.open_device(device_id=0)
@@ -534,13 +655,37 @@ def main():
     )
 
     torch.manual_seed(42)
-    tt_input = ttnn.from_torch(
-        torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Only allocate the replicated input when not using NP (avoids wasting DRAM on all chips).
+    tt_input = None
+    if not args.with_np:
+        tt_input = ttnn.from_torch(
+            torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # NP setup: create the pre-halo input tensor and CCLManager sub-devices.
+    ccl_manager = None
+    tt_np_input = None
+    if args.with_np:
+        from models.tt_dit.parallel.manager import CCLManager
+        from models.tt_dit.utils.tensor import typed_tensor_2dshard
+
+        # VAE always uses Linear topology with effective_num_links=1 for the halo path.
+        ccl_manager = CCLManager(device, topology=ttnn.Topology.Linear, num_links=1)
+        H_raw = H - 2 * args.h_pad
+        W_raw = W - 2 * args.w_pad
+        assert (
+            H_raw > 0 and W_raw > 0
+        ), f"--h-pad={args.h_pad} --w-pad={args.w_pad} leaves non-positive dims for H={H} W={W}"
+        # Shard across the full mesh: each device holds (1, T, H_raw, W_raw, C_in).
+        # This is the real production pattern — NP exchanges actual halo rows/cols over fabric.
+        full_np = torch.randn(1, T, H_raw * mr, W_raw * mc, padded_cin, dtype=torch.float32)
+        tt_np_input = typed_tensor_2dshard(
+            full_np, device, {args.h_axis: 2, args.w_axis: 3}, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
     w = torch.randn(C_out, padded_cin, *kernel_size, dtype=torch.float32)
     tt_bias = ttnn.from_torch(
         torch.randn(1, C_out, dtype=torch.float32),
@@ -571,7 +716,9 @@ def main():
 
     def get_weight(cin):
         if cin not in weight_cache:
-            tt_w = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+            # Create weight on host then let prepare_conv3d_weights handle device placement —
+            # matches production (vae_wan2_1.py: from_torch on host, then prepare with device=).
+            tt_w = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
             weight_cache[cin] = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=tt_w, C_in_block=cin, device=device
             )
@@ -594,11 +741,32 @@ def main():
                 C_in_block=cin,
                 compute_with_storage_grid_size=grid_size,
             )
-            tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, ckc)
+            if args.with_np:
+                cfg_tbl.use_h_halo_buffer = True
+                cfg_tbl.input_progress_t_batch_size = t_blk if t_blk > 1 else 0
+                tbl_args = (
+                    device,
+                    tt_np_input,
+                    get_weight(cin),
+                    tt_bias,
+                    cfg_tbl,
+                    C_out,
+                    kernel_size,
+                    ckc,
+                    ccl_manager,
+                    args.h_pad,
+                    args.w_pad,
+                    args.h_axis,
+                    args.w_axis,
+                )
+                run_fn = _run_with_np
+            else:
+                tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, ckc)
+                run_fn = _run_once
             try:
                 for _ in range(WARMUP):
-                    _run_once(*tbl_args)
-                tbl_us = statistics.mean(_run_once(*tbl_args) for _ in range(RUNS))
+                    run_fn(*tbl_args)
+                tbl_us = statistics.mean(run_fn(*tbl_args) for _ in range(RUNS))
                 best_us = min(best_us, tbl_us)
                 if t_blk == 1:
                     t1_baseline[(cin, cout, h_blk, w_blk)] = tbl_us
@@ -626,6 +794,28 @@ def main():
                 C_in_block=cin,
                 compute_with_storage_grid_size=grid_size,
             )
+            if args.with_np:
+                cfg.use_h_halo_buffer = True
+                cfg.input_progress_t_batch_size = t_blk if t_blk > 1 else 0
+                run_args = (
+                    device,
+                    tt_np_input,
+                    tt_weight,
+                    tt_bias,
+                    cfg,
+                    C_out,
+                    kernel_size,
+                    ckc,
+                    ccl_manager,
+                    args.h_pad,
+                    args.w_pad,
+                    args.h_axis,
+                    args.w_axis,
+                )
+                run_fn = _run_with_np
+            else:
+                run_args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc)
+                run_fn = _run_once
             probe_threshold = 2.0 if i < len(combos) * 0.20 else 1.4
 
             spatial_key = (cin, cout, h_blk, w_blk)
@@ -638,7 +828,6 @@ def main():
 
             # Run the entire combo (probe + warmup + timed) inside the timeout
             # thread so that slow JIT compilation is also caught by TIMEOUT_S.
-            probe_args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc)
             us_out = [None]
             probe_out = [None]
             exc_out = [None]
@@ -646,53 +835,23 @@ def main():
             def _probe_warmup_and_time():
                 try:
                     # Probe: triggers JIT compile + 1 measurement
-                    probe_out[0] = _run_once(*probe_args)
+                    probe_out[0] = run_fn(*run_args)
 
                     # Cutoff after probe (inside thread so JIT time is counted)
                     if best_us < float("inf"):
                         if probe_out[0] > best_us * probe_threshold:
                             return  # leave us_out[0] = None → treated as slow
                         if probe_out[0] > best_us * (probe_threshold * 0.75):
-                            probe2 = _run_once(*probe_args)
+                            probe2 = run_fn(*run_args)
                             if min(probe_out[0], probe2) > best_us * (probe_threshold * 0.9):
                                 return  # slow
 
                     for _ in range(WARMUP):
-                        out = ttnn.experimental.conv3d(
-                            input_tensor=tt_input,
-                            weight_tensor=tt_weight,
-                            bias_tensor=tt_bias,
-                            config=cfg,
-                            output_channels=C_out,
-                            kernel_size=kernel_size,
-                            stride=(1, 1, 1),
-                            padding=(0, 0, 0),
-                            padding_mode="zeros",
-                            dtype=ttnn.bfloat16,
-                            compute_kernel_config=ckc,
-                        )
-                        ttnn.synchronize_device(device)
-                        ttnn.deallocate(out)
+                        run_fn(*run_args)
 
                     times = []
                     for _ in range(RUNS):
-                        t0 = time.perf_counter()
-                        out = ttnn.experimental.conv3d(
-                            input_tensor=tt_input,
-                            weight_tensor=tt_weight,
-                            bias_tensor=tt_bias,
-                            config=cfg,
-                            output_channels=C_out,
-                            kernel_size=kernel_size,
-                            stride=(1, 1, 1),
-                            padding=(0, 0, 0),
-                            padding_mode="zeros",
-                            dtype=ttnn.bfloat16,
-                            compute_kernel_config=ckc,
-                        )
-                        ttnn.synchronize_device(device)
-                        times.append((time.perf_counter() - t0) * 1e6)
-                        ttnn.deallocate(out)
+                        times.append(run_fn(*run_args))
 
                     us_out[0] = statistics.mean(times)
                 except Exception as e:
@@ -760,6 +919,7 @@ def main():
         "W": W,
         "grid_size": args.grid_size,
         "mesh": args.mesh,
+        "with_np": args.with_np,
         "num_combos": len(combos),
         "num_ok": ok_count,
         "num_fail": fail_count,
@@ -773,6 +933,8 @@ def main():
         json.dump(final, f, indent=2, default=str)
     print(f"Saved to {out_path}")
 
+    if tt_np_input is not None:
+        ttnn.deallocate(tt_np_input)
     if mesh_device:
         ttnn.close_mesh_device(mesh_device)
     else:

@@ -299,16 +299,14 @@ class WanCausalConv3d(Module):
             W_out=W_out,
         )
         # Enable halo-buffer mode when T_out_block > 1 and spatial halo needed.
-        # Fabric-only NeighborPad (4 cores, sub-device 0) runs concurrently with
-        # conv3d (116 cores, sub-device 1) via 2 CQs.
+        # Fabric-only NeighborPad (SD0, 4 cores) runs concurrently with
+        # conv3d (SD1, 116 cores) on CQ0 (single-CQ sub-device pattern).
         _needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
         if _needs_halo and self.conv_config.T_out_block > 1:
             self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block
             self.conv_config.use_h_halo_buffer = True
-            # No sub_device_id — use full grid on CQ0 while NP runs on CQ1
-            # (no sub-device isolation, but 2 CQs allow independent dispatch)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
