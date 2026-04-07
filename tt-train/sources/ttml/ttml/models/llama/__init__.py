@@ -92,13 +92,13 @@ def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
 
 
 class Llama(TransformerBase):
-    def __init__(self, config: LlamaConfig, **kwargs) -> None:
+    def __init__(self, config: LlamaConfig, **kwargs):
         self.config = config
 
-        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False, **kwargs)
+        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size, **kwargs)
+        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             # Share the Parameter object so lazy materialization runs once; assigning
@@ -133,16 +133,12 @@ class Llama(TransformerBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
-                    **kwargs,
                 )
                 for _ in range(config.num_hidden_layers)
             ],
-            **kwargs,
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size, **kwargs)
-
-        super().__init__(**kwargs)
+        self.ln_fc = RMSNormLayer(config.hidden_size)
 
     def forward(
         self,

@@ -45,57 +45,6 @@ from ttml.distributed import (
     RowwiseParallel,
 )
 from ttml.distributed.debug import DispatchTraceCallback
-from ttml.distributed.layout import Shard, get_layout
-
-
-def _mesh_axis_sizes(mesh_device) -> list[int]:
-    ms = mesh_device.shape
-    if hasattr(ms, "dims"):
-        return [int(ms[i]) for i in range(ms.dims())]
-    return [int(x) for x in ms]
-
-
-def _global_numel_from_shard_shape_and_layout(
-    local_shape: tuple[int, ...],
-    layout,
-    mesh_device,
-) -> int:
-    """Invert ``Layout.shard_shape``: recover global element count from shard-local logical shape.
-
-    For each ``Shard(dim)`` on mesh axis ``a``, multiplies ``local_shape[dim]`` by
-    ``mesh_shape[a]``. Replicated axes leave sizes unchanged.
-    """
-    if layout is None or mesh_device is None:
-        return math.prod(local_shape)
-    mesh_sizes = _mesh_axis_sizes(mesh_device)
-    rank = len(local_shape)
-    g = list(local_shape)
-    for mesh_axis, placement in enumerate(layout.placements):
-        if mesh_axis >= len(mesh_sizes):
-            break
-        if isinstance(placement, Shard):
-            dim = placement.dim if placement.dim >= 0 else rank + placement.dim
-            n = mesh_sizes[mesh_axis]
-            if n > 1:
-                g[dim] *= n
-    return math.prod(g)
-
-
-def parameter_count_stats_from_sharding(model, mesh_device) -> tuple[int, int]:
-    """Sum over ``model.parameters()``: (local_shard_numel, global_unique_numel).
-
-    ``local_shard_numel`` is ``sum(prod(t.shape()))`` as reported by the runtime.
-    ``global_unique_numel`` applies the mesh × ``Layout`` shard inverse (same convention
-    as ``Layout.shard_shape``) so TP-sharded weights count once at full width.
-    """
-    local_total = 0
-    global_total = 0
-    for _name, t in model.parameters().items():
-        sh = tuple(int(x) for x in t.shape())
-        local_total += math.prod(sh)
-        layout = get_layout(t)
-        global_total += _global_numel_from_shard_shape_and_layout(sh, layout, mesh_device)
-    return local_total, global_total
 
 
 # Memory profiling
@@ -426,6 +375,11 @@ def main():
         action="store_true",
         help="Enable gradient checkpointing (memory efficient mode)",
     )
+    parser.add_argument(
+        "--on_device_init",
+        action="store_true",
+        help="Initialize weights directly on device (skip host numpy roundtrip)",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -586,15 +540,13 @@ def main():
     tp_plan = TpPlan(LLAMA_TP_STYLES, tp_axis=tp_axis) if tp_axis is not None else None
     if tp_plan is not None:
         print(f"   Using lazy init with {len(tp_plan)} tp_plan patterns")
-    model = Llama(llama_config, mesh_device=mesh_device, tp_plan=tp_plan)
+    model = Llama(llama_config, mesh_device=mesh_device, tp_plan=tp_plan, on_device_init=args.on_device_init)
 
-    local_p, global_p = parameter_count_stats_from_sharding(model, mesh_device)
     print(
         f"   Config: {llama_config.num_hidden_layers} layers, {llama_config.hidden_size} hidden, "
         f"{llama_config.num_attention_heads} heads, {llama_config.num_key_value_heads} kv_heads"
     )
-    print(f"   Parameters (local shard logical, sum of prod(shape) per weight): {local_p:,}")
-    print(f"   Parameters (global unique, from Layout × mesh sharding): {global_p:,}")
+    summary(model)
 
     if args.track_memory:
         MemoryUsageTracker.end_capture("MODEL_CREATION")

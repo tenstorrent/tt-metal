@@ -21,7 +21,6 @@ class RMSNormLayer(AbstractModuleBase):
         features: int,
         epsilon: float = 1e-5,
         use_composite: bool = False,
-        **kwargs,
     ) -> None:
         self.epsilon = epsilon
         self.use_composite = use_composite
@@ -33,7 +32,7 @@ class RMSNormLayer(AbstractModuleBase):
             )
         )
 
-        super().__init__(**kwargs)
+        super().__init__()
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         if self.use_composite:
@@ -52,7 +51,6 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        **kwargs,
     ) -> None:
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
@@ -63,11 +61,11 @@ class LlamaMLP(AbstractModuleBase):
             unrounded_size = (4 * embedding_size * 2) // 3
             intermediate_size = ((unrounded_size + multiple_of - 1) // multiple_of) * multiple_of
 
-        self.w1 = LinearLayer(embedding_size, intermediate_size, False, **kwargs)
-        self.w3 = LinearLayer(embedding_size, intermediate_size, False, **kwargs)
-        self.w2 = LinearLayer(intermediate_size, embedding_size, False, **kwargs)
+        self.w1 = LinearLayer(embedding_size, intermediate_size, False)
+        self.w3 = LinearLayer(embedding_size, intermediate_size, False)
+        self.w2 = LinearLayer(intermediate_size, embedding_size, False)
 
-        super().__init__(**kwargs)
+        super().__init__()
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         swished = ttml.ops.unary.silu(self.w1(input))
@@ -92,11 +90,10 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
-        **kwargs,
     ) -> None:
-        self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout, **kwargs)
-        self.attention_norm = RMSNormLayer(hidden_size, **kwargs)
-        self.mlp_norm = RMSNormLayer(hidden_size, **kwargs)
+        self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout)
+        self.attention_norm = RMSNormLayer(hidden_size)
+        self.mlp_norm = RMSNormLayer(hidden_size)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,
@@ -104,10 +101,9 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            **kwargs,
         )
 
-        super().__init__(**kwargs)
+        super().__init__()
 
     def forward(
         self,

@@ -28,7 +28,7 @@ class AbstractModuleBase(CppModuleBase):
     here — use ``TransformerBase`` as the root to materialize the full tree.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self) -> None:
         super().__init__()
         object.__setattr__(self, "_buffers", {})
         self.create_name(self.__class__.__name__)
@@ -167,24 +167,44 @@ class AbstractModuleBase(CppModuleBase):
 class TransformerBase(AbstractModuleBase):
     """Root-level transformer base that materializes the full module tree.
 
-    Subclasses create child modules in their constructor, then call
-    ``super().__init__(**kwargs)``.  This class captures ``mesh_device``
-    and ``tp_plan``, then walks the tree to materialize every
-    ``TensorMetadata`` Parameter.
+    Subclasses just create child modules in ``__init__`` — no
+    ``super().__init__()`` call needed.  ``mesh_device`` and ``tp_plan``
+    are popped from kwargs automatically, and ``__post_init__``
+    materializes every ``TensorMetadata`` Parameter after ``__init__``
+    returns.
 
     Usage::
 
         class Llama(TransformerBase):
-            def __init__(self, config, **kwargs):
+            def __init__(self, config):
                 self.fc = LinearLayer(...)
-                super().__init__(**kwargs)
     """
 
-    def __init__(self, mesh_device=None, tp_plan=None, **kwargs) -> None:
-        self._mesh_device = mesh_device
-        self._tp_plan = tp_plan.resolve(mesh_device) if tp_plan is not None else None
-        super().__init__(**kwargs)
-        self._materialize_tree()
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        if "__init__" in cls.__dict__:
+            import functools
+
+            orig = cls.__dict__["__init__"]
+
+            @functools.wraps(orig)
+            def wrapped(self, *args, _orig=orig, **kw):
+                mesh_device = kw.pop("mesh_device", None)
+                tp_plan = kw.pop("tp_plan", None)
+                on_device_init = kw.pop("on_device_init", False)
+                object.__setattr__(self, "_mesh_device", mesh_device)
+                object.__setattr__(
+                    self,
+                    "_tp_plan",
+                    tp_plan.resolve(mesh_device) if tp_plan is not None else None,
+                )
+                object.__setattr__(self, "_on_device_init", on_device_init)
+                _orig(self, *args, **kw)
+                if not hasattr(self, "_buffers"):
+                    AbstractModuleBase.__init__(self)
+                self._materialize_tree()
+
+            cls.__init__ = wrapped
 
     # ------------------------------------------------------------------
     # Materialization
@@ -209,7 +229,12 @@ class TransformerBase(AbstractModuleBase):
         metadata = param.tensor
         layout = _match_policy(full_path, self._tp_plan)
 
-        tensor = metadata.init_fn(metadata.shape, layout=layout, mesh_device=self._mesh_device)
+        tensor = metadata.init_fn(
+            metadata.shape,
+            layout=layout,
+            mesh_device=self._mesh_device,
+            on_device_init=self._on_device_init,
+        )
         tensor.set_requires_grad(metadata.requires_grad)
         param.tensor = tensor
         module._bind_parameter(tensor, name)

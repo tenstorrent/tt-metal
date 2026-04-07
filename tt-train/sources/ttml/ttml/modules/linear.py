@@ -20,7 +20,6 @@ class LinearLayer(AbstractModuleBase):
         in_features: int,
         out_features: int,
         has_bias: bool = True,
-        **kwargs,
     ) -> None:
         self.in_features = in_features
         self.out_features = out_features
@@ -44,7 +43,7 @@ class LinearLayer(AbstractModuleBase):
         else:
             self.bias = None
 
-        super().__init__(**kwargs)
+        super().__init__()
 
     def __reduce__(self):
         return (

@@ -14,14 +14,7 @@ from ttml.modules.parameter import TensorMetadata
 class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
-    def __init__(self, num_embeddings: int, embedding_dim: int, **kwargs) -> None:
-        """Initialize embedding layer.
-
-        Args:
-            num_embeddings: Size of vocabulary.
-            embedding_dim: Dimension of embeddings.
-            **kwargs: Forwarded to AbstractModuleBase (mesh_device, tp_plan, etc.).
-        """
+    def __init__(self, num_embeddings: int, embedding_dim: int) -> None:
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
 
@@ -33,7 +26,7 @@ class Embedding(AbstractModuleBase):
             )
         )
 
-        super().__init__(**kwargs)
+        super().__init__()
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.
