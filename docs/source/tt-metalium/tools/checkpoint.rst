@@ -275,7 +275,7 @@ state across the entire grid.
 
 .. code-block:: c++
 
-    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores, scratch_addr)
+    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores)
 
 .. list-table::
    :header-rows: 1
@@ -290,8 +290,6 @@ state across the entire grid.
      - Physical NOC coordinates of the coordinator core
    * - ``num_cores``
      - Total number of cores participating
-   * - ``scratch_addr``
-     - L1 address for NOC polling scratch space (4 bytes, e.g., a second semaphore)
 
 **Host setup:**
 
@@ -300,7 +298,6 @@ state across the entire grid.
     // Allocate semaphore on all participating cores
     CoreRange cores({0, 0}, {0, 1});  // 2 cores
     uint32_t sem_id = CreateSemaphore(program, cores, 0);
-    uint32_t scratch_sem_id = CreateSemaphore(program, cores, 0);
 
     // Get coordinator's physical coordinates
     CoreCoord coord_phys = device->worker_core_from_logical_core({0, 0});
@@ -308,7 +305,7 @@ state across the entire grid.
     // Pass to all kernels as runtime args
     SetRuntimeArgs(program, kernel, core, {
         ...,
-        sem_id, coord_phys.x, coord_phys.y, num_cores, scratch_sem_id
+        sem_id, coord_phys.x, coord_phys.y, num_cores
     });
 
 **Kernel usage** (all RISCs on all cores must call with the same args):
@@ -322,11 +319,10 @@ state across the entire grid.
         uint32_t coord_x = get_arg_val<uint32_t>(4);
         uint32_t coord_y = get_arg_val<uint32_t>(5);
         uint32_t num_cores = get_arg_val<uint32_t>(6);
-        uint32_t scratch_addr = get_semaphore(get_arg_val<uint32_t>(7));
 
         // ... work ...
 
-        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores, scratch_addr);
+        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores);
     }
 
 **How it works:**

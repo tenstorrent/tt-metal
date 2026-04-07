@@ -243,20 +243,28 @@ inline void debug_checkpoint(uint8_t checkpoint_id) {
 #include "api/dataflow/dataflow_api.h"
 
 inline void debug_checkpoint_cross_core_barrier(
-    uint32_t sem_id, uint32_t coord_x, uint32_t coord_y, uint32_t num_cores, uint32_t scratch_addr) {
+    uint32_t sem_id, uint32_t coord_x, uint32_t coord_y, uint32_t num_cores) {
     uint32_t sem_addr = get_semaphore(sem_id);
+    volatile tt_l1_ptr uint32_t* local_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint64_t coord_noc_addr = get_noc_addr(coord_x, coord_y, sem_addr);
 
     // Signal arrival (atomic increment on coordinator)
     noc_semaphore_inc(coord_noc_addr, 1);
     noc_async_atomic_barrier();
 
-    // Poll coordinator's semaphore until all cores have arrived
-    volatile tt_l1_ptr uint32_t* poll = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
-    *poll = 0;
-    while (*poll < num_cores) {
-        noc_async_read(coord_noc_addr, scratch_addr, sizeof(uint32_t));
-        noc_async_read_barrier();
+    bool is_coordinator = (my_x[noc_index] == coord_x && my_y[noc_index] == coord_y);
+    if (is_coordinator) {
+        // Coordinator: wait locally for all cores to arrive
+        noc_semaphore_wait_min(local_sem, num_cores);
+    } else {
+        // Non-coordinator: poll coordinator's semaphore via NOC read.
+        // Use our local copy of the semaphore as the read destination
+        // (it's unused on non-coordinator cores since all increments go to coordinator).
+        *local_sem = 0;
+        while (*local_sem < num_cores) {
+            noc_async_read(coord_noc_addr, sem_addr, sizeof(uint32_t));
+            noc_async_read_barrier();
+        }
     }
 }
 #endif  // KERNEL_BUILD && (COMPILE_FOR_BRISC || COMPILE_FOR_NCRISC || COMPILE_FOR_DM)
@@ -282,8 +290,7 @@ inline void debug_checkpoint_global(
     [[maybe_unused]] uint32_t sem_id,
     [[maybe_unused]] uint32_t coord_x,
     [[maybe_unused]] uint32_t coord_y,
-    [[maybe_unused]] uint32_t num_cores,
-    [[maybe_unused]] uint32_t scratch_addr) {
+    [[maybe_unused]] uint32_t num_cores) {
     WAYPOINT("GCW");  // Global Checkpoint Wait
 
     // 1. Intra-core: all RISCs on this core synchronize
@@ -291,7 +298,7 @@ inline void debug_checkpoint_global(
 
     // 2. Cross-core: BRISC on each core synchronizes across all cores
 #if defined(KERNEL_BUILD) && defined(COMPILE_FOR_BRISC)
-    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores, scratch_addr);
+    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores);
 #endif
 
     // 3. Intra-core: BRISC releases other RISCs after cross-core sync
@@ -308,7 +315,7 @@ inline void debug_checkpoint_global(
     // Reset coordinator semaphore for reuse
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
     noc_semaphore_set(sem_ptr, 0);
-    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores, scratch_addr);
+    debug_checkpoint_cross_core_barrier(sem_id, coord_x, coord_y, num_cores);
 #endif
 
     // 7. Final intra-core release
@@ -321,13 +328,13 @@ inline void debug_checkpoint_global(
 // ---------------------------------------------------------------------------
 #define DEBUG_CHECKPOINT(id) debug_checkpoint<>(id)
 #define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest) debug_checkpoint<num_cbs, words_per_cb, dump_dest>(id)
-#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores, scratch_addr) \
-    debug_checkpoint_global<>(id, sem_id, coord_x, coord_y, num_cores, scratch_addr)
+#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores) \
+    debug_checkpoint_global<>(id, sem_id, coord_x, coord_y, num_cores)
 
 #else  // !DEBUG_CHECKPOINT_ENABLED
 
 #define DEBUG_CHECKPOINT(id)
 #define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest)
-#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores, scratch_addr)
+#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores)
 
 #endif  // DEBUG_CHECKPOINT_ENABLED

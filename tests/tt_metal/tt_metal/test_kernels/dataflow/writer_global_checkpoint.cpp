@@ -17,15 +17,13 @@ void kernel_main() {
     uint32_t coord_x = get_arg_val<uint32_t>(4);
     uint32_t coord_y = get_arg_val<uint32_t>(5);
     uint32_t num_cores = get_arg_val<uint32_t>(6);
-    uint32_t scratch_sem_id = get_arg_val<uint32_t>(7);
-    uint32_t scratch_addr = get_semaphore(scratch_sem_id);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = get_tile_size(cb_id);
 
     // Global checkpoint: synchronize across all cores before consuming output
-    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores, scratch_addr);
+    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);

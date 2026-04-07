@@ -94,9 +94,6 @@ static void run_global_checkpoint_test(
         CreateCircularBuffer(program_, core, output_cb_config);
     }
 
-    // Use a second semaphore's address as scratch space for NOC polling
-    uint32_t scratch_sem_id = CreateSemaphore(program_, core_range, 0);
-
     // Create reader kernel on both cores (NCRISC)
     auto reader_kernel = CreateKernel(
         program_,
@@ -123,23 +120,13 @@ static void run_global_checkpoint_test(
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_global_checkpoint.cpp",
         core_range,
         ComputeConfig{
-            .compile_args = {
-                static_cast<uint32_t>(NUM_TILES),
-                sem_id,
-                coord_phys.x,
-                coord_phys.y,
-                NUM_CORES,
-                scratch_sem_id  // compute uses sem_id as scratch (will call get_semaphore)
-            }});
+            .compile_args = {static_cast<uint32_t>(NUM_TILES), sem_id, coord_phys.x, coord_phys.y, NUM_CORES}});
 
     // Set runtime args for both cores
     for (uint32_t i = 0; i < NUM_CORES; i++) {
         CoreCoord core = (i == 0) ? core0 : core1;
         auto input_dram = (i == 0) ? input_dram_0 : input_dram_1;
         auto output_dram = (i == 0) ? output_dram_0 : output_dram_1;
-
-        // Get this core's scratch address (use scratch semaphore's L1 addr)
-        // The kernel will call get_semaphore(scratch_sem_id) to get the L1 address
 
         SetRuntimeArgs(
             program_,
@@ -151,8 +138,7 @@ static void run_global_checkpoint_test(
              sem_id,
              coord_phys.x,
              coord_phys.y,
-             NUM_CORES,
-             scratch_sem_id});
+             NUM_CORES});
 
         SetRuntimeArgs(
             program_,
@@ -164,8 +150,7 @@ static void run_global_checkpoint_test(
              sem_id,
              coord_phys.x,
              coord_phys.y,
-             NUM_CORES,
-             scratch_sem_id});
+             NUM_CORES});
     }
 
     // Generate and write input data for both cores
