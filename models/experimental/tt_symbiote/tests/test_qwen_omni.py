@@ -36,7 +36,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeMLP,
     Qwen3OmniMoeCode2WavMlp,
     Qwen3OmniMoeTalkerCodePredictorAttention,
-    # SnakeBeta,
+    SnakeBeta,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -58,7 +58,7 @@ from models.experimental.tt_symbiote.modules.activation import (
     TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     TTNNQwen3OmniMoeConvNeXtBlock,
     TTNNSilu,
-    # TTNNSnakeBeta,
+    TTNNSnakeBeta,
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
@@ -79,6 +79,7 @@ from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
 from models.experimental.tt_symbiote.modules.conv import (
     TTNNConv1d,
     TTNNConv3d,
+    TTNNConvTranspose1d,
     TTNNQwenOmniConv2dNHWC,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
@@ -96,7 +97,7 @@ _QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
     SiLUActivation: TTNNSilu,
     GELUActivation: TTNNGelu,
     GELUTanh: TTNNGelu,
-    # SnakeBeta: TTNNSnakeBeta,
+    SnakeBeta: TTNNSnakeBeta,
 }
 
 # HF ``nn.LayerNorm`` (audio encoder, vision merger/blocks, code2wav ConvNeXt). ``TTNNQwenLayerNorm.from_torch``
@@ -111,7 +112,7 @@ _QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
     torch.nn.Conv3d: TTNNConv3d,
     torch.nn.Conv1d: TTNNConv1d,
-    # torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
+    torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
 
 
@@ -222,7 +223,7 @@ NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
     Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
-    # Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
+    Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
     Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
