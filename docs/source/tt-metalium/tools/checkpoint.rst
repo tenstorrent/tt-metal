@@ -20,7 +20,7 @@ Quick Start
 
     void kernel_main() {
         // ... work ...
-        DEBUG_CHECKPOINT(1);   // all RISCs sync → dump CB state → resume
+        DEBUG_CHECKPOINT("post_matmul");   // all RISCs sync → dump CB state → resume
         // ... more work ...
     }
 
@@ -87,7 +87,7 @@ Usage
 ^^^^^
 
 Include ``api/debug/checkpoint.h`` in every kernel (reader, writer, and compute) that
-participates in the checkpoint. All active RISCs must call ``DEBUG_CHECKPOINT`` with the same ID
+participates in the checkpoint. All active RISCs must call ``DEBUG_CHECKPOINT`` with the same name
 at the corresponding point within the op.
 
 **Compute kernel:**
@@ -99,7 +99,7 @@ at the corresponding point within the op.
     void kernel_main() {
         // ... stage 1: unpack and compute ...
 
-        DEBUG_CHECKPOINT(1);  // all RISCs synchronize and dump CB state
+        DEBUG_CHECKPOINT("post_unpack");  // all RISCs synchronize and dump CB state
 
         // ... stage 2: pack output ...
     }
@@ -113,7 +113,7 @@ at the corresponding point within the op.
     void kernel_main() {
         // ... read tiles from DRAM into input CB ...
 
-        DEBUG_CHECKPOINT(1);  // must match the compute kernel's checkpoint ID
+        DEBUG_CHECKPOINT("post_unpack");  // must match the compute kernel's checkpoint name
     }
 
 **Writer kernel (BRISC):**
@@ -123,7 +123,7 @@ at the corresponding point within the op.
     #include "api/debug/checkpoint.h"
 
     void kernel_main() {
-        DEBUG_CHECKPOINT(1);  // synchronize before consuming output CB
+        DEBUG_CHECKPOINT("post_unpack");  // synchronize before consuming output CB
 
         // ... write tiles from output CB to DRAM ...
     }
@@ -138,7 +138,7 @@ Knobs
 
 .. code-block:: c++
 
-    DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest)
+    DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest)
 
 .. list-table::
    :header-rows: 1
@@ -147,10 +147,10 @@ Knobs
      - Type
      - Default
      - Description
-   * - ``id``
-     - ``uint8_t``
+   * - ``name``
+     - ``const char*``
      - (required)
-     - Checkpoint identifier. All RISCs must use the same value.
+     - Checkpoint name (string literal). All RISCs must use the same value.
    * - ``num_cbs``
      - ``uint8_t``
      - 0
@@ -169,10 +169,10 @@ Examples:
 .. code-block:: c++
 
     // Dump metadata for all configured CBs
-    DEBUG_CHECKPOINT(1);
+    DEBUG_CHECKPOINT("post_matmul");
 
     // Dump first 4 CBs, 8 words of L1 data each, plus dest registers
-    DEBUG_CHECKPOINT_EX(2, 4, 8, true);
+    DEBUG_CHECKPOINT_EX("pre_pack", 4, 8, true);
 
 How it works
 ^^^^^^^^^^^^
@@ -235,15 +235,15 @@ Usage
 
 .. code-block:: c++
 
-    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
+    DEBUG_CHECKPOINT_GLOBAL(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
 
 .. list-table::
    :header-rows: 1
 
    * - Parameter
      - Description
-   * - ``id``
-     - Checkpoint identifier (for DPRINT output labeling)
+   * - ``name``
+     - Checkpoint name (string literal, for output labeling)
    * - ``sem_id``
      - Semaphore ID allocated by host via ``CreateSemaphore``
    * - ``barrier_coord_x``, ``barrier_coord_y``
@@ -284,7 +284,7 @@ Usage
         // ... work ...
 
         // All cores synchronize here, then each core prints its OWN local CB state
-        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
+        DEBUG_CHECKPOINT_GLOBAL("global_sync", sem_id, barrier_coord_x, barrier_coord_y, num_cores);
     }
 
 How it works
@@ -359,21 +359,21 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
 Output Format
 -------------
 
-Each CB-capable RISC prints a header with its index, followed by CB metadata:
+Each CB-capable RISC prints a header with the checkpoint name and its RISC index:
 
 .. code-block:: text
 
-    === CKPT 1 RISC0 CBs ===
+    === CKPT post_matmul RISC0 CBs ===
     CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
     CB16 sz=128 rd=2048 wr=2048 ack=0 rcv=0
-    === CKPT 1 RISC2 CBs ===
+    === CKPT post_matmul RISC2 CBs ===
     CB0 sz=128 rd=1024 wr=1024 ack=0 rcv=1
 
 When ``dump_dest=true``, TRISC1 (Math) also prints destination register contents:
 
 .. code-block:: text
 
-    === CKPT 1 dest regs ===
+    === CKPT pre_pack dest regs ===
     ...
 
 When ``words_per_cb > 0``, L1 data at the read pointer is printed in hex:

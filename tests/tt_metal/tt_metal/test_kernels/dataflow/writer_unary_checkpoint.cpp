@@ -19,7 +19,7 @@ void kernel_main() {
 
     // Participate in checkpoint barrier
     // (compute kernel hasn't packed output yet, so we checkpoint first)
-    DEBUG_CHECKPOINT(1);
+    DEBUG_CHECKPOINT("basic");
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);

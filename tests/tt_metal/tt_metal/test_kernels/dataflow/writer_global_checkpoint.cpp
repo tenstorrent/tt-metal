@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t ublock_size_bytes = get_tile_size(cb_id);
 
     // Global checkpoint: synchronize across all cores before consuming output
-    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
+    DEBUG_CHECKPOINT_GLOBAL("global_sync", sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);

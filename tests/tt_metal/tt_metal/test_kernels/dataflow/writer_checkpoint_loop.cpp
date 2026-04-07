@@ -16,9 +16,9 @@ void kernel_main() {
 
     // Must match compute kernel's checkpoint pattern exactly
     for (uint32_t i = 0; i < 3; i++) {
-        DEBUG_CHECKPOINT(1);
+        DEBUG_CHECKPOINT("loop_iter");
     }
-    DEBUG_CHECKPOINT_EX(2, 2, 0, true);
+    DEBUG_CHECKPOINT_EX("dump_dest", 2, 0, true);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);

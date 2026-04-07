@@ -26,13 +26,13 @@ void kernel_main() {
         copy_tile(tt::CBIndex::c_0, b, b);
     }
 
-    // Test 1: checkpoint in a loop (same ID reused — epoch counter must handle this)
+    // Test 1: checkpoint in a loop (same name reused — epoch counter must handle this)
     for (uint32_t i = 0; i < 3; i++) {
-        DEBUG_CHECKPOINT(1);
+        DEBUG_CHECKPOINT("loop_iter");
     }
 
     // Test 2: DEBUG_CHECKPOINT_EX with dump_dest=true (Math thread dumps dest regs)
-    DEBUG_CHECKPOINT_EX(2, 2, 0, true);
+    DEBUG_CHECKPOINT_EX("dump_dest", 2, 0, true);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         pack_tile(b, tt::CBIndex::c_16);

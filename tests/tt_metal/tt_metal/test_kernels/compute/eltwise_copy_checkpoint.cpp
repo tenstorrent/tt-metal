@@ -29,7 +29,7 @@ void kernel_main() {
     }
 
     // Checkpoint between stages: all RISCs synchronize and dump CB state
-    DEBUG_CHECKPOINT(1);
+    DEBUG_CHECKPOINT("basic");
 
     // Stage 2: Pack tiles from dest registers to output CB
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

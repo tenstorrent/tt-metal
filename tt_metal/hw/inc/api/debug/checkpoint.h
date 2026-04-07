@@ -8,10 +8,10 @@
 // dump circular buffer state via DPRINT, then proceed in unison.
 //
 // Usage in kernel code:
-//   DEBUG_CHECKPOINT(1);                          // barrier + dump CB metadata + barrier
-//   DEBUG_CHECKPOINT_EX(2, 4, 8, true);           // dump first 4 CBs, 8 words each, + dest regs
+//   DEBUG_CHECKPOINT("post_matmul");              // barrier + dump CB metadata + barrier
+//   DEBUG_CHECKPOINT_EX("pre_pack", 4, 8, true);  // dump first 4 CBs, 8 words each, + dest regs
 //
-// All active RISCs must call the same checkpoint ID. The macro is a no-op when
+// All active RISCs must call the same checkpoint. The macro is a no-op when
 // DEBUG_CHECKPOINT_ENABLED is not defined.
 //
 // The checkpoint state (20 bytes) is stored at MEM_LLK_DEBUG_BASE in L1,
@@ -135,7 +135,7 @@ inline void debug_checkpoint_barrier() {
 // whichever backend is not active.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
-inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
+inline void debug_checkpoint_dump_cbs([[maybe_unused]] const char* name) {
 #if !defined(CHECKPOINT_PRINT_ENABLED)
     // No print backend available — checkpoint acts as barrier only, skip dump.
     return;
@@ -144,8 +144,8 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
-        DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " dest regs ===" << ENDL();
-        DEVICE_PRINT("=== CKPT {} dest regs ===\n", checkpoint_id);
+        DPRINT << "=== CKPT " << name << " dest regs ===" << ENDL();
+        DEVICE_PRINT("=== CKPT {} dest regs ===\n", name);
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -179,8 +179,8 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
     // CB pointers (rd_ptr, wr_ptr, tiles_acked, tiles_received) are RISC-specific,
     // so each RISC's view is different. Prefix with RISC index for disambiguation.
     uint32_t risc_idx = internal_::get_hw_thread_idx();
-    DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " RISC" << risc_idx << " CBs ===" << ENDL();
-    DEVICE_PRINT("=== CKPT {} RISC{} CBs ===\n", checkpoint_id, risc_idx);
+    DPRINT << "=== CKPT " << name << " RISC" << risc_idx << " CBs ===" << ENDL();
+    DEVICE_PRINT("=== CKPT {} RISC{} CBs ===\n", name, risc_idx);
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
@@ -223,11 +223,11 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
 // Combined checkpoint: barrier -> dump -> barrier
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
-inline void debug_checkpoint(uint8_t checkpoint_id) {
+inline void debug_checkpoint(const char* name) {
     WAYPOINT("CKW");  // Checkpoint Wait
     debug_checkpoint_barrier();
 
-    debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(checkpoint_id);
+    debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(name);
 
     // Second barrier ensures all RISCs finish dumping before any proceeds
     debug_checkpoint_barrier();
@@ -299,7 +299,7 @@ inline void debug_checkpoint_cross_core_barrier(
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_global(
-    uint8_t checkpoint_id,
+    const char* name,
     [[maybe_unused]] uint32_t sem_id,
     [[maybe_unused]] uint32_t barrier_coord_x,
     [[maybe_unused]] uint32_t barrier_coord_y,
@@ -318,7 +318,7 @@ inline void debug_checkpoint_global(
     debug_checkpoint_barrier();
 
     // 4. Dump (BRISC/NCRISC/TRISC0/TRISC2 print CB state; Math prints dest regs if enabled)
-    debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(checkpoint_id);
+    debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(name);
 
     // 5. Intra-core: all RISCs wait for dump to finish
     debug_checkpoint_barrier();
@@ -337,15 +337,16 @@ inline void debug_checkpoint_global(
 // ---------------------------------------------------------------------------
 // User-facing macros
 // ---------------------------------------------------------------------------
-#define DEBUG_CHECKPOINT(id) debug_checkpoint<>(id)
-#define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest) debug_checkpoint<num_cbs, words_per_cb, dump_dest>(id)
-#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores) \
-    debug_checkpoint_global<>(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
+#define DEBUG_CHECKPOINT(name) debug_checkpoint<>(name)
+#define DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest) \
+    debug_checkpoint<num_cbs, words_per_cb, dump_dest>(name)
+#define DEBUG_CHECKPOINT_GLOBAL(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores) \
+    debug_checkpoint_global<>(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
 
 #else  // !DEBUG_CHECKPOINT_ENABLED
 
-#define DEBUG_CHECKPOINT(id)
-#define DEBUG_CHECKPOINT_EX(id, num_cbs, words_per_cb, dump_dest)
-#define DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
+#define DEBUG_CHECKPOINT(name)
+#define DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest)
+#define DEBUG_CHECKPOINT_GLOBAL(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
 
 #endif  // DEBUG_CHECKPOINT_ENABLED

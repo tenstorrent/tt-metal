@@ -28,7 +28,7 @@ void kernel_main() {
 
     // Must match compute kernel's checkpoint pattern exactly
     for (uint32_t i = 0; i < 3; i++) {
-        DEBUG_CHECKPOINT(1);
+        DEBUG_CHECKPOINT("loop_iter");
     }
-    DEBUG_CHECKPOINT_EX(2, 2, 0, true);
+    DEBUG_CHECKPOINT_EX("dump_dest", 2, 0, true);
 }

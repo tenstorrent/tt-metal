@@ -36,5 +36,5 @@ void kernel_main() {
     }
 
     // Global checkpoint: synchronize across all cores
-    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
+    DEBUG_CHECKPOINT_GLOBAL("global_sync", sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 }

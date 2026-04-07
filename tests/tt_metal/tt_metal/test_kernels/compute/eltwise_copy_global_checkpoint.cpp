@@ -33,7 +33,7 @@ void kernel_main() {
     }
 
     // Global checkpoint: synchronize all RISCs on all cores
-    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
+    DEBUG_CHECKPOINT_GLOBAL("global_sync", sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         pack_tile(b, tt::CBIndex::c_16);

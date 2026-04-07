@@ -30,5 +30,5 @@ void kernel_main() {
     }
 
     // Participate in checkpoint barrier
-    DEBUG_CHECKPOINT(1);
+    DEBUG_CHECKPOINT("basic");
 }
