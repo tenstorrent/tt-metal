@@ -136,7 +136,7 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
-            use_deepseek_prefill=use_throughput,  # Use DeepSeek prefill ops when throughput experts enabled
+            use_deepseek_prefill=False,  # DeepSeek prefill: enable manually for single-user long prefill
             prefill_seq_len=128,
         )
         model_args.append(model_args_i)
