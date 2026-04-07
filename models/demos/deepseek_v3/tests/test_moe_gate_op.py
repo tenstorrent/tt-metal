@@ -35,9 +35,16 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid):
     torch_bias_loaded = torch.load("/work/scores_correction_bias.pt")
     torch_bias = torch.reshape(torch_bias_loaded, input_shape)
     with torch.no_grad():
+        """
         torch_bias[0, 1, :] = 0
         torch_bias[0, 3, :] = 0
+        torch_bias[0, 4, :] = 0
         torch_bias[0, 5, :] = 0
+        torch_bias[0, 6, 3] = 10 # 195
+        torch_bias[0, 6, 15] = 10 # 207
+        """
+        # torch_bias[0, 2, 24] += 0.002
+        # torch_bias[0, 7, 6] += 0.1
     eps = 1e-20
     scaling_factor = 2.5
 
@@ -75,7 +82,7 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid):
         memory_config=input_mem_config,
         tile=input_tile,
     )
-    breakpoint()
+
     reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
     ttnn_bias = ttnn.from_torch(
         reshaped_bias,
@@ -181,6 +188,17 @@ tensor([[  9,  84,  88,  92, 196, 210, 230, 237]])
 (Pdb) top8_scores
 tensor([[0.3526, 0.2854, 0.3079, 0.3112, 0.2906, 0.3816, 0.2687, 0.3019]])
 
+After setting the bias to 0 for groups not chosen by ref
+(Pdb) sorted_output_indices_torch
+tensor([[  9,  84,  92, 192, 196, 197, 210, 237]], dtype=torch.uint16)
+(Pdb) sorted_output_torch
+tensor([[0.3594, 0.2910, 0.3145, 0.2910, 0.2949, 0.2520, 0.3887, 0.3066]],
+       dtype=torch.bfloat16)
+(Pdb) top8_indices
+tensor([[  9,  84,  88,  92, 196, 210, 230, 237]])
+(Pdb) top8_scores
+tensor([[0.3526, 0.2854, 0.3079, 0.3112, 0.2906, 0.3816, 0.2687, 0.3019]])
+
 Output from test_moe_gate.py
 (Pdb) ref_sorted_indices[0]
 tensor([210,   9,  92,  88, 237, 196,  84, 230], dtype=torch.int32)
@@ -220,4 +238,25 @@ tensor([[0.3526, 0.2854, 0.3079, 0.3112, 0.2906, 0.3816, 0.2687, 0.3019]])
 In op:
 tensor([[  9,  84,  88,  92, 192, 196, 197, 210]])
 tensor([[0.3574, 0.2891, 0.3105, 0.3145, 0.2891, 0.2949, 0.2500, 0.3867]])
+"""
+
+"""
+(Pdb) tt_sorted_indices[0]
+tensor([210,   9,  92,  88, 196,  84, 192, 197], dtype=torch.int32)
+(Pdb) tt_sorted_weights[0]
+tensor([0.3867, 0.3574, 0.3145, 0.3105, 0.2949, 0.2891, 0.2891, 0.2500],
+       dtype=torch.bfloat16)
+
+
+(Pdb) tt_sorted_indices[0]
+tensor([210,   9,  92,  88, 215, 196,  84,  54], dtype=torch.int32)
+(Pdb) tt_sorted_weights[0]
+tensor([0.3809, 0.3535, 0.3066, 0.3027, 0.2969, 0.2871, 0.2871, 0.2773],
+       dtype=torch.bfloat16)
+
+(Pdb) tt_sorted_indices[0]
+tensor([210,   9,  92,  88, 196,  84, 197,  74], dtype=torch.int32)
+(Pdb) tt_sorted_weights[0]
+tensor([0.3926, 0.3633, 0.3223, 0.3164, 0.2988, 0.2949, 0.2559, 0.2539],
+       dtype=torch.bfloat16)
 """

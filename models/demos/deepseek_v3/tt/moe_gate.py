@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -199,6 +199,18 @@ class MoEGate(AbstractModule):
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
+                    program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+                        in0_block_w=32,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        out_block_h=1,
+                        out_block_w=2,
+                        per_core_M=1,
+                        per_core_N=2,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                    ),
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
@@ -277,6 +289,8 @@ class MoEGate(AbstractModule):
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
+        breakpoint()
+
         mesh_device = cfg["mesh_device"]
         total_batch_size = logits.shape[2]
 
@@ -317,6 +331,7 @@ class MoEGate(AbstractModule):
         )
 
         ### load logits
+        """
         logits_loaded = torch.load("/work/logits.pt")
         logits = logits_loaded.unsqueeze(0)
         logits = logits.repeat(batch_size_per_iter, 1)
@@ -329,45 +344,51 @@ class MoEGate(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
         )
         logits = ttnn.to_memory_config(logits, memory_config=input_output_mem_config)
-
-        ### load scores_correction_bias
-        scores_correction_bias_loaded = torch.load("/work/scores_correction_bias.pt")
-        scores_correction_bias = scores_correction_bias_loaded.unsqueeze(0)
-        scores_correction_bias = scores_correction_bias.repeat(batch_size_per_iter, 1)
-        scores_correction_bias = torch.reshape(scores_correction_bias, (batch_size_per_iter, *cfg["token_shape"]))
-        scores_correction_bias = torch.transpose(scores_correction_bias, -2, -1)
-        scores_correction_bias = ttnn.from_torch(
-            scores_correction_bias,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_output_mem_config)
+        """
 
         # create the bias tensor
-        # scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        # scores_correction_bias = scores_correction_bias[:batch_size_per_iter, :, :]
+        scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
+        scores_correction_bias = ttnn.slice(
+            scores_correction_bias,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 16, 16],
+            memory_config=input_output_mem_config,
+        )
 
         # get the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-        ttnn_output_tensor = ttnn_output_tensor[:batch_size_per_iter, :, :]
+        ttnn_output_tensor = ttnn.slice(
+            ttnn_output_tensor,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 32, 32],
+            memory_config=input_output_mem_config,
+        )
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-        ttnn_input_indices = ttnn_input_indices[:batch_size_per_iter, :, :]
+        ttnn_input_indices = ttnn.slice(
+            ttnn_input_indices,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 16, 16],
+            memory_config=input_output_mem_config,
+        )
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-        ttnn_output_indices = ttnn_output_indices[:batch_size_per_iter, :, :]
+        ttnn_output_indices = ttnn.slice(
+            ttnn_output_indices,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 32, 32],
+            memory_config=input_output_mem_config,
+        )
 
         # we can only have one token per core at a time
         # this loop is designed to handle the huge batch size (4096)
         topk_experts_weights_list = []
         topk_experts_indices_list = []
         for start_index in range(0, total_batch_size + padding_shape, batch_size_per_iter):
-            # cur_logits = logits[:, :, start_index : start_index + batch_size_per_iter, :]
-            # cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
-            # cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
-            cur_logits = logits
+            cur_logits = logits[:, :, start_index : start_index + batch_size_per_iter, :]
+            cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
+            cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
+            # cur_logits = logits
             topk_experts_weights, topk_experts_indices = DeepseekMoeGateOp.op(
                 cur_logits,
                 scores_correction_bias,
