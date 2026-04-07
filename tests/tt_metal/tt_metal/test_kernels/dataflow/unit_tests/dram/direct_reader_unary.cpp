@@ -33,7 +33,7 @@ void kernel_main() {
     uint32_t tlocal_src_addr = src_addr + (producer_idx * ublock_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        dfb.read_in(noc, src_dram, {.bank_id = src_bank_id, .addr = tlocal_src_addr});
+        noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
         tlocal_src_addr += dfb.get_stride_size();
     }
 

@@ -9,6 +9,14 @@
 namespace experimental {
 
 struct MulticastEndpoint;
+class DataflowBuffer;
+
+// Concrete arg struct for the DFB-specific Noc overloads.
+// Defined here so noc.h can use it in async_read/async_write specializations defined in
+// dataflow_buffer.h which includes noc.h
+struct DataflowBufferArgs {
+    uint32_t offset_bytes{};
+};
 
 template <typename T>
 struct noc_traits_t {
@@ -566,6 +574,38 @@ public:
      * core.
      */
     void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
+
+    /**
+     * @brief Implicit-sync read into a DataflowBuffer.
+     *
+     * Selects this overload when TxnIdMode::ENABLED is specified and the destination is a DataflowBuffer
+     * No txn id is accepted here because the DataflowBuffer manages txn_ids internally
+     * via its private prepare/commit helpers
+     * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
+     */
+    template <TxnIdMode txn_id_mode, typename Src>
+    std::enable_if_t<txn_id_mode == TxnIdMode::ENABLED>
+    async_read(
+        const Src& src,
+        DataflowBuffer& dst,
+        const src_args_t<Src>& src_args,
+        const DataflowBufferArgs& dst_args = {}) const;
+
+    /**
+     * @brief Implicit-sync write from a DataflowBuffer.
+     *
+     * Selects this overload when TxnIdMode::ENABLED is specified and the source is a
+     * DataflowBuffer. No txn id is accepted here because the DataflowBuffer manages txn_ids internally
+     * via its private prepare/commit helpers.
+     * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
+     */
+    template <TxnIdMode txn_id_mode, typename Dst>
+    std::enable_if_t<txn_id_mode == TxnIdMode::ENABLED>
+    async_write(
+        DataflowBuffer& src,
+        const Dst& dst,
+        const DataflowBufferArgs& src_args,
+        const dst_args_t<Dst>& dst_args) const;
 
 private:
     uint8_t noc_id_;

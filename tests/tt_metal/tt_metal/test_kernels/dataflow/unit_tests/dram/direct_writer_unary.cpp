@@ -31,17 +31,12 @@ void kernel_main() {
     uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        dfb.write_out(noc, dst_dram, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
+        noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, dst_dram, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
         tlocal_dst_addr += dfb.get_stride_size();
     }
 
     dfb.finish();
-
-    // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
-    LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
-    for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
-        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
-    }
+    dfb.write_barrier(noc);
 #else
     // single-tile ublocks
     uint32_t ublock_size_bytes = get_tile_size(cb_id);

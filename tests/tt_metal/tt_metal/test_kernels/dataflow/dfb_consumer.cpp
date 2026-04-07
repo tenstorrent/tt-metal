@@ -43,7 +43,7 @@ void kernel_main() {
         }
         DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         if constexpr (implicit_sync) {
-            dfb.write_out(noc, tensor_accessor, {.page_id = page_id});
+            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
         } else {
             dfb.wait_front(1);
             noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
@@ -53,6 +53,6 @@ void kernel_main() {
     }
     dfb.finish();
     DPRINT << "CBW" << ENDL();
-    noc.async_write_barrier();
+    dfb.write_barrier(noc);
     DPRINT << "CBWD" << ENDL();
 }

@@ -46,7 +46,7 @@ void kernel_main() {
                                      : chunk_offset + tile_id * num_producers + producer_idx;
         DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         if constexpr (implicit_sync) {
-            dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
         } else {
             dfb.reserve_back(1);
             noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
