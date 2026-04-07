@@ -101,7 +101,7 @@ template <
     typename AccumulateT,
     bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(
-    experimental::CircularBuffer& cb_accum, uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate) {
+    ::experimental::CircularBuffer& cb_accum, uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
@@ -206,10 +206,10 @@ ALWI void reduce(
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
 
-    experimental::CircularBuffer cb_input(input_cb);
-    experimental::CircularBuffer cb_scaler(scaler_cb);
-    experimental::CircularBuffer cb_output(output_cb);
-    experimental::CircularBuffer cb_accum([&]() -> uint32_t {
+    ::experimental::CircularBuffer cb_input(input_cb);
+    ::experimental::CircularBuffer cb_scaler(scaler_cb);
+    ::experimental::CircularBuffer cb_output(output_cb);
+    ::experimental::CircularBuffer cb_accum([&]() -> uint32_t {
         if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
         else { return 0; }
     }());
