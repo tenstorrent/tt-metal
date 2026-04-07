@@ -101,17 +101,64 @@ DRAM → [Injector] ──L1→L1──► [Middle] ──L1→L1──► [Sink
 ### Protocol
 ```
 Injector:                    Receiver:
-1. Read K from DRAM          1. Inc sender_sem (ready)
+1. Read from DRAM            1. Inc sender_sem (ready)
 2. Wait sender_sem           2. Wait receiver_sem (data)
-3. NOC write to receiver     3. Use K from L1
+3. NOC write to receiver     3. Use data from L1
 4. Set receiver_sem
 ```
 
-### Chaining in Balanced Mode
+### Two-Chain Architecture (MLA Mode)
 
-Chaining is **enabled** for balanced mode. Key considerations:
+When `NHK < NH` (K is shared across heads), the system uses **two separate chains**:
 
-**Pair-based work distribution:** When zigzag balancing is enabled, work is distributed in pairs of (light, heavy) Q chunks to cores:
+| Chain | Scope | Purpose | Semaphores |
+|-------|-------|---------|------------|
+| **K chain** | Per-batch | Single injector reads K, forwards to all cores in batch | `k_sender_sem`, `k_receiver_sem`, `k_valid_sem` |
+| **V chain** | Per-head | Existing per-head chaining for V | `sender_sem`, `receiver_sem`, `valid_sem` |
+
+**K chain data structures:**
+```cpp
+struct CoreKChainInfo {
+    bool participates = false;
+    bool is_injector = false;
+    bool is_sink = false;
+    uint32_t batch = 0;
+    CoreCoord prev_physical = CoreCoord{0, 0};
+    CoreCoord next_physical = CoreCoord{0, 0};
+    uint32_t next_core_q_chunks = 0;  // For forwarding decision
+};
+```
+
+**K chain construction (per batch):**
+1. Group active cores by batch
+2. Sort by physical core order (row-major)
+3. Find injector: first core with single head segment (not last core)
+4. Build linear chain from injector forward to last core
+
+### Chain Forwarding Logic
+
+Both chains use `q_iter`-based forwarding (work completed count, not remapped chunk index):
+
+```cpp
+// V chain (head-level)
+const bool should_forward_v = is_chain_participant && !is_sink &&
+                              (nb == chain_batch && nq == chain_head) &&
+                              (q_iter_local < next_core_q_chunks);
+
+// K chain (batch-level, MLA mode)
+const bool should_forward_k = k_is_chain_participant && !k_is_sink &&
+                              (nb == k_chain_batch) &&
+                              (q_iter_local < k_next_core_total_reads);
+```
+
+This is critical because:
+- `q_iter` monotonically tracks how much work the core has done
+- The remapped q_chunk index jumps around (zigzag pattern)
+- Chain forwarding must be based on sequential progress, not logical chunk position
+
+### Pair-based Work Distribution
+
+When zigzag balancing is enabled, work is distributed in pairs of (light, heavy) Q chunks:
 ```cpp
 if (enable_zigzag_balancing) {
     const uint32_t total_pairs = total_q_chunks / 2;
@@ -121,32 +168,69 @@ if (enable_zigzag_balancing) {
 }
 ```
 
-This ensures each core gets balanced compute by receiving both a lightweight and heavyweight chunk together.
-
-**Chain forwarding uses iteration count:** The chain forwarding condition uses `q_iter` (how many Q chunks the core has processed) rather than the remapped Q chunk index:
-```cpp
-const uint32_t q_iter_local = q_iter;  // Work completed count
-const bool should_forward = is_chain_participant && !is_sink &&
-                            (nb == chain_batch && nq == chain_head) &&
-                            (q_iter_local < next_core_q_chunks);
-```
-
-This is critical because:
-- `q_iter` monotonically tracks how much work the core has done
-- The remapped q_chunk index jumps around (zigzag pattern)
-- Chain forwarding must be based on sequential progress, not logical chunk position
-
 ### Current Constraints
 
 | Constraint | Location | Reason |
 |------------|----------|--------|
-| One chain per core | `CoreChainInfo` struct | Single set of chain metadata |
+| One V chain per core | `CoreChainInfo` struct | Single set of V chain metadata |
+| One K chain per core | `CoreKChainInfo` struct | Single set of K chain metadata |
 | Head spans ≥2 cores | Chain construction loop | Nothing to forward otherwise |
 | Injector = single-head core | `work.head_work.size() == 1` | Avoid head boundary issues |
 | Linear only, no wrap | Comment at line 817 | Prevents deadlock |
 
-### Multicast Variant
-When all chain cores on same row: injector broadcasts to all receivers simultaneously.
+### Multicast Variant (V chain only)
+When all V chain cores on same row: injector broadcasts to all receivers simultaneously. K chain currently uses unicast only.
+
+### Known Issue: Non-MLA K Chaining Regression
+
+**Problem:** When `NHK >= NH` (non-MLA case), K is no longer chained.
+
+**Before K chain changes:** K was forwarded via V chain using `should_receive`:
+```cpp
+if (should_receive) {  // V chain condition applied to both K and V
+    // Receive forwarded K chunk from previous core
+```
+
+**After K chain changes:** K uses `should_receive_k` which requires K chain to be active:
+```cpp
+if (should_receive_k) {  // Only true when k_is_chain_participant (NHK < NH)
+    // Receive forwarded K chunk from K chain
+```
+
+Since K chain is only built when `NHK < NH`, non-MLA configs now read K from DRAM on every core.
+
+**Fix:** Fall back to V chain semantics when K chain is inactive:
+```cpp
+const bool should_receive_k = k_is_chain_participant
+    ? (!k_is_injector && (nb == k_chain_batch))
+    : should_receive_v;  // Non-MLA: K chains with V
+
+const bool should_forward_k = k_is_chain_participant
+    ? (!k_is_sink && (nb == k_chain_batch) && (q_iter_local < k_next_core_total_reads))
+    : should_forward_v;  // Non-MLA: K chains with V
+```
+
+---
+
+## Debug Visualization
+
+Debug logging helpers in `ring_joint_sdpa_program_factory.cpp` (enabled with `TT_METAL_LOGGER_LEVEL=Debug`):
+
+| Function | Output |
+|----------|--------|
+| `print_per_core_work()` | Per-core Q chunk assignments with zigzag indices, light/heavy counts, and role tags `[INJ]`/`[RCV]`/`[SNK]` |
+| `print_chains()` | V chains grouped by head with DRAM ratio |
+| `print_k_chains()` | K chains grouped by batch (MLA mode) |
+
+**Example output:**
+```
+Per-Core Workload (zigzag indices)
+Core 0 (0,0)[INJ]: H:0-Q:[0,15]{L1+H1} H:1-Q:[0,15]{L1+H1}
+Core 1 (1,0)[RCV]: H:1-Q:[1,14]{L1+H1} H:2-Q:[0,15]{L1+H1}
+...
+V-Chain(head=0: (0,0)[2:INJ]->(1,0)[2:RCV]->(2,0)[2:SNK], dram_ratio=0.33)
+K-Chain(batch=0: (0,0)[4:INJ]->(1,0)[4:RCV]->(2,0)[4:SNK], dram_ratio=0.33)
+```
 
 ---
 
@@ -214,9 +298,11 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 
 **Implementation phases:**
 
-**Phase 1: Enable chain for K**
-- Single injector core reads K from DRAM
-- Forwards K via L1→L1 to all cores processing heads
+**Phase 1: Enable chain for K** ✅ COMPLETE
+- Separate `CoreKChainInfo` struct with batch-level chaining
+- Dedicated semaphores (`k_sender_sem`, `k_receiver_sem`, `k_valid_sem`)
+- Linear unicast forwarding based on `q_iter` count
+- Debug visualization via `print_k_chains()`
 
 **Phase 2: 2D multicast for full grid**
 - Injector broadcasts K to entire compute grid simultaneously
@@ -282,6 +368,7 @@ TT_FATAL(!(args.is_balanced && (N_local / 2) % q_chunk_size != 0), ...);
 
 ## Quick Reference: Loop Structure
 
+### Compute Kernel Loop
 ```cpp
 // Outer: ring iterations (device-to-device)
 for (ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -304,6 +391,37 @@ for (ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
             // Attention computation
         }
     }
+}
+```
+
+### Reader Kernel KV Flow (with K chain)
+```cpp
+for (k_chunk ...) {
+    // K: receive from K chain or read from DRAM
+    if (should_receive_k) {  // K chain receiver (batch-level)
+        noc_semaphore_set(k_receiver_sem, INVALID);
+        noc_semaphore_inc(k_sender_sem_noc, 1);
+        noc_semaphore_wait(k_receiver_sem, VALID);
+    } else {
+        read_block(K_dram, ...);
+    }
+
+    // K: forward via K chain if applicable
+    if (should_forward_k) {  // Based on q_iter < k_next_core_total_reads
+        noc_semaphore_wait(k_sender_sem, 1);
+        noc_async_write(cb_k, next_core_k_addr, ...);
+        noc_semaphore_set_remote(k_valid_sem, k_receiver_sem_noc);
+    }
+
+    // Q: download after K (on first K iteration)
+    ...
+
+    // V: receive from V chain or read from DRAM (head-level)
+    if (should_receive_v) { ... }
+    else { read_block(V_dram, ...); }
+
+    // V: forward via V chain (supports multicast)
+    if (should_forward_v) { ... }
 }
 ```
 
