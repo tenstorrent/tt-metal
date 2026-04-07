@@ -8,7 +8,8 @@ Frequency layout matches Hugging Face ``modeling_qwen3_omni_moe`` (MRoPE / 1D / 
 ``inv_freq`` matmuls and MRoPE interleaving run in **PyTorch** (same numerics as HF).
 Embedding ``cos`` / ``sin`` are computed with ``ttnn.cos`` / ``ttnn.sin``. On a multi-device mesh,
 unaries may leave ``[B, S, H]`` **sequence-sharded** (``S/num_devices`` per chip); we then
-``ttnn.all_gather`` along dim 1 so host readback matches full ``S`` before wrapping for attention.
+``ttnn.all_gather`` along whichever dim shards ``S`` (often dim 1 on ``[B,S,H]``; mesh
+unaries can shard another axis) so host readback matches full ``S`` before wrapping for attention.
 
 For ``rope_type != "default"`` (dynamic / longrope / etc.), forwards delegate to the original
 HF layer stored in ``_fallback_torch_layer``.
@@ -154,10 +155,18 @@ def _cos_sin_ttnn(emb: torch.Tensor, attention_scaling: float, device, out_dtype
         sin = ttnn.typecast(sin, ttnn.float16)
 
     if nd > 1:
-        s_local = int(cos.shape[1])
-        if s_local != s and s_local * nd == s:
-            cos = ttnn.all_gather(cos, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            sin = ttnn.all_gather(sin, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+        # Mesh cos/sin may shard sequence on any dim, not only dim=1; stitch before host readback.
+        while True:
+            gather_dim = None
+            for d in range(len(cos.shape)):
+                s_local = int(cos.shape[d])
+                if s_local != s and s_local * nd == s:
+                    gather_dim = d
+                    break
+            if gather_dim is None:
+                break
+            cos = ttnn.all_gather(cos, dim=gather_dim, num_links=1, topology=ttnn.Topology.Linear)
+            sin = ttnn.all_gather(sin, dim=gather_dim, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.synchronize_device(device)
 
     if nd <= 1:
