@@ -3,16 +3,23 @@
 Set these when submitting device jobs.
 For developer setup (HF_TOKEN, cache paths), see `recipes/developer-setup.md`.
 
+## Required for every vLLM job
+
 | Variable | Source | Example |
 |---|---|---|
 | `TT_METAL_HOME` | Workspace-detect | `/localdev/user/workspaces/feat/tt-metal` |
 | `PYTHONPATH` | TT_METAL_HOME + vllm path | `/localdev/user/workspaces/feat/tt-metal:/localdev/user/workspaces/feat/vllm` |
 | `VLLM_TARGET_DEVICE` | Always `tt` | `tt` |
-| `MESH_DEVICE` | User request or test requirements | `T3K`, `TG`, `N300`, `(4, 8)` |
-| `VLLM_RPC_TIMEOUT` | Recipe default, increase for large models | `300000`–`900000` |
-| `HF_MODEL` | User request | `meta-llama/Llama-3.3-70B-Instruct` |
+| `HF_MODEL` | User request — **always required by tt model loader** | `meta-llama/Llama-3.1-8B-Instruct` |
 | `HF_HOME` | Workspace-detect | `/localdev/user/hf_data` |
 | `HF_TOKEN` | Workspace-detect (when model download needed) | Developer's token |
+
+## Optional / situational
+
+| Variable | Source | Example |
+|---|---|---|
+| `MESH_DEVICE` | User request or test requirements | `T3K`, `TG`, `N300`, `(4, 8)` |
+| `VLLM_RPC_TIMEOUT` | Recipe default, increase for large models | `300000`–`900000` |
 
 ## TT config overrides (CLI flags, not env vars)
 

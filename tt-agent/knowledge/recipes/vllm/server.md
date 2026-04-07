@@ -24,7 +24,7 @@ echo $! > server.pid
 - `--model` — HuggingFace model ID (required)
 - `--data_parallel_size N` — DP replicas across chips
 - `--max_num_seqs N` — max concurrent sequences
-- `--max_model_len N` — max context length
+- `--max_model_len N` — total context window in tokens (input + output combined)
 - `--override_tt_config '{...}'` — TT-specific config JSON
 
 ## Health check
