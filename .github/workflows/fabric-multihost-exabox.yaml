@@ -68,6 +68,7 @@ jobs:
         id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
 
   reset:
     name: Reset cards
