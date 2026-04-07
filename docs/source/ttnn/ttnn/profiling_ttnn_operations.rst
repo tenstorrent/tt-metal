@@ -134,41 +134,30 @@ Tenstorrent devices contain hardware performance counters that measure cycle-lev
 
 **Quick Start**
 
-To capture performance counters alongside profiling data:
+To capture performance counters alongside profiling data, use the ``python -m tracy`` CLI with the ``--profiler-capture-perf-counters`` option:
 
 ..  code-block:: sh
 
-    # Using environment variables directly
-    TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=47 \
-        pytest your_test.py -x -v
+    python -m tracy --profiler-capture-perf-counters=fpu,pack,unpack,l1_0,instrn \
+        -m "pytest your_test.py -x -v"
 
-    # Process the results
-    python tools/tracy/process_ops_logs.py --device-only
+Available counter groups:
 
-The ``TT_METAL_PROFILE_PERF_COUNTERS`` value is a bitfield selecting which counter groups to capture:
+- ``fpu`` — compute utilization (FPU, SFPU, math counters)
+- ``pack`` — packer activity (dest read, packer busy, scoreboard)
+- ``unpack`` — unpacker activity, math pipeline stalls, source register writes
+- ``l1_0`` — L1 memory ports 0-7 (unpacker, packer, TDMA, NOC Ring 0)
+- ``l1_1`` — L1 memory ports 8-15 (extended unpacker, NOC Ring 1)
+- ``instrn`` — per-thread instruction availability, stalls, and issue counts
+- ``all`` — all of the above (recommended starting point)
 
-- ``1`` = FPU (compute utilization)
-- ``2`` = PACK (packer activity)
-- ``4`` = UNPACK (unpacker activity, math pipeline)
-- ``8`` = L1_0 (L1 memory ports 0-7: unpacker, packer, TDMA, NOC Ring 0)
-- ``16`` = L1_1 (L1 memory ports 8-15: extended unpacker, NOC Ring 1)
-- ``32`` = INSTRN (instruction availability, stalls, issue counts per thread)
-- ``47`` = all of the above (recommended starting point)
+**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously. When both are requested, the profiler automatically runs two passes and merges the results.
 
-**Note**: L1_0 and L1_1 share hardware mux state and cannot be captured simultaneously in a single run. Use separate runs if both are needed.
-
-Blackhole-only groups:
-
-- ``64`` = L1_2 (NOC Ring 2 ports)
-- ``128`` = L1_3 (NOC Ring 3 ports)
-- ``256`` = L1_4 (misc L1 ports)
+Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4`` (additional NOC ring ports).
 
 **Output**
 
-The profiler produces two types of output:
-
-1. **Console**: Raw counter values per counter type, followed by derived efficiency metrics with Min/Median/Max/Avg statistics across cores.
-2. **CSV** (``generated/profiler/reports/ops_perf_results.csv``): Derived metrics only, with Min/Median/Max/Avg columns per operation.
+The profiler generates the standard ops performance CSV at ``generated/profiler/reports/ops_perf_results.csv`` with additional columns for perf counter metrics. Console output also includes raw counter values and derived efficiency metrics with Min/Median/Max/Avg statistics across cores per operation.
 
 **Derived Metrics Reference**
 
