@@ -35,12 +35,14 @@ class TtnnC3k2:
             )
             self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
         else:
+            cv1_shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED if reshard else None
             self.cv1 = TtnnConv(
                 device,
                 parameter.cv1,
                 conv_pt.cv1,
                 reshard=reshard,
                 deallocate_activation=True,
+                shard_layout=cv1_shard_layout,
                 slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
             )
             self.cv2 = TtnnConv(
