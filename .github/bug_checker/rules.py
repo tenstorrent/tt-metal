@@ -23,7 +23,6 @@ class Rule:
     severity: str  # "blocking" | "warning"
     suggest_fix: bool
     model: Optional[str]
-    group: Optional[str]
     paths: list[str] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     content: str = ""
@@ -72,7 +71,6 @@ def load_rules() -> list[Rule]:
             severity=config.get("severity", "warning"),
             suggest_fix=config.get("suggest_fix", False),
             model=config.get("model"),
-            group=config.get("group"),
             paths=config.get("paths", []),
             labels=config.get("labels", []),
             content=content,
@@ -97,15 +95,3 @@ def select_rules(
             logger.debug(f"Rule {rule.id!r} selected: {reason}")
             selected.append(rule)
     return selected
-
-
-def group_rules(rules: list[Rule]) -> list[list[Rule]]:
-    """Group rules by their group name. Ungrouped rules become single-item lists."""
-    groups: dict[Optional[str], list[Rule]] = {}
-    isolated: list[list[Rule]] = []
-    for rule in rules:
-        if rule.group is None:
-            isolated.append([rule])
-        else:
-            groups.setdefault(rule.group, []).append(rule)
-    return isolated + list(groups.values())

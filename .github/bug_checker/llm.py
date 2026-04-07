@@ -102,7 +102,6 @@ class LLMSession:
         severity: str,
         suggest_fix: bool,
         diff: str,
-        context_files: dict[str, str] | None = None,
     ) -> list[Finding]:
         """Run a single rule against the diff. Returns findings.
 
@@ -110,7 +109,7 @@ class LLMSession:
         """
         system_prompt = self._build_system_prompt()
         user_message = self._build_user_message(
-            rule_content, rule_id, severity, suggest_fix, diff, context_files
+            rule_content, rule_id, severity, suggest_fix, diff
         )
 
         response = self._client.messages.create(
@@ -149,7 +148,6 @@ class LLMSession:
         severity: str,
         suggest_fix: bool,
         diff: str,
-        context_files: dict[str, str] | None,
     ) -> str:
         parts = [
             f"## Rule: {rule_id} (severity: {severity})\n",
@@ -157,11 +155,6 @@ class LLMSession:
             "\n## PR Diff\n",
             f"```diff\n{diff}\n```\n",
         ]
-
-        if context_files:
-            parts.append("\n## Additional Context Files\n")
-            for path, content in context_files.items():
-                parts.append(f"### {path}\n```\n{content}\n```\n")
 
         if suggest_fix:
             parts.append(

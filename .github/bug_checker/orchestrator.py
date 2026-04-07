@@ -39,6 +39,11 @@ def run_bug_check(
     if not matched_rules:
         logger.info("No rules matched this PR.")
         print_findings([])
+        if post_comments:
+            post_pr_comment(
+                pr_number=pr_info.number,
+                body="## Bug Checker\nNo rules matched the files in this PR — nothing to check.",
+            )
         return []
 
     logger.info(

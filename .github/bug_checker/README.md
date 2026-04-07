@@ -24,7 +24,7 @@ flowchart TD
     ORCH["Orchestrator\nrun_bug_check()"]
     ORCH --> RULES
 
-    RULES["Rule Engine\nload_rules() → select_rules() → group_rules()"]
+    RULES["Rule Engine\nload_rules() → select_rules()"]
     RULES --> LLM
 
     LLM["LLM Analysis\nLLMSession.analyze_rule()"]
@@ -76,14 +76,13 @@ flowchart TD
 #### Orchestrator — `orchestrator.py` : `run_bug_check()` (21–89)
 
 - Central coordinator that sequences the entire pipeline:
-  load rules → select matching → group by model → per-rule LLM analysis → collect findings → dispatch outputs
+  load rules → select matching → per-rule LLM analysis → collect findings → dispatch outputs
 - Fails open — if an LLM call fails, the rule is skipped and the check still passes
 
 #### Rule Engine — `rules.py` + `manifest.yaml` + `rules/*.md`
 
 - `load_rules()` reads `manifest.yaml` and the markdown content of each rule
 - `select_rules()` filters by file-glob and label match against `PRInfo`
-- `group_rules()` batches rules that share a `group` name into a single LLM session
 - Current rules:
   - `ccl-ring-buffer-mismatch` — blocking, paths: `tt_metal/impl/ccl/**`, `ttnn/cpp/ttnn/operations/ccl/**`, labels: `area:ccl`
   - `reshape-dim-check` — warning, paths: `ttnn/cpp/ttnn/operations/data_movement/**`, labels: `area:ops`
@@ -108,7 +107,7 @@ flowchart TD
 
 - `exit 1` if any finding has `severity == "blocking"`, `exit 0` otherwise
 
-Rules run in isolation by default (separate LLM session each). Rules with the same `group` in the manifest share a conversation, so later rules see earlier analysis.
+Each rule runs in its own isolated LLM session — no state is shared between rules.
 
 ## Usage
 
@@ -171,7 +170,6 @@ good_code();
        severity: warning       # "blocking" fails the check, "warning" is informational
        suggest_fix: false      # true = LLM includes suggested code fixes
        model: null             # null = use default, or e.g. "claude-sonnet-4-20250514"
-       group: null             # null = isolated, or a group name to share LLM context
        paths:                  # rule runs if any changed file matches these globs
          - "path/to/relevant/code/**"
        labels:                 # rule runs if any PR label matches
@@ -192,7 +190,6 @@ good_code();
 | `severity` | `"blocking"` \| `"warning"` | Blocking findings fail the check and are marked prominently |
 | `suggest_fix` | bool | Whether the LLM should include suggested code fixes |
 | `model` | string \| null | Claude model override; null uses the global default |
-| `group` | string \| null | Group name for shared LLM context; null runs in isolation |
 | `paths` | list of globs | Rule runs if any changed file matches |
 | `labels` | list of strings | Rule runs if any PR label matches |
 

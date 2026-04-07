@@ -11,7 +11,6 @@ def _rule(paths: list[str]) -> Rule:
         severity="warning",
         suggest_fix=False,
         model=None,
-        group=None,
         paths=paths,
         labels=[],
     )

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-from typing import TextIO
 
 from .llm import Finding
 from .logger import logger
@@ -52,8 +50,11 @@ def findings_to_sarif(findings: list[Finding], rules_used: list[str]) -> dict:
                             "artifactLocation": {"uri": f.file},
                             "replacements": [
                                 {
-                                    "deletedRegion": {"startLine": max(f.line, 1)},
-                                    "insertedContent": {"text": f.suggested_fix},
+                                    "deletedRegion": {
+                                        "startLine": max(f.line, 1),
+                                        "endLine": max(f.line, 1),
+                                    },
+                                    "insertedContent": {"text": f.suggested_fix + "\n"},
                                 }
                             ],
                         }
@@ -91,7 +92,7 @@ def write_sarif(findings: list[Finding], rules_used: list[str], path: Path) -> N
 # --- CLI stdout ---
 
 
-def print_findings(findings: list[Finding], file: TextIO = sys.stdout) -> None:
+def print_findings(findings: list[Finding]) -> None:
     """Print findings in human-readable CLI format with color."""
     if not findings:
         logger.opt(colors=True).info("<green>No findings.</green>")

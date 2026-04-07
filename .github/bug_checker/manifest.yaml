@@ -4,7 +4,6 @@ rules:
     severity: blocking
     suggest_fix: true
     model: null
-    group: null
     paths:
       - "tt_metal/impl/ccl/**"
       - "ttnn/cpp/ttnn/operations/ccl/**"
@@ -16,7 +15,6 @@ rules:
     severity: warning
     suggest_fix: false
     model: null
-    group: null
     paths:
       - "ttnn/cpp/ttnn/operations/data_movement/**"
     labels:

@@ -26,7 +26,9 @@ jobs:
     steps:
       - name: Get PR number
         id: pr
-        run: echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+        env:
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: echo "number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,9 +49,10 @@ jobs:
         env:
           BUG_CHECKER_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           python .github/bug_checker/run_bug_checker.py \
-            --pr ${{ steps.pr.outputs.number }} \
+            --pr "$PR_NUMBER" \
             --sarif .github/bug-checker-results.sarif \
             --post-comments \
             --verbose

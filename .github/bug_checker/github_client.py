@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -10,7 +12,7 @@ from typing import Optional
 
 from bug_checker.logger import logger
 
-REPO = "tenstorrent/tt-metal"
+REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
 MAX_DIFF_LINES = 8000
 
 
@@ -188,8 +190,6 @@ def fetch_file_content(path: str, ref: str) -> Optional[str]:
             "-f",
             f"ref={ref}",
         )
-        import base64
-
         return base64.b64decode(content.strip()).decode("utf-8", errors="replace")
     except Exception as e:
         logger.warning(f"Failed to fetch {path}@{ref}: {e}")

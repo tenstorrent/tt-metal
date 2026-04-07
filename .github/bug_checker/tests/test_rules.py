@@ -1,6 +1,6 @@
 """Tests for rule loading and targeting."""
 
-from bug_checker.rules import Rule, group_rules, load_manifest, load_rules, select_rules
+from bug_checker.rules import Rule, load_manifest, load_rules, select_rules
 
 
 def _rule(paths=None, labels=None) -> Rule:
@@ -10,7 +10,6 @@ def _rule(paths=None, labels=None) -> Rule:
         severity="warning",
         suggest_fix=False,
         model=None,
-        group=None,
         paths=paths or [],
         labels=labels or [],
     )
@@ -106,60 +105,3 @@ def test_select_rules_by_label():
     rules = load_rules()
     selected = select_rules(rules, changed_files=[], pr_labels=["area:ops"])
     assert any(r.id == "reshape-dim-check" for r in selected)
-
-
-def test_group_rules_isolated():
-    rules = [
-        Rule(
-            id="a",
-            file="a.md",
-            severity="warning",
-            suggest_fix=False,
-            model=None,
-            group=None,
-        ),
-        Rule(
-            id="b",
-            file="b.md",
-            severity="warning",
-            suggest_fix=False,
-            model=None,
-            group=None,
-        ),
-    ]
-    groups = group_rules(rules)
-    assert len(groups) == 2
-    assert all(len(g) == 1 for g in groups)
-
-
-def test_group_rules_grouped():
-    rules = [
-        Rule(
-            id="a",
-            file="a.md",
-            severity="warning",
-            suggest_fix=False,
-            model=None,
-            group="grp",
-        ),
-        Rule(
-            id="b",
-            file="b.md",
-            severity="warning",
-            suggest_fix=False,
-            model=None,
-            group="grp",
-        ),
-        Rule(
-            id="c",
-            file="c.md",
-            severity="warning",
-            suggest_fix=False,
-            model=None,
-            group=None,
-        ),
-    ]
-    groups = group_rules(rules)
-    assert len(groups) == 2
-    sizes = sorted(len(g) for g in groups)
-    assert sizes == [1, 2]
