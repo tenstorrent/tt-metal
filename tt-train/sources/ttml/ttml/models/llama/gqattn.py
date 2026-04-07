@@ -39,15 +39,9 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(
-            embedding_size, embedding_size, bias_linears, **kwargs
-        )
-        self.kv_linear = LinearLayer(
-            embedding_size, concat_kv_dim, bias_linears, **kwargs
-        )
-        self.out_linear = LinearLayer(
-            embedding_size, embedding_size, bias_linears, **kwargs
-        )
+        self.q_linear = LinearLayer(embedding_size, embedding_size, bias_linears, **kwargs)
+        self.kv_linear = LinearLayer(embedding_size, concat_kv_dim, bias_linears, **kwargs)
+        self.out_linear = LinearLayer(embedding_size, embedding_size, bias_linears, **kwargs)
 
         super().__init__(**kwargs)
 

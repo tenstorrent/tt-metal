@@ -81,19 +81,13 @@ def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
-                ml_dtypes.bfloat16
-            )
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                weight_np, layout=ttnn.Layout.TILE
-            )
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(ml_dtypes.bfloat16)
+            new_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
             tensor.assign(new_tensor)
         elif "bias" in name:
             # Re-initialize biases with 0
             bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
-            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
             tensor.assign(new_tensor)
 
 
@@ -104,9 +98,7 @@ class Llama(TransformerBase):
         self.fc = LinearLayer(config.hidden_size, config.vocab_size, False, **kwargs)
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(
-            vocab_size_divisible_by_32, config.hidden_size, **kwargs
-        )
+        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size, **kwargs)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             # Share the Parameter object so lazy materialization runs once; assigning

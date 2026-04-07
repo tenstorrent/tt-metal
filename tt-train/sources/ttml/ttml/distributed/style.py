@@ -97,11 +97,6 @@ class ColwiseParallel(ParallelStyle):
         """
         self.gather_output = gather_output
 
-    def get_layout(self, mesh_device, tp_axis: int) -> DistributedLayout:
-        """Return the weight layout for this style (for composite module rules)."""
-        ndim = _mesh_ndim(mesh_device)
-        return DistributedLayout(ndim=ndim, axis_placements={tp_axis: Shard(-2)})
-
     def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, DistributedLayout]:
         ndim = _mesh_ndim(mesh_device)
         return {
@@ -184,11 +179,6 @@ class RowwiseParallel(ParallelStyle):
     Example:
         parallelize_module(model, mesh, {"w2": RowwiseParallel()})
     """
-
-    def get_layout(self, mesh_device, tp_axis: int) -> DistributedLayout:
-        """Return the weight layout for this style (for composite module rules)."""
-        ndim = _mesh_ndim(mesh_device)
-        return DistributedLayout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
 
     def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, DistributedLayout]:
         ndim = _mesh_ndim(mesh_device)

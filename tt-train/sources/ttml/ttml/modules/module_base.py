@@ -180,10 +180,9 @@ class TransformerBase(AbstractModuleBase):
                 super().__init__(**kwargs)
     """
 
-    def __init__(self, mesh_device=None, tp_plan=None, on_device_init=False, **kwargs) -> None:
+    def __init__(self, mesh_device=None, tp_plan=None, **kwargs) -> None:
         self._mesh_device = mesh_device
         self._tp_plan = tp_plan.resolve(mesh_device) if tp_plan is not None else None
-        self._on_device_init = on_device_init
         super().__init__(**kwargs)
         self._materialize_tree()
 
@@ -210,12 +209,7 @@ class TransformerBase(AbstractModuleBase):
         metadata = param.tensor
         layout = _match_policy(full_path, self._tp_plan)
 
-        tensor = metadata.init_fn(
-            metadata.shape,
-            layout=layout,
-            mesh_device=self._mesh_device,
-            on_device_init=self._on_device_init,
-        )
+        tensor = metadata.init_fn(metadata.shape, layout=layout, mesh_device=self._mesh_device)
         tensor.set_requires_grad(metadata.requires_grad)
         param.tensor = tensor
         module._bind_parameter(tensor, name)

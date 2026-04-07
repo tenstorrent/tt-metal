@@ -198,11 +198,7 @@ def _stamp_layout(tensor, layout):
 def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
-    def uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
-        if on_device_init and mesh_device is not None:
-            mapper = _layout_to_mapper(layout, mesh_device, len(shape))
-            tensor = ttml.ops.rand(shape, a, b, mapper=mapper)
-            return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
+    def uniform_init(shape, layout=None, mesh_device=None):
         arr = np.random.uniform(a, b, shape).astype(ml_dtypes.bfloat16)
         return _to_tensor(arr, layout, mesh_device)
 
@@ -212,11 +208,7 @@ def uniform(a: float = 0.0, b: float = 1.0):
 def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
-    def normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
-        if on_device_init and mesh_device is not None:
-            mapper = _layout_to_mapper(layout, mesh_device, len(shape))
-            tensor = ttml.ops.randn(shape, mean, std, mapper=mapper)
-            return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
+    def normal_init(shape, layout=None, mesh_device=None):
         arr = np.random.normal(mean, std, shape).astype(ml_dtypes.bfloat16)
         return _to_tensor(arr, layout, mesh_device)
 
@@ -256,11 +248,11 @@ def ones():
 def xavier_uniform(gain: float = 1.0):
     """Xavier uniform initialization (Glorot 2010)."""
 
-    def xavier_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+    def xavier_uniform_init(shape, layout=None, mesh_device=None):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
         std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
         a = math.sqrt(3.0) * std
-        return uniform(-a, a)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
+        return uniform(-a, a)(shape, layout=layout, mesh_device=mesh_device)
 
     return xavier_uniform_init
 
@@ -268,10 +260,10 @@ def xavier_uniform(gain: float = 1.0):
 def xavier_normal(gain: float = 1.0):
     """Xavier normal initialization (Glorot 2010)."""
 
-    def xavier_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+    def xavier_normal_init(shape, layout=None, mesh_device=None):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
         std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
-        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
+        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device)
 
     return xavier_normal_init
 
@@ -283,12 +275,12 @@ def kaiming_uniform(
 ):
     """Kaiming uniform initialization (He 2015)."""
 
-    def kaiming_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+    def kaiming_uniform_init(shape, layout=None, mesh_device=None):
         fan = _calculate_correct_fan(shape, mode)
         gain = calculate_gain(nonlinearity, a)
         std = gain / math.sqrt(fan)
         bound = math.sqrt(3.0) * std
-        return uniform(-bound, bound)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
+        return uniform(-bound, bound)(shape, layout=layout, mesh_device=mesh_device)
 
     return kaiming_uniform_init
 
@@ -300,11 +292,11 @@ def kaiming_normal(
 ):
     """Kaiming normal initialization (He 2015)."""
 
-    def kaiming_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+    def kaiming_normal_init(shape, layout=None, mesh_device=None):
         fan = _calculate_correct_fan(shape, mode)
         gain = calculate_gain(nonlinearity, a)
         std = gain / math.sqrt(fan)
-        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
+        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device)
 
     return kaiming_normal_init
 
