@@ -80,13 +80,17 @@ class Qwen35Model:
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
 
     @classmethod
-    def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048):
+    def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048, n_layers=None):
         args = Qwen35ModelArgs(
             mesh_device=device,
             checkpoint_dir=checkpoint_dir,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
         )
+
+        if n_layers is not None:
+            args.n_layers = n_layers
+            args.attention_type_list = args.attention_type_list[:n_layers]
 
         logger.info("Loading weights from safetensors...")
         raw_state_dict = {}
