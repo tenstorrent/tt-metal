@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -140,6 +142,17 @@ bool need_link(const std::string& out_dir, const std::string& target_name) {
     return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
+std::string with_trailing_space(std::string_view segment) {
+    if (segment.empty()) {
+        return {};
+    }
+    std::string normalized(segment);
+    if (!std::isspace(static_cast<unsigned char>(normalized.back()))) {
+        normalized.push_back(' ');
+    }
+    return normalized;
+}
+
 // SECURITY: constructs a shell command from client-supplied strings (gpp, cflags, defines,
 // includes, srcs, objs). A malicious client can inject arbitrary shell commands via any of
 // these fields. This is equivalent to remote code execution by design — the server's
@@ -152,14 +165,14 @@ void compile_one(
     const std::string& temp_obj) {
     std::string cmd = fmt::format("cd {} && {} ", out_dir, gpp);
     cmd += fmt::format("-{} ", target.compiler_opt_level);
-    cmd += target.cflags;
-    cmd += target.includes;
+    cmd += with_trailing_space(target.cflags);
+    cmd += with_trailing_space(target.includes);
 
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
     cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, target.srcs[src_index], temp_d_path);
-    cmd += target.defines;
+    cmd += with_trailing_space(target.defines);
 
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
@@ -190,9 +203,9 @@ void link_one(
         cmd += target.weakened_firmware_name + " ";
     }
 
-    cmd += target.lflags;
-    cmd += target.extra_link_objs;
-    cmd += link_objs_str;
+    cmd += with_trailing_space(target.lflags);
+    cmd += with_trailing_space(target.extra_link_objs);
+    cmd += with_trailing_space(link_objs_str);
     std::string elf_name = out_dir + target.target_name + ".elf";
     tt::jit_build::utils::FileRenamer elf_file(elf_name);
     cmd += "-o " + elf_file.path();
@@ -225,6 +238,10 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
     file.seekg(0, std::ios::beg);
     std::vector<std::uint8_t> data(static_cast<size_t>(byte_count));
     file.read(reinterpret_cast<char*>(data.data()), byte_count);
+    if (file.gcount() != byte_count || (!file && !file.eof())) {
+        throw std::runtime_error(fmt::format(
+            "Failed to read ELF file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount()));
+    }
     return data;
 }
 
