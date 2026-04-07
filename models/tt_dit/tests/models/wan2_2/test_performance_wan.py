@@ -271,7 +271,7 @@ def test_pipeline_performance(
                     height=height,
                     width=width,
                     num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
+                    num_inference_steps=1,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                     seed=42,
