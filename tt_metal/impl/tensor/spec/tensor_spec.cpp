@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -250,12 +251,16 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
     }
 
-    return MemoryConfig::create_with_prepopulated_shard_specs(
+    auto result = MemoryConfig::create_with_prepopulated_shard_specs(
         mem_config.memory_layout(),
         mem_config.buffer_type(),
         mem_config.shard_spec(),
         std::move(nd_shard_spec),
         mem_config.created_with_nd_shard_spec());
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(mem_config)) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(result, true);
+    }
+    return result;
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() const {

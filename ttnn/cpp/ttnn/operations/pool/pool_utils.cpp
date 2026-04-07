@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
@@ -540,7 +540,9 @@ void validate_input_params(
         dilation_h,
         dilation_w);
 
-    // check that padding is not excessive (should not be more than half the kernel size)
+    // Check that padding is not excessive (should not be more than half the kernel size).
+    // pad_right is intentionally excluded: DRAM slicing with TILE output can inflate it
+    // via width rounding in Pool2dSliceAttr::get_input_slice_and_padding.
     TT_FATAL(
         pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
         "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
@@ -716,8 +718,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window_config.input_hw.first,
         sliding_window_config.input_hw.second,
         sliding_window_config.channels,
-        slice_padding[0],  // pad_h (top)
-        slice_padding[2],  // pad_w (left)
+        slice_padding[0] + slice_padding[1],  // pad_h (top + bottom)
+        slice_padding[2] + slice_padding[3],  // pad_w (left + right)
         slice_ceil_pad[0],
         slice_ceil_pad[1],
         sliding_window_config.ceil_mode,
