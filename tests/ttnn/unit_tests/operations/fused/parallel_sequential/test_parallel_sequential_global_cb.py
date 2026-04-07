@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -117,6 +117,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,14 +39,17 @@ std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) 
     return std::string(buf.data(), buf.size());
 }
 
-Data::Data()
-    : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
-
+Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
-            auto address = rtoptions.get_inspector_rpc_server_address();
+            int port = rtoptions.get_inspector_rpc_server_port();
+            std::string host = rtoptions.get_inspector_rpc_server_host();
+            if (rank.has_value()) {
+                port += *rank;  // Offset port by rank to allow multiple instances on the same machine
+            }
+            std::string address = host + ":" + std::to_string(port);
             rpc_server_controller.start(address);
 
             // Connect callbacks that we want to respond to
@@ -608,7 +611,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_rpc_server_enabled);
     RT(inspector_rpc_server_host);
     RT(inspector_rpc_server_port);
-    RT(inspector_rpc_server_address);
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());

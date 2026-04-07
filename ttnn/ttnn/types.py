@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -41,6 +41,7 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 TILE_SIZE = 32
 
 Tile = ttnn._ttnn.tensor.Tile
+OverlappedTensor = ttnn._ttnn.tensor.OverlappedTensor
 
 Shape = ttnn._ttnn.types.Shape
 TensorSpec = ttnn._ttnn.tensor.TensorSpec
