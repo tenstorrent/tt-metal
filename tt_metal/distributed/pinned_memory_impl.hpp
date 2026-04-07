@@ -82,6 +82,8 @@ public:
     void unlock();
 
 private:
+    void drain_barrier_events();
+
     void initialize_from_devices(
         const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
 
