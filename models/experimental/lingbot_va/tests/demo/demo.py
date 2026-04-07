@@ -16,54 +16,66 @@ import time
 from copy import deepcopy
 from pathlib import Path
 
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-import numpy as np
-
-# Repo root: lingbot_va (parent of tests/demo)
+# -----------------------------------------------------------------------------
+# Import path bootstrap: ``models.*`` and ``tt.*`` require lingbot_va + tt-metal on ``sys.path``.
+# -----------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# TT-Metal root so tt.utils can import models.tt_dit (for TT transformer)
 _TT_METAL_ROOT = os.environ.get("TT_METAL_HOME") or str(_REPO_ROOT.parent.parent.parent)
 if os.path.isdir(_TT_METAL_ROOT) and _TT_METAL_ROOT not in sys.path:
     sys.path.insert(0, _TT_METAL_ROOT)
 
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# isort: off
+# Path bootstrap above; keep explicit third-party vs repo import grouping.
+# -----------------------------------------------------------------------------
+# Third-party
+# -----------------------------------------------------------------------------
+import numpy as np
 import torch
 import torch.nn.functional as F
+import ttnn
 from diffusers.utils import export_to_video
 from diffusers.video_processor import VideoProcessor
 from PIL import Image
 from tqdm import tqdm
 
-from reference.utils import (
-    VA_CONFIGS,
-    init_logger,
-    load_tokenizer,
-    load_vae,
-    logger,
-    WanVAEStreamingWrapper,
-)
-
-import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
-from models.tt_dit.parallel.manager import CCLManager
-
-from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
-from models.experimental.lingbot_va.tt.utils import FlowMatchSchedulerTtnn, get_mesh_id_ttnn, data_seq_to_patch_ttnn
-from tt.utils import (
-    _safe_deallocate_tensor,
-    load_text_encoder as load_text_encoder_tt,
-    load_transformer as load_transformer_tt,
-    WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
-    WanVAEDecoderWrapper as TTWanVAEDecoderWrapper,
-)
+# -----------------------------------------------------------------------------
+# Lingbot reference + tt-metal (``models.*``, ``reference.*``, ``tt.*``)
+# -----------------------------------------------------------------------------
 from models.experimental.lingbot_va.tests.mesh_utils import (
     inference_work_mesh_from_opened,
     ttnn_mesh_shape_for_inference_demo,
 )
+from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
+from models.experimental.lingbot_va.tt.utils import (
+    FlowMatchSchedulerTtnn,
+    data_seq_to_patch_ttnn,
+    get_mesh_id_ttnn,
+)
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
+from models.tt_dit.parallel.manager import CCLManager
+from reference.utils import (
+    VA_CONFIGS,
+    WanVAEStreamingWrapper,
+    init_logger,
+    load_tokenizer,
+    load_vae,
+    logger,
+)
+from tt.utils import (
+    WanVAEDecoderWrapper as TTWanVAEDecoderWrapper,
+    WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
+    _safe_deallocate_tensor,
+    load_text_encoder as load_text_encoder_tt,
+    load_transformer as load_transformer_tt,
+)
+
+# isort: on
 
 OBS_CAM_HIGH = "observation.images.cam_high"
 OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
@@ -145,12 +157,10 @@ class _TTTransformerAdapter:
         self._tt_model.clear_cache(cache_name)
 
     def cleanup_all(self):
-        if hasattr(self._tt_model, "cleanup_all"):
-            self._tt_model.cleanup_all()
+        self._tt_model.cleanup_all()
 
     def deallocate_weights(self):
-        if hasattr(self._tt_model, "deallocate_weights"):
-            self._tt_model.deallocate_weights()
+        self._tt_model.deallocate_weights()
 
     def create_empty_cache(
         self,
@@ -180,14 +190,6 @@ class _TTTransformerAdapter:
         prompt = input_dict["text_emb"]
         timesteps = input_dict["timesteps"]
         grid_id = input_dict["grid_id"]
-        for name, t in (
-            ("noisy_latents", spatial),
-            ("text_emb", prompt),
-            ("timesteps", timesteps),
-            ("grid_id", grid_id),
-        ):
-            if not isinstance(t, ttnn.Tensor):
-                raise TypeError(f"_TTTransformerAdapter expects {name} to be ttnn.Tensor, got {type(t).__name__}")
 
         ts = timesteps
         B = int(spatial.shape[0])
@@ -340,11 +342,10 @@ def _close_lingbot_mesh_stack(models: dict) -> None:
 
 def _load_models_phase1(
     config,
-    load_text_encoder=True,
     mesh_device=None,
     timings_out: dict[str, float] | None = None,
 ):
-    """Load tokenizer, VAE (CPU), mesh, optional TT text encoder. Transformer and TT VAE load in later phases.
+    """Load tokenizer, VAE (CPU), mesh, and schedulers. TT text encoder loads via ``_load_text_encoder_into_models``.
 
     Args:
         mesh_device: Optional pre-opened mesh (e.g. pytest ``mesh_device``). When ``None``, opens a mesh
@@ -373,8 +374,8 @@ def _load_models_phase1(
     elif mesh_device.get_num_devices() > 1:
         logger.info(
             "Full mesh %sx%s: DiT tensor_parallel=%s (axis 1), sequence_parallel=%s (axis 0); "
-            "VAE height_parallel=%s, width_parallel=%s. Text encoder TP follows mesh width (see load_text_encoder). "
-            "Set LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1 to force one die only.",
+            "VAE height_parallel=%s, width_parallel=%s. Text encoder loads before encode via "
+            "_load_text_encoder_into_models. Set LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1 to force one die only.",
             rows,
             cols,
             cols,
@@ -391,16 +392,6 @@ def _load_models_phase1(
         )
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
     dit_parallel_config = _lingbot_dit_parallel_config(mesh_device)
-
-    text_encoder = None
-    if load_text_encoder:
-        text_encoder = load_text_encoder_tt(
-            os.path.join(ckpt, "text_encoder"),
-            mesh_device,
-            ccl_manager=ccl_manager,
-            torch_dtype=dtype,
-            max_prompt_length=512,
-        )
 
     vae = load_vae(
         os.path.join(ckpt, "vae"),
@@ -424,7 +415,7 @@ def _load_models_phase1(
         # "vae_half": vae_half,
         "streaming_vae": streaming_vae,
         "tokenizer": tokenizer,
-        "text_encoder": text_encoder,
+        "text_encoder": None,
         # "streaming_vae_half": streaming_vae_half,
         "scheduler": scheduler,
         "action_scheduler": action_scheduler,
@@ -446,13 +437,11 @@ def _free_tt_model(models: dict, key: str) -> None:
     if obj is not None:
         _release_ttnn_runtime_configs(obj)
         try:
-            if hasattr(obj, "cleanup_all"):
-                obj.cleanup_all()
+            obj.cleanup_all()
         except Exception as e:
             logger.warning("cleanup_all failed for %s: %s", key, e)
         try:
-            if hasattr(obj, "deallocate_weights"):
-                obj.deallocate_weights()
+            obj.deallocate_weights()
         except Exception as e:
             logger.warning("deallocate_weights failed for %s: %s", key, e)
         del obj
@@ -502,19 +491,16 @@ def _load_tt_vae_into_models(models: dict) -> None:
 
 
 def _free_tt_vae_from_models(models: dict) -> None:
-    """Replace TT VAE in models with PyTorch wrappers and run gc to free device memory."""
+    """Tear down TTNN VAE encoder on device and run gc."""
     streaming_vae = models.get("streaming_vae")
-    # old_streaming_vae_half = models.get("streaming_vae_half")
     if streaming_vae is not None:
         _release_ttnn_runtime_configs(streaming_vae)
         try:
-            if hasattr(streaming_vae, "cleanup_all"):
-                streaming_vae.cleanup_all()
+            streaming_vae.cleanup_all()
         except Exception as e:
             logger.warning("cleanup_all failed for streaming_vae: %s", e)
         try:
-            if hasattr(streaming_vae, "deallocate_weights"):
-                streaming_vae.deallocate_weights()
+            streaming_vae.deallocate_weights()
         except Exception as e:
             logger.warning("deallocate_weights failed for streaming_vae: %s", e)
     gc.collect()
@@ -604,12 +590,8 @@ def _encode_prompt_ttnn(
 
 def _postprocess_action(models, state, action):
     config = models["config"]
-    actions_q01 = state["actions_q01"]
-    actions_q99 = state["actions_q99"]
-    if isinstance(actions_q01, ttnn.Tensor):
-        actions_q01 = ttnn.to_torch(actions_q01).float()
-    if isinstance(actions_q99, ttnn.Tensor):
-        actions_q99 = ttnn.to_torch(actions_q99).float()
+    actions_q01 = ttnn.to_torch(state["actions_q01"]).float()
+    actions_q99 = ttnn.to_torch(state["actions_q99"]).float()
     action_norm_method = state["action_norm_method"]
 
     action = action.cpu()
@@ -630,8 +612,6 @@ def _repeat_input_for_cfg_ttnn(models, state, input_dict):
     if use_cfg:
         if negative_prompt_embeds is None:
             raise ValueError("use_cfg requires state['negative_prompt_embeds']")
-        if not isinstance(prompt_embeds, ttnn.Tensor) or not isinstance(negative_prompt_embeds, ttnn.Tensor):
-            raise TypeError("_repeat_input_for_cfg_ttnn expects prompt and negative prompt as ttnn.Tensor when use_cfg")
         input_dict["noisy_latents"] = ttnn.repeat(input_dict["noisy_latents"], (2, 1, 1, 1, 1))
         input_dict["text_emb"] = ttnn.concat([prompt_embeds, negative_prompt_embeds], dim=0)
         g = ttnn.unsqueeze(input_dict["grid_id"], 0)
@@ -681,12 +661,9 @@ def _timesteps_1d_ttnn(mesh_device, num_frames: int, t_val: float, *, zero_first
     )
 
 
-def _action_channel_mask_ttnn(mesh_device, num_channels: int, action_mask: torch.Tensor | ttnn.Tensor) -> ttnn.Tensor:
-    """Broadcast mask ``[C]`` (torch bool or TTNN 0/1) to ``[1, C, 1, 1, 1]`` float TTNN (1 = keep, 0 = zero)."""
-    if isinstance(action_mask, ttnn.Tensor):
-        am = ttnn.to_torch(action_mask).detach().cpu().numpy().squeeze() > 0.5
-    else:
-        am = action_mask.detach().cpu().numpy().astype(bool)
+def _action_channel_mask_ttnn(mesh_device, num_channels: int, action_mask: ttnn.Tensor) -> ttnn.Tensor:
+    """Broadcast mask ``[C]`` (TTNN 0/1) to ``[1, C, 1, 1, 1]`` float (1 = keep, 0 = zero)."""
+    am = ttnn.to_torch(action_mask).detach().cpu().numpy().squeeze() > 0.5
     m = np.ones((1, num_channels, 1, 1, 1), dtype=np.float32)
     m[0, ~am, 0, 0, 0] = 0.0
     return ttnn.from_torch(
@@ -710,19 +687,13 @@ def _prepare_latent_input_ttnn(
     patch_size: tuple[int, int, int] = (1, 2, 2),
 ) -> dict:
     """
-    TTNN-native analogue of :func:`_prepare_latent_input`: all activations are ``ttnn.Tensor`` on ``mesh_device``.
-
-    Expects ``state['prompt_embeds']`` to be a ``ttnn.Tensor``. Does not call :func:`torch.ones` / ``.to`` on
-    activations; timestep lines use :func:`ttnn.full` / :func:`ttnn.concat`. Grid ids use
+    TTNN-only: activations are ``ttnn.Tensor`` on ``mesh_device``; ``state['prompt_embeds']`` must be TTNN.
+    Timestep lines use :func:`ttnn.full` / :func:`ttnn.concat`; grid ids use
     :func:`models.experimental.lingbot_va.tt.utils.get_mesh_id_ttnn`.
-
-    Callers keep tensors on-device for the TTNN scheduler path.
     """
     mesh_device = models["mesh_device"]
     action_mask = state["action_mask"]
     prompt_embeds = state["prompt_embeds"]
-    if not isinstance(prompt_embeds, ttnn.Tensor):
-        raise TypeError("_prepare_latent_input_ttnn expects state['prompt_embeds'] to be a ttnn.Tensor")
 
     input_dict: dict = {}
     if latent_model_input is not None:
@@ -790,49 +761,26 @@ def _randn_ttnn(mesh_device, shape: tuple[int, ...], *, torch_dtype: torch.dtype
     )
 
 
-def _ensure_prompt_embeds_ttnn(models, state) -> None:
-    """Ensure ``state['prompt_embeds']`` (and negative when CFG) are TTNN for :func:`_prepare_latent_input_ttnn`."""
-    mesh_device = models["mesh_device"]
-    dtype = models["dtype"]
-    tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
+def _ensure_prompt_embeds_ttnn(state) -> None:
+    """Require ``state['prompt_embeds']`` (and negative when CFG) as TTNN tensors."""
     pe = state.get("prompt_embeds")
     if pe is None:
         raise RuntimeError("TTNN latent prepare requires encoded prompt embeddings; set prompt before infer.")
-    if isinstance(pe, ttnn.Tensor):
-        if state.get("use_cfg") and state.get("negative_prompt_embeds") is not None:
-            neg = state["negative_prompt_embeds"]
-            if not isinstance(neg, ttnn.Tensor):
-                state["negative_prompt_embeds"] = ttnn.from_torch(
-                    neg.to(dtype).contiguous(),
-                    device=mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    dtype=tt_dtype,
-                )
-        return
-    state["prompt_embeds"] = ttnn.from_torch(
-        pe.to(dtype).contiguous(),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=tt_dtype,
-    )
-    neg = state.get("negative_prompt_embeds")
-    if state.get("use_cfg") and neg is not None and not isinstance(neg, ttnn.Tensor):
-        state["negative_prompt_embeds"] = ttnn.from_torch(
-            neg.to(dtype).contiguous(),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=tt_dtype,
-        )
+    if not isinstance(pe, ttnn.Tensor):
+        raise TypeError(f"state['prompt_embeds'] must be ttnn.Tensor, got {type(pe).__name__}")
+    if state.get("use_cfg") and state.get("negative_prompt_embeds") is not None:
+        neg = state["negative_prompt_embeds"]
+        if not isinstance(neg, ttnn.Tensor):
+            raise TypeError(
+                f"state['negative_prompt_embeds'] must be ttnn.Tensor when use_cfg, got {type(neg).__name__}"
+            )
 
 
 def _encode_obs_ttnn(models, state, obs):
-    """Encode observations to TTNN latents.
+    """Encode observations to TTNN latents via ``encode_chunk_ttnn``.
 
-    * ``obs['obs_ttnn']``: list of per-frame dicts mapping ``config.obs_cam_keys`` to **ttnn** tensors
-      (E2E / device path).
-    * ``obs['obs']``: same structure as :func:`_encode_obs` — list of dicts with numpy RGB (H, W, 3) per
-      camera key (e.g. ``run_generate`` / ``_load_init_obs``, or ``message['obs']`` from
-      :func:`build_infer_message`).
+    * ``obs['obs_ttnn']``: list of per-frame dicts mapping ``config.obs_cam_keys`` to **ttnn** tensors.
+    * ``obs['obs']``: list of dicts with numpy RGB (H, W, 3) per camera key (uploaded to mesh before encode).
     """
     config = models["config"]
     mesh_device = models["mesh_device"]
@@ -864,9 +812,7 @@ def _encode_obs_ttnn(models, state, obs):
     else:
         images = obs.get("obs")
         if images is None:
-            raise ValueError(
-                "_encode_obs_ttnn requires obs['obs_ttnn'] (TTNN) or obs['obs'] (numpy/RGB), same as _encode_obs"
-            )
+            raise ValueError("_encode_obs_ttnn requires obs['obs_ttnn'] or obs['obs'] (numpy RGB per camera)")
         # Match _encode_obs preprocessing, then upload BCTHW to mesh for encode_chunk_ttnn.
         height = state["height"]
         width = state["width"]
@@ -1019,8 +965,7 @@ def _reset_state(models, state, prompt):
     else:
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
         if state.get("_prompt_embeds_prompt") != prompt_list or "prompt_embeds" not in state:
-            if models.get("text_encoder") is not None:
-                _free_tt_model(models, "text_encoder")
+            _free_tt_model(models, "text_encoder")
             _load_text_encoder_into_models(models, config)
             tokenizer = models["tokenizer"]
             text_encoder = models["text_encoder"]
@@ -1071,7 +1016,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
 
     mesh_device = models["mesh_device"]
     tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
-    _ensure_prompt_embeds_ttnn(models, state)
+    _ensure_prompt_embeds_ttnn(state)
 
     _set_seed()
     latents_tt = _randn_ttnn(
@@ -1155,7 +1100,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
             action_mode=False,
             dump_iter=None,
         )
-        # Older paths may return sequence [B, N, C]; convert to [B, C, T, H, W] on device.
+        # Sequence head [B, N, C] -> [B, C, T, H, W] on device.
         if len(video_noise_pred.shape) == 3:
             video_noise_pred = data_seq_to_patch_ttnn(
                 config.patch_size,
@@ -1299,13 +1244,11 @@ def _free_tt_vae_decoder_from_models(models: dict) -> None:
     if vae_decoder_tt is not None:
         _release_ttnn_runtime_configs(vae_decoder_tt)
         try:
-            if hasattr(vae_decoder_tt, "cleanup_all"):
-                vae_decoder_tt.cleanup_all()
+            vae_decoder_tt.cleanup_all()
         except Exception as e:
             logger.warning("cleanup_all failed for vae_decoder_tt: %s", e)
         try:
-            if hasattr(vae_decoder_tt, "deallocate_weights"):
-                vae_decoder_tt.deallocate_weights()
+            vae_decoder_tt.deallocate_weights()
         except Exception as e:
             logger.warning("deallocate_weights failed for vae_decoder_tt: %s", e)
         del vae_decoder_tt
@@ -1315,6 +1258,9 @@ def _free_tt_vae_decoder_from_models(models: dict) -> None:
 
 def _decode_one_video(models, latents, output_type="np"):
     vae = models["vae"]
+    vae_decoder_tt = models.get("vae_decoder_tt")
+    if vae_decoder_tt is None:
+        raise RuntimeError("TT VAE decoder required: call _load_tt_vae_decoder_into_models before _decode_one_video")
 
     latents = latents.to(vae.dtype)
     latents_mean = (
@@ -1325,10 +1271,7 @@ def _decode_one_video(models, latents, output_type="np"):
     )
     latents = latents / latents_std + latents_mean
 
-    if models.get("vae_decoder_tt") is not None:
-        video = models["vae_decoder_tt"].decode(latents)
-    else:
-        video = vae.decode(latents, return_dict=False)[0]
+    video = vae_decoder_tt.decode(latents)
 
     video_processor = VideoProcessor(vae_scale_factor=1)
     video = video_processor.postprocess_video(video, output_type=output_type)
@@ -1442,7 +1385,7 @@ def run_inference(
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
     _phase1_timings: dict[str, float] = {}
-    models = _load_models_phase1(config, load_text_encoder=False, timings_out=_phase1_timings)
+    models = _load_models_phase1(config, timings_out=_phase1_timings)
     state = {}
     prompt = message.get("prompt", "")
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
@@ -1562,7 +1505,7 @@ def run_generate(
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
     _phase1_timings: dict[str, float] = {}
-    models = _load_models_phase1(config, load_text_encoder=False, timings_out=_phase1_timings)
+    models = _load_models_phase1(config, timings_out=_phase1_timings)
     state = {}
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
     gen_timings: list[tuple[str, float | None]] = []
@@ -1645,25 +1588,22 @@ def run_generate(
         except Exception as e:
             logger.warning("transformer.clear_cache failed: %s", e)
         try:
-            if hasattr(transformer, "cleanup_all"):
-                transformer.cleanup_all()
+            transformer.cleanup_all()
         except Exception as e:
             logger.warning("transformer.cleanup_all failed: %s", e)
         try:
-            if hasattr(transformer, "deallocate_weights"):
-                transformer.deallocate_weights()
+            transformer.deallocate_weights()
         except Exception as e:
             logger.warning("transformer.deallocate_weights failed: %s", e)
         models.pop("transformer", None)
         del transformer
 
     if models.get("streaming_vae"):
-        _release_ttnn_runtime_configs(models["streaming_vae"])
+        sv = models["streaming_vae"]
+        _release_ttnn_runtime_configs(sv)
         try:
-            if hasattr(models["streaming_vae"], "cleanup_all"):
-                models["streaming_vae"].cleanup_all()
-            if hasattr(models["streaming_vae"], "deallocate_weights"):
-                models["streaming_vae"].deallocate_weights()
+            sv.cleanup_all()
+            sv.deallocate_weights()
         except Exception as e:
             logger.warning("streaming_vae cleanup failed: %s", e)
         del models["streaming_vae"]
@@ -1688,8 +1628,6 @@ def run_generate(
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
         gen_timings.append(("decode_one_video", time.perf_counter() - t0_dv))
         _free_tt_vae_decoder_from_models(models)
-        if models.get("vae_decoder_tt") is not None:
-            _free_tt_vae_decoder_from_models(models)
     else:
         gen_timings.append(("decode_one_video", None))
 
