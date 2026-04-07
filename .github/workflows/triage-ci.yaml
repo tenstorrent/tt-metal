@@ -29,6 +29,6 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL_ID: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
