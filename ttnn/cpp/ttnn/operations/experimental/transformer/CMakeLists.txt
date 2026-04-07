@@ -113,10 +113,18 @@ target_sources(
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_sharded_program_factory.cpp
+        dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused.cpp
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_experimental_transformer PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_experimental_transformer
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::MinimalMatmul
+)
 
 install(
     TARGETS
