@@ -18,10 +18,11 @@
 #include "api/compute/transpose_wh.h"
 
 // M_block x N_block matmul with K-outer layout.
-// If prefill_cb != 0 and prefill_scalar != 0, pre-fills matching DST positions with
-// scaled tiles from prefill_cb before the matmul, so the matmul accumulates on top.
-// prefill_k_within: which K-tile position in in0_cb contains the G[m,n] tiles
-// prefill_col_offset: global column offset for matching output columns
+// bG pre-fill: before matmul, copies (b/c)*G[m,n] into matching DST positions from c_0.
+// Each core has stride-2 K-columns (even for lower, odd for upper). For output column n_global,
+// G[m, n_global] appears in c_0 at the K-block where k_col == n_global.
+// kb: current K-block index, n_global_base: global column start for this (m_sub, n_sub) block,
+// parity: 0 for even K-cols (lower/diag), 1 for odd (upper), b_over_c: scalar bits.
 void matmul_blocks(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -33,9 +34,15 @@ void matmul_blocks(
     uint32_t subblock_w,
     uint32_t current_M,
     uint32_t current_N,
-    uint32_t prefill_scalar = 0,
-    int prefill_k_within = -1) {
+    uint32_t kb = 0,
+    uint32_t n_global_base = 0,
+    uint32_t parity = 0,
+    uint32_t b_over_c = 0) {
     uint32_t last_sh = subblock_h, last_sw = subblock_w;
+
+    // K-column range for this K-block
+    uint32_t k_col_start = kb * K_block_tiles * 2 + parity;
+    uint32_t k_col_end = k_col_start + K_block_tiles * 2;
 
     for (uint32_t ms = 0; ms < current_M; ms += subblock_h) {
         uint32_t current_sh = std::min(subblock_h, current_M - ms);
@@ -51,24 +58,37 @@ void matmul_blocks(
 
             tile_regs_acquire();
 
-            // Pre-fill DST with (b/c)*G[m,n] before matmul accumulates on top.
-            // DST is acquired, so copy_tile writes directly to DST positions.
-            if (prefill_scalar != 0 && prefill_k_within >= 0) {
-                copy_tile_to_dst_init_short(in0_cb);
-                binop_with_scalar_tile_init();
-                uint32_t dst = 0;
-                for (uint32_t h = 0; h < current_sh; h++) {
-                    for (uint32_t w = 0; w < current_sw; w++) {
-                        uint32_t c0_tile = prefill_k_within * M_block + (ms + h);
-                        copy_tile(in0_cb, c0_tile, dst);
-                        mul_unary_tile(dst, prefill_scalar);
-                        dst++;
+            // Pre-fill DST with (b/c)*G[m,n] for output columns that match this K-block.
+            // DST is zero at acquire. Matching positions get bG; non-matching stay zero.
+            // Matmul then accumulates on top of both.
+            if (b_over_c != 0) {
+                bool any_match = false;
+                for (uint32_t w = 0; w < current_sw; w++) {
+                    uint32_t n_global = n_global_base + ns + w;
+                    if ((n_global & 1) != parity)
+                        continue;
+                    if (n_global < k_col_start || n_global >= k_col_end)
+                        continue;
+                    // This column matches — pre-fill all rows in this subblock
+                    if (!any_match) {
+                        copy_tile_to_dst_init_short(in0_cb);
+                        binop_with_scalar_tile_init();
+                        any_match = true;
+                    }
+                    uint32_t k_within = (n_global - k_col_start) / 2;
+                    for (uint32_t h = 0; h < current_sh; h++) {
+                        uint32_t dst_idx = h * current_sw + w;
+                        uint32_t c0_tile = k_within * M_block + (ms + h);
+                        copy_tile(in0_cb, c0_tile, dst_idx);
+                        mul_unary_tile(dst_idx, b_over_c);
                     }
                 }
-                // Re-init matmul after copy/sfpu changed pipeline config
-                mm_block_init_short(in0_cb, in1_cb, true, current_sw, current_sh, 1);
-                last_sh = current_sh;
-                last_sw = current_sw;
+                if (any_match) {
+                    // Re-init matmul after copy/sfpu changed pipeline config
+                    mm_block_init_short(in0_cb, in1_cb, true, current_sw, current_sh, 1);
+                    last_sh = current_sh;
+                    last_sw = current_sw;
+                }
             }
 
             for (uint32_t k = 0; k < K_block_tiles; k++) {
@@ -246,7 +266,14 @@ void kernel_main() {
                 cb_wait_front(in0_cb, tiles_per_in0_block);
                 cb_wait_front(in1_cb, tiles_per_in1_block);
 
-                // DEBUG: at kb=0, pre-fill DST with (b/c)*G tile from c_0[0]
+                // Compute parity for bG stride-2 column matching
+#ifdef REDUCE_ACCUMULATOR
+                constexpr uint32_t bg_parity = 1;  // upper cores: odd K-columns
+#else
+                constexpr uint32_t bg_parity = 0;  // lower/diagonal cores: even K-columns
+#endif
+                uint32_t n_global_base = N_global_offset + N_start;
+
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -258,16 +285,14 @@ void kernel_main() {
                     subblock_w,
                     current_M_block,
                     current_N,
-                    (kb == 0) ? b_over_c_bits : 0,
-                    (kb == 0) ? 0 : -1);
+                    kb,
+                    n_global_base,
+                    bg_parity,
+                    b_over_c_bits);
 
                 if (kb == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
-
-                // DEBUG: test if L1 acc works by doing a zero-contribution matmul at kb=1
-                // This uses the matmul pipeline which is known to work with L1 acc
-                // TODO: find correct init sequence for copy_tile + L1 acc
 
                 cb_pop_front(in0_cb, tiles_per_in0_block);
                 cb_pop_front(in1_cb, tiles_per_in1_block);
