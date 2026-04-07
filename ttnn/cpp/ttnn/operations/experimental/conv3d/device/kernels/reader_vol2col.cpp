@@ -679,6 +679,7 @@ void kernel_main() {
 #if defined(PROFILE_ZONES)
                                     DeviceZoneScopedN("r-shard-w-shift");
 #endif
+#if !defined(ABLATE_DM)
                                     shift_retained_w_columns<
                                         C_in_block_bytes,
                                         H_shard_max_W_shard_max,
@@ -702,6 +703,7 @@ void kernel_main() {
                                         w_shard_start,
                                         overlap_w,
                                         new_w_cols);
+#endif  // !defined(ABLATE_DM)
                                     }
                                 }
 
@@ -719,6 +721,7 @@ void kernel_main() {
 #if defined(PROFILE_ZONES)
                                             DeviceZoneScopedN("r-shard-gather");
 #endif
+#if !defined(ABLATE_DM)
                                             GATHER_ROWS(
                                                 shard_all_in_bounds,
                                                 in_reader,
@@ -733,6 +736,7 @@ void kernel_main() {
                                                 w_shard_start,
                                                 0u,
                                                 W_shard_cur);
+#endif  // !defined(ABLATE_DM)
                                             h_rows_gathered = h_needed;
                                         }
 
@@ -821,7 +825,9 @@ void kernel_main() {
                                                             static_cast<uint32_t>(w_idx);
                                                         const uint64_t noc_addr = get_input_noc_addr(
                                                             in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
+#if !defined(ABLATE_DM)
                                                         noc_async_read(noc_addr, chunk.write_addr, C_in_block_bytes);
+#endif  // !defined(ABLATE_DM)
                                                         chunk.write_addr += C_in_block_bytes;
                                                     }
                                                 }

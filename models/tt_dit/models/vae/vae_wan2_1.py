@@ -471,7 +471,6 @@ class WanCausalConv3d(Module):
                 used_halo_path = True
                 if self.conv_config.sub_device_id is None:
                     self.conv_config.sub_device_id = self.ccl_manager._conv3d_sd_id
-                self.ccl_manager._pending_np_event = None
             else:
                 x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                     x_BTHWC,

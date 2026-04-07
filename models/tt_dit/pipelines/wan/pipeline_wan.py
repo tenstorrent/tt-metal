@@ -167,6 +167,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             num_links=num_links,
             topology=topology,
         )
+        # VAE CCL: use the same num_links as DiT.
+        # - NP halo path (T_out_block > 1): effective_num_links forced to 1; more links has no effect.
+        # - NP persistent path (T_out_block == 1): uses num_links via get_neighbor_pad_num_links; more = faster.
+        # - device_to_host all_gather: uses self.num_links directly; more links = faster gather.
+        # - Sub-device (fabric_cores) is hardcoded to 4 in manager.py, so num_links no longer
+        #   controls how many cores are carved out from conv3d.
         self.vae_ccl_manager = CCLManager(
             mesh_device=mesh_device,
             num_links=num_links,

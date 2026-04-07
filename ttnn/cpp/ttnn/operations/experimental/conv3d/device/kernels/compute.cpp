@@ -208,6 +208,51 @@ void kernel_main() {
                             // Tilize TILE_HEIGHT RM patches -> K_t tiles, matmul immediately,
                             // pop K_t tiles and reuse CB for next tile-row.
                             // Saves (M_t-1)*K_t tiles of L1 in cb_vol2col_tiled.
+#if defined(ABLATE_TILIZE)
+                            // ABLATE_TILIZE: skip tilize, push dummy tiles directly to cb_vol2col_tiled,
+                            // then run matmul normally. Measures matmul cost without tilize overhead.
+                            {
+                                constexpr uint32_t row_tiles = matmul_K_t;
+                                uint32_t patches_left = num_patches;
+                                for (uint32_t m = 0; m < matmul_M_t; m++) {
+                                    const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
+                                                                          ? tt::constants::TILE_HEIGHT
+                                                                          : patches_left;
+
+                                    // Drain vol2col_rm (reader still pushes, skip tilize)
+                                    cb_wait_front(cb_vol2col_rm, patches_this_row);
+                                    cb_pop_front(cb_vol2col_rm, patches_this_row);
+
+                                    // Push dummy tiles to cb_vol2col_tiled to feed matmul
+                                    if constexpr (use_fp32_partials) {
+                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                    }
+
+                                    cb_wait_front(cb_weight_tiled, weight_tiles);
+
+                                    cb_reserve_back(cb_vol2col_tiled, row_tiles);
+                                    cb_push_back(cb_vol2col_tiled, row_tiles);
+
+                                    cb_wait_front(cb_vol2col_tiled, row_tiles);
+                                    matmul_blocks(
+                                        cb_vol2col_tiled,
+                                        cb_weight_tiled,
+                                        cb_matmul_interm_tiled,
+                                        1,
+                                        matmul_N_t,
+                                        matmul_K_t,
+                                        in0_num_subblocks,
+                                        in1_num_subblocks,
+                                        in0_block_w,
+                                        subblock_h,
+                                        subblock_w,
+                                        false);
+                                    cb_pop_front(cb_vol2col_tiled, row_tiles);
+
+                                    patches_left -= patches_this_row;
+                                }
+                            }
+#else
                             {
                                 constexpr uint32_t row_tiles = matmul_K_t;
                                 uint32_t patches_left = num_patches;
@@ -294,6 +339,7 @@ void kernel_main() {
                                     patches_left -= patches_this_row;
                                 }
                             }
+#endif
 
                             // Stall on matmul/bias to finish
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
