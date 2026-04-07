@@ -107,6 +107,8 @@ class TtGemma3MultiModalProjector(LightweightModule):
             ceil_mode=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            # Scalar pool config defaults to L1_SMALL; accuracy-mode prefill can exhaust it before this op.
+            config_tensor_in_dram=True,
         )
         # transpose
         HOUT = ((in_h - self.kernel_size) // self.kernel_size) + 1
