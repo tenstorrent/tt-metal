@@ -151,7 +151,8 @@ _BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
     ids=[c[2] for c in _SHAPES_AND_DIMS],
 )
 @pytest.mark.parametrize("distribution", ["normal", "wide_uniform"])
-def test_mean_ulp_bf16(device, shape, dim, desc, distribution):
+@pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
+def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim):
     """Characterize BF16 mean ULP vs FP32-accumulated Torch golden."""
     torch.manual_seed(42)
     if distribution == "normal":
@@ -159,19 +160,19 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution):
     else:
         x = torch.empty(shape, dtype=torch.float32).uniform_(-1e3, 1e3).to(torch.bfloat16)
 
-    golden = _golden_mean_bf16(x, dim=dim, keepdim=True)
-    actual = _run_ttnn_mean(x, ttnn.bfloat16, device, dim=dim, keepdim=True)
+    golden = _golden_mean_bf16(x, dim=dim, keepdim=keepdim)
+    actual = _run_ttnn_mean(x, ttnn.bfloat16, device, dim=dim, keepdim=keepdim)
 
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} {distribution} shape={shape} dim={dim}"
+    spec = f"{desc} {distribution} shape={shape} dim={dim} keepdim={keepdim}"
     logger.info(
         f"ttnn.mean ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[BF16 {desc} {distribution}] {msg}"
+    assert passed, f"[BF16 {desc} {distribution} keepdim={keepdim}] {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +190,8 @@ _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
     ids=[c[2] for c in _SHAPES_AND_DIMS],
 )
 @pytest.mark.parametrize("distribution", ["normal", "wide_uniform"])
-def test_mean_ulp_fp32(device, shape, dim, desc, distribution):
+@pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
+def test_mean_ulp_fp32(device, shape, dim, desc, distribution, keepdim):
     """Characterize FP32 mean ULP vs Torch FP32 golden."""
     torch.manual_seed(42)
     if distribution == "normal":
@@ -197,16 +199,16 @@ def test_mean_ulp_fp32(device, shape, dim, desc, distribution):
     else:
         x = torch.empty(shape, dtype=torch.float32).uniform_(-1e3, 1e3)
 
-    golden = _golden_mean_fp32(x, dim=dim, keepdim=True)
-    actual = _run_ttnn_mean(x, ttnn.float32, device, dim=dim, keepdim=True)
+    golden = _golden_mean_fp32(x, dim=dim, keepdim=keepdim)
+    actual = _run_ttnn_mean(x, ttnn.float32, device, dim=dim, keepdim=keepdim)
 
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} {distribution} shape={shape} dim={dim}"
+    spec = f"{desc} {distribution} shape={shape} dim={dim} keepdim={keepdim}"
     logger.info(
         f"ttnn.mean ULP (FP32) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[FP32 {desc} {distribution}] {msg}"
+    assert passed, f"[FP32 {desc} {distribution} keepdim={keepdim}] {msg}"

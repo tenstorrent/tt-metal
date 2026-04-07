@@ -43,6 +43,16 @@ def create_recip_tensor(device, w, use_welford):
 # ---------------------------------------------------------------------------
 
 
+def _make_ln_input(h: int, w: int, dtype: torch.dtype, distribution: str) -> torch.Tensor:
+    """Generate a (h, w) layer-norm input for the requested distribution."""
+    if distribution == "normal":
+        return torch.randn((h, w), dtype=torch.float32).to(dtype)
+    if distribution == "wide_uniform":
+        return torch.empty((h, w), dtype=torch.float32).uniform_(-1e3, 1e3).to(dtype)
+    # uniform_01 (default, matches original torch.rand behaviour)
+    return torch.rand((h, w), dtype=torch.float32).to(dtype)
+
+
 def _run_ttnn_layer_norm(
     torch_input_tensor: torch.Tensor,
     device,
@@ -50,7 +60,13 @@ def _run_ttnn_layer_norm(
     torch_weight: torch.Tensor | None = None,
     torch_bias: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Same path as test_layer_norm: TILE, fill_implicit_tile_padding, optional weight/bias."""
+    """Same path as test_layer_norm: TILE, fill_implicit_tile_padding, optional weight/bias.
+
+    Supports all four wb combinations: no_wb, weight_only, bias_only, and wb.
+    Each non-None tensor is converted individually; None parameters are omitted
+    from the ttnn.layer_norm call (not passed as explicit None) so the C++ binding
+    uses its own default, matching the no-wb code path for missing parameters.
+    """
     h, w = torch_input_tensor.shape[-2], torch_input_tensor.shape[-1]
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
@@ -59,15 +75,16 @@ def _run_ttnn_layer_norm(
     if torch_weight is None and torch_bias is None:
         output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     else:
-        weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
-        bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.layer_norm(
-            input_tensor,
-            weight=weight,
-            bias=bias,
-            program_config=program_config,
-            recip_tensor=recip_tensor,
+        weight = (
+            ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device) if torch_weight is not None else None
         )
+        bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device) if torch_bias is not None else None
+        ln_kwargs: dict = dict(program_config=program_config, recip_tensor=recip_tensor)
+        if weight is not None:
+            ln_kwargs["weight"] = weight
+        if bias is not None:
+            ln_kwargs["bias"] = bias
+        output_tensor = ttnn.layer_norm(input_tensor, **ln_kwargs)
     output_tensor = ttnn.from_device(output_tensor)
     return ttnn.to_torch(output_tensor)
 
@@ -80,7 +97,7 @@ def _run_ttnn_layer_norm(
 _BF16_ULP_THRESHOLD = 32
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 
-_LN_W_SIZES = sorted(set(range(32, 513, 64)) | {33, 41, 512})
+_LN_W_SIZES = sorted(set(range(32, 513, 64)) | {33, 41, 512, 768, 1024, 2048})
 _LN_H_SIZES = sorted(set(range(32, 257, 64)) | {17, 37, 128, 256})
 _LN_SQUARES = list(range(64, 257, 64))
 _LN_H_FIXED = 32
@@ -117,34 +134,43 @@ _SHAPES = _build_layer_norm_shapes()
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford):
+@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford, distribution):
     """BF16 layer_norm ULP vs torch.nn.functional.layer_norm (no weight/bias)."""
     torch.manual_seed(0)
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, distribution)
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford} dist={distribution}"
     logger.info(
         f"ttnn.layer_norm ULP (BF16, no wb) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[BF16 no_wb {desc} use_welford={use_welford}] {msg}"
+    assert passed, f"[BF16 no_wb {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
-    """BF16 layer_norm ULP with weight and bias vs torch reference."""
+@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+@pytest.mark.parametrize("wb_mode", ["wb", "weight_only", "bias_only"])
+def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford, distribution, wb_mode):
+    """BF16 layer_norm ULP with weight/bias variants vs torch reference.
+
+    wb_mode controls which affine parameters are active:
+      "wb"          – both weight and bias (original coverage)
+      "weight_only" – weight only, bias=None
+      "bias_only"   – bias only, weight=None
+    """
     torch.manual_seed(0)
     dtype = torch.bfloat16
-    torch_input_tensor = torch.rand((h, w), dtype=dtype)
-    torch_weight = torch.rand((w,), dtype=dtype)
-    torch_bias = torch.rand((w,), dtype=dtype)
+    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
+    torch_weight = torch.rand((w,), dtype=dtype) if wb_mode in ("wb", "weight_only") else None
+    torch_bias = torch.rand((w,), dtype=dtype) if wb_mode in ("wb", "bias_only") else None
     golden = torch.nn.functional.layer_norm(
         torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
     )
@@ -155,13 +181,13 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford} dist={distribution} wb={wb_mode}"
     logger.info(
-        f"ttnn.layer_norm ULP (BF16, wb) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.layer_norm ULP (BF16, {wb_mode}) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[BF16 weight+bias {desc} use_welford={use_welford}] {msg}"
+    assert passed, f"[BF16 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -176,33 +202,42 @@ _FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford):
+@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, distribution):
     """FP32 layer_norm ULP vs torch float32 golden (no weight/bias)."""
     torch.manual_seed(0)
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_input_tensor = _make_ln_input(h, w, torch.float32, distribution)
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford} dist={distribution}"
     logger.info(
         f"ttnn.layer_norm ULP (FP32, no wb) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[FP32 no_wb {desc} use_welford={use_welford}] {msg}"
+    assert passed, f"[FP32 no_wb {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford):
-    """FP32 layer_norm ULP with weight and bias vs torch float32 golden."""
+@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+@pytest.mark.parametrize("wb_mode", ["wb", "weight_only", "bias_only"])
+def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, distribution, wb_mode):
+    """FP32 layer_norm ULP with weight/bias variants vs torch float32 golden.
+
+    wb_mode controls which affine parameters are active:
+      "wb"          – both weight and bias
+      "weight_only" – weight only, bias=None
+      "bias_only"   – bias only, weight=None
+    """
     torch.manual_seed(0)
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
-    torch_weight = torch.rand((w,), dtype=torch.float32)
-    torch_bias = torch.rand((w,), dtype=torch.float32)
+    torch_input_tensor = _make_ln_input(h, w, torch.float32, distribution)
+    torch_weight = torch.rand((w,), dtype=torch.float32) if wb_mode in ("wb", "weight_only") else None
+    torch_bias = torch.rand((w,), dtype=torch.float32) if wb_mode in ("wb", "bias_only") else None
     golden = torch.nn.functional.layer_norm(
         torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
     )
@@ -213,10 +248,10 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford):
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
-    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford} dist={distribution} wb={wb_mode}"
     logger.info(
-        f"ttnn.layer_norm ULP (FP32, wb) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.layer_norm ULP (FP32, {wb_mode}) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[FP32 wb {desc} use_welford={use_welford}] {msg}"
+    assert passed, f"[FP32 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"

@@ -92,7 +92,7 @@ _SMALL_INNER = list(range(32, 385, 64))  # 32..352 step 64
 # LARGE_W: dim is last; penultimate matches 32*4 tile-style layouts from callback tests
 _LARGE_W_LAST = [160, 320, 480]  # (2,3,128,w), dim=3
 _LARGE_H_PENULT = [128, 256, 384]  # dim 2 on (2,3,h,160)
-_LARGE_C_DIMS = [7, 15, 23, 31]  # channel count for (1,c,32,32) dim 1
+_LARGE_C_DIMS = [7, 8, 15, 16, 23, 31, 32]  # channel count for (1,c,32,32) dim 1; includes tile-aligned 8, 16, 32
 
 
 def _build_moreh_logsoftmax_strategy_cases():
