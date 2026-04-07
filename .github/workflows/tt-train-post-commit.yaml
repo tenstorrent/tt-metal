@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-asserts-hw:
+        description: 'Enable LLK HW asserts'
+        required: false
+        type: boolean
+        default: false
       gtest_filter:
         required: false
         default: "*"
@@ -99,6 +104,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 

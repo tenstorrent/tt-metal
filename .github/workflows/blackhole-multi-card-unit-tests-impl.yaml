@@ -33,6 +33,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-asserts-hw:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK HW asserts"
       model:
         description: 'Filter tests by model-name (default: all)'
         required: false
@@ -230,6 +235,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

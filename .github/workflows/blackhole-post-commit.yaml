@@ -83,6 +83,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-asserts-hw:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK HW asserts"
       schedule-runs-all-tests:
         required: false
         type: boolean
@@ -163,6 +168,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      enable-llk-asserts-hw:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK HW asserts"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -320,6 +330,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
   umd-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
@@ -336,6 +347,7 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
   models-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
@@ -353,6 +365,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
@@ -369,6 +382,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
   ops-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
@@ -386,6 +400,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
@@ -404,6 +419,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
@@ -424,3 +440,4 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-hw: ${{ inputs.enable-llk-asserts-hw || false }}
