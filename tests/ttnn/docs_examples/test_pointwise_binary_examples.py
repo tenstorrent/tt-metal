@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -386,7 +386,7 @@ def test_minimum(device):
 
 
 def test_atan2(device):
-    # Create two tensors for atan2 calculation (y, x format)
+    # Create two tensors for atan2(y, x)
     tensor1 = ttnn.from_torch(
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )

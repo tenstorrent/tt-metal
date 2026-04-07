@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -849,7 +850,18 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             nb::arg("values"),
-            "Extend all cores' runtime args with the same values");
+            "Extend all cores' runtime args with the same values")
+        .def(
+            "append_common_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's common_runtime_args from itself");
+                }
+                self.common_runtime_args.insert(
+                    self.common_runtime_args.end(), other.common_runtime_args.begin(), other.common_runtime_args.end());
+            },
+            nb::arg("other"),
+            "Append another kernel's common_runtime_args to this kernel's");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
@@ -901,7 +913,11 @@ void py_module_types(nb::module_& mod) {
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "custom_program_hash",
+            &tt::tt_metal::ProgramDescriptor::custom_program_hash,
+            "Optional memoized program hash (skips full descriptor walk when set)");
 
     mod.def(
         "merge_program_descriptors",
