@@ -28,11 +28,11 @@ void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
             Args:
                 combine_output (ttnn.Tensor): MoE combine output in ROW_MAJOR layout.
                     Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok, emb_dim]
-                    Example: [1, 1, 256, 8, 7168]
+                    Example: [1, 1, 3200, 8, 7168]
 
                 weights (ttnn.Tensor): Gate weights for broadcast multiply.
                     Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok]
-                    Example: [1, 1, 256, 8]
+                    Example: [1, 1, 3200, 8]
 
                 expert_dim (int, optional): Dimension to reduce over. Defaults to 3.
 
@@ -42,14 +42,14 @@ void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
-                    Example: [1, 1, 256, 7168]
+                    Example: [1, 1, 3200, 7168]
 
             Example:
-                >>> combine_output = ttnn.zeros([1, 1, 256, 8, 7168], layout=ttnn.ROW_MAJOR_LAYOUT)
-                >>> weights = ttnn.ones([1, 1, 256, 8])
+                >>> combine_output = ttnn.zeros([1, 1, 3200, 8, 7168], layout=ttnn.ROW_MAJOR_LAYOUT)
+                >>> weights = ttnn.ones([1, 1, 3200, 8])
                 >>> result = ttnn.experimental.deepseek_moe_post_combine_reduce(combine_output, weights)
                 >>> print(result.shape)
-                [1, 1, 256, 7168]
+                [1, 1, 3200, 7168]
         )doc",
         &ttnn::experimental::deepseek_moe_post_combine_reduce,
         nb::arg("combine_output").noconvert(),

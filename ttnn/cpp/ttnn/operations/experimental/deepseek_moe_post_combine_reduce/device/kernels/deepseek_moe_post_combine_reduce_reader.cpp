@@ -23,7 +23,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = 2048;
     constexpr uint32_t combine_page_size = emb_dim * 2;
-    constexpr uint32_t weight_page_size = 64;
+    constexpr uint32_t weight_page_size = 64;  // minmum DRAM bank page offset on BlackHole
 
     const InterleavedAddrGen<combine_is_dram> combine_addrg = {
         .bank_base_address = combine_addr, .page_size = combine_page_size};

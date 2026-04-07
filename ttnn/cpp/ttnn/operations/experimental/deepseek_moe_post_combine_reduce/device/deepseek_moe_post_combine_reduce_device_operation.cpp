@@ -30,6 +30,7 @@ void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
     TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
     TT_FATAL(weights.storage_type() == StorageType::DEVICE, "weights must be on device");
+    TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
 }
 
 ttnn::TensorSpec DeepseekMoEPostCombineReduceDeviceOperation::compute_output_specs(
