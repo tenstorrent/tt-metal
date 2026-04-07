@@ -34,7 +34,7 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<4>();  // 4 args now (removed row_chunk)
+    constexpr auto tensor_args = TensorAccessorArgs<4>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     experimental::Noc noc;
