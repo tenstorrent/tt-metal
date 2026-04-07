@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
+from models.demos.molmo2.reference.functional import _apply_rope
 
 
 def calculate_pcc(a, b):
@@ -72,19 +73,19 @@ def reference_attention_with_kv_cache(
     q = rms_norm(q, q_norm_weight)
     k = rms_norm(k, k_norm_weight)
 
-    # RoPE
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    freqs = current_pos * inv_freq
-    cos = torch.cos(freqs).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-    sin = torch.sin(freqs).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-    def apply_rope(x, cos, sin):
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rope = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-        return x_rope.flatten(-2)
-
-    q = apply_rope(q, cos, sin)
-    k = apply_rope(k, cos, sin)
+    # RoPE: Molmo2 / TTNN use half-split rotate + duplicated cos/sin (same as reference/functional.py),
+    # not interleaved even/odd pairing.
+    q = q.transpose(1, 2)  # [B, 1, num_heads, head_dim]
+    k = k.transpose(1, 2)  # [B, 1, num_kv_heads, head_dim]
+    position_ids = torch.full(
+        (batch_size, 1),
+        float(current_pos),
+        dtype=torch.float32,
+        device=hidden_states.device,
+    )
+    q, k = _apply_rope(q, k, position_ids, head_dim, rope_theta)
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
 
     # Update KV cache at current position
     kv_cache_k[:, :, current_pos : current_pos + 1, :] = k
