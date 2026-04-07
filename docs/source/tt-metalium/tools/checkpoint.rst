@@ -165,18 +165,16 @@ How it works
 
 At this point all RISCs are synchronized — no RISC proceeds until every active RISC has arrived.
 
-**Dump.** Each RISC prints its local CB state via DPRINT or DEVICE_PRINT:
+**Dump.** CB interfaces are shared L1 — all RISCs on a core see the same data. To avoid
+redundant output, only one RISC prints each type of information:
 
-- **BRISC, NCRISC, TRISC0, TRISC2** read their own ``get_local_cb_interface(cb_id)`` struct
-  and print metadata (size, read/write pointers, acked/received counts). Optionally hex-dump
-  L1 data at the read pointer. Each RISC has its own 204-byte DPRINT buffer; if it fills,
-  DPRINT automatically waits for the host server to drain before continuing.
-- **TRISC1 (Math)** cannot access CB interfaces (hardware limitation). It prints a skip
-  marker, or if ``dump_dest=true``, reads destination register contents via debug hardware
-  registers.
-
-The dump is purely local — each RISC reads its own L1 CB interface struct. No NOC reads, no
-remote access.
+- **BRISC** prints CB metadata (size, read/write pointers, acked/received counts) and
+  optionally hex-dumps L1 data at the read pointer. DPRINT's built-in back-pressure handles
+  the 204-byte buffer limit automatically.
+- **TRISC1 (Math)** prints destination register contents if ``dump_dest=true`` (only Math can
+  access dest regs). Otherwise it prints nothing.
+- **NCRISC, TRISC0, TRISC2** print nothing — they still participate in the barriers but skip
+  the dump since BRISC already covers the CB state.
 
 **Exit barrier.** Same mechanism with ``next_epoch = 2``. This ensures no RISC moves past the
 checkpoint until every RISC has finished printing — without it, a fast RISC could modify CBs
@@ -307,8 +305,8 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
    4 RISCs were spinning here. BRISC's arrival advances the epoch, releasing them.
    All 10 RISCs (5 per core × 2 cores) are now synchronized.
 
-4. **Dump.** Every RISC prints its own local CB state. Core 0's RISCs print core 0's CBs.
-   Core 1's RISCs print core 1's CBs. No cross-core reads — the dump is purely local.
+4. **Dump.** On each core, BRISC prints the CB state (once per core — CBs are shared L1).
+   If ``dump_dest=true``, TRISC1 also prints dest registers. Other RISCs print nothing.
 
 5. **Intra-core barrier.** Ensures all RISCs on each core finish printing.
 
@@ -320,25 +318,20 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
 Output Format
 -------------
 
-Each RISC prints a header line followed by CB metadata:
+BRISC prints a header line followed by CB metadata (once per core):
 
 .. code-block:: text
 
-    === CKPT 1 RISC 0 ===
+    === CKPT 1 CBs ===
     CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
     CB16 sz=128 rd=2048 wr=2048 ack=0 rcv=0
-    === CKPT 1 RISC 1 ===
-    CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
-    === CKPT 1 RISC 3 ===
-    (math thread, no CB access)
 
-The RISC indices are:
+When ``dump_dest=true``, TRISC1 (Math) also prints destination register contents:
 
-- 0: BRISC
-- 1: NCRISC
-- 2: TRISC0 (Unpack)
-- 3: TRISC1 (Math)
-- 4: TRISC2 (Pack)
+.. code-block:: text
+
+    === CKPT 1 dest regs ===
+    ...
 
 When ``words_per_cb > 0``, L1 data at the read pointer is printed in hex:
 
