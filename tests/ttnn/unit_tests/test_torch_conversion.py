@@ -1075,3 +1075,151 @@ def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtyp
 
     result = ttnn.to_torch(ttnn_tensor)
     assert_with_pcc(torch_tensor, result, 0.999)
+
+
+def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
+    """
+    Regression test for tilize with a shard grid that extends beyond the compute
+    grid (e.g. includes dispatch cores).
+
+    Derived from test_all_gather_6u_llama (TG nightly, SDPA case) where the
+    persistent output tensor's shard grid included cores at positions overlapping
+    with dispatch cores.  The sharded tilize program factory would place compute
+    kernels on ALL shard cores, crashing with:
+
+        TT_FATAL: Illegal kernel placement for tilize, Kernels cannot be
+        placed on dispatch cores!
+
+    On WH B0 80 with fast dispatch (row mode), the compute grid is (8, 8) and
+    dispatch cores occupy y=9 (last row of the 8×10 tensix grid).  This test
+    constructs a shard grid that spans both compute cores (y=0) and a row
+    beyond the compute grid (y=grid.y) and verifies that from_torch succeeds.
+    """
+    grid = device.compute_with_storage_grid_size()
+
+    shard_height = 32
+    shard_width = 128
+
+    # Row y = grid.y is beyond the compute grid.  On most WH B0 configs this
+    # is the dispatch core row (e.g. 72-core: y=8, 80-core: y=9).
+    # The tilize fix must handle this gracefully.
+    dispatch_y = grid.y
+
+    num_cores = grid.x * 2
+    total_height = num_cores * shard_height
+    shape = (1, 1, total_height, shard_width)
+
+    core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_y), ttnn.CoreCoord(grid.x - 1, dispatch_y)),
+        ]
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
+
+    try:
+        result = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+    except RuntimeError as e:
+        if "No core coordinate" in str(e) or "out of range" in str(e).lower():
+            pytest.skip(f"Row y={dispatch_y} does not exist on this device")
+        raise
+
+    assert result.layout == ttnn.TILE_LAYOUT
+    assert result.dtype == ttnn.bfloat16
+    assert list(result.shape) == list(shape)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype,total_width,num_shards",
+    [
+        (torch.float32, ttnn.bfloat16, 14336, 28),
+    ],
+)
+def test_from_torch_width_sharded_l1_tilize_with_sub_devices(device, torch_dtype, ttnn_dtype, total_width, num_shards):
+    """
+    Regression test: from_torch with float32 → bfloat16, TILE_LAYOUT, WIDTH_SHARDED
+    L1 memory config, mesh_mapper, and sub-devices must not overflow L1 during tilize.
+
+    Derived from test_all_reduce (FF1 intermediate buffer, TG nightly):
+        from_torch(torch.zeros([8, 4, 32, 14336]), dtype=bfloat16,
+                   memory_config=WIDTH_SHARDED_L1, mesh_mapper=ShardTensor2dMesh(...))
+
+    When sub-devices are loaded, convert_python_tensor_to_tt_tensor passes a
+    sub_core_grids to to_layout → tilize. The sharded tilize program factories
+    reject sub_core_grids (tilize_device_operation.cpp can_use_sharded_optimized_factories),
+    causing a fallback to TilizeMultiCoreDefaultProgramFactory which treats the
+    entire tensor as one block on a single core. For [1,1,32,14336] bfloat16
+    this allocates ~1.84 MB of static CBs, exceeding L1 capacity (~1.50 MB on
+    Wormhole B0, ~1.57 MB on Blackhole).
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+
+    if cols * rows < num_shards:
+        pytest.skip(f"Device grid {cols}x{rows} has fewer cores than {num_shards} shards")
+
+    shard_width = total_width // num_shards
+    assert total_width % num_shards == 0
+    assert shard_width % ttnn.TILE_SIZE == 0
+
+    full_rows = num_shards // cols
+    remaining = num_shards % cols
+    core_ranges = []
+    if full_rows > 0:
+        core_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, full_rows - 1)))
+    if remaining > 0:
+        core_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(remaining - 1, full_rows)))
+    shard_crs = ttnn.CoreRangeSet(core_ranges)
+
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))})
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+
+    sub_device_manager = device.create_sub_device_manager([worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([worker_sub_device_id])
+
+    try:
+        shape = (1, 1, 32, total_width)
+
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(shard_crs, [32, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        torch.manual_seed(42)
+        torch_tensor = torch.zeros(shape, dtype=torch_dtype)
+
+        ttnn_tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+            mesh_mapper=ReplicateTensorToMesh(device),
+        )
+
+        assert ttnn_tensor.dtype == ttnn_dtype
+        assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+        assert ttnn_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+        result = ttnn.to_torch(ttnn_tensor)
+        assert_with_pcc(torch_tensor, result, 0.999)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(sub_device_manager)
