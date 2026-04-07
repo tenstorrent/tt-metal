@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -79,18 +80,26 @@ void kernel_main() {
     // Number of dispatch groups (index 34)
     constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(34);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 35)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<35>();
+    // Expert region offsets tensor metadata (indices 35-38)
+    constexpr uint32_t cb_expert_region_offsets_id = get_compile_time_arg_val(35);
+    constexpr uint32_t expert_region_offsets_pages = get_compile_time_arg_val(36);
+    constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(37);
+    constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(38);
+
+    // TensorAccessorArgs for all 5 tensors (starting at index 39)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
+    constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
-    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores =
+        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
 #endif
 
     // ===== Runtime Args =====
@@ -98,6 +107,7 @@ void kernel_main() {
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args++);
+    uint32_t expert_region_offsets_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args++);
@@ -180,11 +190,23 @@ void kernel_main() {
     const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
     const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
 
-    constexpr auto expert_stride = max_dispatched_tokens_per_expert;
+    // Read expert region offsets directly from the host-provided tensor.
+    // Layout matches expert_token_counts: this device's experts_per_chip slice lives at
+    // [mesh_col, mesh_row, experts_per_chip] within a flat [num_routed_experts] page.
+    const auto expert_region_offsets_addr_gen = TensorAccessor(expert_region_offsets_args, expert_region_offsets_addr);
+    cb_reserve_back(cb_expert_region_offsets_id, expert_region_offsets_pages);
+    uint32_t region_offsets_base_addr = get_write_ptr(cb_expert_region_offsets_id);
+    for (uint32_t i = 0; i < expert_region_offsets_pages; i++) {
+        noc_async_read_page(
+            i, expert_region_offsets_addr_gen, region_offsets_base_addr + i * aligned_expert_region_offsets_page_size);
+    }
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint32_t* expert_region_offsets_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(region_offsets_base_addr) + offset;
 
     // Process each expert in assigned range
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
-        uint32_t start_page = local_expert * expert_stride;
+        uint32_t start_page = expert_region_offsets_l1[local_expert];
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         if (expert_tokens > max_dispatched_tokens_per_expert) {
             expert_tokens = max_dispatched_tokens_per_expert;

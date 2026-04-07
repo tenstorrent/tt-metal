@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
@@ -133,6 +133,7 @@ class TtMoe(LightweightModule):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
         emb_dim: int = DeepSeekV3Config.EMB_SIZE,
@@ -160,7 +161,10 @@ class TtMoe(LightweightModule):
             num_routed_experts: Total number of routed experts
             num_experts_per_tok: Number of experts each token routes to
             metadata_len: Length of metadata per token
-            max_dispatched_tokens_per_expert: Max tokens per expert buffer
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts).
             seq_len_per_chip: Sequence length per chip
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
@@ -227,6 +231,7 @@ class TtMoe(LightweightModule):
             gate_config,
             mesh_device,
             dispatch_table=expert_dispatch_table,
+            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
@@ -253,6 +258,7 @@ class TtMoe(LightweightModule):
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             cluster_axis=0,
@@ -274,10 +280,29 @@ class TtMoe(LightweightModule):
             init_zeros=True,
         )
 
+        # Build (group, chip, local_expert) -> global expert id table, sharded
+        # across the EP mesh so each device holds (1, 1, experts_per_chip).
+        # Then squeeze the two leading singleton dims so each device has a 1D
+        # (experts_per_chip,) lookup vector (required by extract/insert validators).
+        global_expert_idx_tt = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=experts_per_chip,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+            ),
+            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
+            global_expert_idx_table=global_expert_idx_tt,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
@@ -344,7 +369,9 @@ class TtMoe(LightweightModule):
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
+        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
+            x_for_gate
+        )
         ttnn.deallocate(x_for_gate)  # x_for_gate is no longer needed.
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
@@ -440,7 +467,7 @@ class TtMoe(LightweightModule):
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
+        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
@@ -460,6 +487,7 @@ class TtMoe(LightweightModule):
             expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
+            tt_expert_region_offsets,
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
@@ -500,18 +528,22 @@ class TtMoe(LightweightModule):
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:
-            # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
+            # Check for buffer overflow (dispatch kernel silently drops overflow tokens).
+            # The kernel bounds-check is against max_dispatch_buffer_token_size (total per-chip
+            # buffer capacity). Any single per-expert count exceeding that cap is a guaranteed
+            # overflow; if the per-expert counts fit individually but their sum-per-chip would
+            # exceed the cap, overflow is still possible (not detected here).
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
             _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
             max_token_count = int(_counts_host.to(torch.int64).max().item())
-            max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
+            max_capacity = self.dispatch_module.max_dispatch_buffer_token_size
             if max_token_count > max_capacity:
                 logger.error(
                     f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
-                    f"max_dispatched_tokens_per_expert ({max_capacity}). "
+                    f"max_dispatch_buffer_token_size ({max_capacity}). "
                     f"Overflow tokens were dropped - output data is corrupted. "
-                    f"Increase capacity_factor or reduce sequence length."
+                    f"Reduce sequence length."
                 )
                 logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 

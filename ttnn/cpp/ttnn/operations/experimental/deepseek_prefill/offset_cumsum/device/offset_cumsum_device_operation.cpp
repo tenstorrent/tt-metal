@@ -7,7 +7,7 @@
 
 namespace ttnn::experimental::prim {
 void OffsetCumsumDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*args*/, const tensor_args_t& input_tensor) {
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::UINT32, "Only UINT32 is supported for inputs!");
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
@@ -18,6 +18,11 @@ void OffsetCumsumDeviceOperation::validate_on_program_cache_miss(
         input_shape.size());
     TT_FATAL(input_shape[-2] > 0, "H (num_devices) must be > 0, got {}", input_shape[-2]);
     TT_FATAL(input_shape[-1] > 0, "W (n_routed_experts) must be > 0, got {}", input_shape[-1]);
+    TT_FATAL(
+        args.experts_per_chip > 0 && input_shape[-1] % args.experts_per_chip == 0,
+        "n_routed_experts ({}) must be divisible by experts_per_chip ({})",
+        input_shape[-1],
+        args.experts_per_chip);
 }
 
 OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::compute_output_specs(
@@ -32,7 +37,8 @@ OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::co
 
     auto offsets_spec = TensorSpec(ttnn::Shape({1, W}), layout);
     auto totals_spec = TensorSpec(ttnn::Shape({1, W}), layout);
-    return {offsets_spec, totals_spec};
+    auto expert_region_spec = TensorSpec(ttnn::Shape({1, W}), layout);
+    return {offsets_spec, totals_spec, expert_region_spec};
 }
 
 OffsetCumsumDeviceOperation::topology_return_value_t OffsetCumsumDeviceOperation::compute_output_topologies(
@@ -54,8 +60,9 @@ OffsetCumsumDeviceOperation::topology_return_value_t OffsetCumsumDeviceOperation
 
     auto offsets_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
     auto totals_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
+    auto expert_region_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
 
-    return {offsets_topology, totals_topology};
+    return {offsets_topology, totals_topology, expert_region_topology};
 }
 
 tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
@@ -71,16 +78,17 @@ OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::
     auto output_specs = compute_output_specs(args, input_tensor);
     auto offsets_tensor = create_device_tensor(output_specs[0], input_tensor.device());
     auto totals_tensor = create_device_tensor(output_specs[1], input_tensor.device());
-    return {offsets_tensor, totals_tensor};
+    auto expert_region_tensor = create_device_tensor(output_specs[2], input_tensor.device());
+    return {offsets_tensor, totals_tensor, expert_region_tensor};
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-std::array<Tensor, 2> offset_cumsum(const Tensor& input_tensor, uint32_t cluster_axis) {
+std::array<Tensor, 3> offset_cumsum(const Tensor& input_tensor, uint32_t cluster_axis, uint32_t experts_per_chip) {
     using OperationType = ttnn::experimental::prim::OffsetCumsumDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{cluster_axis};
+    auto operation_attributes = OperationType::operation_attributes_t{cluster_axis, experts_per_chip};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
 }
 
