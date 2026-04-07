@@ -18,6 +18,7 @@ Mesh shape comes from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device c
 
 import gc
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -43,6 +44,12 @@ os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 pytestmark = pytest.mark.timeout(600)
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/text_encoder"
+
+
+def _text_encoder_checkpoint_dir() -> Path:
+    return Path(os.environ.get("TT_METAL_HOME", os.getcwd())).resolve() / CHECKPOINT_PATH
+
+
 MIN_PCC = 0.99
 MAX_RELATIVE_RMSE = 0.15
 BATCH_SIZE = 1
@@ -65,8 +72,11 @@ def parallel_config_and_ccl_manager(mesh_device, num_links, topology):
 
 @pytest.fixture(scope="module")
 def hf_model():
+    ckpt = _text_encoder_checkpoint_dir()
+    if not ckpt.is_dir():
+        pytest.skip(f"Lingbot-VA text encoder checkpoint not found: {ckpt}")
     model = UMT5EncoderModel.from_pretrained(
-        CHECKPOINT_PATH,
+        str(ckpt),
         torch_dtype=torch.bfloat16,
     ).to(device="cpu")
     model.eval()

@@ -15,6 +15,7 @@ Multi-device setup aligned with ``test_encoder_wan.py`` / ``models/tt_dit/tests/
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -37,6 +38,12 @@ os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 pytestmark = pytest.mark.timeout(600)
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
+
+
+def _vae_checkpoint_dir() -> Path:
+    return Path(os.environ.get("TT_METAL_HOME", os.getcwd())).resolve() / CHECKPOINT_PATH
+
+
 MIN_PCC = 0.99
 MAX_RELATIVE_RMSE = 0.2
 BATCH_SIZE = 1
@@ -57,8 +64,11 @@ def vae_ccl_manager(mesh_device, num_links, topology):
 
 @pytest.fixture(scope="module")
 def vae():
+    ckpt = _vae_checkpoint_dir()
+    if not ckpt.is_dir():
+        pytest.skip(f"Lingbot-VA VAE checkpoint not found: {ckpt}")
     model = AutoencoderKLWan.from_pretrained(
-        CHECKPOINT_PATH,
+        str(ckpt),
         torch_dtype=torch.float32,
     ).to(device="cpu")
     model.eval()
