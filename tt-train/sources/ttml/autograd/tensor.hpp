@@ -36,8 +36,6 @@ public:
     void add_grad(const tt::tt_metal::Tensor &grad);
     void set_requires_grad(bool requires_grad);
 
-    // PreferredPrecision::FULL means "canonical/original stored view", not
-    // "always FLOAT32". Request explicit typecast if FLOAT32 is required.
     const tt::tt_metal::Tensor &get_value(PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
     const tt::tt_metal::Tensor &get_grad() const;
     tt::tt_metal::Tensor &get_grad();
