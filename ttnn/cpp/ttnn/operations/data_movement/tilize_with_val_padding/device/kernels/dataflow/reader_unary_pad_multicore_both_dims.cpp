@@ -11,8 +11,8 @@
 // Assumption: if val_size < 4, multiple vals are packed into a single uint32_t val.
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
-    using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
+    static_assert(val_size == sizeof(uint16_t) || val_size == sizeof(uint32_t), "Unsupported val_size");
+    using IntType = std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>;
 
     const uint32_t end_addr = start_addr + n_bytes;
     const uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;
@@ -28,7 +28,7 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
     }
 
     // For data-types smaller than 4 bytes, handle unaligned start/end
-    if constexpr (val_size < 4) {
+    if constexpr (val_size < sizeof(uint32_t)) {
         auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
         auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
         auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
