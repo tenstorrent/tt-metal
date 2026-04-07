@@ -1088,6 +1088,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
 
         // Batch configuration (1)
         read_batch_size,
+
+        // Dispatch buffer total token capacity (1) — used by the reader's
+        // in-kernel bounds check.
+        operation_attributes.max_dispatch_buffer_token_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
