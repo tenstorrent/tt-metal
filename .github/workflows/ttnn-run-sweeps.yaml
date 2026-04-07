@@ -781,12 +781,12 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::📊 Workflow Context Information"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
-          echo "Triggered by: ${{ github.actor }}"
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Triggered by: $GITHUB_ACTOR"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch/Ref: $GITHUB_REF_NAME"
           echo "::endgroup::"
 
   build-artifact:
@@ -794,7 +794,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ needs.resolve-inputs.outputs.build-type }}
       tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
@@ -813,9 +814,10 @@ jobs:
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.10'
       - name: Install dependencies
@@ -878,7 +880,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -941,10 +943,14 @@ jobs:
       galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
     steps:
       - name: Show run identifiers
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-vectors
@@ -1011,7 +1017,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1099,8 +1105,8 @@ jobs:
 
           "${CMD[@]}"
       - name: Upload sweep results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/
@@ -1216,6 +1222,7 @@ jobs:
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
+
   ttnn-homogenize-run-result:
     name: Homogenize run result
     needs:
@@ -1246,7 +1253,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1263,6 +1270,9 @@ jobs:
           path: /work/tests/sweep_framework/results_export
           merge-multiple: true
       - name: Homogenize sweep results
+        env:
+          SWEEP_NAME_INPUT: ${{ github.event.inputs.sweep_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           # Determine run type based on sweep name
           RUN_TYPE="nightly"
@@ -1328,7 +1338,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github/actions

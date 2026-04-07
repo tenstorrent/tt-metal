@@ -1,29 +1,31 @@
 # Get allocation rank data by reading Node labels assigned by Allocation Controller
 # Return JSON with hostname - rank mapping
 
-name: 'Get Allocation rank data'
+name: "Get Allocation rank data"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
 outputs:
   ranksData:
-    description: 'JSON dictionary with node names as keys and allocation ranks as values'
+    description: "JSON dictionary with node names as keys and allocation ranks as values"
     value: ${{ steps.get-ranks.outputs.ranksData }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Get ranks
       shell: bash
       id: get-ranks
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
         echo "Getting ranks..."
 
         # Get all nodes with allocation.tenstorrent.com/allocated-by = allocationName
         nodes_json=$(kubectl get nodes -o json \
-          --selector "allocation.tenstorrent.com/allocated-by=${{ inputs.allocationName }}")
+          --selector "allocation.tenstorrent.com/allocated-by=${ALLOCATION_NAME}")
         ranks_json=$(echo $nodes_json | jq '.items | map({(.metadata.name): .metadata.labels["allocation.tenstorrent.com/allocation-rank"]}) | add ')
         echo "ranksData=$(echo $ranks_json | jq -c)" >> $GITHUB_OUTPUT
         echo "Node ranks:"

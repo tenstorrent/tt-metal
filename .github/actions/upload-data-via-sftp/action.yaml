@@ -1,43 +1,52 @@
-name: "Upload data via SFTP"
-description: "Upload data SFTP server for later analysis"
+name: Upload data via SFTP
+description: Upload data SFTP server for later analysis
 inputs:
   ssh-private-key:
-    description: "The Slack ID of the person to be tagged."
+    description: The Slack ID of the person to be tagged.
     required: true
   sftp-batchfile:
-    description: "Text batchfile containing SFTP commands"
+    description: Text batchfile containing SFTP commands
     required: true
   username:
-    description: "Username of account on server"
+    description: Username of account on server
     required: true
   hostname:
-    description: "Hostname of server"
+    description: Hostname of server
     required: true
   path:
-    description: "Path where data and batchfile are located"
+    description: Path where data and batchfile are located
     required: false
-
 runs:
-  using: "composite"
+  using: composite
   steps:
     - name: Create key file
       shell: bash
+      env:
+        PATH_INPUT: ${{ inputs.path }}
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
       run: |
-        # Change dir to path if its set
-        # If provided, generate key file in inputs.path location for the upload step
-        if [ -n "${{ inputs.path }}" ]; then
-          echo "Changing dir to ${{ inputs.path }}"
-          cd "${{ inputs.path }}"
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        if [ -n "$PATH_INPUT" ]; then
+          validate_path "$PATH_INPUT" --allow-relative || exit 1
+          echo "Changing dir to $PATH_INPUT"
+          cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
         fi
-        echo "${{ inputs.ssh-private-key }}" > id_key
+        printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
         chmod go-rwx id_key
     - name: Upload files
       shell: bash
+      env:
+        PATH_INPUT: ${{ inputs.path }}
+        SFTP_BATCHFILE: ${{ inputs.sftp-batchfile }}
+        SFTP_USERNAME: ${{ inputs.username }}
+        SFTP_HOSTNAME: ${{ inputs.hostname }}
       run: |
-        # Change dir to path if its set
-        # Example: when running in containers the batchfile and data files are located under /work
-        if [ -n "${{ inputs.path }}" ]; then
-          echo "Changing dir to ${{ inputs.path }}"
-          cd "${{ inputs.path }}"
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_hostname "$SFTP_HOSTNAME" || exit 1
+        validate_username "$SFTP_USERNAME" || exit 1
+        if [ -n "$PATH_INPUT" ]; then
+          validate_path "$PATH_INPUT" --allow-relative || exit 1
+          echo "Changing dir to $PATH_INPUT"
+          cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
         fi
-        sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
+        sftp -oStrictHostKeyChecking=false -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"

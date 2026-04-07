@@ -6,28 +6,50 @@ jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
     permissions:
-      issues: write
-      pull-requests: write
+      issues: write  # NOLINT(24) - required for gh issue edit --add-label
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Set username and number based on event type
         id: set-variables
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_LOGIN: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          PR_LOGIN: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER_VAL: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
-            echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
-            echo "EVENT_URL=${{ github.event.issue.html_url }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=issue" >> $GITHUB_ENV
-            echo "GH_COMMAND=issue" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
-            echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-            echo "EVENT_URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=PR" >> $GITHUB_ENV
-            echo "GH_COMMAND=pr" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
-            echo "EVENT_URL=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=push" >> $GITHUB_ENV
+          source .github/scripts/security/input-validation.sh
+          if [ "$EVENT_NAME" = "issues" ]; then
+            validate_no_newlines "ISSUE_LOGIN" "${ISSUE_LOGIN}"
+            validate_no_newlines "ISSUE_NUMBER" "${ISSUE_NUMBER}"
+            validate_no_newlines "ISSUE_URL" "${ISSUE_URL}"
+            printf '%s\n' "USERNAME=${ISSUE_LOGIN}" >> "${GITHUB_ENV}"
+            printf '%s\n' "NUMBER=${ISSUE_NUMBER}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_URL=${ISSUE_URL}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_TYPE=issue" >> "${GITHUB_ENV}"
+            printf '%s\n' "GH_COMMAND=issue" >> "${GITHUB_ENV}"
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            validate_no_newlines "PR_LOGIN" "${PR_LOGIN}"
+            validate_no_newlines "PR_NUMBER_VAL" "${PR_NUMBER_VAL}"
+            validate_no_newlines "PR_URL" "${PR_URL}"
+            printf '%s\n' "USERNAME=${PR_LOGIN}" >> "${GITHUB_ENV}"
+            printf '%s\n' "NUMBER=${PR_NUMBER_VAL}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_URL=${PR_URL}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_TYPE=PR" >> "${GITHUB_ENV}"
+            printf '%s\n' "GH_COMMAND=pr" >> "${GITHUB_ENV}"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            printf '%s\n' "USERNAME=${ACTOR}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_URL=https://github.com/${REPO}/commit/${SHA}" >> "${GITHUB_ENV}"
+            printf '%s\n' "EVENT_TYPE=push" >> "${GITHUB_ENV}"
           fi
       - name: Check if organization member
         id: is_organization_member
@@ -35,26 +57,27 @@ jobs:
           GITHUB_ORG: tenstorrent
           ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
-          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" "https://api.github.com/orgs/${GITHUB_ORG}/members/${USERNAME}")
           if [ "$http_status" -eq 204 ]; then
             echo "Detected org member"
-            echo "is_member=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "is_member=true" >> "${GITHUB_OUTPUT}"
           else
             echo "Detected community member"
-            echo "is_member=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "is_member=false" >> "${GITHUB_OUTPUT}"
           fi
       - name: Add community label
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' && env.GH_COMMAND && env.NUMBER }}
         run: |
-          gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
+          gh $GH_COMMAND edit "$NUMBER" --add-label "$LABELS"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           LABELS: community
       - name: Send Notification
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
         with:
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",

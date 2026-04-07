@@ -1,5 +1,4 @@
 name: "[internal] metal - Run microbenchmarks impl"
-
 on:
   workflow_call:
     inputs:
@@ -12,7 +11,15 @@ on:
       docker-image:
         required: true
         type: string
-
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME:
+        required: false
 jobs:
   run-microbenchmarks:
     strategy:
@@ -94,7 +101,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
@@ -103,7 +110,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -115,7 +122,17 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run microbenchmark tests
         timeout-minutes: 45
-        run: ${{ matrix.test-group.cmd }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - name: Upload microbenchmark report csvs
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -128,19 +145,22 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Check for benchmark/latency data
         id: check-data
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name,
+          'Fabric BW') }}
         uses: ./docker-job/.github/actions/check-latency-bw-results
         with:
           path: /work
           arch: ${{ matrix.test-group.arch }}
           check_bw: "true"
           check_latency: "true"
-      - name: Upload benchmark data
-        ## Only upload benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-data.outputs.has_benchmark_data == 'true' }}
+      - name:
+          Upload benchmark data
+          ## Only upload benchmark data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name,
+          'Fabric BW') && steps.check-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -148,9 +168,11 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - name: Upload latency data
-        ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-data.outputs.has_latency_data == 'true' }}
+      - name:
+          Upload latency data
+          ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name,
+          'Fabric BW') && steps.check-data.outputs.has_latency_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

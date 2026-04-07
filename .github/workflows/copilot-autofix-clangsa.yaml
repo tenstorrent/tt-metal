@@ -3,8 +3,8 @@ name: "Copilot Autofix ClangSA"
 on:
   schedule:
     # Run twice daily - 4 hours after analysis, then again 2 hours later
-    - cron: "0 6 * * *"   # 10 PM PST
-    - cron: "0 8 * * *"   # 12 AM PST
+    - cron: "0 6 * * *" # 10 PM PST
+    - cron: "0 8 * * *" # 12 AM PST
   workflow_dispatch:
 
 jobs:
@@ -20,12 +20,12 @@ jobs:
 
     steps:
       - name: Check out source repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
       - name: Checkout results repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: tenstorrent/tt-metal-clangsa-results
           ref: gh-pages
@@ -33,7 +33,7 @@ jobs:
           token: ${{ secrets.CLANGSA_RESULTS_PAT }}
 
       - name: Restore attempted hashes cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: attempted_hashes.txt
           key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
@@ -106,7 +106,7 @@ jobs:
           echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
 
       - name: Save attempted hashes cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         if: always()
         with:
           path: attempted_hashes.txt
@@ -196,6 +196,9 @@ jobs:
         timeout-minutes: 30
         env:
           COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -208,14 +211,14 @@ jobs:
           echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
 
           # Run Copilot
-          BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
+          BASE_BRANCH="${EVENT_NAME == 'schedule' && 'main' || REF_NAME}"
 
           # Note: --follow streams session logs but may exit non-zero due to
           # a gh CLI v2.87.x regression (cli/cli#12729). The agent task itself
           # still completes successfully, so we tolerate follow failures.
           gh agent-task create -F /tmp/prompt.txt \
             --base "$BASE_BRANCH" \
-            --repo "${{ github.repository }}" \
+            --repo "$REPO" \
             --follow \
           || echo "::warning::--follow exited with $? (known gh CLI issue); checking task result..."
 
@@ -223,34 +226,39 @@ jobs:
           PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
 
           if [ -n "$PR_NUMBER" ]; then
-            echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "pr-url=https://github.com/$REPO/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
             echo "pr-created=true" >> "$GITHUB_OUTPUT"
             # Add label to track Copilot PRs
-            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" --add-label "copilot-autofix" || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "copilot-autofix" || true
             # Mark PR as ready for review (not draft) so CI runs automatically
-            gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
+            gh pr ready "$PR_NUMBER" -R "$REPO" || true
           else
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Output job summary
         if: always()
+        env:
+          HAS_ISSUE: ${{ steps.select-issue.outputs.has-issue }}
+          PR_CREATED: ${{ steps.copilot-fix.outputs.pr-created }}
+          PR_URL: ${{ steps.copilot-fix.outputs.pr-url }}
+          ISSUE_CHECKER: ${{ steps.select-issue.outputs.checker }}
+          ISSUE_FILE: ${{ steps.select-issue.outputs.file }}
+          ISSUE_LINE: ${{ steps.select-issue.outputs.line }}
+          ISSUE_MESSAGE: ${{ steps.select-issue.outputs.message }}
+          REPO: ${{ github.repository }}
         run: |
           SUMMARY="$GITHUB_STEP_SUMMARY"
           echo "## 🤖 Copilot Autofix ClangSA" >> "$SUMMARY"
 
-          if [ "${{ steps.select-issue.outputs.has-issue }}" != "true" ]; then
+          if [ "$HAS_ISSUE" != "true" ]; then
             echo "No unprocessed issues found." >> "$SUMMARY"
-          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            echo "✅ **PR Created:** ${{ steps.copilot-fix.outputs.pr-url }}" >> "$SUMMARY"
+          elif [ "$PR_CREATED" = "true" ]; then
+            echo "✅ **PR Created:** $PR_URL" >> "$SUMMARY"
             echo "" >> "$SUMMARY"
             echo "**Issue fixed:**" >> "$SUMMARY"
-            CHECKER="${{ steps.select-issue.outputs.checker }}"
-            FILE="${{ steps.select-issue.outputs.file }}"
-            LINE="${{ steps.select-issue.outputs.line }}"
-            echo "- \`$CHECKER\` in \`$FILE:$LINE\`" >> "$SUMMARY"
-            echo "- ${{ steps.select-issue.outputs.message }}" >> "$SUMMARY"
+            echo "- \`$ISSUE_CHECKER\` in \`$ISSUE_FILE:$ISSUE_LINE\`" >> "$SUMMARY"
+            echo "- $ISSUE_MESSAGE" >> "$SUMMARY"
           else
-            REPO="${{ github.repository }}"
             echo "⚠️ No PR created. Check [Copilot dashboard](https://github.com/$REPO/copilot)." >> "$SUMMARY"
           fi

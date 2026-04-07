@@ -1,42 +1,42 @@
-name: 'Sweep Run Analysis'
-description: 'Analyze sweep run results and send Slack notification with regression detection'
+name: "Sweep Run Analysis"
+description: "Analyze sweep run results and send Slack notification with regression detection"
 
 inputs:
   github-run-id:
-    description: 'GitHub Actions run ID to analyze'
+    description: "GitHub Actions run ID to analyze"
     required: true
   source-github-run-number:
-    description: 'GitHub Actions run number from the triggering ttnn-run-sweeps workflow run'
+    description: "GitHub Actions run number from the triggering ttnn-run-sweeps workflow run"
     required: false
   run-type:
-    description: 'Type of sweep run (nightly, comprehensive, model_traced, lead_models)'
+    description: "Type of sweep run (nightly, comprehensive, model_traced, lead_models)"
     required: true
   conclusion:
-    description: 'Workflow conclusion (success, failure, cancelled)'
+    description: "Workflow conclusion (success, failure, cancelled)"
     required: true
   source-git-sha:
-    description: 'Git SHA from the triggering ttnn-run-sweeps workflow run'
+    description: "Git SHA from the triggering ttnn-run-sweeps workflow run"
     required: false
   source-git-branch:
-    description: 'Git branch from the triggering ttnn-run-sweeps workflow run'
+    description: "Git branch from the triggering ttnn-run-sweeps workflow run"
     required: false
   slack-alert-user-ids:
-    description: 'Comma-separated Slack user IDs to mention on non-green results (e.g., U123,U456)'
+    description: "Comma-separated Slack user IDs to mention on non-green results (e.g., U123,U456)"
     required: false
   slack-webhook-url:
-    description: 'Slack webhook URL for notifications'
+    description: "Slack webhook URL for notifications"
     required: true
   database-url:
-    description: 'PostgreSQL connection string for sweep database'
+    description: "PostgreSQL connection string for sweep database"
     required: true
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
-        python-version: '3.10'
+        python-version: "3.10"
 
     - name: Install dependencies
       shell: bash
@@ -56,7 +56,7 @@ runs:
 
     - name: Fallback - Download run result artifact
       if: steps.query-db.outcome == 'failure'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: sweeps-run-result
         path: ./sweep-results

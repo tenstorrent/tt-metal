@@ -43,7 +43,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -52,7 +53,8 @@ jobs:
   galaxy-e2e-tests:
     needs: build-artifact
     uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

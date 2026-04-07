@@ -7,16 +7,22 @@ on:
 
 permissions:
   actions: read
-  contents: write
-  pull-requests: write
-  pages: write
-  id-token: write
-  packages: write
-  checks: write
+  contents: write  # NOLINT(24) - inherited by sanity-tests for artifact handling
+  pages: write  # NOLINT(24) - inherited by sanity-tests for deployment
+  id-token: write  # NOLINT(24) - inherited by sanity-tests for OIDC
+  packages: write  # NOLINT(24) - inherited by sanity-tests for GHCR push
+  checks: write  # NOLINT(24) - inherited by sanity-tests for check results
 
 run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   trigger-post-commit:
-    if: ${{ github.event.pull_request.head.repo.fork == true }}
+    if: github.event.pull_request.head.repo.fork == true
     uses: ./.github/workflows/sanity-tests.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}

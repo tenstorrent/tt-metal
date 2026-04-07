@@ -8,6 +8,9 @@ on:
       - "main"
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   find-changed-files:
     runs-on: ubuntu-latest
@@ -20,21 +23,21 @@ jobs:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write  # NOLINT(24) - required by pre-commit auto-fix
+      pull-requests: write  # NOLINT(24) - inherited by callers for PR comments
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history and all branches / tags so 'origin/main' is available
+          fetch-depth: 0 # Fetch all history and all branches / tags so 'origin/main' is available
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.11
 
       - name: Run Pre-commit
-        uses: pre-commit/action@v3.0.1
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         env:
           PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
           PRE_COMMIT_TO_REF: HEAD
@@ -49,26 +52,25 @@ jobs:
       - name: Do Nothing
         run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
 
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check SPDX licenses
-        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
+        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@ac8d2f84b93d166ddfb1af400f8cf2390d994ba4 # main
         with:
-          ignore_config_file: '.github/spdx_ignore.yaml'
-          verbose: 'true'
+          ignore_config_file: ".github/spdx_ignore.yaml"
+          verbose: "true"
   check-metal-kernel-count:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install ASPELL
         run: sudo apt-get install -y aspell
       - name: Run checks on docs
@@ -78,22 +80,22 @@ jobs:
     needs: find-changed-files
     # We get rate-limited if we run too often; only run when it's useful
     # Issue 21637: Disable check-docs-links for now to unblock developers
-    if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
+    if: false # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           clean: false
       - name: Link Checker
-        uses: lycheeverse/lychee-action@v2
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
         with:
           args: --verbose './README.md' './INSTALLING.md'  './docs/source/**/*.rst' './docs/source/**/*.md'
           fail: true
   check-forbidden-imports:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check ttnn is not used in tt_metal tests
         run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
@@ -103,15 +105,18 @@ jobs:
   check-interleaved-addr-gen-usage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history for git diff comparison
+          fetch-depth: 0 # Fetch all history for git diff comparison
       - name: Check for new InterleavedAddrGen usages in changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           # Get the base branch for comparison
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_REF="origin/${PR_BASE_REF}"
           else
             BASE_REF="HEAD^"
           fi
@@ -173,10 +178,10 @@ jobs:
   check-sweeps-workflow:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Check sweeps workflow option count against sweep file count
         run: |
           pip install pyyaml
@@ -184,7 +189,7 @@ jobs:
   codeowners-validator:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: mszostok/codeowners-validator@7f3f5e28c6d7b8dfae5731e54ce2272ca384592f # v0.7.4
         with:
           checks: "files,duppatterns,syntax"
@@ -192,7 +197,7 @@ jobs:
   check-symlinks-valid:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check for broken symlinks
         run: |
           broken_links=$(find . -type l ! -exec test -e {} \; -print)

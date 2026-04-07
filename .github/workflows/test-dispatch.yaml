@@ -1,5 +1,4 @@
-name: "Custom test dispatch"
-
+name: Custom test dispatch
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +9,8 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, BH, config-t3000, topology-6u. for example: ["in-service", "config-t3000"]'
+        description: 'Optional: N150, N300, BH, config-t3000, topology-6u. for example:
+          ["in-service", "config-t3000"]'
         required: true
         type: string
         default: '["in-service"]'
@@ -18,27 +18,27 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Build with tracy enabled"
+        description: Build with tracy enabled
       command:
         required: true
         type: string
       description:
         type: string
-        default: "Custom test dispatch"
+        default: Custom test dispatch
         required: false
       commit:
         required: false
         type: string
         default: ""
-        description: 'Commit SHA to test (default: HEAD)'
+        description: "Commit SHA to test (default: HEAD)"
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: Ubuntu 22.04
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
+          - Ubuntu 22.04
+          - Ubuntu 24.04
+        description: Platform to build and test
       build-type:
         required: false
         type: choice
@@ -52,8 +52,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Enable Link Time Optimization (LTO)"
-
+        description: Enable Link Time Optimization (LTO)
 run-name: ${{ inputs.description }}
 jobs:
   # NOTE: build-artifact.yaml handles platform parsing internally.
@@ -62,7 +61,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
@@ -73,9 +73,11 @@ jobs:
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120
-    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    runs-on: ${{ fromJSON(inputs.runner-label) }} # NOLINT(26) - workflow_dispatch input with fixed default, collaborator-only
     container:
-      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/' || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/'
+        || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved'
+        }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -85,16 +87,18 @@ jobs:
         TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
-        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      options: "--device /dev/tenstorrent"
+        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G'
+          || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro'
+          || '/donotmount:/donotmount:ro' }}
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 10
         with:
           fetch-depth: 1
@@ -102,7 +106,7 @@ jobs:
           path: docker-job
           ref: ${{ inputs.commit || github.sha }}
       - name: 📦 Download Build Artifact
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -113,7 +117,7 @@ jobs:
         run: tar --zstd -xf ttm_any.tar.zst
         shell: bash
       - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -130,9 +134,20 @@ jobs:
           uv pip install "$WHEEL_FILENAME"
         shell: bash
       - name: Run regression in loop
+        env:
+          TEST_COMMAND: ${{ inputs.command }}
         run: |
+          # SECURITY NOTE: This workflow executes user-provided commands.
+          # Only repository maintainers should be able to trigger workflow_dispatch.
           uv pip install pytest-repeat
-          ${{ inputs.command }}
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_command.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_COMMAND" >> /tmp/test_command.sh
+          chmod +x /tmp/test_command.sh
+          bash /tmp/test_command.sh
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

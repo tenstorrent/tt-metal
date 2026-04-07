@@ -1,41 +1,39 @@
-name: 'Pull, tag, and push a docker image to GHCR as latest'
-description: 'Tags a Docker image as latest and pushes to GitHub Container Registry'
+name: "Pull, tag, and push a docker image to GHCR as latest"
+description: "Tags a Docker image as latest and pushes to GitHub Container Registry"
 
 inputs:
   docker-image-tag:
-    description: 'Docker image tag in format REPO_NAME:VERSION'
+    description: "Docker image tag in format REPO_NAME:VERSION"
     required: true
     type: string
   github-token:
-    description: 'GH Token for registry login'
+    description: "GH Token for registry login"
     required: true
     type: string
   new-tag:
-    description: 'New tag to use, for example latest or v0.65.0'
+    description: "New tag to use, for example latest or v0.65.0"
     required: false
     type: string
-    default: 'latest'
+    default: "latest"
 
 outputs:
   repo-name:
-    description: 'Extracted repository name from docker image tag'
+    description: "Extracted repository name from docker image tag"
     value: ${{ steps.parse-repo.outputs.repo-name }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Validate docker image tag format
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
       run: |
-        if [[ ! "${{ inputs.docker-image-tag }}" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]]; then
-          echo "Error: docker-image-tag must be in format REPO_NAME:VERSION"
-          echo "Provided: ${{ inputs.docker-image-tag }}"
-          exit 1
-        fi
-        echo "✅ Docker image tag format is valid"
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_docker_image "$DOCKER_IMAGE_TAG" || exit 1
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -50,15 +48,21 @@ runs:
     - name: Parse repository name
       id: parse-repo
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
       run: |
-        FULL_TAG="${{ inputs.docker-image-tag }}"
-        REPO_NAME="${FULL_TAG%:*}"
-        echo "repo-name=${REPO_NAME}" >> $GITHUB_OUTPUT
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        REPO_NAME="${DOCKER_IMAGE_TAG%:*}"
+        set_github_output "repo-name" "$REPO_NAME"
         echo "Extracted repository name: ${REPO_NAME}"
 
     - name: Pull, tag and push image
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
+        REPO_NAME: ${{ steps.parse-repo.outputs.repo-name }}
+        NEW_TAG: ${{ inputs.new-tag }}
       run: |
-        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:${{ inputs.new-tag }}"
-        echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
-        regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
+        LATEST_TAG="${REPO_NAME}:${NEW_TAG}"
+        echo "Copying $DOCKER_IMAGE_TAG to ${LATEST_TAG}"
+        regctl image copy "$DOCKER_IMAGE_TAG" "$LATEST_TAG"

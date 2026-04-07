@@ -8,7 +8,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: Release
       build-wheel: true
@@ -19,7 +20,9 @@ jobs:
   ttnn-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       arch: wormhole_b0
       runner-label: N150

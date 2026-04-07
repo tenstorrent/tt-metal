@@ -16,7 +16,7 @@ on:
         type: string
         default: "in-service"
       single-card-demo:
-        description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
+        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["resnet", "sdxl"]'
         default: disabled
         type: string
       single-card-perf-models:
@@ -71,37 +71,58 @@ jobs:
       run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
       run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Determine test execution
         id: logic
+        env:
+          INPUT_TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          INPUT_SINGLE_CARD_DEMO: ${{ inputs.single-card-demo }}
+          INPUT_SINGLE_CARD_PERF_MODELS: ${{ inputs.single-card-perf-models }}
+          INPUT_SINGLE_CARD_PERF_DEVICE_MODELS: ${{ inputs.single-card-perf-device-models }}
+          INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT: ${{ inputs.single-card-ttnn-models-frequent }}
+          INPUT_CPP_UNIT: ${{ inputs.cpp-unit }}
         run: |
-          case "${{ inputs.trigger_type }}" in
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines \
+              "INPUT_TRIGGER_TYPE" "$INPUT_TRIGGER_TYPE" \
+              "INPUT_SINGLE_CARD_DEMO" "$INPUT_SINGLE_CARD_DEMO" \
+              "INPUT_SINGLE_CARD_PERF_MODELS" "$INPUT_SINGLE_CARD_PERF_MODELS" \
+              "INPUT_SINGLE_CARD_PERF_DEVICE_MODELS" "$INPUT_SINGLE_CARD_PERF_DEVICE_MODELS" \
+              "INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT" "$INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT" \
+              "INPUT_CPP_UNIT" "$INPUT_CPP_UNIT"
+          case "$INPUT_TRIGGER_TYPE" in
             "manual")
-              echo "run-demo=${{ inputs.single-card-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-perf-models=${{ inputs.single-card-perf-models }}" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-demo=$([[ "$INPUT_SINGLE_CARD_DEMO" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-models=${INPUT_SINGLE_CARD_PERF_MODELS}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-device-models=${INPUT_SINGLE_CARD_PERF_DEVICE_MODELS}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-ttnn-models-frequent=${INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-cpp-unit=${INPUT_CPP_UNIT}" >> "${GITHUB_OUTPUT}"
               ;;
             "models-mandatory")
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-perf-models=false" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-models=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-device-models=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-ttnn-models-frequent=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-cpp-unit=true" >> "${GITHUB_OUTPUT}"
               ;;
             "models-extended")
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-perf-models=true" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-demo=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-models=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf-device-models=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-ttnn-models-frequent=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-cpp-unit=true" >> "${GITHUB_OUTPUT}"
               ;;
           esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -111,7 +132,8 @@ jobs:
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -123,7 +145,11 @@ jobs:
   single-card-perf-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-models == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/perf-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -133,7 +159,11 @@ jobs:
   single-card-perf-device-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -143,7 +173,10 @@ jobs:
   single-card-ttnn-models-frequent:
     if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -153,7 +186,6 @@ jobs:
   cpp-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0

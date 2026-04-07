@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Extract Issue Date
         id: setup
+        env:
+          ISSUE_CREATED_AT: ${{ github.event.issue.created_at }}
         run: |
           set -e
 
@@ -35,12 +37,16 @@ jobs:
           fi
 
           # Extract date from issue creation timestamp
-          RAW_CREATED="${{ github.event.issue.created_at }}"
+          RAW_CREATED="$ISSUE_CREATED_AT"
           OPENED_DATE="${RAW_CREATED%%T*}"
 
           echo "opened_date=$OPENED_DATE" >> "$GITHUB_OUTPUT"
 
       - name: Add Issue to Project and Set Date
+        env:
+          ISSUE_NODE_ID: ${{ github.event.issue.node_id }}
+          OPENED_DATE: ${{ steps.setup.outputs.opened_date }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -e
 
@@ -87,7 +93,7 @@ jobs:
             }
           }' \
           -F projectId="$PROJECT_ID" \
-          -F contentId='${{ github.event.issue.node_id }}' --include 2>&1) || {
+          -F contentId="$ISSUE_NODE_ID" --include 2>&1) || {
             if check_rate_limit_error "$ADD_RESP" "adding issue to project"; then
               exit 1
             fi
@@ -134,7 +140,7 @@ jobs:
           -F projectId="$PROJECT_ID" \
           -F itemId="$ITEM_ID" \
           -F fieldId="$FIELD_ID" \
-          -F date='${{ steps.setup.outputs.opened_date }}' --include 2>&1) || {
+          -F date="$OPENED_DATE" --include 2>&1) || {
             if check_rate_limit_error "$UPDATE_RESP" "setting field value"; then
               exit 1
             fi
@@ -165,4 +171,4 @@ jobs:
             exit 1
           fi
 
-          echo "Successfully set 'Opened On' to ${{ steps.setup.outputs.opened_date }} for issue #${{ github.event.issue.number }}"
+          echo "Successfully set 'Opened On' to $OPENED_DATE for issue #$ISSUE_NUMBER"

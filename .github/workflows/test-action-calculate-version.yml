@@ -2,13 +2,13 @@ name: Test Calculate Version Action
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '.github/actions/calculate-version/**'
+      - ".github/actions/calculate-version/**"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '.github/actions/calculate-version/**'
+      - ".github/actions/calculate-version/**"
   workflow_dispatch:
 
 jobs:
@@ -18,9 +18,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history for git tag operations
+          fetch-depth: 0 # Fetch all history for git tag operations
 
       # Clean up existing tags to simulate a repository with no tags
       - name: Remove all existing tags for clean test
@@ -38,15 +38,20 @@ jobs:
           tag-type: ""
 
       - name: Verify Test 1 Results
+        env:
+          LATEST_SEMVER: ${{ steps.test-no-tags.outputs.latest_semver }}
+          BUMP_TYPE: ${{ steps.test-no-tags.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-no-tags.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-no-tags.outputs.final_version }}
         run: |
           echo "Test 1 Results:"
-          echo "  Latest semver: ${{ steps.test-no-tags.outputs.latest_semver }}"
-          echo "  Bump type: ${{ steps.test-no-tags.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-no-tags.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-no-tags.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Verify outputs
-          if [ "${{ steps.test-no-tags.outputs.latest_semver }}" != "v0.0.0" ]; then
+          if [ "$LATEST_SEMVER" != "v0.0.0" ]; then
             echo "FAIL: Expected latest_semver to be v0.0.0"
             exit 1
           fi
@@ -73,16 +78,21 @@ jobs:
           tag-type: ""
 
       - name: Verify Test 2 Results
+        env:
+          LATEST_SEMVER: ${{ steps.test-with-tags.outputs.latest_semver }}
+          BUMP_TYPE: ${{ steps.test-with-tags.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-with-tags.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-with-tags.outputs.final_version }}
         run: |
           echo "Test 2 Results:"
-          echo "  Latest semver: ${{ steps.test-with-tags.outputs.latest_semver }}"
-          echo "  Bump type: ${{ steps.test-with-tags.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-with-tags.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-with-tags.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Verify latest tag detection
-          if [ "${{ steps.test-with-tags.outputs.latest_semver }}" != "v2.1.0" ]; then
-            echo "FAIL: Expected latest_semver to be v2.1.0, got ${{ steps.test-with-tags.outputs.latest_semver }}"
+          if [ "$LATEST_SEMVER" != "v2.1.0" ]; then
+            echo "FAIL: Expected latest_semver to be v2.1.0, got $LATEST_SEMVER"
             exit 1
           fi
           echo "PASS: Test 2 passed"
@@ -95,12 +105,14 @@ jobs:
           tag-type: "rc"
 
       - name: Verify Test 3 Results
+        env:
+          FINAL_VERSION: ${{ steps.test-rc.outputs.final_version }}
         run: |
           echo "Test 3 Results:"
-          echo "  Final version: ${{ steps.test-rc.outputs.final_version }}"
+          echo "  Final version: $FINAL_VERSION"
 
           # RC version should have -rc suffix
-          if [[ "${{ steps.test-rc.outputs.final_version }}" != *"-rc"* ]]; then
+          if [[ "$FINAL_VERSION" != *"-rc"* ]]; then
             echo "FAIL: Expected final_version to contain -rc suffix"
             exit 1
           fi
@@ -114,21 +126,25 @@ jobs:
           tag-type: "dev"
 
       - name: Verify Test 4 Results
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev.outputs.final_version }}
         run: |
           echo "Test 4 Results:"
-          echo "  Latest semver: ${{ steps.test-dev.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Dev version should have -dev suffix with date
-          if [[ "${{ steps.test-dev.outputs.final_version }}" != *"-dev"* ]]; then
+          if [[ "$FINAL_VERSION" != *"-dev"* ]]; then
             echo "FAIL: Expected final_version to contain -dev suffix"
             exit 1
           fi
 
           # Dev tag should always increment minor version from latest (v2.1.0 -> v2.2.0)
-          if [ "${{ steps.test-dev.outputs.new_version }}" != "v2.2.0" ]; then
-            echo "FAIL: Expected dev tag to increment minor version to v2.2.0, got ${{ steps.test-dev.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.2.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v2.2.0, got $NEW_VERSION"
             exit 1
           fi
 
@@ -140,7 +156,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -164,18 +180,21 @@ jobs:
           tag-type: ""
 
       - name: Verify MAJOR bump
+        env:
+          BUMP_TYPE: ${{ steps.test-major.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-major.outputs.new_version }}
         run: |
           echo "MAJOR test results:"
-          echo "  Bump type: ${{ steps.test-major.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-major.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
-          if [ "${{ steps.test-major.outputs.bump_type }}" != "major" ]; then
+          if [ "$BUMP_TYPE" != "major" ]; then
             echo "FAIL: Expected bump_type to be major"
             exit 1
           fi
 
-          if [ "${{ steps.test-major.outputs.new_version }}" != "v2.0.0" ]; then
-            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-major.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: MAJOR bump test passed"
@@ -195,18 +214,21 @@ jobs:
           tag-type: ""
 
       - name: Verify MINOR bump
+        env:
+          BUMP_TYPE: ${{ steps.test-minor.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-minor.outputs.new_version }}
         run: |
           echo "MINOR test results:"
-          echo "  Bump type: ${{ steps.test-minor.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-minor.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
-          if [ "${{ steps.test-minor.outputs.bump_type }}" != "minor" ]; then
+          if [ "$BUMP_TYPE" != "minor" ]; then
             echo "FAIL: Expected bump_type to be minor"
             exit 1
           fi
 
-          if [ "${{ steps.test-minor.outputs.new_version }}" != "v1.1.0" ]; then
-            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-minor.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: MINOR bump test passed"
@@ -226,18 +248,21 @@ jobs:
           tag-type: ""
 
       - name: Verify PATCH bump
+        env:
+          BUMP_TYPE: ${{ steps.test-patch.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-patch.outputs.new_version }}
         run: |
           echo "PATCH test results:"
-          echo "  Bump type: ${{ steps.test-patch.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-patch.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
-          if [ "${{ steps.test-patch.outputs.bump_type }}" != "patch" ]; then
+          if [ "$BUMP_TYPE" != "patch" ]; then
             echo "FAIL: Expected bump_type to be patch"
             exit 1
           fi
 
-          if [ "${{ steps.test-patch.outputs.new_version }}" != "v1.0.1" ]; then
-            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-patch.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: PATCH bump test passed"
@@ -248,7 +273,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -270,27 +295,31 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag increments minor from v1.5.3
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-v1-5-3.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-v1-5-3.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-v1-5-3.outputs.final_version }}
         run: |
           echo "Dev tag from v1.5.3 results:"
-          echo "  Latest semver: ${{ steps.test-dev-v1-5-3.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
-          if [ "${{ steps.test-dev-v1-5-3.outputs.latest_semver }}" != "v1.5.3" ]; then
+          if [ "$LATEST_SEMVER" != "v1.5.3" ]; then
             echo "FAIL: Expected latest_semver to be v1.5.3"
             exit 1
           fi
 
-          if [ "${{ steps.test-dev-v1-5-3.outputs.new_version }}" != "v1.6.0" ]; then
-            echo "FAIL: Expected dev tag to increment minor version to v1.6.0, got ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.6.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v1.6.0, got $NEW_VERSION"
             exit 1
           fi
 
           # Check final version has correct format with date
           current_date=$(date +%Y%m%d)
           expected_final="v1.6.0-dev$current_date"
-          if [ "${{ steps.test-dev-v1-5-3.outputs.final_version }}" != "$expected_final" ]; then
-            echo "FAIL: Expected final version to be $expected_final, got ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+          if [ "$FINAL_VERSION" != "$expected_final" ]; then
+            echo "FAIL: Expected final version to be $expected_final, got $FINAL_VERSION"
             exit 1
           fi
 
@@ -309,19 +338,23 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag increments minor from v3.0.0
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-v3-0-0.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-v3-0-0.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-v3-0-0.outputs.final_version }}
         run: |
           echo "Dev tag from v3.0.0 results:"
-          echo "  Latest semver: ${{ steps.test-dev-v3-0-0.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-v3-0-0.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
-          if [ "${{ steps.test-dev-v3-0-0.outputs.latest_semver }}" != "v3.0.0" ]; then
+          if [ "$LATEST_SEMVER" != "v3.0.0" ]; then
             echo "FAIL: Expected latest_semver to be v3.0.0"
             exit 1
           fi
 
-          if [ "${{ steps.test-dev-v3-0-0.outputs.new_version }}" != "v3.1.0" ]; then
-            echo "FAIL: Expected dev tag to increment minor version to v3.1.0, got ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v3.1.0, got $NEW_VERSION"
             exit 1
           fi
 
@@ -346,15 +379,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag ignores commit indicators
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-ignores-commits.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-ignores-commits.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-ignores-commits.outputs.final_version }}
         run: |
           echo "Dev tag ignores commits results:"
-          echo "  Latest semver: ${{ steps.test-dev-ignores-commits.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-ignores-commits.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should still be v3.1.0 regardless of MAJOR/PATCH commits
-          if [ "${{ steps.test-dev-ignores-commits.outputs.new_version }}" != "v3.1.0" ]; then
-            echo "FAIL: Expected dev tag to always increment minor to v3.1.0 regardless of commit indicators, got ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to always increment minor to v3.1.0 regardless of commit indicators, got $NEW_VERSION"
             exit 1
           fi
 
@@ -373,19 +410,23 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag increments minor from v0.0.0
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-v0-0-0.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-v0-0-0.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-v0-0-0.outputs.final_version }}
         run: |
           echo "Dev tag from v0.0.0 results:"
-          echo "  Latest semver: ${{ steps.test-dev-v0-0-0.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-v0-0-0.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
-          if [ "${{ steps.test-dev-v0-0-0.outputs.latest_semver }}" != "v0.0.0" ]; then
+          if [ "$LATEST_SEMVER" != "v0.0.0" ]; then
             echo "FAIL: Expected latest_semver to be v0.0.0 when no tags exist"
             exit 1
           fi
 
-          if [ "${{ steps.test-dev-v0-0-0.outputs.new_version }}" != "v0.1.0" ]; then
-            echo "FAIL: Expected dev tag to increment minor version to v0.1.0 from v0.0.0, got ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v0.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v0.1.0 from v0.0.0, got $NEW_VERSION"
             exit 1
           fi
 
@@ -397,7 +438,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -425,43 +466,50 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag consistency
+        env:
+          FIRST_LATEST_SEMVER: ${{ steps.first-dev-call.outputs.latest_semver }}
+          FIRST_NEW_VERSION: ${{ steps.first-dev-call.outputs.new_version }}
+          FIRST_FINAL_VERSION: ${{ steps.first-dev-call.outputs.final_version }}
+          SECOND_LATEST_SEMVER: ${{ steps.second-dev-call.outputs.latest_semver }}
+          SECOND_NEW_VERSION: ${{ steps.second-dev-call.outputs.new_version }}
+          SECOND_FINAL_VERSION: ${{ steps.second-dev-call.outputs.final_version }}
         run: |
           echo "First dev call results:"
-          echo "  Latest semver: ${{ steps.first-dev-call.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.first-dev-call.outputs.new_version }}"
-          echo "  Final version: ${{ steps.first-dev-call.outputs.final_version }}"
+          echo "  Latest semver: $FIRST_LATEST_SEMVER"
+          echo "  New version: $FIRST_NEW_VERSION"
+          echo "  Final version: $FIRST_FINAL_VERSION"
           echo ""
           echo "Second dev call results:"
-          echo "  Latest semver: ${{ steps.second-dev-call.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.second-dev-call.outputs.new_version }}"
-          echo "  Final version: ${{ steps.second-dev-call.outputs.final_version }}"
+          echo "  Latest semver: $SECOND_LATEST_SEMVER"
+          echo "  New version: $SECOND_NEW_VERSION"
+          echo "  Final version: $SECOND_FINAL_VERSION"
 
           # Both calls should have same latest_semver
-          if [ "${{ steps.first-dev-call.outputs.latest_semver }}" != "${{ steps.second-dev-call.outputs.latest_semver }}" ]; then
+          if [ "$FIRST_LATEST_SEMVER" != "$SECOND_LATEST_SEMVER" ]; then
             echo "FAIL: Expected latest_semver to be the same in both calls"
-            echo "  First: ${{ steps.first-dev-call.outputs.latest_semver }}"
-            echo "  Second: ${{ steps.second-dev-call.outputs.latest_semver }}"
+            echo "  First: $FIRST_LATEST_SEMVER"
+            echo "  Second: $SECOND_LATEST_SEMVER"
             exit 1
           fi
 
           # Both calls should have same new_version (base increment)
-          if [ "${{ steps.first-dev-call.outputs.new_version }}" != "${{ steps.second-dev-call.outputs.new_version }}" ]; then
+          if [ "$FIRST_NEW_VERSION" != "$SECOND_NEW_VERSION" ]; then
             echo "FAIL: Expected new_version to be the same in both calls"
-            echo "  First: ${{ steps.first-dev-call.outputs.new_version }}"
-            echo "  Second: ${{ steps.second-dev-call.outputs.new_version }}"
+            echo "  First: $FIRST_NEW_VERSION"
+            echo "  Second: $SECOND_NEW_VERSION"
             exit 1
           fi
 
           # Both calls should have same final_version (since same date)
-          if [ "${{ steps.first-dev-call.outputs.final_version }}" != "${{ steps.second-dev-call.outputs.final_version }}" ]; then
+          if [ "$FIRST_FINAL_VERSION" != "$SECOND_FINAL_VERSION" ]; then
             echo "FAIL: Expected final_version to be the same in both calls (same date)"
-            echo "  First: ${{ steps.first-dev-call.outputs.final_version }}"
-            echo "  Second: ${{ steps.second-dev-call.outputs.final_version }}"
+            echo "  First: $FIRST_FINAL_VERSION"
+            echo "  Second: $SECOND_FINAL_VERSION"
             exit 1
           fi
 
           # Verify the expected version pattern
-          if [ "${{ steps.first-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+          if [ "$FIRST_NEW_VERSION" != "v2.4.0" ]; then
             echo "FAIL: Expected new_version to be v2.4.0 (minor increment from v2.3.5)"
             exit 1
           fi
@@ -469,7 +517,7 @@ jobs:
           # Verify final version has correct date format
           current_date=$(date +%Y%m%d)
           expected_final="v2.4.0-dev$current_date"
-          if [ "${{ steps.first-dev-call.outputs.final_version }}" != "$expected_final" ]; then
+          if [ "$FIRST_FINAL_VERSION" != "$expected_final" ]; then
             echo "FAIL: Expected final version to be $expected_final"
             exit 1
           fi
@@ -504,41 +552,48 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev tag consistency with commits
+        env:
+          THIRD_LATEST_SEMVER: ${{ steps.third-dev-call.outputs.latest_semver }}
+          THIRD_NEW_VERSION: ${{ steps.third-dev-call.outputs.new_version }}
+          THIRD_FINAL_VERSION: ${{ steps.third-dev-call.outputs.final_version }}
+          FOURTH_LATEST_SEMVER: ${{ steps.fourth-dev-call.outputs.latest_semver }}
+          FOURTH_NEW_VERSION: ${{ steps.fourth-dev-call.outputs.new_version }}
+          FOURTH_FINAL_VERSION: ${{ steps.fourth-dev-call.outputs.final_version }}
         run: |
           echo "Third dev call results (with commits):"
-          echo "  Latest semver: ${{ steps.third-dev-call.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.third-dev-call.outputs.new_version }}"
-          echo "  Final version: ${{ steps.third-dev-call.outputs.final_version }}"
+          echo "  Latest semver: $THIRD_LATEST_SEMVER"
+          echo "  New version: $THIRD_NEW_VERSION"
+          echo "  Final version: $THIRD_FINAL_VERSION"
           echo ""
           echo "Fourth dev call results (with commits):"
-          echo "  Latest semver: ${{ steps.fourth-dev-call.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.fourth-dev-call.outputs.new_version }}"
-          echo "  Final version: ${{ steps.fourth-dev-call.outputs.final_version }}"
+          echo "  Latest semver: $FOURTH_LATEST_SEMVER"
+          echo "  New version: $FOURTH_NEW_VERSION"
+          echo "  Final version: $FOURTH_FINAL_VERSION"
 
           # Latest semver should still be the same (v2.3.5 - no new release tags)
-          if [ "${{ steps.third-dev-call.outputs.latest_semver }}" != "v2.3.5" ]; then
+          if [ "$THIRD_LATEST_SEMVER" != "v2.3.5" ]; then
             echo "FAIL: Expected latest_semver to still be v2.3.5 (no new release tags)"
             exit 1
           fi
 
-          if [ "${{ steps.fourth-dev-call.outputs.latest_semver }}" != "v2.3.5" ]; then
+          if [ "$FOURTH_LATEST_SEMVER" != "v2.3.5" ]; then
             echo "FAIL: Expected latest_semver to still be v2.3.5 (no new release tags)"
             exit 1
           fi
 
           # New version should still be v2.4.0 (dev always increments minor from latest release)
-          if [ "${{ steps.third-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+          if [ "$THIRD_NEW_VERSION" != "v2.4.0" ]; then
             echo "FAIL: Expected new_version to still be v2.4.0 (dev ignores commit indicators)"
             exit 1
           fi
 
-          if [ "${{ steps.fourth-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+          if [ "$FOURTH_NEW_VERSION" != "v2.4.0" ]; then
             echo "FAIL: Expected new_version to still be v2.4.0 (dev ignores commit indicators)"
             exit 1
           fi
 
           # Final versions should be identical (same date)
-          if [ "${{ steps.third-dev-call.outputs.final_version }}" != "${{ steps.fourth-dev-call.outputs.final_version }}" ]; then
+          if [ "$THIRD_FINAL_VERSION" != "$FOURTH_FINAL_VERSION" ]; then
             echo "FAIL: Expected final_version to be identical in both calls with commits"
             exit 1
           fi
@@ -551,7 +606,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -574,11 +629,13 @@ jobs:
           tag-type: ""
 
       - name: Verify no bump
+        env:
+          BUMP_TYPE: ${{ steps.test-no-bump.outputs.bump_type }}
         run: |
           echo "No bump test results:"
-          echo "  Bump type: ${{ steps.test-no-bump.outputs.bump_type }}"
+          echo "  Bump type: $BUMP_TYPE"
 
-          if [ "${{ steps.test-no-bump.outputs.bump_type }}" != "none" ]; then
+          if [ "$BUMP_TYPE" != "none" ]; then
             echo "FAIL: Expected bump_type to be none"
             exit 1
           fi
@@ -602,13 +659,15 @@ jobs:
           tag-type: "rc"
 
       - name: Verify RC increment
+        env:
+          FINAL_VERSION: ${{ steps.test-rc-increment.outputs.final_version }}
         run: |
           echo "RC increment test results:"
-          echo "  Final version: ${{ steps.test-rc-increment.outputs.final_version }}"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should create rc3 since rc1 and rc2 already exist for v1.1.0
           expected_pattern="v.*-rc3"
-          if [[ ! "${{ steps.test-rc-increment.outputs.final_version }}" =~ $expected_pattern ]]; then
+          if [[ ! "$FINAL_VERSION" =~ $expected_pattern ]]; then
             echo "FAIL: Expected final_version to match RC pattern"
             exit 1
           fi
@@ -621,7 +680,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -653,20 +712,25 @@ jobs:
           tag-type: ""
 
       - name: Verify integration results
+        env:
+          LATEST_SEMVER: ${{ steps.integration.outputs.latest_semver }}
+          BUMP_TYPE: ${{ steps.integration.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.integration.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.integration.outputs.final_version }}
         run: |
           echo "Integration test results:"
-          echo "  Latest semver: ${{ steps.integration.outputs.latest_semver }}"
-          echo "  Bump type: ${{ steps.integration.outputs.bump_type }}"
-          echo "  New version: ${{ steps.integration.outputs.new_version }}"
-          echo "  Final version: ${{ steps.integration.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should detect MAJOR bump (highest priority)
-          if [ "${{ steps.integration.outputs.bump_type }}" != "major" ]; then
+          if [ "$BUMP_TYPE" != "major" ]; then
             echo "FAIL: Expected bump_type to be major (highest priority)"
             exit 1
           fi
 
-          if [ "${{ steps.integration.outputs.new_version }}" != "v2.0.0" ]; then
+          if [ "$NEW_VERSION" != "v2.0.0" ]; then
             echo "FAIL: Expected new_version to be v2.0.0"
             exit 1
           fi
@@ -679,7 +743,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -704,18 +768,21 @@ jobs:
           force-bump-type: "major"
 
       - name: Verify force-bump-type works
+        env:
+          BUMP_TYPE: ${{ steps.test-force-major.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-force-major.outputs.new_version }}
         run: |
           echo "Force bump test results:"
-          echo "  Bump type: ${{ steps.test-force-major.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-force-major.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
-          if [ "${{ steps.test-force-major.outputs.bump_type }}" != "major" ]; then
-            echo "FAIL: Expected forced bump_type to be major, got ${{ steps.test-force-major.outputs.bump_type }}"
+          if [ "$BUMP_TYPE" != "major" ]; then
+            echo "FAIL: Expected forced bump_type to be major, got $BUMP_TYPE"
             exit 1
           fi
 
-          if [ "${{ steps.test-force-major.outputs.new_version }}" != "v2.0.0" ]; then
-            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-force-major.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: Force bump type test passed"
@@ -746,20 +813,24 @@ jobs:
           ignore-commits: ${{ steps.setup-ignore-test.outputs.major-sha }}
 
       - name: Verify ignore-commits works
+        env:
+          BUMP_TYPE: ${{ steps.test-ignore-major.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-ignore-major.outputs.new_version }}
+          IGNORED_SHA: ${{ steps.setup-ignore-test.outputs.major-sha }}
         run: |
           echo "Ignore commits test results:"
-          echo "  Bump type: ${{ steps.test-ignore-major.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-ignore-major.outputs.new_version }}"
-          echo "  Ignored SHA: ${{ steps.setup-ignore-test.outputs.major-sha }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
+          echo "  Ignored SHA: $IGNORED_SHA"
 
           # Should be minor since we ignored the major commit
-          if [ "${{ steps.test-ignore-major.outputs.bump_type }}" != "minor" ]; then
-            echo "FAIL: Expected bump_type to be minor after ignoring major commit, got ${{ steps.test-ignore-major.outputs.bump_type }}"
+          if [ "$BUMP_TYPE" != "minor" ]; then
+            echo "FAIL: Expected bump_type to be minor after ignoring major commit, got $BUMP_TYPE"
             exit 1
           fi
 
-          if [ "${{ steps.test-ignore-major.outputs.new_version }}" != "v1.1.0" ]; then
-            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-ignore-major.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: Ignore commits test passed"
@@ -815,19 +886,22 @@ jobs:
           ignore-commits: "${{ steps.setup-multiple-ignore.outputs.major-sha1 }},${{ steps.setup-multiple-ignore.outputs.major-sha2 }}"
 
       - name: Verify multiple ignored commits
+        env:
+          BUMP_TYPE: ${{ steps.test-ignore-multiple.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-ignore-multiple.outputs.new_version }}
         run: |
           echo "Multiple ignore test results:"
-          echo "  Bump type: ${{ steps.test-ignore-multiple.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-ignore-multiple.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
           # Should be patch since we ignored both major commits
-          if [ "${{ steps.test-ignore-multiple.outputs.bump_type }}" != "patch" ]; then
-            echo "FAIL: Expected bump_type to be patch after ignoring major commits, got ${{ steps.test-ignore-multiple.outputs.bump_type }}"
+          if [ "$BUMP_TYPE" != "patch" ]; then
+            echo "FAIL: Expected bump_type to be patch after ignoring major commits, got $BUMP_TYPE"
             exit 1
           fi
 
-          if [ "${{ steps.test-ignore-multiple.outputs.new_version }}" != "v1.0.1" ]; then
-            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-ignore-multiple.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got $NEW_VERSION"
             exit 1
           fi
           echo "PASS: Multiple ignore commits test passed"
@@ -841,17 +915,20 @@ jobs:
           force-bump-type: "none"
 
       - name: Verify force none bump
+        env:
+          BUMP_TYPE: ${{ steps.test-force-none.outputs.bump_type }}
+          NEW_VERSION: ${{ steps.test-force-none.outputs.new_version }}
         run: |
           echo "Force none test results:"
-          echo "  Bump type: ${{ steps.test-force-none.outputs.bump_type }}"
-          echo "  New version: ${{ steps.test-force-none.outputs.new_version }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  New version: $NEW_VERSION"
 
-          if [ "${{ steps.test-force-none.outputs.bump_type }}" != "none" ]; then
+          if [ "$BUMP_TYPE" != "none" ]; then
             echo "FAIL: Expected forced bump_type to be none"
             exit 1
           fi
 
-          if [ "${{ steps.test-force-none.outputs.new_version }}" != "v1.0.0" ]; then
+          if [ "$NEW_VERSION" != "v1.0.0" ]; then
             echo "FAIL: Expected new_version to stay v1.0.0 with no bump"
             exit 1
           fi
@@ -878,14 +955,18 @@ jobs:
           ignore-commits: ${{ steps.setup-short-sha-test.outputs.short-sha }}
 
       - name: Verify short SHA ignore works
+        env:
+          BUMP_TYPE: ${{ steps.test-ignore-short-sha.outputs.bump_type }}
+          SHORT_SHA: ${{ steps.setup-short-sha-test.outputs.short-sha }}
+          FULL_SHA: ${{ steps.setup-short-sha-test.outputs.full-sha }}
         run: |
           echo "Short SHA ignore test results:"
-          echo "  Bump type: ${{ steps.test-ignore-short-sha.outputs.bump_type }}"
-          echo "  Short SHA used: ${{ steps.setup-short-sha-test.outputs.short-sha }}"
-          echo "  Full SHA: ${{ steps.setup-short-sha-test.outputs.full-sha }}"
+          echo "  Bump type: $BUMP_TYPE"
+          echo "  Short SHA used: $SHORT_SHA"
+          echo "  Full SHA: $FULL_SHA"
 
           # Should be none since we ignored the only commit
-          if [ "${{ steps.test-ignore-short-sha.outputs.bump_type }}" != "none" ]; then
+          if [ "$BUMP_TYPE" != "none" ]; then
             echo "FAIL: Expected bump_type to be none after ignoring commit with short SHA"
             exit 1
           fi
@@ -908,7 +989,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -933,15 +1014,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev bumps from bigger RC
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-from-bigger-rc.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-from-bigger-rc.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-from-bigger-rc.outputs.final_version }}
         run: |
           echo "Dev tag from bigger RC results:"
-          echo "  Latest semver: ${{ steps.test-dev-from-bigger-rc.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-from-bigger-rc.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-from-bigger-rc.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v1.5.0 (from rc) and bump minor -> v1.6.0
-          if [ "${{ steps.test-dev-from-bigger-rc.outputs.new_version }}" != "v1.6.0" ]; then
-            echo "❌ FAILED: Expected v1.6.0 but got ${{ steps.test-dev-from-bigger-rc.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v1.6.0" ]; then
+            echo "❌ FAILED: Expected v1.6.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -963,15 +1048,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev bumps from bigger semver
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-from-bigger-semver.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-from-bigger-semver.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-from-bigger-semver.outputs.final_version }}
         run: |
           echo "Dev tag from bigger semver results:"
-          echo "  Latest semver: ${{ steps.test-dev-from-bigger-semver.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-from-bigger-semver.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-from-bigger-semver.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v2.0.0 (semver, bigger) and bump minor -> v2.1.0
-          if [ "${{ steps.test-dev-from-bigger-semver.outputs.new_version }}" != "v2.1.0" ]; then
-            echo "❌ FAILED: Expected v2.1.0 but got ${{ steps.test-dev-from-bigger-semver.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.1.0" ]; then
+            echo "❌ FAILED: Expected v2.1.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -994,15 +1083,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev uses semver when versions equal
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-equal-versions.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-equal-versions.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-equal-versions.outputs.final_version }}
         run: |
           echo "Dev tag with equal versions results:"
-          echo "  Latest semver: ${{ steps.test-dev-equal-versions.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-equal-versions.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-equal-versions.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v3.2.1 (semver, when equal prefer semver) and bump minor -> v3.3.0
-          if [ "${{ steps.test-dev-equal-versions.outputs.new_version }}" != "v3.3.0" ]; then
-            echo "❌ FAILED: Expected v3.3.0 but got ${{ steps.test-dev-equal-versions.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v3.3.0" ]; then
+            echo "❌ FAILED: Expected v3.3.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -1023,15 +1116,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev bumps from RC with bigger major
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-rc-bigger-major.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-rc-bigger-major.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-rc-bigger-major.outputs.final_version }}
         run: |
           echo "Dev tag from RC bigger major results:"
-          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-major.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-rc-bigger-major.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-rc-bigger-major.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v2.0.0 (from rc, bigger major) and bump minor -> v2.1.0
-          if [ "${{ steps.test-dev-rc-bigger-major.outputs.new_version }}" != "v2.1.0" ]; then
-            echo "❌ FAILED: Expected v2.1.0 but got ${{ steps.test-dev-rc-bigger-major.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.1.0" ]; then
+            echo "❌ FAILED: Expected v2.1.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -1052,15 +1149,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev bumps from RC with bigger minor
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-rc-bigger-minor.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-rc-bigger-minor.outputs.final_version }}
         run: |
           echo "Dev tag from RC bigger minor results:"
-          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-minor.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-rc-bigger-minor.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v2.6.0 (from rc, bigger minor) and bump minor -> v2.7.0
-          if [ "${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}" != "v2.7.0" ]; then
-            echo "❌ FAILED: Expected v2.7.0 but got ${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v2.7.0" ]; then
+            echo "❌ FAILED: Expected v2.7.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -1081,15 +1182,19 @@ jobs:
           tag-type: "dev"
 
       - name: Verify dev bumps from RC with bigger patch
+        env:
+          LATEST_SEMVER: ${{ steps.test-dev-rc-bigger-patch.outputs.latest_semver }}
+          NEW_VERSION: ${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}
+          FINAL_VERSION: ${{ steps.test-dev-rc-bigger-patch.outputs.final_version }}
         run: |
           echo "Dev tag from RC bigger patch results:"
-          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-patch.outputs.latest_semver }}"
-          echo "  New version: ${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}"
-          echo "  Final version: ${{ steps.test-dev-rc-bigger-patch.outputs.final_version }}"
+          echo "  Latest semver: $LATEST_SEMVER"
+          echo "  New version: $NEW_VERSION"
+          echo "  Final version: $FINAL_VERSION"
 
           # Should use v3.1.6 (from rc, bigger patch) and bump minor -> v3.2.0
-          if [ "${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}" != "v3.2.0" ]; then
-            echo "❌ FAILED: Expected v3.2.0 but got ${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}"
+          if [ "$NEW_VERSION" != "v3.2.0" ]; then
+            echo "❌ FAILED: Expected v3.2.0 but got $NEW_VERSION"
             exit 1
           fi
 
@@ -1098,7 +1203,17 @@ jobs:
   final-test-summary:
     name: Final Test Summary
     runs-on: ubuntu-latest
-    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits, test-dev-tag-rc-comparison]
+    needs:
+      [
+        test-calculate-version,
+        test-version-bumping,
+        test-dev-tag-versioning,
+        test-dev-tag-consistency,
+        test-edge-cases,
+        integration-test,
+        test-force-bump-and-ignore-commits,
+        test-dev-tag-rc-comparison,
+      ]
     steps:
       - name: Test summary
         run: |

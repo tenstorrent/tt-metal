@@ -1,9 +1,9 @@
-name: 'Delete Allocation'
-description: 'A composable action to delete an allocation'
+name: "Delete Allocation"
+description: "A composable action to delete an allocation"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
   namespace:
     description: 'Kubernetes namespace for the environment'
@@ -11,9 +11,13 @@ inputs:
     default: 'ttop-ci'
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Delete Allocation
       shell: bash
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }} --ignore-not-found
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
+        kubectl -n ${{ inputs.namespace }} delete allocation/$ALLOCATION_NAME --ignore-not-found

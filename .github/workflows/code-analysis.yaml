@@ -36,6 +36,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+    secrets:
+      CLANGSA_RESULTS_PAT:
+        required: false
+      REDIS_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       architecture:
@@ -79,7 +84,7 @@ jobs:
       merge-base: ${{ steps.compute-outputs.outputs.merge-base }}
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -92,17 +97,22 @@ jobs:
 
       - id: compute-outputs
         shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          CLANG_TIDY_CONFIG_CHANGED: ${{ steps.find-changes.outputs.clang-tidy-config-changed }}
+          ANY_CODE_CHANGED: ${{ steps.find-changes.outputs.any-code-changed }}
+          CMAKE_CHANGED: ${{ steps.find-changes.outputs.cmake-changed }}
         run: |
-          if [[ "${{ github.ref_name }}" == "main" ]] || \
-             [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
+          if [[ "$REF_NAME" == "main" ]] || \
+             [[ "$CLANG_TIDY_CONFIG_CHANGED" == "true" ]]; then
             do_full_scan="true"
           else
             do_full_scan="false"
           fi
 
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "$ANY_CODE_CHANGED" == "true" ]] || \
+             [[ "$CMAKE_CHANGED" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
@@ -110,8 +120,8 @@ jobs:
 
           merge_base=""
           if [[ "$do_full_scan" != "true" ]]; then
-            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
-            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+            merge_base=$(git merge-base "$REF_NAME" origin/main)
+            echo "Merge base between $REF_NAME and main: $merge_base"
           fi
 
           echo "Do a scan: $do_scan"
@@ -122,11 +132,10 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: always() && !failure() && !cancelled() && inputs.ci-build-docker-image == ''
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -134,13 +143,14 @@ jobs:
   # Full scan: single job that analyzes everything
   clang-tidy-full:
     name: 🤖 Clang Tidy (Full)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan == 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -148,21 +158,22 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'true'
-      merge-base: ''
-      prereq-targets: ''
-      scan-targets: ''
+      do-full-scan: "true"
+      merge-base: ""
+      prereq-targets: ""
+      scan-targets: ""
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
     name: 🤖 Clang Tidy (Metalium)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -170,20 +181,21 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: ''
-      scan-targets: 'tt_metal'
+      prereq-targets: ""
+      scan-targets: "tt_metal"
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -191,10 +203,10 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: 'tt_metal'
-      scan-targets: 'ttnn'
+      prereq-targets: "tt_metal"
+      scan-targets: "ttnn"
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -219,13 +231,14 @@ jobs:
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -233,7 +246,7 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''

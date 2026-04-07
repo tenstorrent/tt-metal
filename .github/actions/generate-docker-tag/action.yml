@@ -3,7 +3,7 @@ description: "Run commands in docker"
 
 inputs:
   image:
-    description: 'Docker image to run commands in - follows os-arch format'
+    description: "Docker image to run commands in - follows os-arch format"
     required: false
     default: ubuntu-20.04-amd64
 runs:
@@ -15,7 +15,7 @@ runs:
         echo "::notice::[DEPRECATION] This action is deprecated. Please migrate to reading the Docker image from the pipeline."
 
     - name: Checkout repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         fetch-depth: 1
         clean: false
@@ -23,7 +23,14 @@ runs:
     - name: Compute tags
       id: tags
       shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        REPOSITORY: ${{ github.repository }}
       run: |
+        if [[ ! "${IMAGE}" =~ ^[a-zA-Z0-9._:/-]+$ ]]; then
+          echo "::error::Invalid image name: ${IMAGE}"
+          exit 1
+        fi
         BUILD_TAG=$(cat \
           install_dependencies.sh \
           dockerfile/Dockerfile \
@@ -31,5 +38,5 @@ runs:
           docs/requirements-docs.txt \
           tests/sweep_framework/requirements-sweeps.txt \
           | sha1sum | cut -d' ' -f1)
-        echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
-        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${BUILD_TAG}" >> $GITHUB_ENV
+        printf '%s\n' "BUILD_TAG=${BUILD_TAG}" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${REPOSITORY}/${IMAGE}:${BUILD_TAG}" >> "${GITHUB_ENV}"
