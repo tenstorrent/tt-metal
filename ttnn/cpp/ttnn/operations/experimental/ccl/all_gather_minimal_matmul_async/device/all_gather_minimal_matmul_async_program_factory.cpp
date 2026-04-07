@@ -201,7 +201,8 @@ all_gather_minimal_matmul_async_factory_helper(
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
-    bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    // Derive from scalar presence, matching validate (which guarantees tensors are also present).
+    bool use_fused_ternary = fused_ternary_scalar.has_value();
 
     /**
      * Determine dataformats, compute kernel config
@@ -1114,8 +1115,9 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const AllGatherMinimalMatmulAsyncParams& attributes,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
     std::vector<ttnn::Tensor>& output_tensor) {
-    bool has_fused_ternary =
-        tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
+    // Derive has_fused_ternary from scalar presence, matching validate and create_at.
+    // validate guarantees that scalar and tensors are always provided together.
+    bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
 
     // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
     std::vector<uint32_t> in0_common = {
@@ -1153,10 +1155,9 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     }
 
     // Build compute common args: [scalar, broadcast_ternary_b] (only if fused ternary)
-    bool has_fused_scalar = has_fused_ternary && attributes.fused_ternary_scalar.has_value();
     uint32_t scalar_as_uint = 0;
     uint32_t broadcast_ternary_b_uint = 1;  // default broadcast
-    if (has_fused_scalar) {
+    if (has_fused_ternary) {
         float scalar = attributes.fused_ternary_scalar.value();
         scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
         uint32_t ternary_b_M_tiles =
@@ -1189,7 +1190,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         }
 
         // Update compute common args
-        if (has_fused_scalar) {
+        if (has_fused_ternary) {
             auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.compute_kernels_id);
             compute_common[0] = scalar_as_uint;
             compute_common[1] = broadcast_ternary_b_uint;

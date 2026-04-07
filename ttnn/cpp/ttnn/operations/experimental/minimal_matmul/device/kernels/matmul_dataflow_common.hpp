@@ -210,9 +210,10 @@ void write_block_sync(
  * For ternary_b:
  *   - broadcast_ternary_b=1: read 1 row of tiles (N_block_tiles), compute broadcasts across M rows.
  *   - broadcast_ternary_b=0: read M rows of tiles, pushed one row at a time (matches ternary_a pattern).
- *
- * Performance optimization: pushes tiles one row at a time. This allows the compute kernel to begin
- * processing as soon as the first row is ready.
+ * Performance optimization: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_a
+ * tiles one row at a time. This allows the compute kernel to begin processing addcmul operations
+ * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
+ * of data movement and compute improves overall throughput.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_ternary_blocks_sync(
