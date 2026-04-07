@@ -247,6 +247,70 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
     return torch_tensor
 
 
+def fast_device_to_host(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    concat_dims: list[int | None],
+) -> torch.Tensor:
+    """Fast D2H transfer using async DMA and zero-copy to_torch.
+
+    Instead of on-device all_gather followed by a single ``to_torch`` (which
+    always copies via ``decode_tensor_data``), this:
+
+    1. Issues async DMA for all per-device shards concurrently.
+    2. Synchronizes once.
+    3. Uses ``to_torch_with_padded_shape`` which wraps the host buffer directly
+       as a PyTorch tensor (zero-copy for ROW_MAJOR).
+    4. Trims tile padding and concatenates on host.
+
+    Args:
+        tt_tensor: Multi-device ttnn tensor on ``mesh_device``.
+        mesh_device: The mesh device.
+        concat_dims: Per mesh axis, the tensor dimension to concatenate along,
+            or ``None`` to skip that axis.  E.g. ``[3, 4]`` means concatenate
+            along dim 3 for mesh axis 0 and dim 4 for mesh axis 1.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    import torch
+
+    mesh_shape = tuple(mesh_device.shape)
+    device_tensors = ttnn.get_device_tensors(tt_tensor)
+
+    # Async DMA: issue all transfers then sync once
+    host_tensors = [dt.cpu(blocking=False) for dt in device_tensors]
+    ttnn.synchronize_device(mesh_device)
+
+    # Zero-copy to_torch (wraps existing host buffer, no memcpy)
+    with ThreadPoolExecutor(max_workers=len(host_tensors)) as pool:
+        shards = list(pool.map(ttnn.Tensor.to_torch_with_padded_shape, host_tensors))
+
+    # Trim physical (tile-padded) shape to logical shape — view, no copy
+    logical_shape = list(host_tensors[0].shape)
+    shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
+
+    # Reassemble from 2D mesh.  Devices are in row-major order by mesh
+    # coordinate (r, c) where axis 0 varies across rows and axis 1 across cols.
+    if concat_dims[0] is not None and concat_dims[1] is not None:
+        rows = []
+        for r in range(mesh_shape[0]):
+            row_shards = [shards[r * mesh_shape[1] + c] for c in range(mesh_shape[1])]
+            rows.append(torch.cat(row_shards, dim=concat_dims[1]))
+        return torch.cat(rows, dim=concat_dims[0])
+    elif concat_dims[0] is not None:
+        return torch.cat(
+            [shards[r * mesh_shape[1]] for r in range(mesh_shape[0])],
+            dim=concat_dims[0],
+        )
+    elif concat_dims[1] is not None:
+        return torch.cat(
+            [shards[c] for c in range(mesh_shape[1])],
+            dim=concat_dims[1],
+        )
+    else:
+        return shards[0]
+
+
 def upsample(
     x: ttnn.Tensor,
     /,

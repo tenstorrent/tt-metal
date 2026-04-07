@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
+from ...utils.tensor import fast_device_to_host, local_device_to_torch, typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -1029,7 +1029,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
+            video_torch = fast_device_to_host(tt_video_BCTHW, self.mesh_device, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             if output_type == "np":

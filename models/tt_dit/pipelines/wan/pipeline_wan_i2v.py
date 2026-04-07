@@ -14,7 +14,7 @@ import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host
 from .pipeline_wan import WanPipeline
 
 
@@ -153,12 +153,7 @@ class WanPipelineI2V(WanPipeline):
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-        encoded_video_torch = ttnn.to_torch(
-            encoded_video_BCTHW,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
-            ),
-        )
+        encoded_video_torch = fast_device_to_host(encoded_video_BCTHW, self.mesh_device, concat_dims)
         encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
