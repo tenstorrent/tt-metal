@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -124,11 +123,6 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
-}
-
-Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(

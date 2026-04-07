@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -66,11 +65,6 @@ IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs
     return TensorSpec(
         tensor_args.input.logical_shape(),
         tensor_args.input.tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
-}
-IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 }  // namespace ttnn::operations::index_fill
 

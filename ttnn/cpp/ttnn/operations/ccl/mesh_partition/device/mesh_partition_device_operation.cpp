@@ -83,18 +83,6 @@ MeshPartitionDeviceOperation::spec_return_value_t MeshPartitionDeviceOperation::
             operation_attributes.output_mem_config))};
 }
 
-MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-
-    auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-    return tensor;
-}
-
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {

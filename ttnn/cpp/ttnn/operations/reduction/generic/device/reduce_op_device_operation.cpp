@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
@@ -77,11 +76,6 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
     }
 
     return tensor_spec;
-}
-
-ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
 ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(

@@ -87,12 +87,6 @@ NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
-NLPConcatHeadsDeviceOperation::tensor_return_value_t NLPConcatHeadsDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args;
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input_tensor.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

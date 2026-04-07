@@ -49,12 +49,6 @@ TensorSpec FillRMDeviceOperation::compute_output_specs(
     return TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-Tensor FillRMDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const Tensor& input_tensor = tensor_args.input;
-    return create_device_tensor(compute_output_specs(args, tensor_args), input_tensor.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<FillRMDeviceOperation::tensor_return_value_t>
 FillRMDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,

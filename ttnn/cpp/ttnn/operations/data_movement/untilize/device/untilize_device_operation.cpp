@@ -277,11 +277,6 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
             input_tensor.padded_shape()))};
 }
 
-UntilizeDeviceOperation::tensor_return_value_t UntilizeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;

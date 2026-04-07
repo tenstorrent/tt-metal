@@ -82,12 +82,6 @@ TensorSpec DramPrefetcherOperation::compute_output_specs(
             MemoryConfig{}));
 }
 
-DramPrefetcherOperation::tensor_return_value_t DramPrefetcherOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
-}
-
 ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,

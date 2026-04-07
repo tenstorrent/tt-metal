@@ -150,13 +150,6 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
         TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), mem_config));
 }
 
-AllToAllCombineDeviceOperation::tensor_return_value_t AllToAllCombineDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return tensor_args.optional_output_tensor.value_or(
-        create_device_tensor(output_spec, tensor_args.input_tensor.device()));
-}
-
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {

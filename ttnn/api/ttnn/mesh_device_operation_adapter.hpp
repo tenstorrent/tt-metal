@@ -92,7 +92,20 @@ struct MeshDeviceOperationAdapter {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        if constexpr (HasCreateOutputTensors<DeviceOperation>) {
+            return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        } else {
+            static_assert(
+                std::is_same_v<tensor_return_value_t, Tensor>,
+                "Default create_output_tensors only supports tensor_return_value_t = Tensor. "
+                "Provide a custom create_output_tensors for multi-output operations.");
+            auto specs = DeviceOperation::compute_output_specs(attrs, tensor_args);
+            auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+            TT_FATAL(
+                first_tensor.has_value(),
+                "Default create_output_tensors requires at least one input tensor to determine the device");
+            return create_device_tensor(specs, first_tensor.value().device());
+        }
     }
 
     static ttsl::hash::hash_t compute_program_hash(

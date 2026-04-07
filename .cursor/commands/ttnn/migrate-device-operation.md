@@ -27,7 +27,7 @@ See the comprehensive guide for detailed examples and the complete 15-step check
 1. **Forgetting to register the prim**: Always register in `ttnn::prim` namespace and use it instead of direct calls
 2. **Including runtime-only values in hash**: Only hash compile-time constants that affect program structure
 3. **Not including values that affect the program structure in hash**: Every parameter that affects program structure must be in the hash
-4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
+4. **Implementing `create_output_tensors` unnecessarily**: The framework provides a default that calls `compute_output_specs` and `create_device_tensor` for simple single-output operations. You must implement it for preallocated outputs, in-place ops, attribute-conditional, multi-output, or no-input ops.
 5. **tensor_args_t must NOT contain references** - no `const &` or `&`
 
 ## Example Reference

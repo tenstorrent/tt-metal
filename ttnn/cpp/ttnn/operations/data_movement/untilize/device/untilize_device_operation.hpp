@@ -54,9 +54,6 @@ struct UntilizeDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         tt::tt_metal::MemoryConfig output_mem_config,

@@ -98,18 +98,25 @@ template <typename Variant>
 concept AllFactoriesValid =
     detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
 
+// Detect if operation provides a custom create_output_tensors.
+// If not provided, the framework creates output tensors from compute_output_specs automatically.
+template <typename device_operation_t>
+concept HasCreateOutputTensors = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::create_output_tensors(attrs, tensor_args)
+    } -> std::same_as<typename device_operation_t::tensor_return_value_t>;
+};
+
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     typename device_operation_t::program_factory_t;
+    typename device_operation_t::tensor_return_value_t;
 
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-
-        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
     };
 } && HasComputeOutputSpecs<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>;
 

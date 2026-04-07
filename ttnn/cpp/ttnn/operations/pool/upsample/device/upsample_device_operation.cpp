@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
@@ -134,11 +133,6 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     }
 
     return make_spec(operations::pool::upsample::compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
-}
-
-UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(
-    const operation_attributes_t& args, const Tensor& input) {
-    return create_device_tensor(compute_output_specs(args, input), input.device());
 }
 
 ttnn::Tensor upsample(
