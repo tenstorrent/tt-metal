@@ -73,7 +73,7 @@ void AdamW::step() {
             max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
         }
 
-        ttml::metal::adamw(
+        auto updated_param = ttml::metal::adamw(
             param,
             gradients,
             exp_avg,
@@ -87,6 +87,8 @@ void AdamW::step() {
             m_config.epsilon,
             m_config.weight_decay,
             static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding));
+        // Keep AutocastTensor precision caches coherent after in-place optimizer updates.
+        theta_ptr->set_value(updated_param);
     }
 }
 

@@ -67,7 +67,7 @@ void SGD::step() {
 
         // The first step should not apply dampening
         float dampening = m_steps == 0 ? 0.0f : m_config.dampening;
-        ttml::metal::sgd(
+        auto updated_param = ttml::metal::sgd(
             param,
             gradients,
             m_config.lr,
@@ -76,6 +76,9 @@ void SGD::step() {
             m_config.weight_decay,
             m_config.nesterov,
             momentum_buffer);
+        // Optimizer kernels mutate BF16 parameter views. Re-setting the tensor
+        // invalidates stale autocast caches (e.g. previously materialized FULL precision views).
+        theta_ptr->set_value(updated_param);
     }
     m_steps++;
 }

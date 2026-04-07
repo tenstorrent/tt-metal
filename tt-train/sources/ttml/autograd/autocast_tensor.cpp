@@ -17,8 +17,10 @@ void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
         m_full_precision_tensor = tensor;
         m_half_precision_tensor = ttnn::Tensor();
     } else if (tensor.dtype() == ttnn::DataType::BFLOAT16) {
-        m_half_precision_tensor = tensor;
-        m_full_precision_tensor = ttnn::Tensor();
+        // Keep BF16 as the canonical representation so FULL precision access
+        // returns the original dtype instead of an implicit FP32 upcast.
+        m_full_precision_tensor = tensor;
+        m_half_precision_tensor = ttnn::Tensor();
     } else {
         // Non-castable types (e.g. UINT32 for embedding indices): store as-is in the
         // full-precision slot and return unchanged from get_tensor() regardless of
@@ -44,6 +46,9 @@ const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision prefer
     }
 
     if (preferred_precision == PreferredPrecision::HALF) {
+        if (has_full() && m_full_precision_tensor.dtype() == ttnn::DataType::BFLOAT16) {
+            return m_full_precision_tensor;
+        }
         if (!has_half()) {
             m_half_precision_tensor = ttnn::typecast(m_full_precision_tensor, ttnn::DataType::BFLOAT16);
         }
