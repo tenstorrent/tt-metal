@@ -52,7 +52,6 @@ def run_group_norm_DRAM(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_row_major = ttnn.fill_implicit_tile_padding(input_tensor_row_major, TEST_PADDING_VALUE)
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
     input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
@@ -280,6 +279,7 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -353,7 +353,6 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_row_major = ttnn.fill_implicit_tile_padding(input_tensor_row_major, TEST_PADDING_VALUE)
 
     unpadded_shape = input_tensor_row_major.shape
     out_shape = [
