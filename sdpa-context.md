@@ -125,7 +125,14 @@ struct CoreKChainInfo {
     uint32_t batch = 0;
     CoreCoord prev_physical = CoreCoord{0, 0};
     CoreCoord next_physical = CoreCoord{0, 0};
-    uint32_t next_core_q_chunks = 0;  // For forwarding decision
+    uint32_t next_core_q_chunks = 0;  // For forwarding decision (unicast)
+    // K multicast fields (for 2D mcast across full grid)
+    bool use_k_mcast = false;
+    CoreCoord mcast_start = CoreCoord{0, 0};      // Rectangle start (physical)
+    CoreCoord mcast_end = CoreCoord{0, 0};        // Rectangle end (physical)
+    CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's physical coords
+    uint32_t k_mcast_num_dests = 0;               // Receivers count (excludes self)
+    uint32_t k_mcast_sender_wait = 0;             // Semaphore wait count
 };
 ```
 
@@ -178,8 +185,21 @@ if (enable_zigzag_balancing) {
 | Injector = single-head core | `work.head_work.size() == 1` | Avoid head boundary issues |
 | Linear only, no wrap | Comment at line 817 | Prevents deadlock |
 
-### Multicast Variant (V chain only)
-When all V chain cores on same row: injector broadcasts to all receivers simultaneously. K chain currently uses unicast only.
+### Multicast Variants
+
+**V chain (1D multicast):** When all V chain cores are on the same row with uniform work, the injector broadcasts to all receivers simultaneously via `noc_async_write_multicast`.
+
+**K chain (2D multicast):** When `NHK < NH` (MLA mode) and `B == 1` (single batch), K uses 2D multicast across the entire compute grid:
+- Injector is selected as the core with **maximum work** (most q_chunks)
+- Physical bounds derived from logical grid corners (always rectangular)
+- All receivers signal the injector's semaphore, then injector broadcasts to all
+- Non-uniform work handled via **loop padding**: all cores iterate `max_q_per_core` times; padded iterations participate in K sync but skip Q/V work
+
+**K mcast logging:** `log_info` shows mode and fallback reason:
+```
+K chain mode: mcast
+K chain mode: unicast (B > 1 (multi-batch not supported))
+```
 
 ### Known Issue: Non-MLA K Chaining Regression
 
@@ -304,16 +324,16 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 - Linear unicast forwarding based on `q_iter` count
 - Debug visualization via `print_k_chains()`
 
-**Phase 2: 2D multicast for full grid**
-- Injector broadcasts K to entire compute grid simultaneously
-- **Complexity:** Requires a full 2D rectangle where all cores do the same amount of work
-- Cores with less work need padding
-- Cores with no work need dummy compute to participate in the multicast synchronization
+**Phase 2: 2D multicast for full grid** ✅ COMPLETE
+- Injector (core with max work) broadcasts K to entire compute grid via `noc_async_write_multicast`
+- Physical bounds computed from logical grid corners (handles harvested cores)
+- Non-uniform work: all cores loop `max_q_per_core` times; padded iterations do K sync only
+- Enabled when `NHK < NH` (MLA) and `B == 1` (single batch)
+- Fallback to unicast with logged reason when conditions not met
 
-**Reference implementations (conv2d multicast patterns):**
-- `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp`
-- `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp`
-- `ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp`
+**Phase 3: Multi-batch K mcast** (future)
+- Current limitation: K mcast only works for single batch (`B == 1`)
+- Options: multiple injectors (one per batch), sequential mcast per batch, or hybrid approach
 
 ### 2. Improving Tests (existing target)
 
@@ -396,32 +416,51 @@ for (ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
 
 ### Reader Kernel KV Flow (with K chain)
 ```cpp
-for (k_chunk ...) {
-    // K: receive from K chain or read from DRAM
-    if (should_receive_k) {  // K chain receiver (batch-level)
-        noc_semaphore_set(k_receiver_sem, INVALID);
-        noc_semaphore_inc(k_sender_sem_noc, 1);
-        noc_semaphore_wait(k_receiver_sem, VALID);
-    } else {
-        read_block(K_dram, ...);
+// Loop padded to max_q_per_core for K mcast sync
+for (q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+    const bool is_padded_iter = (q_iter >= q_per_core);
+
+    for (k_chunk ...) {
+        // K: receive from K chain or read from DRAM
+        if (should_receive_k) {
+            noc_semaphore_set(k_receiver_sem, INVALID);
+            if (k_use_mcast) {
+                // K mcast: signal injector's semaphore
+                noc_semaphore_inc(k_injector_sender_sem_noc, 1);
+            } else {
+                // K unicast: signal previous core's semaphore
+                noc_semaphore_inc(k_sender_sem_noc, 1);
+            }
+            noc_semaphore_wait(k_receiver_sem, VALID);
+            if (!is_padded_iter) cb_push_back(cb_k, k_chunk_tiles);
+        } else {
+            read_block(K_dram, ...);  // Injector reads from DRAM
+        }
+
+        // K: forward (mcast or unicast)
+        if (should_forward_k) {
+            if (k_use_mcast) {
+                // Wait for ALL receivers, then broadcast
+                noc_semaphore_wait(k_sender_sem, k_mcast_sender_wait);
+                noc_async_write_multicast(cb_k, k_mcast_addr, ...);
+                noc_semaphore_set_multicast(k_valid_sem, k_mcast_sem_noc, ...);
+            } else {
+                // Unicast to next core
+                noc_semaphore_wait(k_sender_sem, 1);
+                noc_async_write(cb_k, next_core_k_addr, ...);
+                noc_semaphore_set_remote(k_valid_sem, k_receiver_sem_noc);
+            }
+        }
+
+        // Skip Q, V for padded iterations (K sync only)
+        if (is_padded_iter) continue;
+
+        // Q: download after K (on first K iteration)
+        ...
+
+        // V: receive/read and forward (unchanged)
+        ...
     }
-
-    // K: forward via K chain if applicable
-    if (should_forward_k) {  // Based on q_iter < k_next_core_total_reads
-        noc_semaphore_wait(k_sender_sem, 1);
-        noc_async_write(cb_k, next_core_k_addr, ...);
-        noc_semaphore_set_remote(k_valid_sem, k_receiver_sem_noc);
-    }
-
-    // Q: download after K (on first K iteration)
-    ...
-
-    // V: receive from V chain or read from DRAM (head-level)
-    if (should_receive_v) { ... }
-    else { read_block(V_dram, ...); }
-
-    // V: forward via V chain (supports multicast)
-    if (should_forward_v) { ... }
 }
 ```
 
