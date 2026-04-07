@@ -168,7 +168,7 @@ void kernel_main() {
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
     // DPRINT_COMBINE << "dispatched_metadata scratch addr: " << metadata_base << ENDL();
-    cb_reserve_back(cb_untilized_id, read_batch_size);
+    // cb_reserve_back(cb_untilized_id, read_batch_size);
     uint32_t untilize_base = get_write_ptr(cb_untilized_id);
     // DPRINT_COMBINE << "cb_untilized_id scratch addr: " << untilize_base << ENDL();
     const auto dispatched_buffer_addr_gen =
@@ -209,19 +209,19 @@ void kernel_main() {
             noc_async_read_barrier();
 
             // Debug: dump all tiles from cb_dispatched_buffer (c_0) — chip 0, first expert only
-            if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
-                volatile tt_l1_ptr uint16_t* tile_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buffer_base);
-                constexpr uint32_t num_tiles = hidden_size / 32;            // 224
-                constexpr uint32_t vals_per_tile = 32 * 32;                 // 1024
-                constexpr uint32_t total_vals = num_tiles * vals_per_tile;  // 229376
-                DPRINT_COMBINE << "TILE_DUMP tiles=" << num_tiles << " vals_per_tile=" << vals_per_tile << ENDL();
-                for (uint32_t i = 0; i < total_vals; i += 8) {
-                    for (uint32_t j = 0; j < 8 && (i + j) < total_vals; j++) {
-                        DPRINT_COMBINE << (uint32_t)tile_data[i + j] << " ";
-                    }
-                }
-                DPRINT_COMBINE << ENDL();
-            }
+            // if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
+            //     volatile tt_l1_ptr uint16_t* tile_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buffer_base);
+            //     constexpr uint32_t num_tiles = hidden_size / 32;            // 224
+            //     constexpr uint32_t vals_per_tile = 32 * 32;                 // 1024
+            //     constexpr uint32_t total_vals = num_tiles * vals_per_tile;  // 229376
+            //     DPRINT_COMBINE << "TILE_DUMP tiles=" << num_tiles << " vals_per_tile=" << vals_per_tile << ENDL();
+            //     for (uint32_t i = 0; i < total_vals; i += 8) {
+            //         for (uint32_t j = 0; j < 8 && (i + j) < total_vals; j++) {
+            //             DPRINT_COMBINE << (uint32_t)tile_data[i + j] << " ";
+            //         }
+            //     }
+            //     DPRINT_COMBINE << ENDL();
+            // }
 
             // Push one page to untilize output CB (compute kernel reads value to check for sentinel)
             cb_reserve_back(cb_untilize_out_id, 1);
@@ -231,21 +231,21 @@ void kernel_main() {
             cb_push_back(cb_untilize_out_id, 1);
 
             // Wait for compute kernel to ack via CB
-            cb_wait_front(cb_compute_ack_id, 1);
-            cb_pop_front(cb_compute_ack_id, 1);
+            // cb_wait_front(cb_compute_ack_id, 1);
+            // cb_pop_front(cb_compute_ack_id, 1);
 
             // Debug: dump all read_batch_size rows of cb_untilized_id (c_19) — chip 0, first expert only
-            if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
-                volatile tt_l1_ptr uint16_t* rm_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(untilize_base);
-                constexpr uint32_t total_rm_vals = read_batch_size * hidden_size;  // 32 * 7168 = 229376
-                DPRINT_COMBINE << "RM_DUMP rows=" << read_batch_size << " cols=" << hidden_size << ENDL();
-                for (uint32_t i = 0; i < total_rm_vals; i += 8) {
-                    for (uint32_t j = 0; j < 8 && (i + j) < total_rm_vals; j++) {
-                        DPRINT_COMBINE << (uint32_t)rm_data[i + j] << " ";
-                    }
-                }
-                DPRINT_COMBINE << ENDL();
-            }
+            // if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
+            //     volatile tt_l1_ptr uint16_t* rm_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(untilize_base);
+            //     constexpr uint32_t total_rm_vals = read_batch_size * hidden_size;  // 32 * 7168 = 229376
+            //     DPRINT_COMBINE << "RM_DUMP rows=" << read_batch_size << " cols=" << hidden_size << ENDL();
+            //     for (uint32_t i = 0; i < total_rm_vals; i += 8) {
+            //         for (uint32_t j = 0; j < 8 && (i + j) < total_rm_vals; j++) {
+            //             DPRINT_COMBINE << (uint32_t)rm_data[i + j] << " ";
+            //         }
+            //     }
+            //     DPRINT_COMBINE << ENDL();
+            // }
             tile_batch_counter++;
         }
 
@@ -253,6 +253,8 @@ void kernel_main() {
             uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
             uint32_t batch_count = batch_end - batch_start;
             bool batch_did_local_write = false;
+
+            cb_wait_front(cb_untilized_id, read_batch_size);
 
             for (uint32_t t = 0; t < batch_count; t++) {
                 uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
@@ -295,6 +297,8 @@ void kernel_main() {
                 }
             }
 
+            cb_pop_front(cb_untilized_id, read_batch_size);
+
             // Issue next batch reads BEFORE write barrier
             uint32_t next_batch_start = batch_start + read_batch_size;
             uint32_t next_batch_start_tiled = start_page_tiled + tile_batch_counter * hidden_size / 32;
@@ -332,8 +336,8 @@ void kernel_main() {
                 cb_push_back(cb_untilize_out_id, 1);
 
                 // Wait for compute kernel to ack via CB
-                cb_wait_front(cb_compute_ack_id, 1);
-                cb_pop_front(cb_compute_ack_id, 1);
+                // cb_wait_front(cb_compute_ack_id, 1);
+                // cb_pop_front(cb_compute_ack_id, 1);
             }
         }
     }

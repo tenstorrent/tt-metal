@@ -186,15 +186,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*buffering_factor=*/1,
         /*cb_id=*/tt::CBIndex::c_17,
         "untilize_output");
-    // c_18: 1-page CB for compute→reader ack signal
-    {
-        uint32_t ack_page_size = l1_alignment;
-        tt::tt_metal::CircularBufferConfig ack_cb_config =
-            tt::tt_metal::CircularBufferConfig(ack_page_size, {{tt::CBIndex::c_18, tt::DataFormat::UInt8}})
-                .set_page_size(tt::CBIndex::c_18, ack_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, ack_cb_config);
-    }
-    // c_19: 1-page CB for untilized output from compute (same page size as dispatched_buffer)
+    // c_19: CB for untilized output from compute (same page size as dispatched_buffer)
     detail::create_tensor_cb(
         program,
         sender_core_grid,
@@ -456,6 +448,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id (untilize input)
                 static_cast<uint32_t>(tt::CBIndex::c_19),  // cb_untilized_id (untilize output)
                 static_cast<uint32_t>(hidden_size),        // hidden_size
+                static_cast<uint32_t>(read_batch_size),    // read_batch_size
             }});
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
