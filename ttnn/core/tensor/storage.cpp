@@ -111,7 +111,10 @@ struct DeviceStorage::MeshTensorHolder {
             // We should favor letting MeshTensor go out of scope instead of explicitly calling the underlying
             // MeshBuffer. Calling deallocate is currently needed as we keep the MeshBuffer object alive in the
             // DeallocatedTombStone state.
-            allocated->mesh_tensor_.mesh_buffer().deallocate();
+            // Calling mesh_buffer_invariant_breaking() as we wish to get a mutable pointer to the MeshBuffer,
+            // and this is breaking the invariant of MeshTensor (Device memory is allocated when the MeshTensor object
+            // is alive).
+            allocated->mesh_tensor_.mesh_buffer_invariant_breaking()->deallocate();
             // MeshTensor goes out of scope at this assignment:
             state_ = DeallocatedTombStone{
                 allocated->mesh_tensor_.tensor_spec(),
