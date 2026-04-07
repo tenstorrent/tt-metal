@@ -113,6 +113,12 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
+    if (!shard_first) {
+        TT_FATAL(
+            !args.output_mem_config.is_sharded(),
+            "Cannot concat interleaved inputs into a sharded output. "
+            "Either shard the inputs first or use an interleaved output memory config.");
+    }
     if (shard_first) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
