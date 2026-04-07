@@ -7,6 +7,10 @@ inputs:
   allocationName:
     description: 'Allocation name'
     required: true
+  namespace:
+    description: 'Namespace where the allocation exists'
+    required: false
+    default: 'ttop-ci'
 outputs:
   ranksData:
     description: 'JSON dictionary with node names as keys and allocation ranks as values'
@@ -21,9 +25,9 @@ runs:
       run: |
         echo "Getting ranks..."
 
-        # Get all nodes with allocation.tenstorrent.com/allocated-by = allocationName
+        # Get all nodes with allocation.tenstorrent.com/allocated-by = namespace--allocationName
         nodes_json=$(kubectl get nodes -o json \
-          --selector "allocation.tenstorrent.com/allocated-by=${{ inputs.allocationName }}")
+          --selector "allocation.tenstorrent.com/allocated-by=${{ inputs.namespace }}--${{ inputs.allocationName }}")
         ranks_json=$(echo $nodes_json | jq '.items | map({(.metadata.name): .metadata.labels["allocation.tenstorrent.com/allocation-rank"]}) | add ')
         echo "ranksData=$(echo $ranks_json | jq -c)" >> $GITHUB_OUTPUT
         echo "Node ranks:"
