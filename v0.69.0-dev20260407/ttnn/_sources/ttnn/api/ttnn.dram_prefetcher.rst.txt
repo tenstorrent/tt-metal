@@ -1,0 +1,8 @@
+﻿ttnn.dram\_prefetcher
+=====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.dram_prefetcher:
+
+.. autooperation:: ttnn.dram_prefetcher

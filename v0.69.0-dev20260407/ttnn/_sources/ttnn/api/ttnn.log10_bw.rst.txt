@@ -1,0 +1,8 @@
+﻿ttnn.log10\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.log10_bw:
+
+.. autooperation:: ttnn.log10_bw
