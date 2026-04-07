@@ -269,7 +269,7 @@ intra-core barriers described above:
       │  └────────────────────────────────────────────────────────┘  │
       ├─ intra-core barrier ──── BRISC releases other RISCs ────────┤
       │                                                              │
-      │  DUMP: each RISC prints its own local CB state               │
+      │  DUMP: BRISC prints CB state (once per core)                  │
       │                                                              │
       ├─ intra-core barrier ──── all 5 RISCs finish dumping ────────┤
       │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
@@ -308,7 +308,7 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
 4. **Dump.** On each core, BRISC prints the CB state (once per core — CBs are shared L1).
    If ``dump_dest=true``, TRISC1 also prints dest registers. Other RISCs print nothing.
 
-5. **Intra-core barrier.** Ensures all RISCs on each core finish printing.
+5. **Intra-core barrier.** Ensures BRISC finishes printing before any RISC proceeds.
 
 6. **Cross-core barrier.** Same mechanism as step 2. Ensures core 0 doesn't proceed
    past the checkpoint while core 1 is still printing.
@@ -382,7 +382,7 @@ Output:
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Prints tile data interpreted according to the CB's data format, showing actual float/int values.
-Uses TileSlice internally. DPRINT only (not supported with DEVICE_PRINT).
+Uses TileSlice internally. Works with both DPRINT and DEVICE_PRINT.
 
 Available on TRISC0 (Unpack), TRISC2 (Pack), BRISC, and NCRISC. On BRISC/NCRISC, an additional
 ``cb_type`` parameter specifies whether the CB is an input or output.
@@ -432,13 +432,13 @@ Comparison with dprint_tensix_dest_regs
      - All active RISCs (BRISC, NCRISC, TRISC0/1/2)
    * - What is dumped
      - Destination register contents
-     - CB metadata from all RISCs (+ optional dest regs, + optional L1 data)
+     - CB metadata via BRISC (+ optional dest regs via Math, + optional L1 data)
    * - Callable from
      - Compute kernels only
      - Any kernel, but all active RISCs must participate
    * - BRISC/NCRISC involvement
      - None
-     - Full participation: they print their CB view
+     - Full participation in barrier; BRISC prints CB state
 
 Use ``dprint_tensix_dest_regs`` when you only need to inspect compute output in dest registers.
 Use ``DEBUG_CHECKPOINT`` when you need a consistent snapshot of the entire dataflow + compute
