@@ -14,12 +14,6 @@ class TtnnSPPF:
 
     def __call__(self, device, x, use_sharded_concat=True):
         x = self.cv1(device, x, output_rm_needed=True)
-        # if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        #     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Keep cv1 output layout for max_pool2d. Forcing height-shard via
-        # create_sharded_memory_config(..., use_height_and_width_as_shard_shape=True)
-        # made physical shards like (400, 256); 400 % 32 != 0 and TILE layout TT_FATALs.
         x1 = x
         m1 = ttnn.max_pool2d(
             x,

@@ -26,8 +26,6 @@ class TtnnBottleneck:
         else:
             residual = _to_l1_interleaved(residual)
             x = _to_l1_interleaved(x)
-            # Tile-aligned conv outputs often have shape[2] > hw; add must use the same trimmed spatial
-            # for residual and branch or PCC collapses (C3k2 + Bottleneck path).
             if int(residual.shape[2]) > hw:
                 residual = residual[:, :, :hw, :]
             if int(x.shape[2]) > hw:

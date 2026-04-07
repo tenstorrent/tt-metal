@@ -8,6 +8,7 @@ import warnings
 
 import ttnn
 from models.common.utility_functions import roundup32
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def _default_yolov11s_conv_shard_layout():

@@ -8,9 +8,9 @@ import pytest
 import ttnn
 from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 from models.demos.yolov11s.reference.yolov11s import Bottleneck as torch_bottleneck
+from models.demos.yolov11s.tests.pcc.pcc_logging import log_assert_with_pcc
 from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_input_tensors, create_yolov11s_model_parameters
 from models.demos.yolov11s.tt.ttnn_yolov11s_bottleneck import TtnnBottleneck as ttnn_bottleneck
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -21,9 +21,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([32, 32], [32, 32], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 32, 40, 40]),
         ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 20, 20]),
         ([64, 32], [32, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 40, 40]),
-        # ([32, 16], [16, 32], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 32, 80, 80]),
-        # ([64, 32], [32, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 40, 40]),
-        # ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 20, 20]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE}], indirect=True)
@@ -57,4 +54,4 @@ def test_yolo_v11_bottleneck(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    log_assert_with_pcc("YOLOv11s Bottleneck", torch_output, ttnn_output, 0.99)

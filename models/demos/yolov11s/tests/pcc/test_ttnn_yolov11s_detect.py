@@ -7,12 +7,12 @@ import pytest
 import ttnn
 from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 from models.demos.yolov11s.reference.yolov11s import Detect as torch_detect
+from models.demos.yolov11s.tests.pcc.pcc_logging import log_assert_with_pcc
 from models.demos.yolov11s.tt.model_preprocessing import (
     create_yolov11s_input_tensors,
     create_yolov11s_model_parameters_detect,
 )
 from models.demos.yolov11s.tt.ttnn_yolov11s_detect import TtnnDetect as ttnn_detect
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -133,4 +133,4 @@ def test_yolo_v11_detect(
     ttnn_output = ttnn_module(y1=ttnn_input_1, y2=ttnn_input_2, y3=ttnn_input_3, device=device)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    log_assert_with_pcc("YOLOv11s Detect", torch_output, ttnn_output, 0.99)

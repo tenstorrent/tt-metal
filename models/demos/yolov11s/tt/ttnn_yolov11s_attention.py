@@ -15,7 +15,6 @@ class TtnnAttention:
         self.head_dim = 64
         self.num_heads = dim // self.head_dim
         self.key_dim = self.head_dim // 2
-        # self.key_dim = int(self.head_dim * 0.5)
         self.scale = self.key_dim**-0.5
         self._softmax_compute_config = yolov11s_softmax_compute_config(device)
 

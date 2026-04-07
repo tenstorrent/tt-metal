@@ -36,8 +36,6 @@ class TtnnC3K:
             k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
             x = sharded_concat([k2, x2], to_interleaved=False)
         else:
-            # L1 interleaved concat requires interleaved inputs; sharded tensors must be converted
-            # even when shape[2] == hw (the block above only de-shards when shape[2] > hw).
             if k2.is_sharded():
                 k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
             if x2.is_sharded():

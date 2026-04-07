@@ -70,7 +70,6 @@ class TtnnDetect:
         dw = _DETECT_DEPTHWISE
         dfl = _DETECT_DFL
 
-        # Three FPN scales; each cv2 is 2× TtnnConv + 1× depthwise Yolov11sConv2D (matches torch Sequential).
         self._cv2_chains = [
             [
                 TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True, config_override=pw128),
@@ -163,14 +162,10 @@ class TtnnDetect:
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
-        # y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-        # if y.layout != ttnn.TILE_LAYOUT:
         y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
-        # deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         b0, l_spatial = int(ya.shape[0]), int(y.shape[1])
-        # Permute into (B, 4, L, 16) before softmax so DFL sees DFL layout without a post-softmax permute.
         ya = ttnn.reshape(ya, (b0, l_spatial, 4, 16))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         ya = ttnn.softmax_in_place(
@@ -185,7 +180,6 @@ class TtnnDetect:
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
         b0 = int(c.shape[0])
-        # DFL conv matches torch (B, 1, 4, W): squeeze is metadata-only vs permute+reshape on many builds.
         if len(c.shape) == 4 and int(c.shape[1]) == 1 and int(c.shape[2]) == 4:
             c = ttnn.squeeze(c, dim=1)
         else:
