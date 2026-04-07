@@ -3,7 +3,8 @@
 
 """Lingbot-VA mesh shape, inference submesh, VAE/UMT5 parallel helpers.
 
-Matches tt-metal root ``conftest`` ``mesh_device`` / ``MESH_DEVICE`` and Lingbot PCC tests.
+Matches tt-metal root ``conftest`` ``mesh_device`` / ``MESH_DEVICE``. Lingbot PCC uses
+:func:`pcc_mesh_shape_request_param` (full mesh) and fixture ``work_mesh_device`` for optional ``(1,1)`` submesh.
 
 Includes VAE ``[B,C,T,H,W]`` host readback (spatial all-gather when H/W are sharded on mesh),
 used by ``decode_ttnn`` / demos and by ``models.experimental.lingbot_va.tt.utils``.
@@ -58,6 +59,11 @@ def vae_bcthw_to_torch(
 _MESH_DEVICE_SHAPES = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}
 
 
+def lingbot_va_inference_single_chip_mesh_enabled() -> bool:
+    """True when ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH`` is ``1``/``true``/``yes`` (case-insensitive)."""
+    return os.environ.get("LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH", "").strip().lower() in ("1", "true", "yes")
+
+
 def _mesh_shape_from_lingbot_va_mesh_shape_env() -> ttnn.MeshShape | None:
     """Parse ``LINGBOT_VA_MESH_SHAPE`` (``R,C`` or ``N`` for ``1×N``); ``None`` if unset."""
     raw = os.environ.get("LINGBOT_VA_MESH_SHAPE", "").strip()
@@ -75,6 +81,16 @@ def _mesh_shape_from_lingbot_va_mesh_shape_env() -> ttnn.MeshShape | None:
 def mesh_shape_request_param() -> tuple[int, int] | int:
     """Pytest indirect ``mesh_device`` value: ``(rows, cols)`` or ``N`` for ``(1, N)`` from device count."""
     return _MESH_DEVICE_SHAPES.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+
+
+def pcc_mesh_shape_request_param() -> tuple[int, int] | int:
+    """Pytest ``mesh_device`` indirect value for Lingbot PCC (and perf e2e).
+
+    Always matches :func:`mesh_shape_request_param` (full system mesh). With fabric (e.g. ``FABRIC_1D``), Metal
+    requires opening all physical devices; single-chip work is done via :func:`inference_work_mesh_from_opened`
+    (pytest fixture ``work_mesh_device`` in this package's ``conftest``), not a smaller ``open_mesh_device`` shape.
+    """
+    return mesh_shape_request_param()
 
 
 def ttnn_mesh_shape_from_env() -> ttnn.MeshShape:
@@ -97,8 +113,7 @@ def inference_work_mesh_from_opened(
     opened_mesh: ttnn.MeshDevice,
 ) -> tuple[ttnn.MeshDevice, ttnn.MeshDevice | None]:
     """``(work_mesh, parent)``; with ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1``, work is a ``(1,1)`` submesh."""
-    single = os.environ.get("LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH", "").strip().lower() in ("1", "true", "yes")
-    if single and opened_mesh.get_num_devices() > 1:
+    if lingbot_va_inference_single_chip_mesh_enabled() and opened_mesh.get_num_devices() > 1:
         sub = opened_mesh.create_submesh(ttnn.MeshShape(1, 1))
         return sub, opened_mesh
     return opened_mesh, None
