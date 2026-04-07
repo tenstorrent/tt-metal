@@ -45,6 +45,9 @@ class DistributedTensorConfig:
     mesh_mapper: Any
     mesh_composer: Any
     logical_shape_fn: Optional[Any] = None
+    # Replicated mesh + ``ConcatMeshToTensor(dim=0)`` stacks one copy per device on dim 0; set True to
+    # take ``result[: ttnn_tensor.shape[0]]`` after readback so logical batch matches a single replica.
+    replicate_compose_slice_dim0_to_leading: bool = False
 
     def get_logical_shape(self, sharded_shape):
         if self.logical_shape_fn is not None:
@@ -89,11 +92,11 @@ class DistributedConfig:
                 print(
                     f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                 )
+                # Replicated mesh: compose with dim=0 only. Do not use MeshComposerConfig([0, len(shape)]);
+                # the second entry is a dimension index, so rank 3 yields [0, 3] which is invalid (dims 0..2).
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
                 )
         return self.tensor_config
 
@@ -180,7 +183,6 @@ class DispatchManager:
     timings: Dict[str, Any] = {}
     _modules_in_progress: List[str] = []
     current_module_name: Optional[str] = None
-    ENABLED = True
 
     @staticmethod
     def set_current_module_name(module_name: Optional[str]) -> None:
@@ -246,13 +248,7 @@ class DispatchManager:
         return rs
 
     @staticmethod
-    def DisableTiming():
-        DispatchManager.ENABLED = False
-
-    @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
-        if not DispatchManager.ENABLED:
-            return
         if backend not in DispatchManager.timings:
             DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
@@ -560,9 +556,13 @@ class NormalRun:
         def _to_torch_from_device(self):
             is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                return ttnn.to_torch(
-                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
-                ).to(self.device, self.dtype)
+                cfg = self.ttnn_distributed_tensor_config
+                result = ttnn.to_torch(self.ttnn_tensor, mesh_composer=cfg.mesh_composer).to(self.device, self.dtype)
+                if getattr(cfg, "replicate_compose_slice_dim0_to_leading", False) and result.dim() >= 1:
+                    lead = int(self.ttnn_tensor.shape[0])
+                    if result.shape[0] > lead:
+                        result = result[:lead].contiguous()
+                return result
             return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
 
         if self.ttnn_tensor is None:
@@ -606,6 +606,7 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
+        begin_full = time.time()
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
@@ -640,6 +641,10 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
+        end_full = time.time()
+        DispatchManager.record_timing(
+            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
+        )
         return result
 
 
