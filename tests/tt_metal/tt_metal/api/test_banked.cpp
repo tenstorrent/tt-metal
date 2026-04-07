@@ -268,7 +268,8 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
             .compile_args = writer_compile_time_args_dc});
 
     vector<uint32_t> compute_kernel_args = {
-        uint(cfg.num_tiles)  // per_core_tile_cnt
+        uint(cfg.num_tiles),  // per_core_tile_cnt
+        false                 // use_dfbs
     };
     CreateKernel(
         program_,
