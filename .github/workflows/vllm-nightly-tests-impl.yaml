@@ -329,7 +329,7 @@ jobs:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
       - in-service
-      - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
+      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
