@@ -182,6 +182,8 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/tt-1xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/dataflow_buffer.inl
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h

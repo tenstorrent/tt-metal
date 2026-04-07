@@ -48,7 +48,9 @@ void kernel_main() {
         DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
+#ifdef ARCH_QUASAR
             dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
+#endif
         } else {
             dfb.reserve_back(1);
             noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});

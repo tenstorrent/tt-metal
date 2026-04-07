@@ -79,7 +79,7 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
 def run_layernorm_pre_all_gather_residual_pcc(device):
     """Stats from layer_norm_pre_all_gather with residual_input_tensor (input + residual).
 
-    Aligns with test_norm41467.py: shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
+    Shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
     Golden stats match torch reductions on the fused tensor input + residual.
     """
     torch.manual_seed(41467)
@@ -173,8 +173,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
     """End-to-end LayerNorm (pre_all_gather -> post_all_gather) with weight only, no bias.
 
     Regression for the former TT_FATAL that required beta whenever layernorm used gamma
-    (see layernorm_post_all_gather_device_operation). Shape (1, 1, 37, 72) matches the
-    standalone repro formerly in test_norm41378.py.
+    (see layernorm_post_all_gather_device_operation). Shape (1, 1, 37, 72)
     """
     torch.manual_seed(42)
 
@@ -466,5 +465,5 @@ def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
 
 
 def test_layernorm_pre_all_gather_residual_pcc(device):
-    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch (see test_norm41467.py)."""
+    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
     run_layernorm_pre_all_gather_residual_pcc(device)

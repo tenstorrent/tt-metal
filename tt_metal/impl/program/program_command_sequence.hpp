@@ -9,6 +9,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <numeric>
 
 struct CQDispatchWritePackedCmd;
@@ -47,6 +48,10 @@ struct ProgramCommandSequence {
     HostMemDeviceCommand go_msg_command_sequence;
     std::vector<uint32_t*> cb_configs_payloads;
     std::vector<std::vector<std::shared_ptr<CircularBufferImpl>>> circular_buffers_on_core_ranges;
+    // Parallel to cb_configs_payloads/circular_buffers_on_core_ranges but for Dataflow Buffers.
+    std::vector<uint8_t*> dfb_configs_payloads;
+    std::vector<std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>>
+        dataflow_buffers_on_core_ranges;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
