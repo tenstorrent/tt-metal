@@ -31,7 +31,9 @@ detect workspace → load recipe → compose command → route → execute → r
 1. **Detect workspace**: Load `workspace-detect.md`. Identify repo, platform, arch.
 2. **Load recipe**: Read `knowledge/recipes/<repo>/` files relevant to the action.
    If no recipe exists, rely on explicit user commands or tt-learn.
-3. **Compose command**: Build command from recipe + user intent + env vars.
+3. **Research target**: Invoke `tt:learn("<target> env vars and config params")` where
+   target is whatever is being run — a model, kernel, op, submodule, or server.
+   Gets required env vars, numeric constraints, and relevant paths from source. See `execution.md`.
 4. **Route & execute**: Device → tt-device-mcp. Host → Bash. See `execution.md`.
 5. **Report**: Summarize result. On failure, include actionable context.
 
@@ -56,3 +58,4 @@ When in doubt: if the command needs a TT device attached, use MCP.
 | Server lifecycle (vLLM) | `knowledge/recipes/vllm/server.md` |
 | Benchmark (vLLM) | `knowledge/recipes/vllm/benchmark.md` |
 | Environment variables | `knowledge/recipes/<repo>/env.md` |
+| Target env vars, constraints, config params | invoke `tt:learn("<target> env vars and config params")` |
