@@ -254,6 +254,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
                 }
             ),
             raw_tensor_shape=(16384, 7168),
+            # Logical per-device o_proj shape exposed to consumers.
+            logical_tensor_shape=(8192, 7168),
             dtype=ttnn.DataType.BFLOAT8_B,
             tp_dim=(None, 0),
         )
@@ -618,7 +620,10 @@ def _build_fusion_group_spec(
         mesh_mapper_config = _infer_mesh_mapper(lanes)
     regions: list[RegionSpec] = []
     for lane in lanes:
-        subtensors = tuple(replace(spec, name=n) for n, spec in lane)
+        subtensors = tuple(
+            replace(spec, name=n, logical_tensor_shape=spec.logical_tensor_shape or spec.raw_tensor_shape)
+            for n, spec in lane
+        )
         regions.append(
             RegionSpec(
                 core_range_set=lane[0][1].core_range_set,
