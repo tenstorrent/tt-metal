@@ -92,9 +92,7 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
 
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [
-        GateComputeMode.DEVICE,
-    ],
+    [GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -196,7 +194,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
         memory_config=sharded_mem_config,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(

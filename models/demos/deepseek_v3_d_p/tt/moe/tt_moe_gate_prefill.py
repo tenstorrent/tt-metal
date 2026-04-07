@@ -23,11 +23,13 @@ class GateComputeMode(Enum):
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
     Each can independently run on device (TTNN) or host (torch).
+    The device grouped-gate has two variants: bf16 (default) and fp32.
     """
 
-    DEVICE = "device"  # matmul device, grouped gate device
+    DEVICE = "device"  # matmul device, grouped gate device (bf16)
+    DEVICE_FP32 = "device_fp32"  # matmul device, grouped gate device (fp32)
     HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
-    HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device
+    HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
 
 
@@ -137,7 +139,7 @@ class TtMoEGatePrefill(LightweightModule):
         self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
-        if fallback_mode != GateComputeMode.DEVICE:
+        if fallback_mode not in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32):
             # Host fallback paths assume real torch tensors; validate early to avoid
             # obscure AttributeError later when calling methods like .float().
             if weight is None or bias is None:
@@ -277,8 +279,21 @@ class TtMoEGatePrefill(LightweightModule):
         host_x = self._compose_x_to_host(x)
         return F.linear(host_x.float(), self.torch_weight.float())
 
-    def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run deepseek_grouped_gate on device."""
+    def _device_grouped_gate_bf16(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run deepseek_grouped_gate on device in bf16."""
+        return ttnn.experimental.deepseek_grouped_gate(
+            logits,
+            self.bias,
+            n_groups=self.config.n_expert_groups,
+            summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
+            topk_groups=self.config.n_limited_groups,
+            n_activated_experts=self.config.n_activated_experts,
+            route_scale=self.config.route_scale,
+            epsilon=1e-20,
+        )
+
+    def _device_grouped_gate_fp32(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run moe_grouped_topk on device with fp32 typecast."""
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
@@ -319,7 +334,7 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 1: Logits (matmul) ----
         signpost(header="moe_gate_linear")
-        if mode in (GateComputeMode.DEVICE, GateComputeMode.HOST_GROUPED_GATE):
+        if mode in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_GROUPED_GATE):
             logits = self._device_matmul(x)
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
@@ -328,7 +343,10 @@ class TtMoEGatePrefill(LightweightModule):
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
         if mode == GateComputeMode.DEVICE:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_bf16(logits)
+
+        elif mode == GateComputeMode.DEVICE_FP32:
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
             host_logits = self._compose_logits_to_host(logits)
@@ -338,7 +356,7 @@ class TtMoEGatePrefill(LightweightModule):
 
         elif mode == GateComputeMode.HOST_MATMUL:
             logits = self._host_logits_to_device(host_logits)
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_bf16(logits)
 
         elif mode == GateComputeMode.HOST_ALL:
             host_indices, host_scores = self._host_grouped_gate(host_logits)

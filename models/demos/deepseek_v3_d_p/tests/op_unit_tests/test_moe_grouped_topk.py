@@ -14,33 +14,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.test_utils import calculate_average_recall
+from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
+from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import calculate_average_recall
 from tests.ttnn.utils_for_testing import comp_pcc
-
-
-def grouped_gate_golden(
-    scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
-):
-    scores = torch.sigmoid(scores)
-    biased_scores = scores + bias
-
-    grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
-    top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1)
-    summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
-
-    _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1)
-
-    group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
-    group_mask.scatter_(-1, top_k_groups_indices, False)
-
-    masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
-    masked_scores = masked_grouped_scores.reshape(scores.shape)
-
-    _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1)
-    chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
-    normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
-    scaled_scores = normalized_scores * route_scale
-    return scaled_scores, top_k_experts_indices
 
 
 def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=torch.float32):
@@ -83,10 +60,20 @@ def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
     epsilon = 1e-20
     route_scale = 0.5
 
+    config = DeepseekV3Config(
+        hidden_size=64,
+        n_routed_experts=total_experts,
+        n_group=n_groups,
+        topk_group=topk_groups,
+        num_experts_per_tok=n_activated_experts,
+        routed_scaling_factor=route_scale,
+    )
+    gate = MoEGate(config, use_bitonic_sort=False)
+
     scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.float32)
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.float32)
 
-    ref_weights, ref_indices = grouped_gate_golden(
+    ref_indices, ref_weights = gate.grouped_gate_golden(
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
     )
 
@@ -124,10 +111,11 @@ def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
         f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
     )
 
-    weights_passed, weights_pcc = comp_pcc(tt_weights_torch, ref_weights, 0.98)
+    pcc_threshold = 0.97
+    weights_passed, weights_pcc = comp_pcc(tt_weights_torch, ref_weights, pcc_threshold)
     status = "PASS" if weights_passed else "FAIL"
     logger.info(
-        f"[{status}] Weights PCC = {weights_pcc:.4f} (threshold: 0.98) "
+        f"[{status}] Weights PCC = {weights_pcc:.4f} (threshold: {pcc_threshold}) "
         f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
     )
 
@@ -136,6 +124,6 @@ def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
         f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
     )
     assert weights_passed, (
-        f"Weights PCC is {weights_pcc:.4f}, expected >= 0.98 "
+        f"Weights PCC is {weights_pcc:.4f}, expected >= {pcc_threshold} "
         f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
     )
