@@ -178,7 +178,9 @@ void MPIContext::create(int argc, char** argv) {
     init_env(argc, argv);
     // it is a good idea to duplicate the world communicator
     // don't want to rely on the global comm_world which cannot be replaced
+    std::cout << "Creating MPIContext" << std::endl;
     current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+    std::cout << "MPIContext created" << std::endl;
 }
 
 const ContextPtr& MPIContext::get_current_world() {

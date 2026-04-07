@@ -1,0 +1,97 @@
+Deepseek Pipeline on Pod and Superpod
+
+Machines Available:
+Aisle D
+Pod 1
+ - bh-glx-d03u08
+ - bh-glx-d03u02
+ - bh-glx-d04u02
+ - bh-glx-d04u08
+Pod 2
+ - bh-glx-d09u08
+ - bh-glx-d09u02
+ - bh-glx-d10u02
+ - bh-glx-d10u08
+Pod 3
+ - bh-glx-d07u08
+ - bh-glx-d07u02
+ - bh-glx-d08u02
+ - bh-glx-d08u08
+Pod 4
+ - bh-glx-d05u08
+ - bh-glx-d05u02
+ - bh-glx-d06u02
+ - bh-glx-d06u08
+
+Aisle B
+Pod 1
+ - bh-glx-b06u08
+ - bh-glx-b06u02
+ - bh-glx-b07u02
+ - bh-glx-b07u08
+Pod 2
+ - bh-glx-b04u08
+ - bh-glx-b04u02
+ - bh-glx-b05u02
+ - bh-glx-b05u08
+Pod 3:
+ - bh-glx-d01u08
+ - bh-glx-d01u02
+ - bh-glx-d02u02
+ - bh-glx-d02u08
+Pod 4:
+ - bh-glx-b08u08
+ - bh-glx-b08u02
+ - bh-glx-b09u02
+ - bh-glx-b09u08
+
+
+First set of testing and integration should be done on a single pod. Pick up whichever pod is available.
+
+Both Aisles have an SP4 available, which can be used once end to end integration is done on a single pod.
+
+Aisle D pods are preferable since they're more stable.
+
+TT-Blaze Branch to use: asaigal/model_integration
+
+This branch pins the TT-Metal submodule at branch asaigal/multi_user, which has all the necessary changes to launch the model with mult-user support on a pod
+or a super-pod.
+
+Launching the Model (do this first):
+- Ensure that you have passwordless ssh access from the head node to all hosts in the cluster you will be launching the model on.
+- Checkout the TT-Blaze branch from above
+- cd tt-metal
+- ./build_metal.sh --build-tests
+- source python_env/bin/activate
+- Run cluster recovery (change the host list depending on the pod/superpod you are launching the model on): ./tools/scaleout/exabox/recover.sh --hosts <comma-seperated-host-list>
+- On a Pod, generate your static pipeline config files as follows: python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod.yaml
+- On a Superpod, generate your static pipeline config files as follows: python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod.yaml
+- Note: For a pod, you'll need to modify the pipeline config YAML file to account for the hosts you're running on. Please user the order specified above when modifying the single pod YAML file.
+
+- Note: For a Superpod, the config files are already provided:
+   - models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod.yaml
+   - models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_aisle_b.yaml
+
+- Launch the model:
+   - On a Pod:
+      TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --tcp-interface ens5f0np0 --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --host  bh-glx-d09u02:4,bh-glx-d09u08:4,bh-glx-d10u02:4,bh-glx-d10u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod.yaml python -m models.demos.deepseek_v3_b1.demo.cli --max-new-tokens 8192 --weights real --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 --launch-only
+   - On a Superpod:
+       TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --tcp-interface ens5f0np0  --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod --bind-to hwt:overload-allowed --host bh-glx-d03u02:4,bh-glx-d03u08:4,bh-glx-d04u02:4,bh-glx-d04u08:4,bh-glx-d06u08:4,bh-glx-d06u02:4,bh-glx-d05u08:4,bh-glx-d05u02:4,bh-glx-d07u02:4,bh-glx-d07u08:4,bh-glx-d08u02:4,bh-glx-d08u08:4,bh-glx-d09u02:4,bh-glx-d09u08:4,bh-glx-d10u02:4,bh-glx-d10u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_superpod.yaml  python -m models.demos.deepseek_v3_b1.demo.cli --max-new-tokens 8192 --weights real --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 --launch-only
+
+- Note: The above are just examples. Depending on the hosts you're running on, the appropriate list of hosts should be used.
+- Note: The first time you run the model, kernel compilation takes a while. This is not a hang, the model is just getting setup. Subsequent runs are faster, though still take ~10 minutes to setup with multi-user functionality.
+
+- Model launch has completed when you see a log like this on rank 0:
+   Pipeline launched; keeping sockets alive until interrupted.
+
+Running the Pipeline Manager or Inference Server Process:
+   - Once the model is launched on the Pod/Superpod login to the head node (stage 0 in the Pipeline Config YAML file)
+   - Verify that socket descriptors have been exported by the model launch
+     - cd /dev/shm/ && ls
+     - You should see tt_h2d_deepseek_h2d.bin and tt_d2h_deepseek_d2h.bin
+   - EXTREMELY IMPORTANT (IF THIS IS NOT DONE, THE PIPELINE MANAGER PROCESS WILL HANG):
+      - Open tt-metal/blitz_decode_pipeline_rank_binding_single_pod.yaml or tt-metal/blitz_decode_pipeline_rank_binding_superpod.yaml (depending on pod/superpod)
+      - Each rank has a TT_VISIBLE_DEVICES environment variable set
+      - Copy the device ids for rank 0 and ensure that these are set in the terminal environment for the pipeline manager process.
+      - export TT_VISIBLE_DEVICES=<comma-seperated-device-ids-from-rank-0>
+      - Launch the pipeline manager or inference server process.

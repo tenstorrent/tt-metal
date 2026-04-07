@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Literal
 
 from loguru import logger
-from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
@@ -145,6 +144,8 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def load_tokenizer(tokenizer_name_or_path: str):
+    from transformers import AutoTokenizer
+
     return AutoTokenizer.from_pretrained(tokenizer_name_or_path, trust_remote_code=True)
 
 
@@ -228,10 +229,12 @@ def run_demo(
 
 
 def main(argv: list[str] | None = None) -> int:
+    print("Starting main function")
     ttnn.init_distributed_context()
+    print("Initialized distributed context")
     parser = create_parser()
     args = parser.parse_args(argv)
-
+    print("Parsed arguments")
     if args.weights == "real" and args.cache_path is None:
         parser.error("--cache-path is required when --weights real")
     if args.weights == "state_dict":
@@ -244,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
         io_socket_descriptor_prefix = "deepseek_v3_b1"
-
+    print("Running demo")
     run_demo(
         prompts=[args.prompt_1, args.prompt_2],
         max_new_tokens=args.max_new_tokens,
