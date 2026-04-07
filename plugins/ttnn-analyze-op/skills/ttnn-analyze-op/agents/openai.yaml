@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Analyze Op"
+  short_description: "User-defined ttnn-analyze-op workflow skill"
+  icon_small: "./assets/ttnn-analyze-op.svg"
+  icon_large: "./assets/ttnn-analyze-op.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-analyze-op for this workflow task."

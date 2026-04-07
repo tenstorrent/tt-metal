@@ -1,0 +1,7 @@
+interface:
+  display_name: "Analyze Runs"
+  short_description: "User-defined analyze-runs workflow skill"
+  icon_small: "./assets/analyze-runs.svg"
+  icon_large: "./assets/analyze-runs.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $analyze-runs for this workflow task."

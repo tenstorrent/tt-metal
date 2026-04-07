@@ -1,0 +1,7 @@
+interface:
+  display_name: "Run Pipelines"
+  short_description: "User-defined run-pipelines workflow skill"
+  icon_small: "./assets/run-pipelines.svg"
+  icon_large: "./assets/run-pipelines.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $run-pipelines for this workflow task."

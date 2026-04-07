@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Op"
+  short_description: "User-defined create-op workflow skill"
+  icon_small: "./assets/create-op.svg"
+  icon_large: "./assets/create-op.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $create-op for this workflow task."

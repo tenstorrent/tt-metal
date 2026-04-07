@@ -1,0 +1,7 @@
+interface:
+  display_name: "TDD Implement"
+  short_description: "User-defined tdd-implement workflow skill"
+  icon_small: "./assets/tdd-implement.svg"
+  icon_large: "./assets/tdd-implement.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $tdd-implement for this workflow task."

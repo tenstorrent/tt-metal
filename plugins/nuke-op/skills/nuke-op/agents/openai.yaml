@@ -1,0 +1,7 @@
+interface:
+  display_name: "Nuke Op"
+  short_description: "User-defined nuke-op workflow skill"
+  icon_small: "./assets/nuke-op.svg"
+  icon_large: "./assets/nuke-op.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $nuke-op for this workflow task."

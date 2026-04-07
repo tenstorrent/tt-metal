@@ -1,0 +1,7 @@
+interface:
+  display_name: "TDD Kernels"
+  short_description: "User-defined tdd-kernels workflow skill"
+  icon_small: "./assets/tdd-kernels.svg"
+  icon_large: "./assets/tdd-kernels.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $tdd-kernels for this workflow task."

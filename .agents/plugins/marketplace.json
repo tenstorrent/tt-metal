@@ -111,6 +111,138 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Productivity"
+    },
+    {
+      "name": "analyze-runs",
+      "source": {
+        "source": "local",
+        "path": "./plugins/analyze-runs"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "create-op",
+      "source": {
+        "source": "local",
+        "path": "./plugins/create-op"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "eval-dev",
+      "source": {
+        "source": "local",
+        "path": "./plugins/eval-dev"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "golden-tests",
+      "source": {
+        "source": "local",
+        "path": "./plugins/golden-tests"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "list-runs",
+      "source": {
+        "source": "local",
+        "path": "./plugins/list-runs"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "nuke-op",
+      "source": {
+        "source": "local",
+        "path": "./plugins/nuke-op"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "run-pipelines",
+      "source": {
+        "source": "local",
+        "path": "./plugins/run-pipelines"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "spec-op",
+      "source": {
+        "source": "local",
+        "path": "./plugins/spec-op"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "tdd-implement",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tdd-implement"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "tdd-kernels",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tdd-kernels"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-analyze-op",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-analyze-op"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
     }
   ]
 }

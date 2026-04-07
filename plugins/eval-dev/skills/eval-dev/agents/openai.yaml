@@ -1,0 +1,7 @@
+interface:
+  display_name: "Eval Dev"
+  short_description: "User-defined eval-dev workflow skill"
+  icon_small: "./assets/eval-dev.svg"
+  icon_large: "./assets/eval-dev.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $eval-dev for this workflow task."

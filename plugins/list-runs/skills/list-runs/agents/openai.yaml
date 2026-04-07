@@ -1,0 +1,7 @@
+interface:
+  display_name: "List Runs"
+  short_description: "User-defined list-runs workflow skill"
+  icon_small: "./assets/list-runs.svg"
+  icon_large: "./assets/list-runs.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $list-runs for this workflow task."

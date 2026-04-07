@@ -1,0 +1,7 @@
+interface:
+  display_name: "Golden Tests"
+  short_description: "User-defined golden-tests workflow skill"
+  icon_small: "./assets/golden-tests.svg"
+  icon_large: "./assets/golden-tests.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $golden-tests for this workflow task."

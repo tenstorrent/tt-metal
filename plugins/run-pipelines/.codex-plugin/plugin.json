@@ -1,0 +1,41 @@
+{
+  "name": "run-pipelines",
+  "version": "0.1.0",
+  "description": "User-defined run-pipelines skill for Codex, mirroring the legacy workflow purpose.",
+  "author": {
+    "name": "User Defined",
+    "email": "noreply@example.com",
+    "url": "https://github.com/tenstorrent/tt-metal"
+  },
+  "homepage": "https://github.com/tenstorrent/tt-metal",
+  "repository": "https://github.com/tenstorrent/tt-metal",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ttnn",
+    "tt-metal",
+    "workflow",
+    "run-pipelines"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Run Pipelines",
+    "shortDescription": "User-defined run-pipelines workflow skill",
+    "longDescription": "Run run-pipelines as a user-defined Codex skill with the same intent as the legacy workflow.",
+    "developerName": "User Defined",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/tenstorrent/tt-metal",
+    "privacyPolicyURL": "https://github.com/tenstorrent/tt-metal/blob/main/CODE_OF_CONDUCT.md",
+    "termsOfServiceURL": "https://github.com/tenstorrent/tt-metal/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use $run-pipelines for this workflow task."
+    ],
+    "brandColor": "#0A7D59",
+    "composerIcon": "./assets/run-pipelines.svg",
+    "logo": "./assets/run-pipelines.svg",
+    "screenshots": []
+  }
+}
