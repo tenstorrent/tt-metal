@@ -184,6 +184,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                         "FILL value {} out of range for UInt16",
                         as_int);
                     fill_val = static_cast<uint32_t>(as_int);
+                } else if (*input_dtype == DataType::INT32) {
+                    fill_val = static_cast<uint32_t>(static_cast<int32_t>(param0_raw));
                 } else {
                     fill_val = static_cast<uint32_t>(param0_raw);
                 }
@@ -210,7 +212,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (*input_dtype == DataType::INT32) {
                 return {
                     "relu_min_tile_init();",
-                    fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(params[0]))};
+                    fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {"relu_min_tile_init();", fmt::format("relu_min_tile({}, {:#x}u);", idst, as_uint(param0))};
         }
@@ -356,7 +358,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (*input_dtype == DataType::INT32) {
                 return {
                     fmt::format("{}_int32_tile_init();", prefix),
-                    fmt::format("{}_int32_tile({}, {}u);", prefix, idst, static_cast<uint32_t>(params[0]))};
+                    fmt::format("{}_int32_tile({}, {}u);", prefix, idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             if (*input_dtype == DataType::UINT32) {
                 return {
@@ -409,8 +411,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "clamp_tile_int32({}, {}, {});",
                         idst,
-                        static_cast<uint32_t>(params[0]),
-                        static_cast<uint32_t>(params[1]))};
+                        static_cast<uint32_t>(static_cast<int32_t>(params[0])),
+                        static_cast<uint32_t>(static_cast<int32_t>(params[1])))};
             }
             return {
                 "clamp_tile_init();", fmt::format("clamp_tile({}, {}, {});", idst, as_uint(param0), as_uint(param1))};
