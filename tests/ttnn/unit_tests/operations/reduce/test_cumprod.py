@@ -35,6 +35,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
+        [16, 32, 33, 63],  # implicit padding issue.
     ],
 )
 @pytest.mark.parametrize(
@@ -53,6 +54,9 @@ def test_cumprod_normal(dim, shape, dtypes, device):
             ttnn_input_tensor = ttnn.from_torch(
                 torch_input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
             )
+            ttnn.fill_implicit_tile_padding(
+                ttnn_input_tensor, -42
+            )  # garbage padding to test that the operation removes it
             ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, dtype=dtypes[1])
 
             # assert metadata
@@ -143,6 +147,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
+        [16, 32, 33, 63],  # implicit padding issue.
     ],
 )
 @pytest.mark.parametrize(
@@ -161,6 +166,9 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn_input_tensor = ttnn.from_torch(
                 torch_input_tensor, dtype=dtypes[1], layout=ttnn.Layout.TILE, device=device
             )
+            ttnn.fill_implicit_tile_padding(
+                ttnn_input_tensor, -42
+            )  # garbage padding to test that the operation removes it
             ttnn_preallocated_tensor = ttnn.zeros_like(ttnn_input_tensor)
             ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, out=ttnn_preallocated_tensor)
 
@@ -266,6 +274,8 @@ def test_cumprod_failing_cases(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
+    if layout == ttnn.TILE_LAYOUT:
+        ttnn.fill_implicit_tile_padding(ttnn_input_tensor, -42)
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
         ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

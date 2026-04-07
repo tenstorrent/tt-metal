@@ -22,6 +22,7 @@ from tests.ttnn.utils_for_testing import assert_equal
         ((32, 32, 32, 32), 0),
         ((32, 32, 32, 32), 2),
         ((32, 32, 32, 32), 3),
+        ((32, 32, 31, 31), 3),  # implicit padding issue.
     ),
 )
 @pytest.mark.parametrize(
@@ -61,6 +62,9 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         raise AttributeError()
 
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
+    if layout == ttnn.TILE_LAYOUT:
+        ttnn.fill_implicit_tile_padding(tt_input, -42)  # implicit padding issue - passed
+
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
     elif kind == "min":

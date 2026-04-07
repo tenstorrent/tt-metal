@@ -50,6 +50,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
+    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     if dtype == ttnn.bfloat16:
@@ -76,6 +77,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
+    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
     if dtype == ttnn.bfloat16:
