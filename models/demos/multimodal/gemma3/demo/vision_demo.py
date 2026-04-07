@@ -24,6 +24,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
@@ -166,7 +167,7 @@ def prepare_generator_args(
     ids=[
         "batch1-notrace",
         "batch1-trace",
-        "batch32-trace",
+        "batch32-trace",  # oom
         "batch4-trace-with-text-prompts",
         "batch1-multi-image-notrace",
         "batch1-multi-image-trace",
@@ -240,13 +241,19 @@ def test_multimodal_demo_text(
 
     generator = Generator(model, model_args, mesh_device)
 
+    can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    non_greedy_decoding_on_device = can_sample_on_device and temperature > 0
+    device_sampling_params = (
+        SamplingParams(temperature=temperature, top_k=32, top_p=top_p) if can_sample_on_device else None
+    )
+
     # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=None,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     logger.info("Warmup complete")
 
@@ -368,13 +375,23 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits, _ = generator.decode_forward(
-                        next_token_tensor,
-                        position_id,
-                        enable_trace=enable_trace,
-                    )
+                    if device_sampling_params is not None:
+                        tok, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                            sampling_params=device_sampling_params,
+                        )
+                        next_tokens = tok.long().reshape(-1)[:max_batch_size]
+                        next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
+                    else:
+                        logits, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                        )
 
-                    next_tokens, next_texts = sampler(logits)
+                        next_tokens, next_texts = sampler(logits)
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                     decode_end = time.perf_counter()

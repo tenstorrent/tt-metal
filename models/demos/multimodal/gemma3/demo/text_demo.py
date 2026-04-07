@@ -876,9 +876,14 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
-    # Warmup prefill and decode
-    # Note: Gemma3 on-device sampling disabled because vocab_size/num_devices > 64k
-    # https://github.com/tenstorrent/tt-metal/issues/32249
+    # On-device sampling when Transformer built SamplingGenerator (Gemma3 ModelArgs raises
+    # device_sampling_max_per_device_vocab; see models/demos/multimodal/gemma3/tt/model_config.py).
+    can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    non_greedy_decoding_on_device = can_sample_on_device and sampling_params.get("temperature", 0) > 0
+    logger.info(
+        f"Gemma3 decode sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
+    )
+
     logger.info("Warming up model...")
     # Must match paged_attention: non-paged KV uses a single logical block; decode warmup cannot use a 1024-wide page table.
     num_blocks = (
@@ -889,16 +894,16 @@ def test_demo_text(
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     logger.info("Warmup complete")
 
@@ -978,10 +983,7 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Gemma3 vocab size is 262144, sampling is supported only where vocab_size/num_devices<=64k
-        # https://github.com/tenstorrent/tt-metal/issues/32249
-        # => Hardcode sampling to host for now
-        sampling_on_device = False
+        sampling_on_device = can_sample_on_device
 
         if sampling_on_device:
             device_sampling_params = SamplingParams(
@@ -1026,10 +1028,17 @@ def test_demo_text(
             )
 
             if _verify_demo:
-                top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
-                logger.info(
-                    f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
-                )
+                if device_sampling_params is not None:
+                    # decode_forward returns per-user sampled token ids, not full vocab logits
+                    logger.info(
+                        f"[VERIFY DEMO] iter={iteration} device_sampling=True (no host top-5 logits); "
+                        f"decode_out_shape={tuple(logits.shape)}"
+                    )
+                else:
+                    top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
+                    logger.info(
+                        f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
+                    )
 
             # Get the next token
             if device_sampling_params is not None:
