@@ -32,9 +32,9 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 | Kind                                                   | Measured value |
 | ------------------------------------------------------ | -------------- |
 | **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.39           |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`)         | 5.68           |
+| **End-to-end** (`tests/perf/test_perf_e2e.py`, trace-on case) | ~5.68 fps equiv. |
 
-NOTE: Device perf profiles a single-pass demo.run_inference path with Tracy, whereas the E2E perf test measures pipeline wall-clock throughput of the TtLingbotVA forward path (currently driven by a single-pass WanTransformer3DModel execution).
+NOTE: Device perf (`test_perf_ttnn_lingbot_va.py`) profiles a single-pass `demo.run_inference` path with Tracy. The **E2E perf** test (`test_perf_lingbot_va_e2e_2cq`) drives `TtLingbotVA` through the `tt_cnn` 2-CQ pipeline; behavior depends on the **`use_trace`** parametrized case (see table below).
 
 ## PyTorch / CPU components
 
@@ -152,7 +152,7 @@ pytest models/experimental/lingbot_va/tests/pcc/test_encoder_wan.py::test_umt5_e
 | File                                      | Test function                            | Notes                                                                                                               |
 | ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `tests/perf/test_perf_ttnn_lingbot_va.py` | `test_perf_device_bare_metal_lingbot_va` | Device profiler (Tracy); nested run of `test_lingbot_va_ttnn_forward_run`                                           |
-| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq_trace`     | `TtLingbotVA` + `tt_cnn` pipeline, 2 command queues with trace; requires checkpoints under `reference/checkpoints/` |
+| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq`           | `TtLingbotVA` + `tt_cnn` pipeline, 2 CQs; `use_trace` selects traced single-DiT vs full infer (see **E2E perf modes**); requires `reference/checkpoints/` |
 
 
 **Device perf (Tracy / bare-metal):**
@@ -166,8 +166,19 @@ pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::t
 **End-to-end perf (pipeline wall-clock, `prep_perf_report`):**
 
 ```bash
-pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_trace -v -s
+pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq -v -s
 ```
+
+**E2E perf modes** (`test_perf_lingbot_va_e2e_2cq` runs both as separate parametrized cases):
+
+| `use_trace` | Pipeline | What runs each pipeline iteration |
+| ----------- | -------- | --------------------------------- |
+| `False`     | `PipelineConfig(use_trace=False, …)` | **`run_inference`** from `tests/demo/demo.py` (prepared path): TT **text encoder** → **VAE encoder** (`_encode_obs_ttnn` during prepare) → full **`_infer_impl`** with video + action denoise loops using the TT **transformer** (`WanTransformer3DModel` via the demo adapter). |
+| `True`      | `PipelineConfig(use_trace=True, …)`  | After `prepare(use_trace=True)` builds **`_prepare_single_run_inputs`**, each iteration calls **`WanTransformer3DModel.forward`** only (`single_run=True`), i.e. a single DiT forward for trace-friendly wall-clock (no full `run_inference` loop). |
+
+Sample **N150** pipeline compile wall (`prep_perf_report` “Compile Time”, derived as first run minus avg inference) from one run: **`use_trace=False` ~3.14 s** vs **`use_trace=True` ~0.47 s** — these inform the `expected_compile_time` values in `test_perf_e2e.py` (update if your hardware or build drifts).
+
+Checkpoints must exist under `reference/checkpoints/` (see **Download Pretrained Weights**). The test resolves that path from the tt-metal repo root so it still works after `demo`/`prepare` changes the process working directory.
 
 #### N300 (Single-Mesh)
 
@@ -181,7 +192,7 @@ pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::t
 
 ```bash
 export LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1
-pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_trace -v -s
+pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq -v -s
 ```
 
 ## Demo Scripts
