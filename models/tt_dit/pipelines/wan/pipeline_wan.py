@@ -305,6 +305,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.negative_prompt_t1_buffer = None
         self.negative_prompt_t2_buffer = None
 
+        self.warmup_buffers(**self.get_default_resolution())
+
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
         if buffer is None or not traced:
@@ -312,6 +314,20 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
+
+    def get_default_resolution(self):
+        if self.mesh_device.shape.mesh_size() >= 32:
+            return {"height": 720, "width": 1280}
+        return {"height": 480, "width": 832}
+
+    def warmup_buffers(self, height, width):
+        self.run_single_prompt(
+            prompt="warmup",
+            height=height,
+            width=width,
+            num_frames=81,
+            num_inference_steps=2,
+        )
 
     @staticmethod
     def create_pipeline(
