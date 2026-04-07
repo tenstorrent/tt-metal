@@ -34,13 +34,18 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     TensorTarget,
 )
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
-from models.demos.deepseek_v3_b1.weights.specs.fusion_groups import (
-    GATE_UP_SPEC,
-    KV_B12_SPEC,
-    O_PROJ_GATE_MM_NORMS_SPEC,
-    Q_AB_KV_A_SPEC,
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    DOWN_PROJ_SINGLE_DEVICE_SPEC,
+    GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+    QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
-from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import DOWN_PROJ_SINGLE_DEVICE_SPEC
+
+Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
@@ -50,8 +55,6 @@ from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     shared_down_torch_for_cache,
     shuffle_dram_tiles,
 )
-
-CURRENT_TRANSFORM_VERSION = 1
 
 # MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
@@ -309,6 +312,7 @@ def _gate_bias_target(layer_idx: int) -> TensorTarget:
             ttnn.ShardSpec(_GATE_BIAS_SENDER_CORE_GRID, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
         ),
         tile_shape=(16, 16),
+        transform_version=1,
     )
 
 
@@ -317,6 +321,7 @@ _EMBEDDING_TARGET = TensorTarget(
     dtype=ttnn.bfloat16,
     layout=ttnn.ROW_MAJOR_LAYOUT,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    transform_version=1,
 )
 
 _LM_HEAD_TARGET = TensorTarget(
@@ -329,6 +334,7 @@ _LM_HEAD_TARGET = TensorTarget(
         ttnn.ShardSpec(_LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
     ),
     mesh_mapper_config=ShardMeshMapper(dim=1),
+    transform_version=1,
 )
 
 _FINAL_NORM_TARGET = TensorTarget(
@@ -337,6 +343,7 @@ _FINAL_NORM_TARGET = TensorTarget(
     layout=ttnn.TILE_LAYOUT,
     memory_config=_NORM_MEM_CONFIG,
     tile_shape=(1, 32),
+    transform_version=1,
 )
 
 
@@ -347,6 +354,7 @@ def _mtp_norm_target(name: str) -> TensorTarget:
         layout=ttnn.TILE_LAYOUT,
         memory_config=_NORM_MEM_CONFIG,
         tile_shape=(1, 32),
+        transform_version=1,
     )
 
 
@@ -364,6 +372,7 @@ def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
         ),
+        transform_version=1,
     )
 
 
@@ -387,6 +396,7 @@ def _shared_down_tensor_target(device) -> TensorTarget:
         memory_config=dp_mem,
         tile_shape=(32, 32),
         mesh_mapper_config=mmc,
+        transform_version=1,
     )
 
 
@@ -413,6 +423,7 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=ReplicateMeshMapper(),
+        transform_version=1,
     )
 
 
@@ -439,6 +450,7 @@ def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> Te
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
+        transform_version=1,
     )
 
 
