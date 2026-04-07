@@ -305,6 +305,7 @@ set(GPP_FLAGS_wormhole -mcpu=tt-wh)
 set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
 # Define common flags for all architectures
+# Note: CMAKE_COMPILE_WARNING_AS_ERROR is set in the main CMakeLists.txt
 set(GPP_FLAGS_common
     -std=c++17
     -flto=auto
@@ -312,7 +313,6 @@ set(GPP_FLAGS_common
     -fno-use-cxa-atexit
     -fno-exceptions
     -Wall
-    -Werror
     -Wno-deprecated-declarations
     -Wno-unknown-pragmas
     -Wno-error=multistatement-macros
