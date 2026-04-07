@@ -330,7 +330,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool use_float32_reduction = fp32_dest_acc_en;  // legacy_reduction=false
     bool use_legacy_rsqrt = false;
     std::vector<uint32_t> compute_args = {
         input_cb_id,
@@ -348,7 +347,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        use_float32_reduction,
         use_legacy_rsqrt,
         has_weight,
         fuse_rope,

@@ -36,12 +36,10 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(12);
     constexpr uint32_t block_size = get_compile_time_arg_val(13);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(14);
-    // Note: get_compile_time_arg_val(15) is use_float32_reduction - unused after library migration
-    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
-    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(16);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(17);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(18);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(19);
+    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(15);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(16);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(17);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
