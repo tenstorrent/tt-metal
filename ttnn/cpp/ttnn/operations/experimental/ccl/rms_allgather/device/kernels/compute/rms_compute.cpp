@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -139,13 +136,13 @@ void kernel_main() {
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
         // TODO(#38448): Temporary workaround pending further debug; do not copy this pattern elsewhere.
         tensix_sync();
-        reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
     tile_regs_commit();
