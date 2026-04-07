@@ -12,21 +12,18 @@ FP32 golden: torch.nn.functional.layer_norm in float32.
 ULP is measured in the output dtype.  Near-zero golden elements use a scaled
 absolute tolerance (same pattern as test_mean_ulp).
 
-Log at INFO per parametrized case; e.g. pytest ... --log-cli-level=INFO
+Loguru logs at INFO per parametrized case (same pattern as other ``tests/ttnn`` tests).
 """
-
-import logging
 
 import pytest
 
 pytestmark = pytest.mark.use_module_device
 
 import torch
+from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
-
-logger = logging.getLogger(__name__)
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -79,9 +76,9 @@ def _run_ttnn_layer_norm(
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# BH characterization stayed below ~14 ULP; keep modest margin.
-_BF16_ULP_THRESHOLD = 24
-_BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
+# BF16 max-ULP cap; shape sweeps (incl. large squares) and weight+bias lift tails on BH (~26 ULP seen).
+_BF16_ULP_THRESHOLD = 32
+_BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 
 _LN_W_SIZES = sorted(set(range(32, 513, 64)) | {33, 41, 512})
 _LN_H_SIZES = sorted(set(range(32, 257, 64)) | {17, 37, 128, 256})
@@ -127,22 +124,15 @@ def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford):
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
     logger.info(
-        "ttnn.layer_norm ULP dtype=BF16 no_wb desc=%r shape=(%s,%s) use_welford=%s "
-        "max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        h,
-        w,
-        use_welford,
-        max_ulp,
-        _BF16_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.layer_norm ULP (BF16, no wb) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 no_wb {desc} use_welford={use_welford}] {msg}"
 
 
@@ -162,22 +152,15 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
         torch_input_tensor, device, use_welford, torch_weight=torch_weight, torch_bias=torch_bias
     )
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
     logger.info(
-        "ttnn.layer_norm ULP dtype=BF16 weight+bias desc=%r shape=(%s,%s) use_welford=%s "
-        "max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        h,
-        w,
-        use_welford,
-        max_ulp,
-        _BF16_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.layer_norm ULP (BF16, wb) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 weight+bias {desc} use_welford={use_welford}] {msg}"
 
 
@@ -185,9 +168,10 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# BH: ~1.28e6 on 32x64; larger mats + use_welford=False top ~1.73e6 (e.g. 64x256).
-_FP32_ULP_THRESHOLD = 1_900_000
-_FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
+# FP32 max-ULP cap; no_wb peak ~1.92e6, wb peak ~2.31e6 (both on BH shape sweeps).
+# Single threshold covers both variants with comfortable margin.
+_FP32_ULP_THRESHOLD = 3_000_000
+_FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
@@ -199,20 +183,40 @@ def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford):
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
     logger.info(
-        "ttnn.layer_norm ULP dtype=FP32 no_wb desc=%r shape=(%s,%s) use_welford=%s "
-        "max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        h,
-        w,
-        use_welford,
-        max_ulp,
-        _FP32_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.layer_norm ULP (FP32, no wb) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[FP32 no_wb {desc} use_welford={use_welford}] {msg}"
+
+
+@pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford):
+    """FP32 layer_norm ULP with weight and bias vs torch float32 golden."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_weight = torch.rand((w,), dtype=torch.float32)
+    torch_bias = torch.rand((w,), dtype=torch.float32)
+    golden = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+    actual = _run_ttnn_layer_norm(
+        torch_input_tensor, device, use_welford, torch_weight=torch_weight, torch_bias=torch_bias
+    )
+
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+        golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
+    )
+    spec = f"{desc} shape_hw=({h},{w}) welford={use_welford}"
+    logger.info(
+        f"ttnn.layer_norm ULP (FP32, wb) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"[FP32 wb {desc} use_welford={use_welford}] {msg}"

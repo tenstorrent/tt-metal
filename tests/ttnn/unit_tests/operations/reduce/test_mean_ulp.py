@@ -35,28 +35,19 @@ ULP is measured in the output dtype (BF16 or FP32).  Elements where
 from ULP (where the metric breaks down due to division by a tiny ULP
 quantum) and validated with a scaled absolute-tolerance check instead.
 
-Metrics are logged at INFO for every parametrized case (pass or fail).  To
-print them in the terminal, run pytest with e.g.:
-
-  pytest .../test_mean_ulp.py --log-cli-level=INFO
-
-or capture to a file:
-
-  pytest .../test_mean_ulp.py --log-file=mean_ulp.log --log-file-level=INFO
+Metrics are logged with loguru at INFO for every parametrized case (pass or fail),
+consistent with other tests under ``tests/ttnn`` (default sink: stderr).
 """
-
-import logging
 
 import pytest
 
 pytestmark = pytest.mark.use_module_device
 
 import torch
+from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +85,8 @@ _MEAN_H_SIZES = sorted(set(range(128, 4097, 1024)) | {512, 1024, 2048, 4096})
 _MEAN_HW_SQUARES = list(range(64, 513, 64))
 _MEAN_HW_MIXED = [(96, 160), (128, 192), (192, 256)]
 # Batch / channel sweeps for (B, C, 32, 32)
-_MEAN_BATCH_SIZES = [2, 4, 8]
-_MEAN_CHANNEL_SIZES = [3, 5, 7]
+_MEAN_BATCH_SIZES = [2, 4, 8, 16, 32]  # 32 = one full tile row; tests tile-boundary batch reduction
+_MEAN_CHANNEL_SIZES = [3, 5, 7, 16, 32]  # 32 = tile-boundary channel reduction
 
 
 def _build_mean_shapes_and_dims():
@@ -130,6 +121,14 @@ def _build_mean_shapes_and_dims():
         out.append(((2, C, 32, 32), 1, f"channel-{C}"))
 
     out.append(((4, 3, 32, 32), [0, 1], "batch+channel"))
+
+    # W/H reductions with non-trivial outer dims: confirms long-reduction ULP profile
+    # holds when there are multiple batch and channel slices (different code path vs N=C=1).
+    for w in [1024, 4096]:
+        out.append(((4, 3, 32, w), -1, f"W-4x3-{w}"))
+    for h in [512, 2048]:
+        out.append(((4, 3, h, 32), -2, f"H-4x3-{h}"))
+
     return out
 
 
@@ -140,11 +139,10 @@ _SHAPES_AND_DIMS = _build_mean_shapes_and_dims()
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# BF16 ULP threshold: 128 is one order of magnitude (2^7 mantissa bits).
-# With FP32 accumulation (the default), measured max ULP is 20 for normal
-# distribution across all reduction patterns.
+# BF16 max-ULP cap vs FP32-accumulated torch golden (see measure_ulp_with_near_zero_atol).
+# Shape/distribution sweeps (long reductions, wide_uniform) widen tails vs tiny fixed shapes.
 _BF16_ULP_THRESHOLD = 30
-_BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
+_BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 
 
 @pytest.mark.parametrize(
@@ -164,22 +162,15 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution):
     golden = _golden_mean_bf16(x, dim=dim, keepdim=True)
     actual = _run_ttnn_mean(x, ttnn.bfloat16, device, dim=dim, keepdim=True)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} {distribution} shape={shape} dim={dim}"
     logger.info(
-        "ttnn.mean ULP dtype=BF16 desc=%r distribution=%r shape=%s dim=%s "
-        "max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        distribution,
-        shape,
-        dim,
-        max_ulp,
-        _BF16_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.mean ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} {distribution}] {msg}"
 
 
@@ -187,9 +178,9 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution):
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32: tile vs sequential ordering; BH sweeps topped ~5.1e5 ULP (batch+channel).
-_FP32_ULP_THRESHOLD = 700_000
-_FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
+# FP32: tile vs sequential ordering; sweeps add large 2D HW reductions—BH hit ~7.3e5 ULP class.
+_FP32_ULP_THRESHOLD = 800_000
+_FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 
 
 @pytest.mark.parametrize(
@@ -209,20 +200,13 @@ def test_mean_ulp_fp32(device, shape, dim, desc, distribution):
     golden = _golden_mean_fp32(x, dim=dim, keepdim=True)
     actual = _run_ttnn_mean(x, ttnn.float32, device, dim=dim, keepdim=True)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} {distribution} shape={shape} dim={dim}"
     logger.info(
-        "ttnn.mean ULP dtype=FP32 desc=%r distribution=%r shape=%s dim=%s "
-        "max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        distribution,
-        shape,
-        dim,
-        max_ulp,
-        _FP32_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.mean ULP (FP32) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} {distribution}] {msg}"

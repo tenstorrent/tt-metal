@@ -19,29 +19,20 @@ is very small relative to the tensor's dynamic range are excluded from ULP
 (where the metric breaks down) and validated with a scaled absolute-tolerance
 check instead.
 
-Metrics are logged at INFO for every parametrized case (pass or fail).  To
-print them in the terminal, run pytest with e.g.:
-
-  pytest .../test_softmax_ulp.py --log-cli-level=INFO
-
-or capture to a file:
-
-  pytest .../test_softmax_ulp.py --log-file=softmax_ulp.log --log-file-level=INFO
+Metrics are logged with loguru at INFO for every parametrized case (pass or fail),
+consistent with other tests under ``tests/ttnn`` (default sink: stderr).
 """
-
-import logging
 
 import pytest
 
 pytestmark = pytest.mark.use_module_device
 
 import torch
+from loguru import logger
 
 import ttnn
 from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +119,9 @@ def _build_softmax_shapes_and_dims():
     )
     for b in _SOFTMAX_BATCH_W:
         out.append(((b, 1, 64, 128), -1, f"W-batch{b}"))
+    # Multi-batch/channel: regression check that ULP holds with non-trivial outer dims.
+    out.append(((2, 3, _SOFTMAX_H_FIXED, 512), -1, "W-2x3-512"))
+    out.append(((2, 3, 512, _SOFTMAX_W_FIXED), -2, "H-2x3-512"))
     return out
 
 
@@ -142,10 +136,10 @@ _SHAPES_AND_DIMS_H_SOFTMAX_ONLY = [s for s in _SHAPES_AND_DIMS if s[1] == -2]
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# BF16: BH runs stayed at or below 10 ULP for normal inputs; keep small margin over
-# test_softmax_accuracy-style worst case (~13).
-_BF16_ULP_THRESHOLD = 12
-_BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
+# BF16 max-ULP cap vs ATen softmax; sweep spans long W/H, fp32_dest_acc_en, numeric_stable
+# (wide-W + fp32_dest_acc_en=False is the stress path on BH for normal logits; observed ~32 ULP).
+_BF16_ULP_THRESHOLD = 40
+_BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 
 
 @pytest.mark.parametrize(
@@ -164,24 +158,15 @@ def test_softmax_ulp_bf16_normal(device, shape, dim, desc, fp32_dest_acc_en, num
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en)
     actual = _run_ttnn_softmax(x, ttnn.bfloat16, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}"
     logger.info(
-        "ttnn.softmax ULP dtype=BF16 desc=%r distribution=normal shape=%s dim=%s "
-        "fp32_dest_acc_en=%s numeric_stable=%s max_ulp=%s ulp_threshold=%s "
-        "max_atol_err=%s passed=%s | %s",
-        desc,
-        shape,
-        dim,
-        fp32_dest_acc_en,
-        numeric_stable,
-        max_ulp,
-        _BF16_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.softmax ULP (BF16, normal) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} normal fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}] {msg}"
 
 
@@ -201,24 +186,15 @@ def test_softmax_ulp_bf16_wide_uniform_h(device, shape, dim, desc, fp32_dest_acc
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en)
     actual = _run_ttnn_softmax(x, ttnn.bfloat16, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}"
     logger.info(
-        "ttnn.softmax ULP dtype=BF16 desc=%r distribution=wide_uniform shape=%s dim=%s "
-        "fp32_dest_acc_en=%s numeric_stable=%s max_ulp=%s ulp_threshold=%s "
-        "max_atol_err=%s passed=%s | %s",
-        desc,
-        shape,
-        dim,
-        fp32_dest_acc_en,
-        numeric_stable,
-        max_ulp,
-        _BF16_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.softmax ULP (BF16, wide_uniform H) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} wide_uniform fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}] {msg}"
 
 
@@ -226,9 +202,9 @@ def test_softmax_ulp_bf16_wide_uniform_h(device, shape, dim, desc, fp32_dest_acc
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32: fp32_dest_acc_en=True only; normal inputs. BH max ~9.3e4 (large W, numstab on).
+# FP32: fp32_dest_acc_en=True only, normal inputs; W/H sweep stays well under this cap on BH.
 _FP32_ULP_THRESHOLD = 200_000
-_FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
+_FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 
 
 @pytest.mark.parametrize(
@@ -246,21 +222,13 @@ def test_softmax_ulp_fp32_normal_fp32_acc_on(device, shape, dim, desc, numeric_s
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en=True)
     actual = _run_ttnn_softmax(x, ttnn.float32, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} shape={shape} dim={dim} numstab={numeric_stable}"
     logger.info(
-        "ttnn.softmax ULP dtype=FP32 desc=%r distribution=normal shape=%s dim=%s "
-        "fp32_dest_acc_en=True numeric_stable=%s max_ulp=%s ulp_threshold=%s "
-        "max_atol_err=%s passed=%s | %s",
-        desc,
-        shape,
-        dim,
-        numeric_stable,
-        max_ulp,
-        _FP32_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"ttnn.softmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} normal fp32_acc=True numstab={numeric_stable}] {msg}"

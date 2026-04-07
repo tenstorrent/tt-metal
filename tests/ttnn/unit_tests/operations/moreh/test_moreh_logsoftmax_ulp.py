@@ -30,17 +30,9 @@ ULP is measured in the output dtype (BF16 or FP32).  Elements where
 from ULP (where the metric breaks down due to division by a tiny ULP
 quantum) and validated with a scaled absolute-tolerance check instead.
 
-Metrics are logged at INFO for every parametrized case (pass or fail).  To
-print them in the terminal, run pytest with e.g.:
-
-  pytest .../test_moreh_logsoftmax_ulp.py --log-cli-level=INFO
-
-or capture to a file:
-
-  pytest .../test_moreh_logsoftmax_ulp.py --log-file=logsoftmax_ulp.log --log-file-level=INFO
+Metrics are logged with loguru at INFO for every parametrized case (pass or fail),
+consistent with other tests under ``tests/ttnn`` (default sink: stderr).
 """
-
-import logging
 
 import pytest
 
@@ -48,13 +40,12 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 
 from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +123,10 @@ _STRATEGY_CASES = _build_moreh_logsoftmax_strategy_cases()
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# ULP limits depend on dest accumulation: FP32 dest tightens the reduction.
-# Tightened from 16/32 after BH characterization (all cases passed with margin).
+# BF16 max-ULP caps: fp32_dest_acc_en=True uses the tighter threshold (12), False uses 24.
 _BF16_ULP_THRESHOLD_FP32_DEST = 12
 _BF16_ULP_THRESHOLD_BF16_DEST = 24
-_BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
+_BF16_NEAR_ZERO_ATOL_FRACTION = 0.001
 
 
 @pytest.mark.parametrize("shape, dim, strategy, desc", _STRATEGY_CASES, ids=[c[3] for c in _STRATEGY_CASES])
@@ -161,23 +151,15 @@ def test_moreh_logsoftmax_ulp_bf16(device, shape, dim, strategy, desc, distribut
     golden = _golden_logsoftmax_bf16(x, dim=dim)
     actual = _run_ttnn_logsoftmax(x, ttnn.bfloat16, device, dim, strategy, fp32_dest_acc_en)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, ulp_threshold, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} {strategy} {distribution} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en}"
     logger.info(
-        "moreh.logsoftmax ULP dtype=BF16 desc=%r distribution=%r shape=%s dim=%s "
-        "fp32_dest_acc_en=%s max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        distribution,
-        shape,
-        dim,
-        fp32_dest_acc_en,
-        max_ulp,
-        ulp_threshold,
-        max_atol_err,
-        passed,
-        msg,
+        f"moreh.logsoftmax ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} {distribution} fp32_dest_acc_en={fp32_dest_acc_en}] {msg}"
 
 
@@ -187,7 +169,7 @@ def test_moreh_logsoftmax_ulp_bf16(device, shape, dim, strategy, desc, distribut
 
 # FP32 fp32_dest_acc_en=True; BH max ~2.5e5 ULP (wide_uniform, large tensors).
 _FP32_ULP_THRESHOLD = 400_000
-_FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
+_FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 
 
 @pytest.mark.parametrize("shape, dim, strategy, desc", _STRATEGY_CASES, ids=[c[3] for c in _STRATEGY_CASES])
@@ -208,20 +190,13 @@ def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribut
     golden = _golden_logsoftmax_fp32(x, dim=dim)
     actual = _run_ttnn_logsoftmax(x, ttnn.float32, device, dim, strategy, fp32_dest_acc_en=True)
 
-    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
+    spec = f"{desc} {strategy} {distribution} shape={shape} dim={dim}"
     logger.info(
-        "moreh.logsoftmax ULP dtype=FP32 desc=%r distribution=%r shape=%s dim=%s "
-        "fp32_dest_acc_en=True max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
-        desc,
-        distribution,
-        shape,
-        dim,
-        max_ulp,
-        _FP32_ULP_THRESHOLD,
-        max_atol_err,
-        passed,
-        msg,
+        f"moreh.logsoftmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if not passed:
+        logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} {distribution}] {msg}"

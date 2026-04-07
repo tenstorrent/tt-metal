@@ -271,7 +271,7 @@ def measure_ulp_with_near_zero_atol(
 
     Policy:
     - For elements with ``|expected| >= near_zero_relative_fraction * max(|expected|)``,
-      measure max ULP in the usual way.
+      measure max ULP using ``models.common.utility_functions.ulp`` on the expected values.
     - For smaller-magnitude elements, skip ULP and require absolute error
       ``<= near_zero_atol_fraction * max(|expected|)``.
 
@@ -297,7 +297,7 @@ def measure_ulp_with_near_zero_atol(
     expected_max = abs_expected.max().item()
     if expected_max == 0:
         abs_err = torch.abs(actual_result.float()).max().item()
-        return abs_err == 0, 0.0, abs_err, f"All-zero golden; max |actual|={abs_err:.6e}"
+        return abs_err == 0, 0.0, abs_err, 0.0, f"All-zero golden; max |actual|={abs_err:.6e}"
 
     dynamic_threshold = near_zero_relative_fraction * expected_max
     normal_mask = abs_expected >= dynamic_threshold
@@ -352,7 +352,7 @@ def measure_ulp_with_near_zero_atol(
     if not atol_ok:
         msg += f" | FAIL atol: {atol_msg}"
 
-    return ulp_ok and atol_ok, max_ulp, max_atol_err, msg
+    return ulp_ok and atol_ok, max_ulp, max_atol_err, scaled_atol, msg
 
 
 def assert_equal(expected_pytorch_result, actual_pytorch_result):
