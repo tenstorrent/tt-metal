@@ -200,7 +200,13 @@ def run_eval(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_seq_len=max_seq_len,
+            image_pooling_use_tensor_parallel=not (use_vision_trace or use_unified_trace),
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(

@@ -156,7 +156,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         state_dict = load_model_weights()
 
         # Create model
-        model = create_model(mesh_device, state_dict, num_layers=None)
+        model = create_model(
+            mesh_device,
+            state_dict,
+            num_layers=None,
+            max_seq_len=max_seq_len,
+        )
 
         # Create model args
         model_args = Molmo2ModelArgs(

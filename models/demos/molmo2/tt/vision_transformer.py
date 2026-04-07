@@ -79,6 +79,7 @@ class VisionTransformer(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.vision_backbone.image_vit",
         dtype=ttnn.bfloat8_b,
+        allow_frame_parallel: bool = True,
     ):
         """
         Initialize VisionTransformer.
@@ -97,10 +98,13 @@ class VisionTransformer(LightweightModule):
             weight_cache_path: Path to cache weights
             state_dict_prefix: Prefix for state dict keys
             dtype: Data type for weights
+            allow_frame_parallel: If False, skip frame-level data-parallel ViT on mesh (uses
+                per-crop TTNN path). Required for mesh trace capture (frame DP uses host reads).
         """
         super().__init__()
 
         self.mesh_device = mesh_device
+        self.allow_frame_parallel = allow_frame_parallel
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.patch_size = patch_size
@@ -322,7 +326,7 @@ class VisionTransformer(LightweightModule):
         return self.mesh_device.__class__.__name__ == "MeshDevice"
 
     def _use_frame_level_dp(self, num_crops: int) -> bool:
-        return vision_frame_dp_enabled() and self._is_mesh_device() and num_crops > 1
+        return self.allow_frame_parallel and vision_frame_dp_enabled() and self._is_mesh_device() and num_crops > 1
 
     def _replicated_embed_to_torch_crops(self, x: ttnn.Tensor, num_crops: int) -> torch.Tensor:
         seq_len = x.shape[2]

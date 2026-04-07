@@ -6,8 +6,18 @@
 Tests for Molmo2 Image Pooling (Cross-Attention).
 
 Validates ImagePooling against PyTorch reference implementation.
+
+**Multi-chip attention TP:** default CI uses a single ``device``, so TP is off. On a mesh where
+``num_heads`` (16) is divisible by device count (e.g. T3K 1×8), run::
+
+    MOLMO2_IMAGE_POOLING_TP_MESH_TEST=1 pytest models/demos/molmo2/tests/test_image_pooling.py::test_image_pooling_attention_tp_mesh -v
+
+Or end-to-end smoke (vision path hits pooling on device)::
+
+    cd tt-metal && MESH_DEVICE=T3K python -m models.demos.molmo2.demo.demo --image models/demos/molmo2/demo/dog.jpg --max-tokens 8
 """
 
+import os
 
 import pytest
 import torch
@@ -269,6 +279,88 @@ def test_image_pooling_with_mask(use_mask, device):
     print(f"ImagePooling (use_mask={use_mask}) PCC: {pcc_msg}")
 
     assert passing, f"ImagePooling with mask failed PCC check: {pcc_msg}"
+
+
+@pytest.mark.skipif(
+    os.environ.get("MOLMO2_IMAGE_POOLING_TP_MESH_TEST", "").strip() != "1",
+    reason="Set MOLMO2_IMAGE_POOLING_TP_MESH_TEST=1 and run on T3K (MeshShape 1×8) to exercise TP",
+)
+def test_image_pooling_attention_tp_mesh():
+    """
+    ImagePooling cross-attention with head-wise TP vs PyTorch reference.
+
+    Opens ``MeshShape(1, 8)`` (T3K-style). Requires ``num_heads % mesh_width == 0``.
+    """
+    from models.demos.molmo2.tt.image_pooling import ImagePooling
+
+    model_id = "allenai/Molmo2-8B"
+    input_dim = 2304
+    hidden_dim = 1152
+    num_heads = 16
+    head_dim = 72
+    num_queries = 32
+    pool_size = 16
+
+    state_dict = get_pooling_weights(model_id)
+    ref_model = ReferenceCrossAttention(input_dim, hidden_dim, num_heads, head_dim)
+    prefix = "model.vision_backbone.image_pooling_2d"
+    ref_model.wq.weight.data = state_dict[f"{prefix}.wq.weight"]
+    ref_model.wq.bias.data = state_dict[f"{prefix}.wq.bias"]
+    ref_model.wk.weight.data = state_dict[f"{prefix}.wk.weight"]
+    ref_model.wk.bias.data = state_dict[f"{prefix}.wk.bias"]
+    ref_model.wv.weight.data = state_dict[f"{prefix}.wv.weight"]
+    ref_model.wv.bias.data = state_dict[f"{prefix}.wv.bias"]
+    ref_model.wo.weight.data = state_dict[f"{prefix}.wo.weight"]
+    ref_model.wo.bias.data = state_dict[f"{prefix}.wo.bias"]
+    ref_model.eval()
+
+    torch.manual_seed(42)
+    query_torch = torch.randn(1, num_queries, input_dim, dtype=torch.float32)
+    kv_torch = torch.randn(1, pool_size, input_dim, dtype=torch.float32)
+    with torch.no_grad():
+        ref_output = ref_model(query_torch, kv_torch)
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, 8)
+    mesh = ttnn.open_mesh_device(mesh_shape)
+    try:
+        assert mesh.get_num_devices() > 1 and num_heads % mesh.get_num_devices() == 0
+        tt_pooling = ImagePooling(
+            mesh_device=mesh,
+            state_dict=state_dict,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            dtype=ttnn.bfloat8_b,
+        )
+        assert tt_pooling.use_attention_tp, "Expected attention TP on 8-device mesh with 16 heads"
+
+        query_ttnn = ttnn.from_torch(
+            query_torch.unsqueeze(0),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        kv_ttnn = ttnn.from_torch(
+            kv_torch.unsqueeze(0),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        tt_output = tt_pooling(query_ttnn, kv_ttnn)
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))[0]
+        tt_output_torch = tt_output_torch.squeeze(0)
+
+        passing, pcc_msg = comp_pcc(ref_output, tt_output_torch, pcc=0.98)
+        print(f"ImagePooling mesh TP PCC: {pcc_msg}")
+        assert passing, f"ImagePooling TP mesh failed PCC: {pcc_msg}"
+    finally:
+        ttnn.close_mesh_device(mesh)
 
 
 if __name__ == "__main__":

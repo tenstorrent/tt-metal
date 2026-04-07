@@ -67,6 +67,7 @@ class Molmo2Model(LightweightModule):
         weight_cache_path=None,
         dtype=ttnn.bfloat8_b,
         lm_head_mesh_column_parallel: bool = False,
+        image_pooling_use_tensor_parallel: bool = True,
     ):
         """
         Initialize Molmo2Model.
@@ -81,6 +82,9 @@ class Molmo2Model(LightweightModule):
             dtype: Data type for weights
             lm_head_mesh_column_parallel: If True on a multi-device mesh, shard LM head weights
                 across devices (column-parallel vocab). See ``molmo2_lm_head`` module.
+            image_pooling_use_tensor_parallel: If False, image cross-attention pooling stays replicated
+                on the mesh and ViT frame-level DP is off (required for vision / unified mesh trace
+                capture; both paths use ops that are illegal during trace capture).
         """
         super().__init__()
 
@@ -113,6 +117,7 @@ class Molmo2Model(LightweightModule):
             layer_norm_eps=layer_norm_eps,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
+            image_pooling_use_tensor_parallel=image_pooling_use_tensor_parallel,
         )
 
         # Text model (Language Model)

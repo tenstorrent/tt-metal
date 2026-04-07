@@ -278,7 +278,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         state_dict = load_model_weights()
         tokenizer = load_processor()
-        model = create_model(device, state_dict, args.num_layers)
+        model = create_model(
+            device,
+            state_dict,
+            args.num_layers,
+            max_seq_len=args.max_seq_len,
+            image_pooling_use_tensor_parallel=not (args.use_vision_trace or args.use_unified_trace),
+        )
         text_num_layers = args.num_layers if args.num_layers is not None else 36
 
         print_text_tensor_parallel_banner(device, model, mesh_shape_rc)

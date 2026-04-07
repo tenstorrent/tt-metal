@@ -57,6 +57,9 @@ FRAME_END_TOKEN = "<frame_end>"
 VIDEO_PROMPT = "<|video|>"
 
 # Default video parameters matching HF Molmo2 video processor defaults
+# Default sampled frames for the CLI. Long-video runs may use ``--max-video-frames`` up to 384+
+# if device memory allows; pair with ``--max-seq-len`` so ISL covers
+# ``n_frames * pooled_h * pooled_w`` visual tokens plus text (often 32k–128k for hundreds of frames).
 VIDEO_MAX_FRAMES = 8
 VIDEO_MAX_FPS = 2.0
 
@@ -541,7 +544,14 @@ def preprocess_video_molmo2(
     }
 
 
-def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
+def create_model(
+    mesh_device,
+    state_dict,
+    num_layers: Optional[int] = None,
+    *,
+    max_seq_len: int = 8192,
+    image_pooling_use_tensor_parallel: bool = True,
+):
     """
     Create the Molmo2 TTNN model.
 
@@ -549,6 +559,11 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         mesh_device: TTNN device or mesh device
         state_dict: Model state dict
         num_layers: Optional number of text layers (default: 36)
+        max_seq_len: Context length for RoPE, text blocks, and (via ``Molmo2Generator``) KV cache.
+            Must match the ``max_seq_len`` passed to ``Molmo2Generator`` for correct long prompts.
+        image_pooling_use_tensor_parallel: Set False when using vision or unified **mesh** trace
+            capture; cross-attention ``all_reduce`` and ViT frame-DP host reads are not allowed
+            during capture.
 
     Returns:
         Molmo2Model instance
@@ -584,10 +599,11 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         text_num_kv_heads=8,
         text_head_dim=128,
         vocab_size=152064,
-        max_seq_len=8192,
+        max_seq_len=max_seq_len,
         rope_theta=1000000.0,
         rms_norm_eps=1e-5,
         dtype=ttnn.bfloat8_b,
+        image_pooling_use_tensor_parallel=image_pooling_use_tensor_parallel,
     )
 
     logger.info("Model created successfully")
@@ -2299,7 +2315,6 @@ def run_video_demo(
         video_path: Path or URL to video file (.mp4, .webm)
         prompt: Text prompt (must include <|video|>)
         max_new_tokens: Maximum tokens to generate
-        device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
         max_seq_len: Maximum sequence length for KV cache (default: 16384 for video)
         max_frames: Maximum frames to sample from video (default: 8)
@@ -2347,7 +2362,13 @@ def run_video_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_seq_len=max_seq_len,
+            image_pooling_use_tensor_parallel=not (use_vision_trace or use_unified_trace),
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -2458,7 +2479,13 @@ def run_demo(
 
     try:
         # Create model
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_seq_len=max_seq_len,
+            image_pooling_use_tensor_parallel=not (use_vision_trace or use_unified_trace),
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         # Create generator
@@ -2565,13 +2592,20 @@ def main():
         "--max-seq-len",
         type=int,
         default=None,
-        help="Maximum sequence length for KV cache (default: 2048 for image, 16384 for video)",
+        help=(
+            "Input sequence length cap: sizes RoPE, text blocks, and KV cache "
+            "(default: 2048 image, 16384 video). For many frames, raise this "
+            "(e.g. 32768 or 131072) so visual tokens + text fit; limited by device memory and kernels."
+        ),
     )
     parser.add_argument(
         "--max-video-frames",
         type=int,
         default=VIDEO_MAX_FRAMES,
-        help=f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES})",
+        help=(
+            f"Max frames to sample from video (default: {VIDEO_MAX_FRAMES}). "
+            "Values up to ~384 are plausible for long-context experiments if ISL and DRAM allow."
+        ),
     )
     parser.add_argument(
         "--max-video-fps",
@@ -2615,7 +2649,6 @@ def main():
             video_path=args.video,
             prompt=prompt,
             max_new_tokens=args.max_tokens,
-            device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
             max_frames=args.max_video_frames,

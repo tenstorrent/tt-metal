@@ -19,14 +19,36 @@ Dimensions:
     - head_dim: 72 (1152 / 16)
 
 All wq, wk, wv, wo projections have bias.
+
+**Tensor parallelism (mesh):** On a ``MeshDevice`` with ``D > 1`` devices, if
+``num_heads % D == 0``, Q/K/V use **column-parallel** sharding on the head
+output (dim 3), ``wo`` uses **row-parallel** sharding on the head input (dim 2),
+then ``all_reduce(..., cluster_axis=1)`` and replicated output bias — same
+pattern as ``TextAttention``. Otherwise weights stay **replicated** (legacy).
+Set ``MOLMO2_IMAGE_POOLING_DISABLE_TP=1`` to force replication on multi-device.
 """
 
+import logging
 import math
+import os
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+_logger = logging.getLogger(__name__)
+
+
+def _should_use_image_pooling_tp(is_mesh: bool, mesh_device, num_heads: int) -> bool:
+    if not is_mesh or os.environ.get("MOLMO2_IMAGE_POOLING_DISABLE_TP", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return False
+    n = mesh_device.get_num_devices()
+    return n > 1 and num_heads % n == 0
 
 
 class ImagePooling(LightweightModule):
@@ -47,6 +69,7 @@ class ImagePooling(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.vision_backbone.image_pooling_2d",
         dtype=ttnn.bfloat8_b,
+        force_replicate_attention: bool = False,
     ):
         """
         Initialize ImagePooling.
@@ -61,6 +84,9 @@ class ImagePooling(LightweightModule):
             weight_cache_path: Path to cache weights
             state_dict_prefix: Prefix for state dict keys
             dtype: Data type for weights
+            force_replicate_attention: If True, never shard cross-attention on the mesh (replicated
+                weights). Required when this module runs inside ``begin_trace_capture`` / ``end_trace_capture``
+                because ``all_reduce`` performs reads that are not allowed during mesh trace capture.
         """
         super().__init__()
 
@@ -78,133 +104,95 @@ class ImagePooling(LightweightModule):
         # Scale factor for attention
         self.scale = head_dim**-0.5
 
+        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+        self.is_mesh_device = is_mesh_device
+        self.num_devices = mesh_device.get_num_devices() if is_mesh_device else 1
+
+        self.use_attention_tp = (
+            _should_use_image_pooling_tp(is_mesh_device, mesh_device, num_heads) and not force_replicate_attention
+        )
+        self.num_heads_per_device = num_heads // self.num_devices if self.use_attention_tp else num_heads
+
+        if force_replicate_attention and is_mesh_device and self.num_devices > 1:
+            _logger.info("ImagePooling: cross-attention TP disabled (replicated) for trace-capture-safe path")
+
+        if is_mesh_device and self.num_devices > 1 and not self.use_attention_tp and not force_replicate_attention:
+            if num_heads % self.num_devices != 0:
+                _logger.info(
+                    "ImagePooling: attention TP unavailable (num_heads=%s not divisible by num_devices=%s); "
+                    "using replicated weights.",
+                    num_heads,
+                    self.num_devices,
+                )
+            else:
+                _logger.info(
+                    "ImagePooling: attention TP disabled via MOLMO2_IMAGE_POOLING_DISABLE_TP; "
+                    "using replicated weights."
+                )
+        elif self.use_attention_tp:
+            _logger.info(
+                "ImagePooling: cross-attention tensor parallelism enabled (%s devices, %s heads/device)",
+                self.num_devices,
+                self.num_heads_per_device,
+            )
+
         # Cache file naming
         if weight_cache_path is None:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
+            suffix = ".attn_tp" if self.use_attention_tp else ""
+            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{suffix}"
 
-        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        col_shard = ttnn.ShardTensorToMesh(mesh_device, dim=3) if self.use_attention_tp else replicate
+        row_shard = ttnn.ShardTensorToMesh(mesh_device, dim=2) if self.use_attention_tp else replicate
 
         # Load wq: input_dim (2304) -> hidden_dim (1152)
         wq = state_dict[f"{state_dict_prefix}.wq.weight"]
         bq = state_dict[f"{state_dict_prefix}.wq.bias"]
 
-        # Handle head_dim padding if needed
         if self.head_dim != self.padded_head_dim:
             wq = self._pad_weight(wq)
             bq = self._pad_bias(bq)
 
-        wq_t = torch.transpose(wq, -2, -1)
+        self.wq = self._make_qkv_weight_ttnn(wq, mesh_device, dtype, col_shard, cache_name("wq.weight"))
+        self.bq = self._make_qkv_bias_ttnn(bq, mesh_device, col_shard, cache_name("wq.bias"))
 
-        self.wq = ttnn.as_tensor(
-            wq_t.unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wq.weight"),
-        )
-
-        self.bq = ttnn.as_tensor(
-            bq,
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wq.bias"),
-        )
-
-        # Load wk: input_dim (2304) -> hidden_dim (1152)
+        # Load wk
         wk = state_dict[f"{state_dict_prefix}.wk.weight"]
         bk = state_dict[f"{state_dict_prefix}.wk.bias"]
-
         if self.head_dim != self.padded_head_dim:
             wk = self._pad_weight(wk)
             bk = self._pad_bias(bk)
+        self.wk = self._make_qkv_weight_ttnn(wk, mesh_device, dtype, col_shard, cache_name("wk.weight"))
+        self.bk = self._make_qkv_bias_ttnn(bk, mesh_device, col_shard, cache_name("wk.bias"))
 
-        wk_t = torch.transpose(wk, -2, -1)
-
-        self.wk = ttnn.as_tensor(
-            wk_t.unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wk.weight"),
-        )
-
-        self.bk = ttnn.as_tensor(
-            bk,
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wk.bias"),
-        )
-
-        # Load wv: input_dim (2304) -> hidden_dim (1152)
+        # Load wv
         wv = state_dict[f"{state_dict_prefix}.wv.weight"]
         bv = state_dict[f"{state_dict_prefix}.wv.bias"]
-
         if self.head_dim != self.padded_head_dim:
             wv = self._pad_weight(wv)
             bv = self._pad_bias(bv)
-
-        wv_t = torch.transpose(wv, -2, -1)
-
-        self.wv = ttnn.as_tensor(
-            wv_t.unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wv.weight"),
-        )
-
-        self.bv = ttnn.as_tensor(
-            bv,
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wv.bias"),
-        )
+        self.wv = self._make_qkv_weight_ttnn(wv, mesh_device, dtype, col_shard, cache_name("wv.weight"))
+        self.bv = self._make_qkv_bias_ttnn(bv, mesh_device, col_shard, cache_name("wv.bias"))
 
         # Load wo: hidden_dim (1152) -> hidden_dim (1152)
         wo = state_dict[f"{state_dict_prefix}.wo.weight"]
         bo = state_dict[f"{state_dict_prefix}.wo.bias"]
-
-        # Handle padding for output projection
         if self.head_dim != self.padded_head_dim:
             wo_reshaped = wo.reshape(-1, self.num_heads, self.head_dim)
             wo_padded = torch.nn.functional.pad(wo_reshaped, (0, self.padded_head_dim - self.head_dim))
             wo = wo_padded.reshape(-1, self.num_heads * self.padded_head_dim)
 
-        wo_t = torch.transpose(wo, -2, -1)
+        self.wo = self._make_wo_weight_ttnn(wo, mesh_device, dtype, row_shard, cache_name("wo.weight"))
 
-        self.wo = ttnn.as_tensor(
-            wo_t.unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wo.weight"),
-        )
-
+        # TP path adds bias after all_reduce; use explicit broadcast shape. Legacy: flat bias for linear.
+        bo_host = bo.reshape(1, 1, 1, -1) if self.use_attention_tp else bo
         self.bo = ttnn.as_tensor(
-            bo,
+            bo_host,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=replicate,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.bias"),
@@ -223,6 +211,101 @@ class ImagePooling(LightweightModule):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+
+    def _make_qkv_weight_ttnn(self, w_padded, mesh_device, dtype, mesh_mapper, cache_file_name):
+        """w_padded: [num_heads * padded_head_dim, input_dim] PyTorch layout."""
+        if not self.use_attention_tp:
+            wq_t = torch.transpose(w_padded, -2, -1)
+            return ttnn.as_tensor(
+                wq_t.unsqueeze(0).unsqueeze(0),
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_file_name,
+            )
+        in_dim = w_padded.shape[1]
+        h_per = self.num_heads_per_device
+        ph = self.padded_head_dim
+        w_h = w_padded.view(self.num_heads, ph, in_dim)
+        pieces = []
+        for d in range(self.num_devices):
+            wd = w_h[d * h_per : (d + 1) * h_per].reshape(-1, in_dim)
+            wt = wd.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+            pieces.append(wt)
+        wq_cat = torch.cat(pieces, dim=-1)
+        return ttnn.as_tensor(
+            wq_cat,
+            dtype=dtype,
+            device=mesh_device,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
+        )
+
+    def _make_qkv_bias_ttnn(self, b_padded, mesh_device, mesh_mapper, cache_file_name):
+        if not self.use_attention_tp:
+            # Match legacy layout: flat bias vector for ttnn.linear with replicated QKV.
+            return ttnn.as_tensor(
+                b_padded,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_file_name,
+            )
+        ph = self.padded_head_dim
+        h_per = self.num_heads_per_device
+        b_h = b_padded.view(self.num_heads, ph)
+        pieces = []
+        for d in range(self.num_devices):
+            bd = b_h[d * h_per : (d + 1) * h_per].reshape(-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            pieces.append(bd)
+        b_cat = torch.cat(pieces, dim=-1)
+        return ttnn.as_tensor(
+            b_cat,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
+        )
+
+    def _make_wo_weight_ttnn(self, wo_padded, mesh_device, dtype, mesh_mapper, cache_file_name):
+        """wo_padded: [hidden_dim, num_heads * padded_head_dim] (Linear out x in)."""
+        wo_t = torch.transpose(wo_padded, -2, -1)
+        if not self.use_attention_tp:
+            return ttnn.as_tensor(
+                wo_t.unsqueeze(0).unsqueeze(0),
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_file_name,
+            )
+        # wo_t: [in_features, out_features] = [num_heads * ph, hidden_dim]
+        h_per = self.num_heads_per_device
+        ph = self.padded_head_dim
+        flat = wo_t
+        pieces = []
+        for d in range(self.num_devices):
+            sl = flat[d * h_per * ph : (d + 1) * h_per * ph, :]
+            pieces.append(sl.unsqueeze(0).unsqueeze(0))
+        wo_cat = torch.cat(pieces, dim=2)
+        return ttnn.as_tensor(
+            wo_cat,
+            dtype=dtype,
+            device=mesh_device,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
         )
 
     def _pad_weight(self, w):
@@ -310,26 +393,19 @@ class ImagePooling(LightweightModule):
         if deallocate_kv_padded:
             ttnn.deallocate(kv_for_linear)
 
-        # Reshape Q, K, V for multi-head attention
-        # Note: Using ttnn ops for head splitting
+        batch_seq = query.shape[1]
+        nh = self.num_heads_per_device
+        padded_hidden = nh * self.padded_head_dim
 
-        # For cross-attention, we need special handling
-        # Get batch dimensions from input tensors
-        batch_seq = query.shape[1]  # B*N_out from vision_backbone
-        padded_hidden = self.num_heads * self.padded_head_dim
-
-        # Q: [1, batch_seq, num_queries, padded_hidden] -> [batch_seq, num_heads, num_queries, head_dim]
-        # K/V: sequence length is attn_kv_len (padded to tile alignment when using attn_mask)
-
-        q = ttnn.reshape(q, [batch_seq, num_queries, self.num_heads, self.padded_head_dim])
+        q = ttnn.reshape(q, [batch_seq, num_queries, nh, self.padded_head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
         q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
 
-        k = ttnn.reshape(k, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
+        k = ttnn.reshape(k, [batch_seq, attn_kv_len, nh, self.padded_head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
         k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
 
-        v = ttnn.reshape(v, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
+        v = ttnn.reshape(v, [batch_seq, attn_kv_len, nh, self.padded_head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
         v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
 
@@ -360,7 +436,6 @@ class ImagePooling(LightweightModule):
                 if prev_mask is not attn_mask:
                     ttnn.deallocate(prev_mask)
 
-        # Scaled dot-product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -378,11 +453,26 @@ class ImagePooling(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape back: [batch_seq, num_heads, num_queries, head_dim] -> [1, batch_seq, num_queries, hidden_dim]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.num_heads * self.padded_head_dim])
+        attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, padded_hidden])
 
-        # Output projection
+        if self.use_attention_tp:
+            output = ttnn.linear(
+                attn_output,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=matmul_output_memory_config,
+            )
+            ttnn.deallocate(attn_output)
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=matmul_output_memory_config,
+            )
+            output = ttnn.add(output, self.bo)
+            return output
+
         output = ttnn.linear(
             attn_output,
             self.wo,
@@ -390,7 +480,5 @@ class ImagePooling(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=matmul_output_memory_config,
         )
-
         ttnn.deallocate(attn_output)
-
         return output

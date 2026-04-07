@@ -61,6 +61,7 @@ class VisionBackbone(LightweightModule):
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
         dtype=ttnn.bfloat8_b,
+        image_pooling_use_tensor_parallel: bool = True,
     ):
         """
         Initialize VisionBackbone.
@@ -84,6 +85,10 @@ class VisionBackbone(LightweightModule):
             layer_norm_eps: Epsilon for LayerNorm
             weight_cache_path: Path to cache weights
             dtype: Data type for weights
+            image_pooling_use_tensor_parallel: If False, cross-attention pooling uses replicated
+                weights (no head-wise TP / ``all_reduce``), and ViT frame-level data parallelism
+                is disabled (avoids host reads / gathers). Set False when vision runs inside mesh
+                trace capture (``--use-vision-trace`` / unified trace).
         """
         super().__init__()
 
@@ -111,6 +116,7 @@ class VisionBackbone(LightweightModule):
             weight_cache_path=weight_cache_path,
             state_dict_prefix="model.vision_backbone.image_vit",
             dtype=dtype,
+            allow_frame_parallel=image_pooling_use_tensor_parallel,
         )
 
         # Image pooling (cross-attention)
@@ -124,6 +130,7 @@ class VisionBackbone(LightweightModule):
             weight_cache_path=weight_cache_path,
             state_dict_prefix="model.vision_backbone.image_pooling_2d",
             dtype=dtype,
+            force_replicate_attention=not image_pooling_use_tensor_parallel,
         )
 
         # Image projector (SwiGLU)
