@@ -153,7 +153,7 @@ namespace ttnn {
 
 Tensor gather(
     const Tensor& input_tensor,
-    const int8_t dim,
+    int8_t dim,
     const Tensor& input_index_tensor,
     const bool sparse_grad,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
@@ -175,9 +175,12 @@ Tensor gather(
         return input_index_tensor;
     }
 
-    const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
+    // Normalize negative dimension to positive index
+    dim = dim < 0 ? dim + input_tensor_rank : dim;
+
+    const bool input_tensor_is_dim_last_idx = (dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
-    const bool input_index_tensor_is_dim_last_idx = (dim == -1 || dim == index_tensor_rank - 1);
+    const bool input_index_tensor_is_dim_last_idx = (dim == index_tensor_rank - 1);
     const bool index_tensor_is_rank_le_4d = index_tensor_rank <= 4;
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
