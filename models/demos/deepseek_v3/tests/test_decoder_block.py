@@ -142,7 +142,7 @@ def run_test_forward_pass_decoder2d(
         ccl,
         mla_cache=paged_input_cache,
     )
-    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device, fabric_config)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Set up ttnn inputs

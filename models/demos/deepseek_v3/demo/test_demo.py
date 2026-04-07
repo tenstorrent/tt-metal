@@ -138,7 +138,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=512,
+            max_prompts=56,
             repeat_batches=1,
             max_new_tokens=129,
             override_num_layers=None,

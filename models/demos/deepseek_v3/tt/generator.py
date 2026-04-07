@@ -412,7 +412,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
         weight_cache_base.mkdir(parents=True, exist_ok=True)
 
-        cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers"
+        cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers_moe_opt"
         if self.enable_mtp:
             cache_subdir_name = f"{cache_subdir_name}_mtp"
 
@@ -1168,7 +1168,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.prefill_max_tokens is not None:
             max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
         # Round up to nearest multiple of TILE_SIZE.
-        alignment = ttnn.TILE_SIZE
+        alignment = ttnn.TILE_SIZE * 16
         max_len = ((max_len + alignment - 1) // alignment) * alignment
 
         pad_id = self._get_pad_id()
