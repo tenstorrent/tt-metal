@@ -99,9 +99,31 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // c_6 (scaler) removed — not needed with sfpu_reduce
 
     // -------------------------------------------------------------------------
-    // 4) Create semaphore (one per core, same L1 address on all cores)
+    // 4) Create semaphores and scalar storage
     // -------------------------------------------------------------------------
-    uint32_t sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    uint32_t chain_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    uint32_t bcast_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    // Repurpose a semaphore slot for 4-byte FP32 norm scalar storage (multicast target)
+    uint32_t norm_scalar_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    // Compute multicast bounding box (physical coords of active grid)
+    auto get_phys = [&](uint32_t lx, uint32_t ly) -> tt::tt_metal::CoreCoord {
+        return device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{lx, ly});
+    };
+    // Active grid spans logical (0,0) to (max_gx, max_gy).
+    // Cores are assigned column-major: core i is at (i/num_cores_y, i%num_cores_y).
+    // The bounding box must cover exactly the active cores.
+    uint32_t max_gx = (num_cores - 1) / num_cores_y;
+    // Last column may be partial; max_gy is the largest y among active cores
+    uint32_t max_gy = (max_gx == 0) ? (num_cores - 1) : (num_cores_y - 1);
+    auto mcast_start = get_phys(0, 0);
+    auto mcast_end = get_phys(max_gx, max_gy);
+    // num_dests for multicast = total cores in the bounding box rectangle
+    // For a rectangular grid from (0,0) to (max_gx, max_gy): (max_gx+1) * (max_gy+1) physical cores
+    // But the last column may be partial, so we use num_cores directly.
+    // HOWEVER: multicast sends to ALL cores in the rectangle, which may include
+    // inactive cores if the last column is partial. We must use the full rectangle count.
+    uint32_t mcast_num_dests = (max_gx + 1) * (max_gy + 1);
 
     // -------------------------------------------------------------------------
     // 5) Create kernels
@@ -140,6 +162,9 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     unpack_to_dest[kCbSqAcc] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[kCbScalar] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[kCbRecv] = UnpackToDestMode::UnpackToDestFp32;
+    // cb_norm: NOT UnpackToDestFp32 — filled by generate_tile_with_uint32_value
+    // which writes standard tile layout, not unpack-to-dest format.
+    // TF32 truncation on a uniform scalar is negligible.
 
     auto make_compute_config = [&](const std::vector<uint32_t>& args) {
         return tt::tt_metal::ComputeConfig{
@@ -165,10 +190,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // -------------------------------------------------------------------------
     // 6) Set per-core runtime args
     // -------------------------------------------------------------------------
-    auto get_phys = [&](uint32_t lx, uint32_t ly) -> tt::tt_metal::CoreCoord {
-        return device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{lx, ly});
-    };
-
     uint32_t tiles_written = 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -179,10 +200,9 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         uint32_t tiles_this_core = core_group_1.contains(logical_core) ? tiles_per_core_g1 : tiles_per_core_g2;
 
         // Neighbor physical coords (set to 0,0 if not applicable — won't be used)
+        // Chain neighbor coords: left (for row send), up (for col send)
         uint32_t left_px = 0, left_py = 0;
         uint32_t up_px = 0, up_py = 0;
-        uint32_t right_px = 0, right_py = 0;
-        uint32_t down_px = 0, down_py = 0;
 
         if (gx > 0) {
             auto p = get_phys(gx - 1, gy);
@@ -193,18 +213,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
             auto p = get_phys(gx, gy - 1);
             up_px = p.x;
             up_py = p.y;
-        }
-        // Right/down neighbors: only reference active cores
-        uint32_t right_idx = (gx + 1) * num_cores_y + gy;
-        if (right_idx < num_cores) {
-            auto p = get_phys(gx + 1, gy);
-            right_px = p.x;
-            right_py = p.y;
-        }
-        if (gy + 1 < num_cores_y && (gx * num_cores_y + gy + 1) < num_cores) {
-            auto p = get_phys(gx, gy + 1);
-            down_px = p.x;
-            down_py = p.y;
         }
 
         // Determine chain role based on active grid topology
@@ -222,10 +230,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         uint32_t do_col_send = col_has_above ? 1 : 0;
         uint32_t is_origin = (gx == 0 && gy == 0) ? 1 : 0;
 
-        // Broadcast forwarding flags
-        uint32_t do_bcast_col_fwd = col_has_below ? 1 : 0;
-        uint32_t do_bcast_row_fwd = has_right ? 1 : 0;
-
         // Reader runtime args
         SetRuntimeArgs(
             program,
@@ -234,22 +238,23 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
             {input_buffer->address(),
              tiles_this_core,
              tiles_written,
-             sem_id,
+             chain_sem_id,
              do_row_receive,
              do_row_send,
              do_col_receive,
              do_col_send,
              is_origin,
-             do_bcast_col_fwd,
-             do_bcast_row_fwd,
              left_px,
              left_py,
              up_px,
              up_py,
-             right_px,
-             right_py,
-             down_px,
-             down_py});
+             bcast_sem_id,
+             norm_scalar_sem_id,
+             static_cast<uint32_t>(mcast_start.x),
+             static_cast<uint32_t>(mcast_start.y),
+             static_cast<uint32_t>(mcast_end.x),
+             static_cast<uint32_t>(mcast_end.y),
+             mcast_num_dests});
 
         // Writer runtime args
         SetRuntimeArgs(
