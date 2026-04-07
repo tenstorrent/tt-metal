@@ -670,9 +670,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 // ========== Test Cases ==========
 
 TEST_F(SDPABackwardTest, SmallBatch) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -688,9 +685,6 @@ TEST_F(SDPABackwardTest, SmallBatch) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -707,9 +701,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -725,9 +716,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
 }
 
 TEST_F(SDPABackwardTest, GroupedQueryAttention) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     // Test GQA: more query heads than kv heads
     SDPABackwardTestConfig config{
         .batch_size = 2U,
@@ -744,9 +732,6 @@ TEST_F(SDPABackwardTest, GroupedQueryAttention) {
 }
 
 TEST_F(SDPABackwardTest, TinyLlamaConfig) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     // Match TinyLlama training config from configs/training_shakespeare_tinyllama.yaml
     // num_heads: 32, num_groups: 4, embedding_dim: 2048, max_sequence_length: 2048
     // head_dim = 2048 / 32 = 64
@@ -766,9 +751,6 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
 }
 
 TEST_F(SDPABackwardTest, CausalMask_MHA) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     // Test causal mask with Multi-Head Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{
@@ -787,9 +769,6 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
 }
 
 TEST_F(SDPABackwardTest, CausalMask_GQA) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{
@@ -808,9 +787,6 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,
@@ -827,9 +803,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
-    SKIP_FOR_LLK_ASSERTS(
-        "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many "
-        "LLK_ASSERT-s. Issue: #41480.");
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,

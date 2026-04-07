@@ -22,7 +22,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
@@ -161,9 +161,6 @@ def build_all_reduce_test_inputs(
     )
 
 
-@skip_with_llk_assert(
-    "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many LLK_ASSERT-s. Issue: #41480."
-)
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
@@ -319,9 +316,6 @@ def test_ccl_all_reduce(
     logger.info("CCL all-reduce test passed!")
 
 
-@skip_with_llk_assert(
-    "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many LLK_ASSERT-s. Issue: #41480."
-)
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [

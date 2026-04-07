@@ -24,7 +24,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,6 @@ class TestInfrastructure:
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_phases", [2, 3, 4])
     def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
@@ -340,7 +339,6 @@ class TestSequentialExecution:
 class TestShardedExecution:
     """Sharded (L1) execution tests."""
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize(
         "shard_type",
         [
@@ -395,7 +393,6 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -446,7 +443,6 @@ class TestShardedExecution:
         golden = sh_ln_golden(g, weight=torch_ws[2])
         check_pcc(golden, out, label="sharded 3-phase")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     def test_sharded_with_bias_residual(self, device):
         """LN(bias+residual)->RMS block-sharded, single-stage."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -653,7 +649,6 @@ class TestMatmulFusion:
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
     def test_matmul_followed_by_n_rms(self, device, num_rms):
         """MM then N consecutive RMS norms."""
@@ -880,7 +875,6 @@ class TestBranchingTopology:
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
             check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_asymmetric_deep_left(self, device):
         """Deep left + shallow right.
 
@@ -992,7 +986,6 @@ class TestParallelExecution:
             )
             check_pcc(golden, rms_tails[i].output_tensors[0], label=f"chain {i}")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     def test_matmul_plus_fused_chain(self, device):
         """Matmul + 3-phase norm chain on disjoint cores."""
         from models.experimental.ops.descriptors.fusion import Sequential

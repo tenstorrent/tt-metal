@@ -181,6 +181,9 @@ public:
             params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        if (params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
+        }
         return cflags;
     }
 
