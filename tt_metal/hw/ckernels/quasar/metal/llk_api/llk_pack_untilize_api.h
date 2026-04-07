@@ -74,7 +74,6 @@ inline void llk_pack_untilize(
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
-    const std::uint32_t C_DIM_FACES = narrow_tile ? 1 : 2;
     const std::uint32_t R_DIM_FACES = (num_faces == 2 && !narrow_tile) ? 1 : 2;
 
     // Each tile is packed in two 16x32 halves — top faces (0+1) then bottom faces (2+3)
