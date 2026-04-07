@@ -69,6 +69,7 @@ void InsertDeviceOperation::validate_on_program_cache_miss(
     const auto& local_tensor = tensor_args.local_tensor;
     const auto& start = tensor_args.start;
     const auto& counts = tensor_args.counts;
+    const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
 
     // global_tensor / local_tensor validation: 2D, BFLOAT8_B, TILE, DRAM interleaved.
     validate_data_tensor(global_tensor, "global_tensor");
@@ -83,9 +84,10 @@ void InsertDeviceOperation::validate_on_program_cache_miss(
         local_hidden_dim,
         global_hidden_dim);
 
-    // start and counts tensors share the same constraints.
+    // start, counts, and global_expert_idx_table share the same static invariants.
     validate_index_tensor(start, "start");
     validate_index_tensor(counts, "counts");
+    validate_index_tensor(global_expert_idx_table, "global_expert_idx_table");
 
     // Last dimension of start and counts must match.
     const auto start_last_dim = start.logical_shape()[-1];
@@ -96,12 +98,15 @@ void InsertDeviceOperation::validate_on_program_cache_miss(
         start_last_dim,
         counts_last_dim);
 
-    // global_expert_id must index into counts' last dimension.
+    // local_expert_id must index into global_expert_idx_table's last dimension.
+    // Validity of global_expert_idx_table[local_expert_id] as an index into start/counts
+    // is checked in-kernel at runtime (the value is device-resident).
+    const auto idx_table_last_dim = global_expert_idx_table.logical_shape()[-1];
     TT_FATAL(
-        operation_attributes.global_expert_id < counts_last_dim,
-        "global_expert_id ({}) must be in the range [0, {}] (counts last dimension - 1)",
-        operation_attributes.global_expert_id,
-        counts_last_dim - 1);
+        operation_attributes.local_expert_id < idx_table_last_dim,
+        "local_expert_id ({}) must be in the range [0, {}] (global_expert_idx_table last dimension - 1)",
+        operation_attributes.local_expert_id,
+        idx_table_last_dim - 1);
 
     // Tile-alignment checks.
     const uint32_t tile_height = tt::constants::TILE_HEIGHT;
@@ -152,12 +157,17 @@ ttnn::Tensor prefill_insert(
     const ttnn::Tensor& local_tensor,
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
-    uint32_t global_expert_id) {
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::insert::InsertDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.global_expert_id = global_expert_id},
+        OperationType::operation_attributes_t{.local_expert_id = local_expert_id},
         OperationType::tensor_args_t{
-            .global_tensor = global_tensor, .local_tensor = local_tensor, .start = start, .counts = counts});
+            .global_tensor = global_tensor,
+            .local_tensor = local_tensor,
+            .start = start,
+            .counts = counts,
+            .global_expert_idx_table = global_expert_idx_table});
 }
 
 }  // namespace ttnn::prim

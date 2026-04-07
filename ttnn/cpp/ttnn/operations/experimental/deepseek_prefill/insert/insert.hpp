@@ -16,7 +16,8 @@ ttnn::Tensor insert(
     const ttnn::Tensor& local_tensor,
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
-    uint32_t global_expert_id);
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert
 
