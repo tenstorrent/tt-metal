@@ -66,7 +66,9 @@ TEST_F(FrobeniusNormalizeTest, SmallMatrix) {
     auto result_tensor = metal::frobenius_normalize(input_tensor, eps);
     auto result = core::to_xtensor(result_tensor);
 
-    EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f));
+    auto d1 = xt::abs(result - expected);
+    EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f))
+        << "max_abs=" << xt::amax(d1)() << " max_rel=" << xt::amax(d1 / (xt::abs(expected) + 1e-10f))();
 }
 
 TEST_F(FrobeniusNormalizeTest, MediumMatrix) {

@@ -24,7 +24,7 @@ constexpr auto cb_scalar = tt::CBIndex::c_2;
 constexpr auto cb_recv = tt::CBIndex::c_3;
 constexpr auto cb_norm = tt::CBIndex::c_4;
 constexpr auto cb_output = tt::CBIndex::c_5;
-constexpr auto cb_scaler = tt::CBIndex::c_6;
+// c_6 unused — was for reduce_tile scaler, not needed with sfpu_reduce
 
 void kernel_main() {
     // Runtime args for per-core role
@@ -115,9 +115,14 @@ void kernel_main() {
         cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
 
-        reconfig_data_format(cb_scalar, cb_recv);
-        add_tiles_init(cb_scalar, cb_recv);
-        add_tiles(cb_scalar, cb_recv, 0, 0, 0);
+        // FP32 add via copy_tile (UnpackToDestFp32 → DST) + add_binary_tile (SFPU)
+        copy_tile_init(cb_scalar);
+        copy_tile(cb_scalar, 0, 0);
+        copy_tile_init(cb_recv);
+        copy_tile(cb_recv, 0, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+
         tile_regs_commit();
         tile_regs_wait();
 
@@ -143,9 +148,13 @@ void kernel_main() {
         cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
 
-        reconfig_data_format(cb_scalar, cb_recv);
-        add_tiles_init(cb_scalar, cb_recv);
-        add_tiles(cb_scalar, cb_recv, 0, 0, 0);
+        copy_tile_init(cb_scalar);
+        copy_tile(cb_scalar, 0, 0);
+        copy_tile_init(cb_recv);
+        copy_tile(cb_recv, 0, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+
         tile_regs_commit();
         tile_regs_wait();
 

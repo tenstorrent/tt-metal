@@ -40,8 +40,6 @@ void kernel_main() {
     constexpr uint32_t cb_scalar = tt::CBIndex::c_2;
     constexpr uint32_t cb_recv = tt::CBIndex::c_3;
     constexpr uint32_t cb_norm = tt::CBIndex::c_4;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_6;
-
     const uint32_t tile_bytes = get_tile_size(cb_input);
     const uint32_t fp32_tile_bytes = get_tile_size(cb_scalar);
 
@@ -53,9 +51,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     bool is_row_leader = (!do_row_send);  // gx == 0
-
-    // Generate the ones tile for reduce_tile (scaler)
-    generate_tile_with_packed_bfloat16_value(cb_scaler, BF16_ONE_PACKED);
 
     // =========================================================================
     // Pass 1: Stream input tiles to compute for square+accumulate
