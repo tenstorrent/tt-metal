@@ -152,6 +152,16 @@ def test_split_negative_dim(device, layout, dtype, shape, chunksize, dim, expect
     torch_results_neg = torch.split(torch_input_tensor, chunksize, dim=dim)
     torch_results_pos = torch.split(torch_input_tensor, chunksize, dim=expected_positive_dim)
 
+    # Verify PyTorch negative and positive dims produce identical results
+    assert len(torch_results_neg) == len(
+        torch_results_pos
+    ), f"Negative dim {dim} and positive dim {expected_positive_dim} produced different split counts"
+    for torch_result_neg, torch_result_pos in zip(torch_results_neg, torch_results_pos):
+        assert (
+            torch_result_neg.shape == torch_result_pos.shape
+        ), f"Negative dim shape {torch_result_neg.shape} does not match positive dim shape {torch_result_pos.shape}"
+        assert_with_pcc(torch_result_neg, torch_result_pos, 0.9999)
+
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
 
     # Test with negative dim

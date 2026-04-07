@@ -148,6 +148,8 @@ std::vector<ttnn::Tensor> split(
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
+    TT_FATAL(split_size > 0, "split_size must be greater than 0, but got: {}", split_size);
+
     // Normalize negative dimension to positive index
     const auto& input_shape = input_tensor.logical_shape();
     dim = input_shape.get_normalized_index(dim);
