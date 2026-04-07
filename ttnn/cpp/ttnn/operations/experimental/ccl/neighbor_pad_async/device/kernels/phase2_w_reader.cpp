@@ -54,6 +54,15 @@ void kernel_main() {
     const address_t output_tensor_address = get_common_arg_val<address_t>(0);
     const uint32_t barrier_sem_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t w_neighbor_sem_addr = get_common_arg_val<uint32_t>(2);
+#if defined(NP_PROGRESS_SEM)
+    // [3] progress_sem_addr: GlobalSemaphore address on conv3d reader cores.
+    //     W-reader signals this after w_nbr_sem wait (guarantees W-halo from neighbor
+    //     is in compact buffer DRAM). All NP_NUM_W_WRITERS W-readers signal once each.
+    // [4] num_reader_cores: number of conv3d reader cores to signal.
+    // [5+]: NOC coords of conv3d reader cores.
+    const uint32_t progress_sem_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(4);
+#endif
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
@@ -196,9 +205,7 @@ void kernel_main() {
 
     // Incoming W padding from neighbor: the neighbor's W writer sent padding sticks
     // directly to our output DRAM via fabric. Wait for all sem_incs confirming each
-    // outer_dim's data has been sent. The startup barrier in the next dispatch ensures
-    // DRAM writes are committed before any device proceeds (barrier goes through the
-    // same fabric link as the data, so FIFO ordering guarantees completion).
+    // outer_dim's data has been sent.
     if (!is_first_chip) {
         volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
@@ -206,4 +213,19 @@ void kernel_main() {
         // Reset after all waits complete (safe: no more fabric increments expected)
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
     }
+
+#if defined(NP_PROGRESS_SEM)
+    // Signal conv3d readers that all compact buffer data (H-halo + W-halo) is committed.
+    // H-halo ordering: all sticks go through L1→CB→local DRAM (noc_async_write_barrier()
+    // in handle_incoming_writes guarantees commit before Phase 2 signal fires). The
+    // fabric_only mode routes ALL sticks through L1 (not just corners) because BH does
+    // not provide DRAM ordering between fabric writes and NOC reads.
+    noc_async_write_barrier();
+    for (uint32_t i = 0; i < num_reader_cores; i++) {
+        const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
+        const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
+        noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1);
+    }
+    noc_async_atomic_barrier();
+#endif
 }

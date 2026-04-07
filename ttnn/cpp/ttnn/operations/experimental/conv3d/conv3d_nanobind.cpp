@@ -138,6 +138,10 @@ void bind_conv3d(nb::module_& mod) {
         &ttnn::experimental::prim::Conv3dConfig::input_progress_sem_addr,
         "L1 address of the progress semaphore from NeighborPadAsync (updated each call, not hashed).");
     py_conv3d_config.def_rw(
+        "h_trig_sem_addr",
+        &ttnn::experimental::prim::Conv3dConfig::h_trig_sem_addr,
+        "GlobalSemaphore L1 addr for H-fabric per-T-batch trigger to W-reader (updated each call).");
+    py_conv3d_config.def_rw(
         "input_progress_t_batch_size",
         &ttnn::experimental::prim::Conv3dConfig::input_progress_t_batch_size,
         "T-batch size for progress semaphore signaling (determines compile-time path).");
