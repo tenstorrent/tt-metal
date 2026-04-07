@@ -18,6 +18,10 @@
 #include "api/compute/transpose_wh.h"
 
 // M_block x N_block matmul with K-outer layout.
+// If prefill_cb != 0 and prefill_scalar != 0, pre-fills matching DST positions with
+// scaled tiles from prefill_cb before the matmul, so the matmul accumulates on top.
+// prefill_k_within: which K-tile position in in0_cb contains the G[m,n] tiles
+// prefill_col_offset: global column offset for matching output columns
 void matmul_blocks(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -28,7 +32,9 @@ void matmul_blocks(
     uint32_t subblock_h,
     uint32_t subblock_w,
     uint32_t current_M,
-    uint32_t current_N) {
+    uint32_t current_N,
+    uint32_t prefill_scalar = 0,
+    int prefill_k_within = -1) {
     uint32_t last_sh = subblock_h, last_sw = subblock_w;
 
     for (uint32_t ms = 0; ms < current_M; ms += subblock_h) {
@@ -44,6 +50,26 @@ void matmul_blocks(
             }
 
             tile_regs_acquire();
+
+            // Pre-fill DST with (b/c)*G[m,n] before matmul accumulates on top.
+            // DST is acquired, so copy_tile writes directly to DST positions.
+            if (prefill_scalar != 0 && prefill_k_within >= 0) {
+                copy_tile_to_dst_init_short(in0_cb);
+                binop_with_scalar_tile_init();
+                uint32_t dst = 0;
+                for (uint32_t h = 0; h < current_sh; h++) {
+                    for (uint32_t w = 0; w < current_sw; w++) {
+                        uint32_t c0_tile = prefill_k_within * M_block + (ms + h);
+                        copy_tile(in0_cb, c0_tile, dst);
+                        mul_unary_tile(dst, prefill_scalar);
+                        dst++;
+                    }
+                }
+                // Re-init matmul after copy/sfpu changed pipeline config
+                mm_block_init_short(in0_cb, in1_cb, true, current_sw, current_sh, 1);
+                last_sh = current_sh;
+                last_sw = current_sw;
+            }
 
             for (uint32_t k = 0; k < K_block_tiles; k++) {
                 uint32_t in0_index = k * M_block + ms;
@@ -220,6 +246,7 @@ void kernel_main() {
                 cb_wait_front(in0_cb, tiles_per_in0_block);
                 cb_wait_front(in1_cb, tiles_per_in1_block);
 
+                // DEBUG: at kb=0, pre-fill DST with (b/c)*G tile from c_0[0]
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -230,31 +257,17 @@ void kernel_main() {
                     subblock_h,
                     subblock_w,
                     current_M_block,
-                    current_N);
+                    current_N,
+                    (kb == 0) ? b_over_c_bits : 0,
+                    (kb == 0) ? 0 : -1);
 
                 if (kb == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
 
-                // DEBUG: unconditionally add c_0[0] to c_2[0] at kb=0 to test L1 acc
-                // Approach: use add_tiles with c_0 as both inputs — adds c_0[0]+c_0[0] to DST,
-                // then pack with L1 acc. This uses the binary eltwise pipeline which is known to work with L1 acc.
-                if (kb == 0) {
-                    add_tiles_init(in0_cb, in0_cb);
-                    reconfig_data_format(in0_cb, in0_cb);
-                    pack_reconfig_data_format(intermed_cb);
-                    pack_reconfig_l1_acc(1);
-                    acquire_dst();
-                    add_tiles(in0_cb, in0_cb, 0, 0, 0);  // DST[0] = c_0[0] + c_0[0] = 2*G[m,k]
-                    pack_tile<true>(0, intermed_cb, 0);
-                    release_dst();
-                    // Restore matmul config
-                    mm_init(in0_cb, in1_cb, intermed_cb);
-                    mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
-                    reconfig_data_format(in1_cb, in0_cb);
-                    pack_reconfig_data_format(intermed_cb);
-                    pack_reconfig_l1_acc(1);
-                }
+                // DEBUG: test if L1 acc works by doing a zero-contribution matmul at kb=1
+                // This uses the matmul pipeline which is known to work with L1 acc
+                // TODO: find correct init sequence for copy_tile + L1 acc
 
                 cb_pop_front(in0_cb, tiles_per_in0_block);
                 cb_pop_front(in1_cb, tiles_per_in1_block);
