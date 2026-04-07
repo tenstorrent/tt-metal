@@ -1,10 +1,24 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Auto Issue Creation"
 
 on:
   workflow_dispatch:
+    inputs:
+      create-issues:
+        description: "Create GitHub issues for deterministic failures"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   cursor-cli-smoke-test:
