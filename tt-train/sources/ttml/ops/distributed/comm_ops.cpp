@@ -4,11 +4,28 @@
 
 #include "comm_ops.hpp"
 
+#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
+
+namespace {
+
+// Check if a gradient tensor is replicated on the given cluster axis.
+// If replicated, the backward CCL can skip the all_reduce (identity).
+bool is_grad_replicated_on_axis(const tt::tt_metal::Tensor& grad, const std::optional<uint32_t> cluster_axis) {
+    const auto& placements = grad.tensor_topology().placements();
+    uint32_t axis = cluster_axis.value_or(0);
+    if (axis >= placements.size()) {
+        return true;  // default: treat as replicated
+    }
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[axis]);
+}
+
+}  // namespace
 
 namespace ttml::ops::distributed {
 
@@ -71,15 +88,15 @@ autograd::TensorPtr all_gather(
     return out;
 }
 
-autograd::TensorPtr all_reduce(
-    const autograd::TensorPtr& tensor, const bool noop_backward, const std::optional<uint32_t> cluster_axis) {
+autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, const std::optional<uint32_t> cluster_axis) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_reduce(tensor->get_value(), cluster_axis));
-    autograd::GradFunction grad = [tensor, out, noop_backward, cluster_axis]() {
+    autograd::GradFunction grad = [tensor, out, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            if (noop_backward) {
-                tensor->add_grad(out->get_grad());
+            const auto& g = out->get_grad();
+            if (is_grad_replicated_on_axis(g, cluster_axis)) {
+                tensor->add_grad(g);
             } else {
-                tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
+                tensor->add_grad(ttnn_fixed::distributed::all_reduce(g, cluster_axis));
             }
         }
     };
@@ -91,7 +108,12 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, const std::opti
     auto out = autograd::create_tensor(tensor->get_value());
     autograd::GradFunction grad = [tensor, out, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
+            const auto& g = out->get_grad();
+            if (is_grad_replicated_on_axis(g, cluster_axis)) {
+                tensor->add_grad(g);
+            } else {
+                tensor->add_grad(ttnn_fixed::distributed::all_reduce(g, cluster_axis));
+            }
         }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));

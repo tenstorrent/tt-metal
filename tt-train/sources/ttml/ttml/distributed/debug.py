@@ -429,9 +429,7 @@ class DispatchTrace:
             for c in ent.post_collectives:
                 ctype = c.get("type", "?")
                 axis = c.get("mesh_axis", "")
-                noop = c.get("noop_backward", "")
-                extra = f", noop_backward={noop}" if noop else ""
-                lines.append(f'<span class="ccl post">↳ {escape(str(ctype))}(axis={axis}{extra})</span>')
+                lines.append(f'<span class="ccl post">↳ {escape(str(ctype))}(axis={axis})</span>')
             if not lines:
                 return ""
             return '<div class="ccls">' + "".join(lines) + "</div>"
@@ -459,12 +457,9 @@ class DispatchTrace:
             if not ent.input_shapes and not ent.input_layouts:
                 return ""
             pairs = []
-            for idx, (sh, ly) in enumerate(
-                zip_longest(ent.input_shapes, ent.input_layouts, fillvalue=None)
-            ):
+            for idx, (sh, ly) in enumerate(zip_longest(ent.input_shapes, ent.input_layouts, fillvalue=None)):
                 pairs.append(
-                    f'<span class="in-pair">in[{idx}]: shape={escape(repr(sh))} '
-                    f"layout={layout_str(ly)}</span>"
+                    f'<span class="in-pair">in[{idx}]: shape={escape(repr(sh))} ' f"layout={layout_str(ly)}</span>"
                 )
             return '<div class="exec-inputs">' + "<br/>".join(pairs) + "</div>"
 

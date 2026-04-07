@@ -72,9 +72,7 @@ class TpPlan:
         """Convert styles to a ``{pattern: Layout}`` dict for materialization."""
         resolved = {}
         for pattern, style in self.styles.items():
-            for param_name, layout in style.get_layouts(
-                mesh_device, self.tp_axis
-            ).items():
+            for param_name, layout in style.get_layouts(mesh_device, self.tp_axis).items():
                 resolved[pattern + r"\." + param_name] = layout
         return resolved
 
@@ -246,17 +244,11 @@ class RowwiseParallel(ParallelStyle):
 
         def _wrapped_forward(x):
             out = _original_forward(x)
-            # noop_backward=True when input was already sharded on last dim (avoids double all_reduce)
-            inp_layout = get_layout(x)
-            input_is_sharded = False
-            if inp_layout is not None and inp_layout.is_sharded_on(tp_axis):
-                dim = inp_layout.shard_dim(tp_axis)
-                input_is_sharded = dim in (-1, 3)
             out = ttml.ops.distributed.all_reduce(
                 out,
                 cluster_axis=tp_axis,
-                noop_backward=input_is_sharded,
             )
+            inp_layout = get_layout(x)
             if inp_layout is not None:
                 out_layout = inp_layout.with_placement(tp_axis, Replicate())
                 set_layout(out, out_layout)

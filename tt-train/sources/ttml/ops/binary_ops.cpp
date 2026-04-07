@@ -83,10 +83,55 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     return reduced;
 }
 
+// Propagate shard topology from inputs to output.
+// If either input is sharded on a mesh axis, the output gets that shard placement.
+void propagate_topology(
+    const tt::tt_metal::Tensor& src_a, const tt::tt_metal::Tensor& src_b, const autograd::TensorPtr& out) {
+    const auto& topo_a = src_a.tensor_topology();
+    const auto& topo_b = src_b.tensor_topology();
+    const auto& pa = topo_a.placements();
+    const auto& pb = topo_b.placements();
+
+    if (pa.size() <= 1 && pb.size() <= 1) {
+        return;
+    }
+
+    using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
+    using ShardT = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+
+    size_t ndim = std::max(pa.size(), pb.size());
+    ttsl::SmallVector<Placement> merged;
+    for (size_t i = 0; i < ndim; ++i) {
+        auto p_a = (i < pa.size()) ? pa[i] : Placement{tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+        auto p_b = (i < pb.size()) ? pb[i] : Placement{tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+        merged.push_back(std::holds_alternative<ShardT>(p_a) ? p_a : p_b);
+    }
+
+    tt::tt_metal::TensorTopology new_topo(
+        topo_a.distribution_shape(), std::move(merged), {topo_a.mesh_coords().begin(), topo_a.mesh_coords().end()});
+
+    tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
+    val.update_tensor_topology(new_topo);
+    out->set_value(val);
+}
+
+void propagate_topology(const tt::tt_metal::Tensor& src, const autograd::TensorPtr& out) {
+    const auto& topo = src.tensor_topology();
+    const auto& placements = topo.placements();
+    if (placements.size() <= 1) {
+        return;
+    }
+
+    tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
+    val.update_tensor_topology(topo);
+    out->set_value(val);
+}
+
 }  // namespace
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
+    propagate_topology(a->get_value(), b, out);
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
@@ -94,6 +139,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& 
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
+    propagate_topology(a->get_value(), b.get_tensor(), out);
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
@@ -105,6 +151,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     out->set_value(
         ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));
@@ -127,6 +174,7 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));
@@ -154,6 +202,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         a->get_value(),
         b->get_value(),
         /* fast_and_approximate_mode*/ true));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         auto a_grad = ttnn::multiply(
             out->get_grad(),
@@ -183,6 +232,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
+    propagate_topology(a->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         auto a_grad = ttnn::multiply(out->get_grad(), b, /* fast_and_approximate_mode*/ true);
 
@@ -197,6 +247,7 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad()) || was_broadcasted(b, out->get_grad())) {
             throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");

@@ -113,11 +113,7 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def(
-            "all_reduce",
-            &ttml::ops::distributed::all_reduce,
-            nb::arg("tensor"),
-            nb::arg("noop_backward") = false,
-            nb::arg("cluster_axis") = nb::none());
+            "all_reduce", &ttml::ops::distributed::all_reduce, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
             "reduce_scatter",
             &ttml::ops::distributed::reduce_scatter,

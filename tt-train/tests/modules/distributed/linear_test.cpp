@@ -508,8 +508,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
-    // Use unscaled ones_grad for replicate layer because row parallel's all_reduce backward
-    // does all_reduce on grad (noop_backward=false), effectively multiplying by num_devices
+    // Use unscaled ones_grad for replicate layer — row parallel's all_reduce backward
+    // now uses topology-aware noop (grad is replicated → identity)
     auto replicate_ones_grad = ttnn::ones_like(replicate_layer_output->get_value());
     replicate_layer_output->set_grad(replicate_ones_grad);
     replicate_layer_output->backward();

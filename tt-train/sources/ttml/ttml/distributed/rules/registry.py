@@ -60,14 +60,12 @@ class AllReduce(CCL):
     """Optional post-collective: all_reduce on the given mesh axis."""
 
     mesh_axis: int
-    noop_backward: bool = False
 
     def __call__(self, tensor: Any) -> Any:
         import ttml
 
         return ttml.ops.distributed.all_reduce(
             tensor,
-            noop_backward=self.noop_backward,
             cluster_axis=self.mesh_axis,
         )
 
@@ -75,7 +73,6 @@ class AllReduce(CCL):
         d = super().log_dict(arg_idx=arg_idx, out_idx=out_idx)
         d["type"] = "all_reduce"
         d["mesh_axis"] = self.mesh_axis
-        d["noop_backward"] = self.noop_backward
         return d
 
 
@@ -133,7 +130,7 @@ class ShardingPlan:
         pre_collectives[i] is None or Broadcast(mesh_axis) for the i-th tensor input.
 
     Post-collectives (per output):
-        post_collectives[j] is None, AllReduce(mesh_axis, noop_backward), or
+        post_collectives[j] is None, AllReduce(mesh_axis), or
         AllGather(dim, mesh_axis, gather_grad_replicated) for the j-th output.
 
     Attributes:
