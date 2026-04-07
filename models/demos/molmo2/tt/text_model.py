@@ -239,6 +239,7 @@ class TextModel(LightweightModule):
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
         trace_id: int = None,
+        prefill_chunk_size: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -252,40 +253,115 @@ class TextModel(LightweightModule):
             rot_mats: Optional pre-computed rotation matrices [cos, sin] for tracing
             page_table: Optional page table for paged attention (vLLM)
             user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
+            prefill_chunk_size: When set with paged ``kv_caches`` and ``page_table``, and
+                ``seq_len > prefill_chunk_size``, run prefill in sequence chunks using
+                ``chunked_scaled_dot_product_attention``. Requires ``seq_len`` and
+                ``prefill_chunk_size`` divisible by the KV ``block_size`` (paged cache dim).
 
         Returns:
             Tuple of (logits, new_kv_caches)
         """
         seq_len = hidden_states.shape[-2]
+        hidden_dim = hidden_states.shape[-1]
 
-        # Get RoPE rotation matrices (prefill mode)
-        # Use provided rot_mats if available (for tracing), otherwise compute
-        if rot_mats is None:
-            rot_mats = self.rotary_setup.get_rot_mats_prefill(seq_len, start_pos)
+        use_chunked_prefill = (
+            prefill_chunk_size is not None
+            and prefill_chunk_size > 0
+            and page_table is not None
+            and kv_caches is not None
+            and seq_len > prefill_chunk_size
+        )
 
-        # Process through decoder blocks
-        all_hidden_states = [] if output_hidden_states else None
-        new_kv_caches = []
-
-        x = hidden_states
-        for layer_idx, block in enumerate(self.blocks):
+        if use_chunked_prefill:
             if output_hidden_states:
-                all_hidden_states.append(x)
+                raise NotImplementedError("output_hidden_states is not supported with chunked paged prefill.")
+            block_size = kv_caches[0][0].shape[2]
+            if seq_len % prefill_chunk_size != 0:
+                raise ValueError(
+                    "Chunked paged prefill requires seq_len divisible by prefill_chunk_size; "
+                    f"got seq_len={seq_len}, prefill_chunk_size={prefill_chunk_size}."
+                )
+            if prefill_chunk_size % block_size != 0:
+                raise ValueError(
+                    "prefill_chunk_size must be divisible by KV block_size; "
+                    f"got prefill_chunk_size={prefill_chunk_size}, block_size={block_size}."
+                )
 
-            kv_cache = kv_caches[layer_idx] if kv_caches else None
-            x, new_kv_cache = block(
-                x,
-                rot_mats,
-                self.transformation_mats,
-                attn_mask,
-                start_pos,
-                kv_cache,
-                page_table,
-                user_id,
-                trace_id,
-                layer_idx,
-            )
-            new_kv_caches.append(new_kv_cache)
+            chunk_outputs = []
+            for chunk_off in range(0, seq_len, prefill_chunk_size):
+                clen = prefill_chunk_size
+                abs_tok = start_pos + chunk_off
+                x_chunk = ttnn.slice(
+                    hidden_states,
+                    (0, 0, chunk_off, 0),
+                    (1, 1, chunk_off + clen, hidden_dim),
+                )
+                if rot_mats is None:
+                    chunk_rot = self.rotary_setup.get_rot_mats_prefill(clen, abs_tok)
+                else:
+                    hdim = rot_mats[0].shape[-1]
+                    chunk_rot = [ttnn.slice(rm, (0, chunk_off, 0), (1, chunk_off + clen, hdim)) for rm in rot_mats]
+
+                b0 = abs_tok // block_size
+                b1 = (abs_tok + clen) // block_size
+                chunk_pt = ttnn.slice(page_table, (user_id, b0), (user_id + 1, b1))
+
+                x = x_chunk
+                layer_kv_out: List[Tuple[ttnn.Tensor, ttnn.Tensor]] = []
+                for layer_idx, block in enumerate(self.blocks):
+                    kv_cache = kv_caches[layer_idx]
+                    x, new_kv_cache = block(
+                        x,
+                        chunk_rot,
+                        self.transformation_mats,
+                        attn_mask,
+                        abs_tok,
+                        kv_cache,
+                        page_table,
+                        user_id,
+                        trace_id,
+                        layer_idx,
+                        chunk_page_table=chunk_pt,
+                        chunk_start_idx=abs_tok,
+                    )
+                    layer_kv_out.append(new_kv_cache)
+
+                new_kv_caches = layer_kv_out
+                chunk_outputs.append(x)
+                ttnn.deallocate(chunk_pt)
+                ttnn.deallocate(chunk_rot[0])
+                ttnn.deallocate(chunk_rot[1])
+
+            x = ttnn.concat(chunk_outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for c in chunk_outputs:
+                ttnn.deallocate(c)
+
+        else:
+            if rot_mats is None:
+                rot_mats = self.rotary_setup.get_rot_mats_prefill(seq_len, start_pos)
+
+            all_hidden_states = [] if output_hidden_states else None
+            new_kv_caches = []
+
+            x = hidden_states
+            for layer_idx, block in enumerate(self.blocks):
+                if output_hidden_states:
+                    all_hidden_states.append(x)
+
+                kv_cache = kv_caches[layer_idx] if kv_caches else None
+                x, new_kv_cache = block(
+                    x,
+                    rot_mats,
+                    self.transformation_mats,
+                    attn_mask,
+                    start_pos,
+                    kv_cache,
+                    page_table,
+                    user_id,
+                    trace_id,
+                    layer_idx,
+                )
+                new_kv_caches.append(new_kv_cache)
 
         # Final normalization
         x = self.ln_f(x)
@@ -313,6 +389,8 @@ class TextModel(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         user_id: int = 0,
+        page_table: Optional[ttnn.Tensor] = None,
+        prefill_chunk_size: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, List[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass with embedding lookup.
@@ -328,7 +406,15 @@ class TextModel(LightweightModule):
             Tuple of (logits, new_kv_caches)
         """
         hidden_states = self.embed_tokens(input_ids)
-        return self.forward(hidden_states, start_pos, attn_mask, kv_caches, user_id=user_id)
+        return self.forward(
+            hidden_states,
+            start_pos,
+            attn_mask,
+            kv_caches,
+            user_id=user_id,
+            page_table=page_table,
+            prefill_chunk_size=prefill_chunk_size,
+        )
 
     def forward_decode(
         self,

@@ -135,6 +135,8 @@ class TextBlock(LightweightModule):
         user_id: int = 0,
         trace_id: int = None,
         layer_idx: int = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        chunk_start_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through decoder block.
@@ -166,6 +168,8 @@ class TextBlock(LightweightModule):
             user_id,
             trace_id=trace_id,
             layer_idx=layer_idx,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
 
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)

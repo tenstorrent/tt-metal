@@ -29,6 +29,36 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def molmo2_chunked_prefill_sdpa_program_config(
+    seq_len: int, chunk_start_idx: Optional[int], compute_grid
+) -> ttnn.SDPAProgramConfig:
+    """SDPA program config for paged chunked prefill (aligned with tt_transformers)."""
+    q_chunk = (
+        256
+        if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+        else 64
+        if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+        else min(256, chunk_start_idx & -chunk_start_idx)
+        if seq_len >= 2048
+        else min(64, chunk_start_idx & -chunk_start_idx)
+    )
+    k_chunk = (
+        256
+        if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+        else 64
+        if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+        else min(256, chunk_start_idx & -chunk_start_idx)
+        if seq_len >= 2048
+        else min(64, chunk_start_idx & -chunk_start_idx)
+    )
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=compute_grid,
+        exp_approx_mode=False,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+    )
+
+
 class TextAttention(LightweightModule):
     """
     Grouped-Query Attention with QK-norm for Molmo2 text model.
@@ -244,6 +274,8 @@ class TextAttention(LightweightModule):
         user_id: int = 0,
         trace_id: int = None,
         layer_idx: int = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        chunk_start_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through GQA attention (prefill mode) with tensor parallelism.
@@ -257,11 +289,22 @@ class TextAttention(LightweightModule):
             page_table: Optional page table for paged attention (vLLM)
                 Shape: [batch, max_num_blocks_per_req] mapping positions to block IDs
             user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
+            chunk_page_table: Sub-table for this prefill chunk (columns = virtual blocks in chunk).
+                Required when chunk_start_idx is set with paged KV.
+            chunk_start_idx: Absolute token offset into the KV sequence for this chunk; when set
+                with paged KV, runs chunked_scaled_dot_product_attention against the full cache.
 
         Returns:
             Tuple of (output, updated_kv_cache)
         """
         seq_len = x.shape[-2]
+        use_chunked_paged_sdpa = kv_cache is not None and page_table is not None and chunk_start_idx is not None
+        if use_chunked_paged_sdpa and chunk_page_table is None:
+            raise ValueError("chunk_page_table is required when using paged chunked prefill (chunk_start_idx set).")
+        if use_chunked_paged_sdpa and attn_mask is not None:
+            raise NotImplementedError(
+                "chunked_scaled_dot_product_attention does not support attn_mask; pass attn_mask=None."
+            )
 
         # Fused QKV: one matmul, then slice along output (column-parallel / mesh layout matches self.wqkv).
         qkv = ttnn.linear(
@@ -334,12 +377,12 @@ class TextAttention(LightweightModule):
         )
 
         # Update KV cache using fill_cache for prefill
+        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
             if page_table is not None:
-                # Paged attention: write to pages specified by page_table
-                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(k_cache, k, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(v_cache, v, fill_page_table, batch_idx=user_id)
             else:
                 # Fallback for non-paged mode (demo) - use user_id for multi-user batching
                 ttnn.fill_cache(k_cache, k, batch_idx=user_id)
@@ -347,31 +390,50 @@ class TextAttention(LightweightModule):
 
         new_kv_cache = (k, v)
 
-        # Repeat K, V for GQA (within each device's subset of heads)
-        if self.num_kv_groups > 1:
-            # [1, num_kv_heads_per_device, seq_len, head_dim] -> [1, num_heads_per_device, seq_len, head_dim]
-            k = ttnn.repeat_interleave(k, self.num_kv_groups, dim=1)
-            v = ttnn.repeat_interleave(v, self.num_kv_groups, dim=1)
+        sdpa_grid = self.mesh_device.compute_with_storage_grid_size()
 
-        # Convert to bfloat8_b for SDPA
-        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+        if use_chunked_paged_sdpa:
+            k_cache, v_cache = kv_cache
+            q_bf8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+            k_bf8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+            v_bf8 = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_bf8,
+                k_cache,
+                v_cache,
+                page_table,
+                chunk_start_idx,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=molmo2_chunked_prefill_sdpa_program_config(seq_len, chunk_start_idx, sdpa_grid),
+            )
+            ttnn.deallocate(q_bf8)
+            ttnn.deallocate(k_bf8)
+            ttnn.deallocate(v_bf8)
+        else:
+            # Repeat K, V for GQA (within each device's subset of heads)
+            if self.num_kv_groups > 1:
+                k = ttnn.repeat_interleave(k, self.num_kv_groups, dim=1)
+                v = ttnn.repeat_interleave(v, self.num_kv_groups, dim=1)
 
-        # Scaled dot-product attention
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True if attn_mask is None else False,
-            scale=self.scale,
-            attn_mask=attn_mask,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
+            q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+            k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+            v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
 
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=True if attn_mask is None else False,
+                scale=self.scale,
+                attn_mask=attn_mask,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+
         ttnn.deallocate(qkv)
 
         # Reshape back: [1, num_heads_per_device, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim_per_device]

@@ -84,6 +84,7 @@ class Molmo2Generator:
         use_paged_attention: bool = False,
         block_size: int = 64,
         num_blocks: int = 512,
+        prefill_chunk_size: Optional[int] = None,
     ):
         self.mesh_device = mesh_device
         self.model = model
@@ -98,6 +99,7 @@ class Molmo2Generator:
         self.num_blocks = num_blocks
         self.page_table = None  # ttnn tensor for current request's page table
         self.page_table_torch = None  # torch tensor for page table management
+        self.prefill_chunk_size = prefill_chunk_size
 
         # Separate trace state for prefill and decode
         self.prefill_traces = {}  # {seq_len: (trace_id, trace_inputs, trace_output)}
@@ -707,6 +709,7 @@ class Molmo2Generator:
             kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
             rot_mats=rot_mats,
             page_table=page_table_for_trace,
+            prefill_chunk_size=self.prefill_chunk_size,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -944,6 +947,7 @@ class Molmo2Generator:
             rot_mats=rot_mats,
             page_table=page_table_for_trace,
             trace_id=trace_id,
+            prefill_chunk_size=self.prefill_chunk_size,
         )
         first_run_env = os.getenv("First_run", "false").lower() == "true"
         if not first_run_env and not current_run_trace:
@@ -1193,6 +1197,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,
                 rot_mats=rot_mats,
                 page_table=warmup_page_table,
+                prefill_chunk_size=self.prefill_chunk_size,
             )
             ttnn.synchronize_device(self.mesh_device)
             timing["compile_ms"] = (time.perf_counter() - warmup_start) * 1000
@@ -1559,6 +1564,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Compile paged attention ops
+                prefill_chunk_size=self.prefill_chunk_size,
             )
         else:
             # Non-traced path: use page_table argument if provided, else try trace_tensors
@@ -1583,6 +1589,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Pass page_table for paged attention
+                prefill_chunk_size=self.prefill_chunk_size,
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -1812,6 +1819,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
                 page_table=effective_page_table,
                 user_id=user_id,
+                prefill_chunk_size=self.prefill_chunk_size,
             )
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
@@ -2433,6 +2441,7 @@ def run_video_demo(
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
+    prefill_chunk_size: Optional[int] = None,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2451,6 +2460,8 @@ def run_video_demo(
         use_vision_trace: Whether to use tracing for vision backbone
         use_unified_trace: Whether to use unified Vision+Prefill trace
         use_paged_attention: Whether to use paged attention (for vLLM compatibility)
+        prefill_chunk_size: Token chunk size for paged long prefill (requires paged attention;
+            prompt length must be greater than this and divisible by it, and it must be divisible by 64).
     """
     logger.info("=" * 60)
     logger.info("Molmo2-8B Video Demo")
@@ -2493,6 +2504,7 @@ def run_video_demo(
             batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
+            prefill_chunk_size=prefill_chunk_size,
         )
 
         logger.info("\n" + "=" * 60)
@@ -2551,6 +2563,7 @@ def run_demo(
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
+    prefill_chunk_size: Optional[int] = None,
 ):
     """
     Run the Molmo2 demo.
@@ -2566,6 +2579,7 @@ def run_demo(
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
         use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
+        prefill_chunk_size: Token chunk size for paged long prefill (requires --paged-attention)
     """
     # Validate incompatible options
     # Paged attention is incompatible with UNIFIED traces because paged KV cache
@@ -2577,6 +2591,14 @@ def run_demo(
             "Paged attention writes during prefill cannot be captured in traces. Disabling unified trace."
         )
         use_unified_trace = False
+
+    if prefill_chunk_size is not None and prefill_chunk_size > 0 and not use_paged_attention:
+        logger.warning("prefill_chunk_size is ignored without --paged-attention (chunked prefill requires paged KV).")
+
+    if prefill_chunk_size is not None and prefill_chunk_size > 0 and use_trace:
+        logger.warning(
+            "Chunked paged prefill with --use-trace is experimental; prefer testing without --use-trace first."
+        )
 
     # Note: Both prefill trace (--use-trace) and decode trace (--use-decode-trace) ARE compatible
     # with paged attention. The page_table is allocated as a trace input tensor and gets updated
@@ -2622,6 +2644,7 @@ def run_demo(
             batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
+            prefill_chunk_size=prefill_chunk_size,
         )
 
         # Warmup: compile ops and capture traces for all bucket sizes
@@ -2915,6 +2938,14 @@ def main():
         help="Enable paged attention (for testing vLLM compatibility)",
     )
     parser.add_argument(
+        "--prefill-chunk-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Paged prefill chunk size in tokens (requires --paged-attention). "
+        "Activates chunked SDPA when prompt length > N; seq_len and N must be divisible by 64, and seq_len %% N == 0.",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=1,
@@ -2947,6 +2978,14 @@ def main():
     elif args.video is not None:
         prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
+        if args.prefill_chunk_size and args.prefill_chunk_size > 0 and not args.paged_attention:
+            logger.warning(
+                "prefill_chunk_size is ignored without --paged-attention (chunked prefill requires paged KV)."
+            )
+        if args.prefill_chunk_size and args.prefill_chunk_size > 0 and args.use_trace:
+            logger.warning(
+                "Chunked paged prefill with --use-trace is experimental; prefer testing without --use-trace first."
+            )
         run_video_demo(
             video_path=args.video,
             prompt=prompt,
@@ -2963,6 +3002,7 @@ def main():
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
+            prefill_chunk_size=args.prefill_chunk_size,
         )
     else:
         prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
@@ -2981,6 +3021,7 @@ def main():
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
+            prefill_chunk_size=args.prefill_chunk_size,
         )
 
 

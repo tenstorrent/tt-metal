@@ -616,6 +616,7 @@ class Molmo2Model(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         start_pos: int = 0,
         page_table: Optional[ttnn.Tensor] = None,
+        prefill_chunk_size: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through the full Molmo2 model.
@@ -628,6 +629,7 @@ class Molmo2Model(LightweightModule):
             kv_caches: Optional KV cache for incremental decoding
             start_pos: Starting position for KV cache
             page_table: Optional page table for paged attention (vLLM)
+            prefill_chunk_size: Optional chunk size for paged long-sequence prefill (see ``TextModel.forward``).
 
         Returns:
             Tuple of (logits, new_kv_caches)
@@ -660,6 +662,7 @@ class Molmo2Model(LightweightModule):
             attn_mask=None,
             kv_caches=kv_caches,
             page_table=page_table,
+            prefill_chunk_size=prefill_chunk_size,
         )
 
         return logits, new_kv_caches
