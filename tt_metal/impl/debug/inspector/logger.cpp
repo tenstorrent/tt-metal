@@ -12,31 +12,40 @@
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path) : logging_path(logging_path) {
+Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> rank) : logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
         "Inspector logger will impact tt-triage functionality.";
 
+    // If rank is provided, append it to the logging path to allow multiple instances of the inspector on the same
+    // machine
+    if (rank.has_value()) {
+        this->logging_path /= "_rank_" + std::to_string(*rank);
+    }
+
     try {
         // Recreate the logging directory if it doesn't exist or clear it if it does.
-        std::filesystem::remove_all(logging_path);
-        std::filesystem::create_directories(logging_path);
+        std::filesystem::remove_all(this->logging_path);
+        std::filesystem::create_directories(this->logging_path);
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_THROW(
-            "Failed to create logging directory: {}. Error: {}\n{}", logging_path.string(), e.what(), additional_text);
+            "Failed to create logging directory: {}. Error: {}\n{}",
+            this->logging_path.string(),
+            e.what(),
+            additional_text);
     }
 
     // Write startup information to the inspector files.
     {
         try {
-            std::ofstream inspector_startup_ostream(logging_path / "startup.yaml", std::ios::trunc);
+            std::ofstream inspector_startup_ostream(this->logging_path / "startup.yaml", std::ios::trunc);
 
             if (!inspector_startup_ostream.is_open()) {
                 TT_INSPECTOR_THROW(
                     "Failed to create inspector file: {}\n{}",
-                    (logging_path / "startup.yaml").string(),
+                    (this->logging_path / "startup.yaml").string(),
                     additional_text);
             } else {
                 // Log current system time and high_resolution_clock time_point
@@ -60,25 +69,31 @@ Logger::Logger(const std::filesystem::path& logging_path) : logging_path(logging
         }
     }
 
-    programs_ostream.open(logging_path / "programs_log.yaml", std::ios::trunc);
+    programs_ostream.open(this->logging_path / "programs_log.yaml", std::ios::trunc);
     if (!programs_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "programs_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "programs_log.yaml").string(),
+            additional_text);
     }
-    kernels_ostream.open(logging_path / "kernels.yaml", std::ios::trunc);
+    kernels_ostream.open(this->logging_path / "kernels.yaml", std::ios::trunc);
     if (!kernels_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "kernels.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}", (this->logging_path / "kernels.yaml").string(), additional_text);
     }
-    mesh_devices_ostream.open(logging_path / "mesh_devices_log.yaml", std::ios::trunc);
+    mesh_devices_ostream.open(this->logging_path / "mesh_devices_log.yaml", std::ios::trunc);
     if (!mesh_devices_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "mesh_devices_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "mesh_devices_log.yaml").string(),
+            additional_text);
     }
-    mesh_workloads_ostream.open(logging_path / "mesh_workloads_log.yaml", std::ios::trunc);
+    mesh_workloads_ostream.open(this->logging_path / "mesh_workloads_log.yaml", std::ios::trunc);
     if (!mesh_workloads_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "mesh_workloads_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "mesh_workloads_log.yaml").string(),
+            additional_text);
     }
 
     initialized = true;
