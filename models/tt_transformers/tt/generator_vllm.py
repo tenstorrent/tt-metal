@@ -27,6 +27,7 @@ from vllm.multimodal.profiling import BaseDummyInputsBuilder
 import ttnn
 from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
+from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
@@ -499,7 +500,7 @@ class MistralForCausalLM(Generator):
     info=Gemma3ProcessingInfo,
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
-class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+class Gemma3ForConditionalGeneration(GemmaMultimodalGenerator, SupportsMultiModal):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
