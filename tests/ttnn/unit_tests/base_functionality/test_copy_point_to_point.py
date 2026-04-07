@@ -1,11 +1,12 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
+
 import pytest
-
 import torch
-
 import ttnn
+
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -28,10 +29,14 @@ def test_copy_output_as_point_to_point_preallocated(mesh_device, shape):
 
     copy_output = ttnn.assign(clone_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    ttnn.point_to_point(
+    final = ttnn.point_to_point(
         clone_output,
         coord0,
         coord1,
         topology=ttnn.Topology.Linear,
         output_tensor=copy_output,
     )
+
+    final_torch = ttnn.to_torch(final, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    input_torch = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert torch.equal(final_torch, input_torch), "point_to_point output does not match input"
