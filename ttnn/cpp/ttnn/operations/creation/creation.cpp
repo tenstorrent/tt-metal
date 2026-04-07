@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 
 namespace ttnn {
 
@@ -263,8 +264,21 @@ Tensor ones(
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
-    return full_impl(
+    auto tensor = full_impl(
         shape, 1.0f, dtype, layout, device.has_value() ? &device->get() : nullptr, memory_config, std::nullopt);
+
+    // Zero-fill padding regions for TILE layout
+    DataType dtype_value = dtype.value_or(DataType::BFLOAT16);
+    auto get_default_layout = [dtype_value]() {
+        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
+                                                                                          : ttnn::ROW_MAJOR_LAYOUT;
+    };
+
+    if (layout.value_or(get_default_layout()) == Layout::TILE) {
+        tensor = fill_implicit_tile_padding(tensor, 0.0f, memory_config);
+    }
+
+    return tensor;
 }
 
 template <typename FillValueType>
