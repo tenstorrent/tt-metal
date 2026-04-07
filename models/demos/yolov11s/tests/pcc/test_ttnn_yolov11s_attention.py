@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.yolov11s.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11s.reference.yolov11s import Attention as torch_attention
 from models.demos.yolov11s.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
@@ -12,25 +13,32 @@ from models.demos.yolov11s.tt.ttnn_yolov11s_attention import TtnnAttention as tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize(
-    "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
-    [
-        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 20, 20]),
-    ],
-)
+# @pytest.mark.parametrize(
+#     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
+#     [
+#         ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 20, 20]),
+#     ],
+# )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
-def test_yolo_v11_attention(
-    device,
-    reset_seeds,
-    in_channel,
-    out_channel,
-    kernel,
-    stride,
-    padding,
-    dilation,
-    groups,
-    fwd_input_shape,
-):
+def test_yolo_v11_attention(device, reset_seeds):
+    kernel = [1, 1, 3]
+    stride = [1, 1, 1]
+    padding = [0, 0, 1]
+    dilation = [1, 1, 1]
+
+    if is_wormhole_b0():
+        in_channel = [128, 128, 128]
+        out_channel = [256, 128, 128]
+        groups = [1, 1, 128]
+        fwd_input_shape = [1, 128, 20, 20]
+    elif is_blackhole():
+        in_channel = [256, 256, 256]
+        out_channel = [512, 256, 256]
+        groups = [1, 1, 256]
+        fwd_input_shape = [1, 256, 7, 7]
+    else:
+        pytest.skip("YOLOv11s Attention PCC: Wormhole B0 or Blackhole only.")
+
     torch_module = torch_attention(in_channel, out_channel, kernel, stride, padding, dilation, groups)
     torch_module.eval()
     torch_input, ttnn_input = create_yolov11_input_tensors(

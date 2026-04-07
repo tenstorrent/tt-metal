@@ -9,7 +9,7 @@ from ultralytics import YOLO
 
 from models.demos.yolov11s.reference import yolov11s
 
-YOLOV11_L1_SMALL_SIZE = 16000
+YOLOV11_L1_SMALL_SIZE = 32768
 
 
 def load_torch_model(model_location_generator=None):
