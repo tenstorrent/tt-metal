@@ -194,6 +194,8 @@
 - name: "per-core allocation tests"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
   owner_id: U06MJ6CVCGZ # Yu Gao
+  merge_gate: false
+  ttsim: false
   skus:
     wh_n300_civ2:
       timeout: 5
