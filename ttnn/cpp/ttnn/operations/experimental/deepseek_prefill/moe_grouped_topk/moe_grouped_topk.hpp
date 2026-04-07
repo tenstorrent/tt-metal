@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"

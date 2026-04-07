@@ -21,12 +21,12 @@ void bind_moe_grouped_topk(nb::module_& mod) {
             Args:
                 scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
                 bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
-                route_scale (float): Routing scale factor to scale the scores after normalization.
-                epsilon (float): Epsilon for numerical stability when normalizing the scores.
                 n_groups (int): Number of groups to partition the experts into. Right now this number must be 8.
                 summed_experts_per_group (int): Number of experts per group to sum prior to ranking groups. Right now this number must be 2.
                 topk_groups (int): Number of top groups to select from. Right now this number must be 4.
                 n_activated_experts (int): Number of final experts to select per token. Right now this number must be 8.
+                route_scale (float): Routing scale factor to scale the scores after normalization.
+                epsilon (float): Epsilon for numerical stability when normalizing the scores.
                 stable_sort (bool): Use stable sorting in topk to maintain relative order of equal-valued elements. Defaults to False.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
 
