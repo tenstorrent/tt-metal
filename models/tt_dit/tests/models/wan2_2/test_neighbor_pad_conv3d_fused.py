@@ -4,7 +4,7 @@
 
 """Unit tests for halo-only NeighborPad + Conv3d correctness.
 
-Tests the production BH Loud Box 2×4 configuration (H_AXIS=0, W_AXIS=1, NUM_LINKS=2).
+Tests both BH Loud Box 2×4 and BH Galaxy 4×8 configurations (H_AXIS=0, W_AXIS=1, NUM_LINKS=2).
 Shapes are taken from the VAE decoder layers that trigger the halo path (T_out_block > 1).
 
 test_old_halo_vs_full_padded:
@@ -80,6 +80,7 @@ def _run_one_seed(
     seed,
     force_no_fused=False,
     force_old_halo=False,
+    force_pipelined_halo=False,
 ):
     """Run one inference call with a specific seed; return (torch_output, tt_output_torch)."""
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
@@ -110,13 +111,20 @@ def _run_one_seed(
     if force_old_halo:
         tt_model.conv_config.use_h_halo_buffer = True
         tt_model.conv_config.input_progress_t_batch_size = 0
+    if force_pipelined_halo:
+        # Enable halo buffer but leave input_progress_t_batch_size at its natural value
+        # (set by WanCausalConv3d.__init__ to T_out_block when _needs_halo and T_out_block > 1).
+        # This is the production path: halo buffer ON + T-slicing pipeline ON.
+        tt_model.conv_config.use_h_halo_buffer = True
 
     logger.info(
         f"seed={seed} use_h_halo_buffer={tt_model.conv_config.use_h_halo_buffer} "
+        f"input_progress_t_batch_size={tt_model.conv_config.input_progress_t_batch_size} "
         f"T_out_block={tt_model.conv_config.T_out_block} "
-        f"force_no_fused={force_no_fused} force_old_halo={force_old_halo}"
+        f"force_no_fused={force_no_fused} force_old_halo={force_old_halo} "
+        f"force_pipelined_halo={force_pipelined_halo}"
     )
-    if not force_no_fused and not force_old_halo:
+    if not force_no_fused and not force_old_halo and not force_pipelined_halo:
         assert tt_model.conv_config.use_h_halo_buffer, (
             f"Fused path not enabled for this shape (T_out_block={tt_model.conv_config.T_out_block}). "
             "Adjust T so that T_out >= T_out_block > 1."
@@ -252,21 +260,21 @@ def _log_boundary_diagnostics(label, a, b, h_factor, w_factor):
 # Test: old halo path vs full-padded path (and both vs PyTorch reference)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "B, C_in, C_out, T, H, W, kernel_size, padding",
+    "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
-        (1, 96, 96, 14, 480, 832, 3, 1),
-        (1, 192, 192, 18, 240, 416, 3, 1),
+        # BH Loud Box 2x4 (480p): H_dev=240, W_dev=208, T_out_block=7. T=3 = production cached (1f+2 cache)
+        (1, 96, 96, 3, 480, 832, 3, 1, (2, 4), 0, 1, 2),
+        (1, 192, 192, 3, 240, 416, 3, 1, (2, 4), 0, 1, 2),
+        # BH Galaxy 4x8 (720p): H_dev=184, W_dev=160, T_out_block=5. T=83 = production uncached (81f)
+        (1, 96, 96, 83, 736, 1280, 3, 1, (4, 8), 0, 1, 2),
+        (1, 192, 192, 83, 368, 640, 3, 1, (4, 8), 0, 1, 2),
     ],
-    ids=["up3_res_T14", "up2_res_T18"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [((2, 4), 0, 1, 2)],
-    ids=["bh_lb_2x4"],
+    ids=["up3_res_bh_lb_2x4", "up2_res_bh_lb_2x4", "up3_res_bh_glx_4x8", "up2_res_bh_glx_4x8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16], ids=["bf16"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.timeout(900)
 def test_old_halo_vs_full_padded(
     mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype
 ):
@@ -356,22 +364,47 @@ def test_old_halo_vs_full_padded(
     assert_quality(torch_ref, tt_halo, pcc=TORCH_REF_PCC, relative_rmse=MAX_RMSE)
     logger.info("PASS: old halo vs pytorch")
 
+    logger.info("--- Running PIPELINED HALO path (halo buffer ON + T-slicing ON, production path) ---")
+    _run_one_seed(
+        mesh_device,
+        torch_model,
+        ccl_manager,
+        parallel_config,
+        B,
+        C_in,
+        C_out,
+        T,
+        H,
+        W,
+        kernel_size,
+        padding,
+        h_axis,
+        w_axis,
+        h_factor,
+        w_factor,
+        dtype,
+        seed=0,
+        force_pipelined_halo=True,
+    )
+    logger.info("PASS: pipelined halo completed (no hang)")
+
 
 # ---------------------------------------------------------------------------
 # Test: fused NP+Conv3d with changing inputs (stale W-halo detection)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "B, C_in, C_out, T, H, W, kernel_size, padding",
+    "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
     [
-        (1, 96, 96, 14, 480, 832, 3, 1),
-        (1, 192, 192, 18, 240, 416, 3, 1),
+        # BH Loud Box 2x4 (480p): H_dev=240, W_dev=208, T_out_block=7. T=3 = production cached (1f+2 cache)
+        (1, 96, 96, 3, 480, 832, 3, 1, (2, 4), 0, 1, 2),
+        (1, 192, 192, 3, 240, 416, 3, 1, (2, 4), 0, 1, 2),
+        # BH Galaxy 4x8 (720p): H_dev=184, W_dev=160, T_out_block=5. T=83 = production uncached (81f)
+        (1, 96, 96, 83, 736, 1280, 3, 1, (4, 8), 0, 1, 2),
+        (1, 192, 192, 83, 368, 640, 3, 1, (4, 8), 0, 1, 2),
+        # BH Galaxy 4x8 fast smoke: T=13 → T_out=11 → 3 T-blocks; quick iteration on W-halo bug
+        (1, 96, 96, 13, 736, 1280, 3, 1, (4, 8), 0, 1, 2),
     ],
-    ids=["up3_res_T14", "up2_res_T18"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [((2, 4), 0, 1, 2)],
-    ids=["bh_lb_2x4"],
+    ids=["up3_res_bh_lb_2x4", "up2_res_bh_lb_2x4", "up3_res_bh_glx_4x8", "up2_res_bh_glx_4x8", "up3_res_fast_4x8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16], ids=["bf16"])
@@ -392,10 +425,18 @@ def test_neighbor_pad_conv3d_fused_changing_inputs(
         mesh_device, B, C_in, C_out, kernel_size, padding, h_axis, w_axis, num_links, dtype
     )
 
+    # On 4x8 the fabric sub-device (cores 0-3, row 0) overlaps with conv3d's reader cores
+    # (which also start from (2,0)). force_old_halo triggers sub-device dispatch and hits
+    # "Programs must be executed on a single sub-device". Use force_no_fused instead:
+    # plain NP→conv3d with no halo buffer, no sub-devices, clean per-seed reference.
+    # Still detects stale W-halo: fused seed N would read seed N-1's data from the shared
+    # halo buffer while no-fused recomputes clean each time.
+    use_no_halo_baseline = tuple(mesh_device.shape) == (4, 8)
+
     for seed in range(N_SEEDS):
         logger.info(f"=== seed {seed} / {N_SEEDS} ===")
 
-        # Old halo baseline (sequential dispatch — no race)
+        # Baseline: old halo (2x4) or no-halo (4x8, avoids sub-device overlap)
         torch_output, tt_baseline = _run_one_seed(
             mesh_device,
             torch_model,
@@ -415,7 +456,8 @@ def test_neighbor_pad_conv3d_fused_changing_inputs(
             w_factor,
             dtype,
             seed,
-            force_old_halo=True,
+            force_old_halo=not use_no_halo_baseline,
+            force_no_fused=use_no_halo_baseline,
         )
 
         # Fused path (pipelined — may race)
@@ -440,8 +482,8 @@ def test_neighbor_pad_conv3d_fused_changing_inputs(
             seed,
         )
 
-        # Fused vs old_halo — isolates pipelining race from bf16 noise
-        logger.info(f"seed={seed}: FUSED vs OLD_HALO (same seed)")
+        baseline_label = "NO_HALO" if use_no_halo_baseline else "OLD_HALO"
+        logger.info(f"seed={seed}: FUSED vs {baseline_label} (same seed)")
         _log_boundary_diagnostics("fused_vs_baseline", tt_fused, tt_baseline, h_factor, w_factor)
         assert_quality(tt_baseline, tt_fused, pcc=HALO_VS_FULL_PCC, relative_rmse=MAX_RMSE)
 
@@ -452,15 +494,23 @@ def test_neighbor_pad_conv3d_fused_changing_inputs(
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [((2, 4), 0, 1, 2)],
-    ids=["bh_lb_2x4"],
+    "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
+    [
+        # BH Loud Box 2x4 (480p): H_dev=240, W_dev=208, T_out_block=7. T=3 = production cached (1f+2 cache)
+        (1, 96, 96, 3, 480, 832, 3, 1, (2, 4), 0, 1, 2),
+        # BH Galaxy 4x8 (720p): H_dev=184, W_dev=160, T_out_block=5. T=83 = production uncached (81f)
+        (1, 96, 96, 83, 736, 1280, 3, 1, (4, 8), 0, 1, 2),
+        # BH Galaxy 4x8 (720p) fast smoke: T=13 → T_out=11 → 3 T-blocks; exercises W-halo pipeline quickly
+        (1, 96, 96, 13, 736, 1280, 3, 1, (4, 8), 0, 1, 2),
+    ],
+    ids=["up3_res_bh_lb_2x4", "up3_res_bh_glx_4x8", "up3_res_fast_4x8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16], ids=["bf16"])
-def test_fused_debug_minimal(mesh_device, h_axis, w_axis, num_links, dtype):
+def test_fused_debug_minimal(
+    mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype
+):
     """Minimal single-seed fused test for hang debugging (no baselines)."""
-    B, C_in, C_out, T, H, W, kernel_size, padding = 1, 96, 96, 14, 480, 832, 3, 1
     torch_model, ccl_manager, parallel_config, h_factor, w_factor = _make_model_and_manager(
         mesh_device, B, C_in, C_out, kernel_size, padding, h_axis, w_axis, num_links, dtype
     )

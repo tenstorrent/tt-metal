@@ -409,8 +409,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     }
     if (config.input_progress_t_batch_size > 0) {
         ablation_defines["CONV3D_INPUT_PROGRESS_SEM"] = "1";
-        // In standalone conv3d (non-fused), progress sem is signaled by the NP H-writer once.
-        // NP_NUM_W_WRITERS = 1 means conv3d waits for 1 signal before processing all T-batches.
+        // NP H-writer signals progress_sem per T-batch (per-T-batch pipelining).
+        // NP W-reader additionally signals once at end (W-halo ordering guarantee).
+        // The extra W-reader signal is harmless: conv3d uses wait_min(t_batches_needed),
+        // so the +1 from W-reader just leaves the sem one higher than needed.
         ablation_defines["NP_NUM_W_WRITERS"] = "1";
     }
     if (config.use_h_halo_buffer) {

@@ -72,9 +72,10 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
     const std::optional<ttnn::MeshCoordinate>& w_forward_coord,
     const std::optional<ttnn::MeshCoordinate>& w_backward_coord,
     uint32_t w_device_index,
-    // Progress semaphore for fused op pipelining (W-writer signals conv3d readers once at end)
-    uint32_t progress_sem_addr,                                          // 0 if not pipelining
-    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords  // conv3d reader cores to signal
+    // Progress semaphore for T-batch pipelining: H-writer signals per T-batch, W-reader signals once at end.
+    uint32_t progress_sem_addr,                                           // 0 if not pipelining
+    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords,  // conv3d reader cores to signal
+    uint32_t progress_t_batch_size = 0  // T-batches per H-writer signal (0 = no H-writer signaling)
 );
 
 struct NeighborPadAsyncSharedVariables {

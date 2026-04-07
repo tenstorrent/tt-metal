@@ -50,17 +50,16 @@ class CCLManager:
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
 
-        _worker_sub_device = ttnn.SubDevice([self.ccl_cores])
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
         # Sub-devices for halo-parallel mode:
-        # Sub-device 0: fabric cores (row 0, first N cols) — for NeighborPad fabric-only on CQ1
+        # Sub-device 0: fabric cores (row 0, first N cols) — for NeighborPad fabric-only on CQ0
         # Sub-device 1: all remaining cores — for conv3d on CQ0
         #
-        # NP uses num_links*2 cores per halo direction. For 2D (H+W) NP the total is
-        # num_links*2 (H) + num_links*2 (W) = num_links*4. We allocate that many cores
-        # in row 0 so the halo sub-device covers all NP cores regardless of direction count.
-        num_fabric_cores = self.num_links * 4
+        # In the halo path, effective_num_links is always forced to 1 (see neighbor_pad_halo_only).
+        # NP therefore uses 1 link × 2 dirs (send+recv) × 2 dims (H+W) = 4 fabric cores.
+        # Allocating num_links*4 would waste cores to conv3d for no benefit.
+        num_fabric_cores = 4
         self.fabric_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_fabric_cores - 1, 0))}
         )
@@ -70,8 +69,6 @@ class CCLManager:
         self._halo_sub_device_mgr = None
         self._fabric_sd_id = None
         self._conv3d_sd_id = None
-        self._pending_np_event = None  # CQ1 event: NP done, conv3d may start on CQ0
-        self._pending_cq0_event = None  # CQ0 event: conv3d done (for future use)
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
@@ -126,8 +123,8 @@ class CCLManager:
     def activate_halo_sub_devices(self):
         """
         Load a 2-sub-device manager for halo-parallel execution:
-        - SD0 (fabric_sd_id): 4 fabric cores — for NP on CQ1
-        - SD1 (conv3d_sd_id): 116 compute cores — for conv3d on CQ0
+        - SD0 (fabric_sd_id): 4 fabric cores — for NP on CQ0
+        - SD1 (conv3d_sd_id): remaining compute cores — for conv3d on CQ0
 
         Sub-devices are non-overlapping (required by TT-Metal).
         Regular ops (RMSNorm, add, etc.) must call deactivate_halo_sub_devices() first
@@ -142,8 +139,7 @@ class CCLManager:
                 [self._fabric_sub_device, self._conv3d_sub_device], 0
             )
             self._fabric_sd_id = ttnn.SubDeviceId(0)  # 4 fabric cores for NP
-            self._conv3d_sd_id = ttnn.SubDeviceId(1)  # 116 compute cores for conv3d
-            self._pending_np_event = None
+            self._conv3d_sd_id = ttnn.SubDeviceId(1)  # remaining compute cores for conv3d
         self.mesh_device.load_sub_device_manager(self._halo_sub_device_mgr)
         return self._fabric_sd_id, self._conv3d_sd_id
 
@@ -368,21 +364,6 @@ class CCLManager:
             pop_current_command_queue_id_for_thread()
         return result
 
-    def record_cq0_event(self):
-        """Record completion of the current CQ0 (conv3d) work as an event."""
-        if self._conv3d_sd_id is not None:
-            self._pending_cq0_event = ttnn.record_event(
-                self.mesh_device,
-                cq_id=ttnn.QueueId(0),
-                sub_device_ids=[self._conv3d_sd_id],
-            )
-
-    def wait_cq0_event_on_cq1(self):
-        """On CQ1, wait for the last CQ0 event before dispatching NeighborPad."""
-        if self._pending_cq0_event is not None:
-            ttnn.wait_for_event(cq_id=ttnn.QueueId(1), mesh_event=self._pending_cq0_event)
-            self._pending_cq0_event = None
-
     def neighbor_pad_halo_only(
         self,
         tensor: ttnn.Tensor,
@@ -450,7 +431,6 @@ class CCLManager:
             sub_device_id=fabric_sd_id,
         )
 
-        self._pending_np_event = None
         return result
 
     def neighbor_pad_conv3d_fused(

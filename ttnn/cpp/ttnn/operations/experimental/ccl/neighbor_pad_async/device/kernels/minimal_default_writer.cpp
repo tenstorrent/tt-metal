@@ -414,19 +414,17 @@ void kernel_main() {
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
 
 #if defined(NP_PROGRESS_SEM)
-        // Progress semaphore: notify all conv3d reader cores that T-batch is ready.
-        // Only direction==0 H writer increments to avoid double-counting with W writer.
         if constexpr (progress_t_batch_size > 0) {
-            if (!direction && !is_w_fabric_writer) {
-                if ((outer_dim + 1) % progress_t_batch_size == 0) {
-                    noc_async_write_barrier();
-                    // Signal each conv3d reader core at its OWN local L1 semaphore address.
-                    // This is the OpSignaler pattern from worker_sync_utils.hpp:
-                    //   get_noc_addr(x, y, sem_addr) targets the REMOTE core's L1,
-                    //   so each core sees the increment in its own local memory.
-                    // No noc_async_atomic_barrier() needed: atomics are in-order with the
-                    // preceding noc_async_write_barrier() flush, so halos reach DRAM before
-                    // any reader core unblocks. The reader polls LOCAL L1 — no round-trip.
+            if ((outer_dim + 1) % progress_t_batch_size == 0) {
+                noc_async_write_barrier();
+                if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
+                    // 2D: route per-T-batch signal through W reader cores via barrier_sem.
+                    // Both dir=0 and dir=1 fire so W reader barrier_count = num_h_fabric_cores.
+                    for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
+                        noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem), 1);
+                    }
+                } else if (!direction && !is_w_fabric_writer) {
+                    // 1D: signal conv3d reader cores directly (no W reader in pipeline).
                     for (uint32_t i = 0; i < num_reader_cores; i++) {
                         const uint32_t reader_x = get_common_arg_val<uint32_t>(6 + i * 2);
                         const uint32_t reader_y = get_common_arg_val<uint32_t>(6 + i * 2 + 1);
@@ -440,6 +438,26 @@ void kernel_main() {
 
     // Ensure all DRAM writes from main loop are complete.
     noc_async_write_barrier();
+
+#if defined(NP_PROGRESS_SEM)
+    // Tail signal: if outer_dim_size is not a multiple of progress_t_batch_size,
+    // the last partial T-batch was not signaled inside the loop.  Fire it now.
+    if constexpr (progress_t_batch_size > 0) {
+        if (outer_dim_size % progress_t_batch_size != 0) {
+            if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
+                for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
+                    noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem), 1);
+                }
+            } else if (!direction && !is_w_fabric_writer) {
+                for (uint32_t i = 0; i < num_reader_cores; i++) {
+                    const uint32_t reader_x = get_common_arg_val<uint32_t>(6 + i * 2);
+                    const uint32_t reader_y = get_common_arg_val<uint32_t>(6 + i * 2 + 1);
+                    noc_semaphore_inc(get_noc_addr(reader_x, reader_y, progress_sem), 1);
+                }
+            }
+        }
+    }
+#endif
 
     // Incoming writes: pop sticks that the paired reader pushed from its L1 recv buffer
     // (fabric-delivered padding from neighbor) and write to output DRAM.
@@ -516,11 +534,14 @@ void kernel_main() {
     }
 
     // Signal Phase 2 AFTER fabric close and all work is complete.
-    // Uses barrier_sem from CRTA[3] — same for all targets.
-    noc_async_write_barrier();
-    for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
-        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
-        noc_semaphore_inc(sem_noc_addr, 1);
+    // When per-T-batch pipelining is active, W reader cores were already signaled
+    // per batch inside the main loop (+ tail above), so skip the end-of-loop signal.
+    if constexpr (progress_t_batch_size == 0) {
+        noc_async_write_barrier();
+        for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
+            uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
+            noc_semaphore_inc(sem_noc_addr, 1);
+        }
+        noc_async_atomic_barrier();
     }
-    noc_async_atomic_barrier();
 }
