@@ -161,15 +161,12 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
             case UnaryOpType::LOGIT: {
-                float value1 = *ops_chain[0].get_param_if<float>(0);
-                float value2 = 1.0f - value1;
-                packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
-                packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
-                if (value1 > 0.5f) {
-                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
-                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
-                    unary_defines["CLAMP"] = "clamp_tile";
-                } else if (value1 >= 0.0f) {
+                const auto eps = *ops_chain[0].get_param_if<float>(0);
+                if (eps >= 0.0f) {
+                    const auto lo = std::min(eps, 1.0f - eps);
+                    const auto hi = std::max(eps, 1.0f - eps);
+                    packed_scalar1 = utils::pack_scalar_runtime_arg_impl(lo, input.dtype());
+                    packed_scalar2 = utils::pack_scalar_runtime_arg_impl(hi, input.dtype());
                     unary_defines["CLAMP"] = "clamp_tile";
                 }
                 break;

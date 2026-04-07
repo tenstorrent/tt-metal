@@ -10,10 +10,6 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/eltwise_unary/comp.h"
-#include "api/compute/eltwise_unary/where.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/compute_kernel_api.h"
 
 void kernel_main() {
@@ -70,22 +66,6 @@ void kernel_main() {
 
             log_tile_init();
             log_tile(0);
-#ifdef WHERE  // Conditional negation: when eps > 0.5 and input < eps, negate the logit result (multiply by -1.0) to
-              // ensure positive output. WHERE selects negated result (true) or original result (false).
-            copy_dest_values(0, 2);
-
-            copy_tile_init(cb_input);
-            copy_tile(cb_input, 0, 1);
-
-            unary_lt_tile_init();
-            unary_lt_tile(1, packed_scalar1);
-
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, 0xBF800000);  // multiply by -1.0
-
-            where_tile_init();
-            WHERE(1, 0, 2, 0);
-#endif
 
             tile_regs_commit();
 
