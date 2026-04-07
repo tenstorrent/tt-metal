@@ -25,7 +25,7 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/profiler_chip_filter.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -419,7 +419,7 @@ inline std::string op_meta_data_serialized_json(
                     continue;                                                                                         \
                 }                                                                                                     \
                 auto device_id = (mesh_device)->get_device(coord)->id();                                              \
-                if (!tt::tt_metal::should_profile_chip(device_id)) {                                                  \
+                if (!tt::tt_metal::detail::ShouldProfileChip(device_id)) {                                            \
                     continue;                                                                                         \
                 }                                                                                                     \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
