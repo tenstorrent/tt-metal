@@ -44,7 +44,6 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
         device,
         interleaved_mem_config,
     )
-
     if in_sharded:
         xt = ttnn.interleaved_to_sharded(
             xt,

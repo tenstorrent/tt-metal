@@ -441,6 +441,8 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
 
     ttnn_scores = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.fill_implicit_tile_padding(ttnn_scores, -42)  # garbage padding to test that deepseek_grouped_gate ignores it
+    ttnn.fill_implicit_tile_padding(ttnn_bias, -42)  # garbage padding to test that deepseek_grouped_gate ignores it
     ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_grouped_gate(
         ttnn_scores,
         ttnn_bias,

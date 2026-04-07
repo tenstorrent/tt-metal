@@ -36,7 +36,9 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     )
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_expert_mask = ttnn.from_torch(expert_mask, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(ttnn_expert_mask, -42)  # garbage padding to test that the operation removes it
     ttnn_topE_mask = ttnn.from_torch(topE_mask, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(ttnn_topE_mask, -42)  # garbage padding to test that the operation removes it
 
     for i in range(3):
         weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
@@ -68,6 +70,7 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
     ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
+    # ((1, 1, 31, 63, 32, 8, 2),), #implicit padding issue.
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)

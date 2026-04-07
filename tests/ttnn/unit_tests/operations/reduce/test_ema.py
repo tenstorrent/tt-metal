@@ -37,7 +37,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
+    ttnn.fill_implicit_tile_padding(ttnn_input_tensor, -42)  # garbage padding to test that the operation removes it
     alpha = 0.25
     num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
