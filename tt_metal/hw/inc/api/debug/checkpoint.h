@@ -280,16 +280,16 @@ inline void debug_checkpoint_cross_core_barrier(
 //   1. Intra-core barrier (all RISCs on this core arrive)
 //   2. Cross-core barrier (BRISC syncs across all cores via NOC semaphore)
 //   3. Intra-core barrier (BRISC releases other RISCs)
-//   4. CB dump (all RISCs print)
-//   5. Intra-core barrier (all RISCs finish dumping)
+//   4. Dump (BRISC prints CB state; Math prints dest regs if dump_dest=true)
+//   5. Intra-core barrier (all RISCs wait for dump to finish)
 //   6. Cross-core barrier (all cores finish before proceeding)
 //   7. Intra-core barrier (final release)
 //
 // All RISCs on all cores must call this with the same arguments.
 // barrier_coord_x/y identify the coordinator core for the NOC semaphore
-// barrier — they do NOT affect what gets printed. Each core's dump is
-// purely local (reads its own CB interfaces). Non-BRISC RISCs ignore the
-// barrier args but participate in intra-core barriers.
+// barrier — they do NOT affect what gets printed. Only BRISC prints CB
+// state (once per core, since CBs are shared L1). Non-BRISC RISCs ignore
+// the barrier args but participate in intra-core barriers.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_global(
