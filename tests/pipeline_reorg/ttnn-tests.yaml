@@ -191,6 +191,18 @@
   merge_gate: false
   ttsim: true
 
+- name: "per-core allocation tests"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+  owner_id: U06MJ6CVCGZ # Yu Gao
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+
 - name: "core ttnn unit test group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
   skus:
