@@ -86,6 +86,11 @@ OBS_STATE = "observation.state"
 REPRODUCIBLE_SEED = 42
 
 
+def _ignore_demo_cleanup_error(operation: str, err: BaseException) -> None:
+    """Log best-effort teardown failures (avoids empty ``except`` blocks for static analysis)."""
+    logger.debug("Lingbot-VA demo: %s failed during cleanup (ignored): %s", operation, err)
+
+
 def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
     """Set random seeds so that inference is reproducible."""
     np.random.seed(seed)
@@ -143,9 +148,8 @@ def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None
         if any(h in lname for h in hints):
             try:
                 setattr(obj, name, None)
-            except Exception:
-                # Best-effort teardown; some descriptors reject clearing.
-                pass
+            except Exception as e:
+                _ignore_demo_cleanup_error(f"clear runtime config attribute {name!r}", e)
 
 
 class _TTTransformerAdapter:
@@ -328,17 +332,17 @@ def _close_lingbot_mesh_stack(models: dict) -> None:
         return
     try:
         ttnn.synchronize_device(work)
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("ttnn.synchronize_device(work mesh)", e)
     try:
         ttnn.close_mesh_device(work)
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("ttnn.close_mesh_device(work mesh)", e)
     if parent is not None:
         try:
             ttnn.close_mesh_device(parent)
-        except Exception:
-            pass
+        except Exception as e:
+            _ignore_demo_cleanup_error("ttnn.close_mesh_device(parent mesh)", e)
 
 
 def _load_models_phase1(
@@ -421,12 +425,12 @@ def _free_tt_model(models: dict, key: str) -> None:
         _release_ttnn_runtime_configs(obj)
         try:
             obj.cleanup_all()
-        except Exception:
-            pass
+        except Exception as e:
+            _ignore_demo_cleanup_error(f"cleanup_all ({key})", e)
         try:
             obj.deallocate_weights()
-        except Exception:
-            pass
+        except Exception as e:
+            _ignore_demo_cleanup_error(f"deallocate_weights ({key})", e)
         del obj
     gc.collect()
 
@@ -473,12 +477,12 @@ def _free_tt_vae_from_models(models: dict) -> None:
     _release_ttnn_runtime_configs(streaming_vae)
     try:
         streaming_vae.cleanup_all()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("streaming_vae.cleanup_all", e)
     try:
         streaming_vae.deallocate_weights()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("streaming_vae.deallocate_weights", e)
     del streaming_vae
     gc.collect()
 
@@ -522,16 +526,16 @@ def _get_t5_prompt_embeds_ttnn(models, tt_input, tt_mask, num_videos_per_prompt=
         prompt_embeds = ttnn.reshape(prompt_embeds, (batch_size * num_videos_per_prompt, seq_len, hidden_dim))
     try:
         ttnn.synchronize_device(mesh_device)
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("ttnn.synchronize_device (text encoder mesh)", e)
     try:
         ttnn.deallocate(tt_input)
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("ttnn.deallocate(tt_input)", e)
     try:
         ttnn.deallocate(tt_mask)
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("ttnn.deallocate(tt_mask)", e)
     return prompt_embeds
 
 
@@ -1216,12 +1220,12 @@ def _free_tt_vae_decoder_from_models(models: dict) -> None:
     _release_ttnn_runtime_configs(vae_decoder_tt)
     try:
         vae_decoder_tt.cleanup_all()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("vae_decoder_tt.cleanup_all", e)
     try:
         vae_decoder_tt.deallocate_weights()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("vae_decoder_tt.deallocate_weights", e)
     del vae_decoder_tt
     gc.collect()
 
@@ -1621,16 +1625,16 @@ def run_generate(
     _release_ttnn_runtime_configs(transformer)
     try:
         transformer.clear_cache(models["cache_name"])
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("transformer.clear_cache", e)
     try:
         transformer.cleanup_all()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("transformer.cleanup_all", e)
     try:
         transformer.deallocate_weights()
-    except Exception:
-        pass
+    except Exception as e:
+        _ignore_demo_cleanup_error("transformer.deallocate_weights", e)
     del transformer
 
     models.pop("text_encoder", None)

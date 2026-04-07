@@ -934,9 +934,6 @@ class WanTransformer3DModel(Module):
             N = grid_id["N"]
             use_per_token = grid_id["use_per_token"]
             action_mode = grid_id.get("action_mode", action_mode)
-            F = grid_id["F"]
-            H = grid_id["H"]
-            W = grid_id["W"]
 
             spatial_1BND = spatial
             prompt_1BLP = prompt
