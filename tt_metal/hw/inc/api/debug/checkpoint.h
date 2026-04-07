@@ -40,11 +40,16 @@
 
 #if defined(DEBUG_CHECKPOINT_ENABLED)
 
+// Checkpoints are only supported on Tensix cores (WH/BH) with 5 RISCs.
+// On Quasar, get_hw_thread_idx() returns values > 4, which would cause
+// out-of-bounds writes to arrived[]. Disable at compile time.
+#if defined(ARCH_QUASAR)
+static_assert(false, "Debug checkpoints are not supported on Quasar architecture");
+#endif
+
 // Checkpoint state lives at a fixed L1 address (start of MEM_LLK_DEBUG region).
 // Uses per-RISC byte flags (not a shared bitmask) to avoid read-modify-write
 // races — each RISC writes only its own byte.
-// Tensix cores (WH/BH): 5 RISCs (BRISC, NCRISC, TRISC0-2).
-// Quasar NEO is not yet supported — checkpoint init is only in Tensix firmware.
 constexpr uint32_t DEBUG_CHECKPOINT_MAX_RISCS = 5;
 struct debug_checkpoint_state_t {
     volatile uint32_t proceed;                             // Monotonically increasing epoch
@@ -230,8 +235,10 @@ inline void debug_checkpoint(uint8_t checkpoint_id) {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-core barrier: synchronize BRISC across all tensix cores via NOC
-// semaphore. Uses coordinator pattern from barrier_sync.hpp.
+// Cross-core barrier: synchronize BRISC across all tensix cores via a NOC
+// semaphore. Uses a coordinator-based pattern: all cores atomically increment
+// the coordinator's semaphore, and each core waits until the monotonically
+// increasing expected count is reached.
 // Only compiled for BRISC (dataflow RISCs have NOC access).
 // ---------------------------------------------------------------------------
 #if defined(KERNEL_BUILD) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_DM))

@@ -290,11 +290,13 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
 2. **Cross-core barrier (BRISC only).** Only BRISC on each core participates. The other
    4 RISCs are blocked at the next intra-core barrier (step 3), waiting for BRISC.
 
-   - Both BRISCs reset their local semaphore to 0 (clears stale values from any
-     previous global checkpoint).
    - Both BRISCs atomically increment the **coordinator's** semaphore via NOC:
      ``noc_semaphore_inc(coordinator_sem_addr, 1)``. Both target the same physical L1
      address on the coordinator core. ``noc_semaphore_inc`` is a hardware atomic.
+   - The semaphore is **monotonic** across global checkpoints — it is never reset
+     to 0 between barriers. Each barrier instance waits for its own expected count
+     (previous barrier's target + ``num_cores``), which avoids the race where a reset
+     could lose increments from a subsequent barrier.
    - **Coordinator BRISC:** Its local semaphore IS the one being incremented.
      Calls ``noc_semaphore_wait_min(local_sem, expected_count)`` — a local spin, no NOC reads.
    - **Non-coordinator BRISC:** Polls the coordinator's semaphore via
