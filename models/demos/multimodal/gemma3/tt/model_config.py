@@ -15,7 +15,6 @@ from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, 
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -95,7 +94,7 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
 
     @lru_cache(maxsize=None)
-    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+    def get_attn_sdpa_decode_program_config(self, prefetcher=None):
         """Gemma3-only decode SDPA config.
 
         ``k_chunk_size=0`` uses ``get_dynamic_Sk_chunk_t()``, which jumps 4→8 tiles at cur_pos 127→128
