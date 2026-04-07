@@ -315,6 +315,7 @@ class Transformer(TTTransformer):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
     ):
         """Forward with rolling-window L1 state for GDN layers.
 

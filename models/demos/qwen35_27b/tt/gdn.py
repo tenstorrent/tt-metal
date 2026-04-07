@@ -609,13 +609,13 @@ class TtGatedDeltaNet(LightweightModule):
         self._prefill_fused_output = None
 
     def forward_prefill(self, x, current_pos):
-        """GDN prefill: batched projections, sequential recurrence with B=1.
+        """GDN prefill: batched projections + conv1d, sequential recurrence with B=1.
 
         Input: [1, 1, seq_len, dim] — 1 user, full prompt sequence
         Output: [1, 1, seq_len, dim] — full sequence output for residual stream
 
-        Projections (QKVZ, AB) are computed once for the full sequence using
-        2D matmul. Conv1d + recurrence runs per-token with B=1 states.
+        Projections (QKVZ, AB) and causal conv1d are computed once for the full
+        sequence using batched ops. Only the recurrence loop runs per-token.
         Output projection is batched for the full sequence.
         """
         tw = self.tw
@@ -662,49 +662,91 @@ class TtGatedDeltaNet(LightweightModule):
         # ab_all: [1, 1, seq_len, Nv_TP*2]
         ttnn.deallocate(x_dram)
 
-        # ---- Sequential per-token: conv1d + recurrence (B=1) ----
+        # ---- Split projections and pre-compute batched conv1d ----
+        # Split qkv and z from qkvz_all: [1, 1, seq_len, qkvz_dim_tp]
+        qkv_all = ttnn.slice(qkvz_all, (0, 0, 0, 0), (1, 1, seq_len, qkv_dim_tp))
+        z_all = ttnn.slice(qkvz_all, (0, 0, 0, qkv_dim_tp), (1, 1, seq_len, qkvz_dim_tp))
+        ttnn.deallocate(qkvz_all)
+
+        # Split a and b from ab_all: [1, 1, seq_len, Nv_TP*2]
+        a_all = ttnn.slice(ab_all, (0, 0, 0, 0), (1, 1, seq_len, Nv_TP))
+        b_all = ttnn.slice(ab_all, (0, 0, 0, Nv_TP), (1, 1, seq_len, Nv_TP * 2))
+        ttnn.deallocate(ab_all)
+
+        # Batched causal conv1d over full sequence
+        # conv_out[t] = silu(tap[0]*qkv[t-3] + tap[1]*qkv[t-2] + tap[2]*qkv[t-1] + tap[3]*qkv[t])
+        # where qkv[t<0] = 0 (causal zero-padding)
+        K = self.conv_kernel_size  # 4
+
+        # Build shifted views: for tap[j], we need qkv shifted right by (K-1-j) positions
+        # Pad qkv_all with (K-1)=3 zero rows at the start of the sequence dim
+        pad_shape = [1, 1, K - 1, qkv_dim_tp]
+        zero_pad = ttnn.from_torch(
+            torch.zeros(pad_shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        padded = ttnn.concat([zero_pad, qkv_all], dim=2)  # [1, 1, seq_len + K-1, qkv_dim_tp]
+        ttnn.deallocate(zero_pad)
+
+        # Compute weighted sum of shifted versions
+        # tap[0] applies to the oldest input (shift right by K-1), tap[K-1] to current (no shift)
+        # Reshape taps from [1, 1, qkv_dim_tp] to [1, 1, 1, qkv_dim_tp] for 4D broadcast
+        conv_out_all = None
+        for j in range(K):
+            shift = K - 1 - j  # tap[0] -> shift 3, tap[3] -> shift 0
+            shifted = ttnn.slice(padded, (0, 0, shift, 0), (1, 1, shift + seq_len, qkv_dim_tp))
+            tap_4d = ttnn.reshape(tw["conv_taps"][j], (1, 1, 1, qkv_dim_tp))
+            if conv_out_all is None:
+                conv_out_all = ttnn.multiply(shifted, tap_4d)
+            else:
+                conv_out_all = ttnn.mac(shifted, tap_4d, conv_out_all)
+            ttnn.deallocate(shifted)
+        ttnn.deallocate(padded)
+
+        conv_out_all = ttnn.silu(conv_out_all)
+        # conv_out_all: [1, 1, seq_len, qkv_dim_tp]
+
+        # Save last (K-1) tokens of qkv input into prefill conv states for decode
+        states = self._prefill_conv_states
+        for j in range(K):
+            # states[0] = qkv[seq_len - K], ..., states[K-1] = qkv[seq_len - 1]
+            t_idx = seq_len - K + j
+            if t_idx >= 0:
+                qkv_t = ttnn.slice(qkv_all, (0, 0, t_idx, 0), (1, 1, t_idx + 1, qkv_dim_tp))
+                qkv_t = ttnn.reshape(qkv_t, (1, B_pf, qkv_dim_tp))
+                ttnn.copy(qkv_t, states[j])
+                ttnn.deallocate(qkv_t)
+        ttnn.deallocate(qkv_all)
+
+        # ---- Sequential per-token recurrence (conv1d already computed) ----
         gated_outputs = []
         num_pairs_pf = B_pf * Nv_TP
         repeat_factor = Nv_TP // Nk_TP
-        states = self._prefill_conv_states
 
         for t in range(seq_len):
-            # Slice token t: [1, 1, seq_len, D] -> [1, 1, 1, D] -> [1, 1, D]
-            qkvz_t = ttnn.slice(qkvz_all, (0, 0, t, 0), (1, 1, t + 1, qkvz_dim_tp))
-            qkvz_t = ttnn.reshape(qkvz_t, (1, B_pf, qkvz_dim_tp))
+            # Slice pre-computed conv_out, z, a, b for token t
+            conv_out_t = ttnn.slice(conv_out_all, (0, 0, t, 0), (1, 1, t + 1, qkv_dim_tp))
+            conv_out_t = ttnn.reshape(conv_out_t, (1, B_pf, qkv_dim_tp))
 
-            ab_t = ttnn.slice(ab_all, (0, 0, t, 0), (1, 1, t + 1, Nv_TP * 2))
-            ab_t = ttnn.reshape(ab_t, (1, B_pf, Nv_TP * 2))
+            a_tt = ttnn.slice(a_all, (0, 0, t, 0), (1, 1, t + 1, Nv_TP))
+            a_tt = ttnn.reshape(a_tt, (1, B_pf, Nv_TP))
 
-            qkv_tt = ttnn.slice(qkvz_t, (0, 0, 0), (1, B_pf, qkv_dim_tp))
-            z_tt = ttnn.slice(qkvz_t, (0, 0, qkv_dim_tp), (1, B_pf, qkvz_dim_tp))
-            ttnn.deallocate(qkvz_t)
+            b_tt = ttnn.slice(b_all, (0, 0, t, 0), (1, 1, t + 1, Nv_TP))
+            b_tt = ttnn.reshape(b_tt, (1, B_pf, Nv_TP))
 
-            a_tt = ttnn.slice(ab_t, (0, 0, 0), (1, B_pf, Nv_TP))
-            b_tt = ttnn.slice(ab_t, (0, 0, Nv_TP), (1, B_pf, Nv_TP * 2))
-            ttnn.deallocate(ab_t)
-
-            # Conv1d (shift register) — B=1 states
-            ttnn.copy(states[1], states[0])
-            ttnn.copy(states[2], states[1])
-            ttnn.copy(states[3], states[2])
-            ttnn.copy(qkv_tt, states[3])
-
-            conv_acc = ttnn.multiply(states[0], tw["conv_taps"][0])
-            for j in range(1, self.conv_kernel_size):
-                conv_acc = ttnn.mac(states[j], tw["conv_taps"][j], conv_acc)
-            conv_out = ttnn.silu(conv_acc)
-            ttnn.deallocate(conv_acc)
-            if len(conv_out.shape) == 4:
-                conv_out = ttnn.reshape(conv_out, (1, B_pf, qkv_dim_tp))
+            z_tt = ttnn.slice(z_all, (0, 0, t, 0), (1, 1, t + 1, qkvz_dim_tp - qkv_dim_tp))
+            z_tt = ttnn.reshape(z_tt, (1, B_pf, qkvz_dim_tp - qkv_dim_tp))
 
             # Fused kernel with B=1
             a_tt = _unshard(a_tt)
             b_tt = _unshard(b_tt)
-            conv_out = _unshard(conv_out)
+            conv_out_t = _unshard(conv_out_t)
 
             gdn_full_fused_inplace(
-                conv_out,
+                conv_out_t,
                 a_tt,
                 b_tt,
                 self.neg_exp_A,
@@ -723,7 +765,7 @@ class TtGatedDeltaNet(LightweightModule):
                 key_dim_tp=key_dim_tp,
             )
 
-            ttnn.deallocate(conv_out)
+            ttnn.deallocate(conv_out_t)
             ttnn.deallocate(a_tt)
             ttnn.deallocate(b_tt)
 
@@ -743,8 +785,10 @@ class TtGatedDeltaNet(LightweightModule):
 
             gated_outputs.append(gated)  # [1, 1, value_dim_tp]
 
-        ttnn.deallocate(qkvz_all)
-        ttnn.deallocate(ab_all)
+        ttnn.deallocate(conv_out_all)
+        ttnn.deallocate(z_all)
+        ttnn.deallocate(a_all)
+        ttnn.deallocate(b_all)
 
         # ---- Stack outputs and batch output projection ----
         # list of [1, 1, value_dim_tp] -> [1, 1, seq_len, value_dim_tp]

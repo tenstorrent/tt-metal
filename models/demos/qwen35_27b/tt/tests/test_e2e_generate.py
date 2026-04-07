@@ -110,6 +110,7 @@ def test_e2e_generate(mesh_device, reset_seeds, ensure_gc):
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         dtype=ttnn.bfloat8_b,
+        n_layers=4,
     )
     load_time = time.time() - t0
     logger.info(f"Model created in {load_time:.1f}s")
@@ -246,6 +247,7 @@ def test_e2e_generate_device_sampling(mesh_device, reset_seeds, ensure_gc):
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         dtype=ttnn.bfloat8_b,
+        n_layers=4,
     )
     load_time = time.time() - t0
     logger.info(f"Model created in {load_time:.1f}s")
@@ -403,8 +405,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    n_layers = 4  # 3 GDN (linear_attention) + 1 full_attention
-    logger.info(f"Creating Qwen3.5 model ({n_layers} layers)...")
+    logger.info("Creating Qwen3.5 model (all layers)...")
     t0 = time.time()
     model = create_qwen35_model(
         mesh_device,
@@ -412,7 +413,6 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         dtype=ttnn.bfloat8_b,
-        n_layers=n_layers,
     )
     load_time = time.time() - t0
     logger.info(f"Model created in {load_time:.1f}s")
@@ -429,18 +429,49 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     prompt_tokens = tokenizer.encode(prompt)
     logger.info(f"Prompt ({len(prompt_tokens)} tokens): '{prompt[:80]}{'...' if len(prompt) > 80 else ''}'")
 
-    # === PREFILL ===
-    logger.info(f"Prefilling {len(prompt_tokens) - 1} tokens...")
-    t_prefill = time.time()
-    for pos_idx in range(len(prompt_tokens) - 1):
-        tok_batch = torch.full((batch_size,), prompt_tokens[pos_idx], dtype=torch.long)
-        current_pos = torch.full((batch_size,), pos_idx, dtype=torch.long)
-        tt_tokens, tt_current_pos, tt_rot_idxs, _ = model.prepare_inputs_decode(tok_batch, current_pos)
-        model.ttnn_decode_forward(tt_tokens, tt_current_pos, rot_mat_idxs=tt_rot_idxs)
-    logger.info(f"Prefill done in {time.time() - t_prefill:.1f}s ({len(prompt_tokens) - 1} tokens)")
+    # === HELPER: reset prefill states ===
+    def _reset_prefill_states():
+        """Reset all layer states and init B=1 prefill states for GDN layers."""
+        for layer in model.layers:
+            attn = layer.attention
+            if hasattr(attn, "reset_state"):
+                attn.reset_state()
+            if hasattr(attn, "_init_prefill_states"):
+                attn._init_prefill_states()
 
-    # === COMPILE RUN (with device sampling) ===
-    logger.info("Compile run...")
+    # === HELPER: replicate prefill state to batch ===
+    def _replicate_to_batch():
+        """Replicate prefill state to all batch_size decode slots."""
+        for layer in model.layers:
+            attn = layer.attention
+            if hasattr(attn, "replicate_kv_cache_to_batch"):
+                attn.replicate_kv_cache_to_batch()
+            if hasattr(attn, "replicate_prefill_state_to_batch"):
+                attn.replicate_prefill_state_to_batch()
+
+    seq_len = len(prompt_tokens)
+    tokens_tensor = torch.tensor([prompt_tokens], dtype=torch.long)  # [1, seq_len]
+    last_token_idx = ((seq_len - 1) // 32) * 32
+
+    # === PREFILL (compile run) ===
+    logger.info(f"Prefilling {len(prompt_tokens)} tokens (true batched prefill, compile run)...")
+    _reset_prefill_states()
+    prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
+    tt_embeds = prefill_inputs[0]
+    tt_rot_global = prefill_inputs[1]
+
+    t_prefill = time.time()
+    tt_out = model.ttnn_prefill_forward(
+        tt_embeds,
+        rot_mats_global=tt_rot_global,
+        get_last_token=last_token_idx,
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"Prefill compile done in {time.time() - t_prefill:.1f}s")
+    _replicate_to_batch()
+
+    # === COMPILE RUN for decode (with device sampling) ===
+    logger.info("Compile run (decode with device sampling)...")
     compile_pos = len(prompt_tokens) - 1
     tok_batch = torch.full((batch_size,), prompt_tokens[-1], dtype=torch.long)
     current_pos = torch.full((batch_size,), compile_pos, dtype=torch.long)
@@ -456,22 +487,23 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     first_token = toks_cpu[0].flatten()[0].int().item()
     logger.info(f"Compile done, first token: '{tokenizer.decode([first_token])}'")
 
-    # === RESET GDN STATES for clean trace ===
-    logger.info("Resetting GDN states...")
-    for layer in model.layers:
-        if hasattr(layer.attention, "reset_state_inplace"):
-            layer.attention.reset_state_inplace()
+    # === RE-PREFILL for trace (timed TTFT with warm tensors) ===
+    logger.info("Re-prefilling for trace (timed)...")
+    _reset_prefill_states()
+    prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
+    tt_embeds = prefill_inputs[0]
+    tt_rot_global = prefill_inputs[1]
 
-    # Re-prefill after reset (this is the steady-state prefill, timed for TTFT)
-    logger.info("Re-prefilling for trace...")
     t_prefill_trace = time.time()
-    for pos_idx in range(len(prompt_tokens) - 1):
-        tok_batch = torch.full((batch_size,), prompt_tokens[pos_idx], dtype=torch.long)
-        current_pos = torch.full((batch_size,), pos_idx, dtype=torch.long)
-        tt_tokens, tt_current_pos, tt_rot_idxs, _ = model.prepare_inputs_decode(tok_batch, current_pos)
-        model.ttnn_decode_forward(tt_tokens, tt_current_pos, rot_mat_idxs=tt_rot_idxs)
+    tt_out = model.ttnn_prefill_forward(
+        tt_embeds,
+        rot_mats_global=tt_rot_global,
+        get_last_token=last_token_idx,
+    )
+    ttnn.synchronize_device(mesh_device)
     prefill_time = time.time() - t_prefill_trace
-    logger.info(f"Re-prefill done in {prefill_time:.1f}s ({len(prompt_tokens) - 1} tokens)")
+    logger.info(f"Re-prefill done in {prefill_time*1000:.1f}ms (TTFT)")
+    _replicate_to_batch()
 
     # === CAPTURE TRACE ===
     logger.info("Capturing trace...")
@@ -556,7 +588,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     logger.info(f"TTFT (prefill): {prefill_time*1000:.1f}ms ({len(prompt_tokens) - 1} prefill tokens)")
 
-    if input_prompts is None and n_layers == 64:
+    if input_prompts is None and args.n_layers == 64:
         output_lower = full_text.lower()
         assert "paris" in output_lower, f"Expected 'paris' in output, got: '{full_text}'"
 
