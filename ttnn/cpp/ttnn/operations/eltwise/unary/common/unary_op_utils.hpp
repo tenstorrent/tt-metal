@@ -98,7 +98,6 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
-        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW:
         case UnaryOpType::MISH:
         case UnaryOpType::POLYGAMMA: return true;
