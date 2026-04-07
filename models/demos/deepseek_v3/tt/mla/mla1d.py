@@ -420,7 +420,6 @@ class MLA1D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         batch_size_per_row: int,
-        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
@@ -1719,7 +1718,7 @@ class MLA1D(AbstractModule):
 
             return v_out_chunk
 
-        WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "1024"))
+        WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "2048"))
         assert WKV_B2_AG_SEQ_CHUNK_SIZE > 0, (
             "DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE must be > 0, " f"got {WKV_B2_AG_SEQ_CHUNK_SIZE}"
         )
@@ -1767,7 +1766,12 @@ class MLA1D(AbstractModule):
                 )
             v_out_chunk = ttnn.reshape(v_out_chunk, (1, 1, padded_chunk_seq_len, hidden_dim))
             _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after reshape")
-            wo_chunk_program_config = build_prefill_matmul_program_config(padded_chunk_seq_len, k=wo_k, n=dim)
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                padded_chunk_seq_len,
+                k=wo_k,
+                n=dim,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
             out_chunk = ttnn.linear(v_out_chunk, **cfg["wo"], program_config=wo_chunk_program_config)
             ttnn.deallocate(v_out_chunk)
             _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after linear wo")
@@ -1806,8 +1810,8 @@ class MLA1D(AbstractModule):
             Output tensor after MLP computation
         """
         # chunk_size = 8192
-        # chunk_size = 4096
-        chunk_size = 2048
+        chunk_size = 4096
+        # chunk_size = 2048
         mesh_shape = cfg["mesh_shape"]
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
@@ -2416,7 +2420,13 @@ class MLA1D(AbstractModule):
 
         # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
         # The program config must account for that batch so fuse_batch stays disabled.
-        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n, batch=batch_size)
+        wq_kv_a_program_config = build_prefill_matmul_program_config(
+            seq_len,
+            k=dim,
+            n=qkv_a_n,
+            batch=batch_size,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+        )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)

@@ -208,8 +208,6 @@ class MLA2D(MLA1D):
             x_next,
             batch_idx=batch_idx % batch_size_per_row,
             row_idx=batch_idx // batch_size_per_row,
-            batch_idx=batch_idx % batch_size_per_row,
-            row_idx=batch_idx // batch_size_per_row,
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,
