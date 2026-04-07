@@ -399,6 +399,11 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
             auto df = datatype_to_dataformat_converter(t.dtype());
             uint32_t ts = tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
+            TT_ASSERT(
+                shard_bytes % ts == 0,
+                "ROW_MAJOR shard size in bytes ({}) must be a multiple of CB page size ({})",
+                shard_bytes,
+                ts);
             return shard_bytes / ts;
         }
         return spec.numel() / t.tensor_spec().tile().get_tile_hw();

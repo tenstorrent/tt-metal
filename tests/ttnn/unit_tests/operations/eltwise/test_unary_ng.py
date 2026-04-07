@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
@@ -439,7 +439,8 @@ def test_unary_ng_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
     assert torch.equal(ttnn_output, golden_output)
 
 
-def test_unary_ng_rm_block_shard(device):
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_unary_ng_rm_block_shard(device, torch_dtype, ttnn_dtype):
     """Test block-sharded ROW_MAJOR with non-tile-aligned shard shape (32, 80).
 
     Shard element count (2560) is not a multiple of tile_hw (1024), so
@@ -448,10 +449,10 @@ def test_unary_ng_rm_block_shard(device):
     """
     torch.manual_seed(42)
     input_shape = [1, 1, 256, 640]
-    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-10, 10)
+    torch_input = torch.empty(input_shape, dtype=torch_dtype).uniform_(-10, 10)
 
-    golden_function = ttnn.get_golden_function(ttnn.square)
-    torch_output = golden_function(torch_input, device=device)
+    golden_function = ttnn.get_golden_function(ttnn.abs)
+    torch_output = golden_function(torch_input)
 
     shard_mem_config = ttnn.create_sharded_memory_config(
         [32, 80],
@@ -463,12 +464,12 @@ def test_unary_ng_rm_block_shard(device):
 
     ttnn_input = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_input = ttnn.to_memory_config(ttnn_input, memory_config=shard_mem_config)
 
-    ttnn_output = ttnn.to_torch(ttnn.square(ttnn_input, memory_config=shard_mem_config))
-    assert_with_pcc(torch_output, ttnn_output, 0.999)
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
+    assert torch.equal(ttnn_output, torch_output)
