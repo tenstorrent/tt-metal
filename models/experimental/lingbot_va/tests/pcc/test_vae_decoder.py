@@ -11,6 +11,7 @@ compounds through the decoder.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -34,6 +35,12 @@ os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 pytestmark = pytest.mark.timeout(600)
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
+
+
+def _vae_checkpoint_dir() -> Path:
+    return Path(os.environ.get("TT_METAL_HOME", os.getcwd())).resolve() / CHECKPOINT_PATH
+
+
 MIN_PCC = 0.985
 MAX_RELATIVE_RMSE = 0.25
 LATENT_T = 1
@@ -141,7 +148,10 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
 def test_decode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager):
     assert num_links >= 1
     assert topology == ttnn.Topology.Linear
-    vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.float32).to("cpu")
+    ckpt = _vae_checkpoint_dir()
+    if not ckpt.is_dir():
+        pytest.skip(f"Lingbot-VA VAE checkpoint not found: {ckpt}")
+    vae = AutoencoderKLWan.from_pretrained(str(ckpt), torch_dtype=torch.float32).to("cpu")
     vae.eval()
 
     torch.manual_seed(42)
