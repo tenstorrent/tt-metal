@@ -12,7 +12,7 @@ from _ttml.modules import InferenceMode, ModuleBase, RunMode
 from .embedding import Embedding
 from .linear import LinearLayer
 from .lora import LoraConfig, LoraLinear, LoraModel
-from .module_base import AbstractModuleBase, ModuleDict, ModuleList, TransformerBase
+from .module_base import AbstractModuleBase, ModuleDict, ModuleList, ParallelizationPlan, TransformerBase
 from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [

@@ -172,11 +172,45 @@ class AbstractModuleBase(CppModuleBase):
         return result
 
 
+class ParallelizationPlan:
+    """Parallelization plan: style patterns + TP/CP axes.
+
+    Bundles a ``{pattern: ParallelStyle}`` dict with the mesh axes
+    so callers pass a single object to ``TransformerBase``.
+
+    Usage::
+
+        plan = ParallelizationPlan({
+            r".*\\.(q_linear|kv_linear)": ColwiseParallel(),
+            r".*\\.out_linear": RowwiseParallel(),
+        }, tp_axis=1, cp_axis=0)
+        model = Llama(config, mesh_device=mesh, parallelization_plan=plan)
+    """
+
+    __slots__ = ("styles", "tp_axis", "cp_axis")
+
+    def __init__(self, styles: dict, tp_axis: int = 0, cp_axis: int | None = None) -> None:
+        self.styles = styles
+        self.tp_axis = tp_axis
+        self.cp_axis = cp_axis
+
+    def resolve(self, mesh_device) -> dict:
+        """Convert styles to a ``{pattern: Layout}`` dict for materialization."""
+        resolved = {}
+        for pattern, style in self.styles.items():
+            for param_name, layout in style.get_layouts(mesh_device, self.tp_axis).items():
+                resolved[pattern + r"\." + param_name] = layout
+        return resolved
+
+    def __len__(self) -> int:
+        return len(self.styles)
+
+
 class TransformerBase(AbstractModuleBase):
     """Root-level transformer base that materializes the full module tree.
 
     Subclasses just create child modules in ``__init__`` — no
-    ``super().__init__()`` call needed.  ``mesh_device`` and ``tp_plan``
+    ``super().__init__()`` call needed.  ``mesh_device`` and ``parallelization_plan``
     are popped from kwargs automatically, and ``__post_init__``
     materializes every ``TensorMetadata`` Parameter after ``__init__``
     returns.
@@ -198,10 +232,10 @@ class TransformerBase(AbstractModuleBase):
             @functools.wraps(orig)
             def wrapped(self, *args, _orig=orig, **kw):
                 mesh_device = kw.pop("mesh_device", None)
-                tp_plan = kw.pop("tp_plan", None)
+                tp_plan = kw.pop("parallelization_plan", None)
                 on_device_init = kw.pop("on_device_init", False)
                 object.__setattr__(self, "_mesh_device", mesh_device)
-                object.__setattr__(self, "_tp_plan", tp_plan)
+                object.__setattr__(self, "_parallelization_plan", tp_plan)
                 object.__setattr__(self, "_on_device_init", on_device_init)
                 _orig(self, *args, **kw)
                 if not hasattr(self, "_buffers"):
@@ -217,7 +251,9 @@ class TransformerBase(AbstractModuleBase):
 
     def _materialize_tree(self) -> None:
         """Walk the full module tree and materialize all TensorMetadata Parameters."""
-        resolved = self._tp_plan.resolve(self._mesh_device) if self._tp_plan is not None else None
+        resolved = (
+            self._parallelization_plan.resolve(self._mesh_device) if self._parallelization_plan is not None else None
+        )
         for prefix, module in self.named_modules():
             if isinstance(module, AbstractModuleBase):
                 self._materialize_module_params(module, prefix, resolved)
@@ -253,10 +289,10 @@ class TransformerBase(AbstractModuleBase):
 
     def _parallelize_modules(self) -> None:
         """Walk the module tree and apply parallelization after materialization."""
-        if self._tp_plan is None and self._mesh_device is None:
+        if self._parallelization_plan is None and self._mesh_device is None:
             return
 
-        tp_plan = self._tp_plan
+        tp_plan = self._parallelization_plan
         if tp_plan is None:
             return
 

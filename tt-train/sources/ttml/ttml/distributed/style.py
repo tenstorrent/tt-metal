@@ -47,40 +47,6 @@ class ParallelStyle(ABC):
         ...
 
 
-class TpPlan:
-    """Tensor-parallel plan: style patterns + axis.
-
-    Bundles a ``{pattern: ParallelStyle}`` dict with the mesh axis
-    so callers pass a single object to ``TransformerBase``.
-
-    Usage::
-
-        plan = TpPlan({
-            r".*\\.(q_linear|kv_linear)": ColwiseParallel(),
-            r".*\\.out_linear": RowwiseParallel(),
-        }, tp_axis=1)
-        model = Llama(config, mesh_device=mesh, tp_plan=plan)
-    """
-
-    __slots__ = ("styles", "tp_axis", "cp_axis")
-
-    def __init__(self, styles: dict[str, ParallelStyle], tp_axis: int = 0, cp_axis: int | None = None) -> None:
-        self.styles = styles
-        self.tp_axis = tp_axis
-        self.cp_axis = cp_axis
-
-    def resolve(self, mesh_device) -> dict:
-        """Convert styles to a ``{pattern: Layout}`` dict for materialization."""
-        resolved = {}
-        for pattern, style in self.styles.items():
-            for param_name, layout in style.get_layouts(mesh_device, self.tp_axis).items():
-                resolved[pattern + r"\." + param_name] = layout
-        return resolved
-
-    def __len__(self) -> int:
-        return len(self.styles)
-
-
 class ColwiseParallel(ParallelStyle):
     """Partition a LinearLayer in column-wise fashion.
 

@@ -8,7 +8,7 @@ entry points are replaced with dispatch-wrapped versions that automatically
 handle tensor redistribution based on sharding rules.
 
 Usage:
-    model = Llama(config, mesh_device=mesh, tp_plan=TpPlan({...}, tp_axis=1))
+    model = Llama(config, mesh_device=mesh, tp_plan=ParallelizationPlan({...}, tp_axis=1))
     # TransformerBase materializes weights and parallelizes automatically
 """
 
@@ -30,7 +30,7 @@ from .rules.registry import (
     get_rule,
 )
 from .debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
-from .style import ParallelStyle, TpPlan, ColwiseParallel, RowwiseParallel
+from .style import ParallelStyle, ColwiseParallel, RowwiseParallel
 from ._register_ops import init_ops
 
 __all__ = [
@@ -58,7 +58,6 @@ __all__ = [
     "DispatchTraceCallback",
     "dispatch_trace",
     "ParallelStyle",
-    "TpPlan",
     "ColwiseParallel",
     "RowwiseParallel",
     "init_ops",

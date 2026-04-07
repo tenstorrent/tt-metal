@@ -37,12 +37,9 @@ from ttml.common.data import CharTokenizer
 from ttml.trainers import SFTConfig, SFTTrainer
 from ttml.datasets import Batch, InMemoryDataloader
 
-# Layout-aware dispatch layer
-from ttml.distributed import (
-    TpPlan,
-    ColwiseParallel,
-    RowwiseParallel,
-)
+# Distributed
+from ttml.modules import ParallelizationPlan
+from ttml.distributed import ColwiseParallel, RowwiseParallel
 from ttml.distributed.debug import DispatchTraceCallback
 
 
@@ -282,7 +279,7 @@ def distributed_collate_fn(
 # ---------------------------------------------------------------------------
 
 # Module name patterns (regex or exact) -> ParallelStyle.
-# tp_axis is set at model creation time via TpPlan(..., tp_axis=...).
+# tp_axis is set at model creation time via ParallelizationPlan(..., tp_axis=...).
 LLAMA_TP_STYLES = {
     r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
     r".*\.(out_linear|w2)": RowwiseParallel(),
@@ -534,13 +531,13 @@ def main():
     if args.track_memory:
         model_guard = MemoryUsageTracker.begin_capture()
 
-    # Build model — TpPlan triggers lazy init + parallelization automatically.
-    tp_plan = None
+    # Build model — ParallelizationPlan triggers lazy init + parallelization automatically.
+    plan = None
     if tp_axis is not None or cp_axis is not None:
-        tp_plan = TpPlan(LLAMA_TP_STYLES, tp_axis=tp_axis, cp_axis=cp_axis)
-        print(f"   TP axis={tp_axis}, CP axis={cp_axis}, {len(tp_plan)} style patterns")
+        plan = ParallelizationPlan(LLAMA_TP_STYLES, tp_axis=tp_axis, cp_axis=cp_axis)
+        print(f"   TP axis={tp_axis}, CP axis={cp_axis}, {len(plan)} style patterns")
 
-    model = Llama(llama_config, mesh_device=mesh_device, tp_plan=tp_plan, on_device_init=args.on_device_init)
+    model = Llama(llama_config, mesh_device=mesh_device, parallelization_plan=plan, on_device_init=args.on_device_init)
 
     print(
         f"   Config: {llama_config.num_hidden_layers} layers, {llama_config.hidden_size} hidden, "
