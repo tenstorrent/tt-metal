@@ -29,6 +29,11 @@ def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, Overlappe
 
     Catches drift between the preprocessing output and the FusionGroupSpec used for fingerprinting.
     Skipped when ``spec.regions`` is empty (e.g. test-only specs).
+
+    Note: ``raw_tensor_shape`` is NOT validated here because
+    ``create_overlapped_tensor`` intentionally overrides it with the
+    actual preprocessed tensor shape, which may differ from the spec's
+    single-device default due to TP expansion or shuffle reshaping.
     """
     if not spec.regions:
         return
@@ -39,11 +44,6 @@ def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, Overlappe
                 raise AssertionError(
                     f"FusionGroupSpec {spec.name!r} declares subtensor {st.name!r} "
                     f"but it is missing from produced views (got {sorted(views.keys())})"
-                )
-            if tuple(view.tensor_shape) != tuple(st.raw_tensor_shape):
-                raise AssertionError(
-                    f"FusionGroupSpec {spec.name!r} subtensor {st.name!r}: "
-                    f"tensor_shape mismatch: spec={st.raw_tensor_shape}, view={view.tensor_shape}"
                 )
             if view.dtype != st.dtype:
                 raise AssertionError(
