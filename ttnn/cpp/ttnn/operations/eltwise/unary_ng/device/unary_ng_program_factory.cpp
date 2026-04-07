@@ -49,15 +49,13 @@ void pack_first_op_scalars(
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
             break;
         case UnaryOpType::LOGIT: {
-            float value1 = *op.get_param_if<float>(0);
-            float value2 = 1.0f - value1;
-            packed_scalar1 = pack_scalar_runtime_arg_impl(value1, input_dtype);
-            packed_scalar2 = pack_scalar_runtime_arg_impl(value2, input_dtype);
-            if (value1 > 0.5f) {
-                const char* data_format = (input_dtype == DataType::FLOAT32) ? "Float32" : "Float16_b";
-                unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
-                unary_defines["CLAMP"] = "clamp_tile";
-            } else if (value1 >= 0.0f) {
+            const auto eps = *op.get_param_if<float>(0);
+            if (eps >= 0.0f) {
+                // Ensure correct clamp bounds [min(eps, 1-eps), max(eps, 1-eps)]
+                const auto lo = std::min(eps, 1.0f - eps);
+                const auto hi = std::max(eps, 1.0f - eps);
+                packed_scalar1 = pack_scalar_runtime_arg_impl(lo, input_dtype);
+                packed_scalar2 = pack_scalar_runtime_arg_impl(hi, input_dtype);
                 unary_defines["CLAMP"] = "clamp_tile";
             }
             break;

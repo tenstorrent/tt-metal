@@ -585,6 +585,13 @@ ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_so
 def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
+    if eps is not None and eps > 0.5:
+        # Manual implementation to avoid platform-dependent UB in torch.special.logit
+        # when eps > 0.5 (std::clamp with lo > hi is undefined behavior).
+        lo = 1.0 - eps
+        hi = eps
+        x = torch.clamp(input_tensor_a, lo, hi)
+        return torch.log(x / (1.0 - x))
     return torch.special.logit(input_tensor_a, eps=eps)
 
 
