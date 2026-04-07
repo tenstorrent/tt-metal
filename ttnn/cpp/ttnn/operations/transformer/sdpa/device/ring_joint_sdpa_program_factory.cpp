@@ -447,6 +447,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     reader_compile_time_args.push_back(k_sender_semaphore_id);
     reader_compile_time_args.push_back(k_receiver_semaphore_id);
     reader_compile_time_args.push_back(k_valid_semaphore_id);
+    reader_compile_time_args.push_back(0);  // k_mcast_enabled placeholder (patched after K mcast construction)
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -776,6 +777,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
+        // K multicast fields (for 2D mcast across full grid)
+        bool use_k_mcast = false;
+        CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
+        CoreCoord mcast_end = CoreCoord{0, 0};          // Rectangle end (physical)
+        CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's physical coords (for receiver sem addr)
+        uint32_t k_mcast_num_dests = 0;                 // Receivers count (excludes self)
+        uint32_t k_mcast_sender_wait = 0;               // Semaphore wait count
     };
 
     std::vector<CoreWork> core_work(num_cores);
@@ -1381,8 +1389,85 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     print_k_chains();
 
-    // Update mcast_enabled compile-time arg now that chain construction is complete
+    // K multicast pass: check if full grid can use 2D multicast for K
+    // Enabled when NHK < NH (MLA mode) and B == 1 (single batch)
+    // The logical grid is always a rectangle by construction (CoreRange from 0,0 to grid_size-1)
+    bool k_mcast_enabled = false;
+    uint32_t max_global_q_count = 0;
+    std::string k_mcast_fallback_reason;
+
+    if (NHK >= NH) {
+        // Not MLA mode - no K sharing needed
+    } else if (B > 1) {
+        k_mcast_fallback_reason = "B > 1 (multi-batch not supported)";
+    } else if (num_cores < 2) {
+        k_mcast_fallback_reason = "num_cores < 2";
+    } else {
+        // Find injector (core with max work)
+        uint32_t injector_idx = 0;
+        for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            if (core_work[ci].global_q_count > max_global_q_count) {
+                max_global_q_count = core_work[ci].global_q_count;
+                injector_idx = ci;
+            }
+        }
+
+        if (max_global_q_count == 0) {
+            k_mcast_fallback_reason = "no work (max_global_q_count == 0)";
+        } else {
+            k_mcast_enabled = true;
+            uint32_t num_receivers = num_cores - 1;
+            CoreCoord injector_physical = core_work[injector_idx].physical_core;
+
+            // Get physical bounds from logical grid corners
+            // Logical grid is always rectangular: (0,0) to (grid_size.x-1, grid_size.y-1)
+            CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
+            CoreCoord phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, grid_size.y - 1});
+
+            // Configure multicast for ALL cores
+            for (uint32_t ci = 0; ci < num_cores; ++ci) {
+                auto& kc = core_k_chain_info[ci];
+                kc.participates = true;  // All cores participate in K mcast
+                kc.use_k_mcast = true;
+                kc.mcast_start = phys_start;
+                kc.mcast_end = phys_end;
+                kc.injector_physical = injector_physical;
+                kc.batch = 0;  // Single batch case
+
+                kc.is_injector = (ci == injector_idx);
+                kc.is_sink = !kc.is_injector;  // All non-injectors are sinks in mcast
+
+                if (kc.is_injector) {
+                    kc.k_mcast_num_dests = num_receivers;
+                    kc.k_mcast_sender_wait = num_receivers;
+                }
+            }
+
+            log_debug(
+                tt::LogOp,
+                "K mcast enabled: {} cores, injector=core {} (max_q={}), rect ({},{}) to ({},{})",
+                num_cores,
+                injector_idx,
+                max_global_q_count,
+                phys_start.x,
+                phys_start.y,
+                phys_end.x,
+                phys_end.y);
+        }
+    }
+
+    // Update mcast_enabled compile-time args now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+    reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
+
+    // Log K chain mode (mcast vs unicast with reason)
+    if (NHK < NH) {
+        if (k_mcast_enabled) {
+            log_info(tt::LogOp, "K chain mode: mcast");
+        } else {
+            log_info(tt::LogOp, "K chain mode: unicast ({})", k_mcast_fallback_reason);
+        }
+    }
 
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
@@ -1483,6 +1568,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.x));
         reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.y));
         reader_args.push_back(k_chain.next_core_q_chunks);
+
+        // K multicast runtime args (for 2D mcast across full grid)
+        reader_args.push_back(static_cast<uint32_t>(k_chain.use_k_mcast));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.mcast_start.x));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.mcast_start.y));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.mcast_end.x));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.mcast_end.y));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.injector_physical.x));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.injector_physical.y));
+        reader_args.push_back(k_chain.k_mcast_num_dests);
+        reader_args.push_back(k_chain.k_mcast_sender_wait);
+        reader_args.push_back(max_global_q_count);  // For loop padding
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);

@@ -81,6 +81,18 @@ void kernel_main() {
     const uint32_t k_next_physical_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t k_next_core_total_reads = get_arg_val<uint32_t>(argidx++);
 
+    // K multicast runtime args (for 2D mcast across full grid)
+    const uint32_t k_use_mcast = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_start_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_start_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_end_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_end_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_injector_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_injector_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+    const uint32_t max_q_per_core = get_arg_val<uint32_t>(argidx++);
+
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -95,6 +107,7 @@ void kernel_main() {
     uint32_t valid_semaphore_addr =
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
     constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
+    constexpr bool k_mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
 
     // K chain semaphores (for MLA mode when K is shared across heads)
     uint32_t k_sender_semaphore_addr =
@@ -153,6 +166,29 @@ void kernel_main() {
         }
     } else {
         receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
+    }
+
+    // K multicast NOC addresses
+    uint64_t k_mcast_base_noc_addr = 0;
+    uint64_t k_mcast_sem_noc_addr = 0;
+    uint32_t k_sender_wait_count = 1;
+
+    // Injector's sender semaphore address (for receivers to signal ready)
+    const uint64_t k_injector_sender_semaphore_noc_addr =
+        get_noc_addr(k_injector_physical_x, k_injector_physical_y, k_sender_semaphore_addr);
+
+    if constexpr (k_mcast_enabled) {
+        if (k_is_injector && k_use_mcast) {
+            // Set up multicast address for K data
+            k_mcast_base_noc_addr = get_noc_multicast_addr(
+                k_mcast_start_x,
+                k_mcast_start_y,
+                k_mcast_end_x,
+                k_mcast_end_y,
+                0);  // addr=0; will OR in actual L1 addr at use site
+            k_mcast_sem_noc_addr = k_mcast_base_noc_addr | k_receiver_semaphore_addr;
+            k_sender_wait_count = k_mcast_sender_wait;
+        }
     }
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -246,7 +282,17 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
         }
 
-        for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {
+        // When K mcast is enabled, loop max_q_per_core times to stay synchronized with injector
+        // Cores with less work do padded iterations (K mcast sync only, no real work)
+        const uint32_t loop_q_count = (k_mcast_enabled && k_use_mcast) ? max_q_per_core : q_per_core;
+
+        for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+            // Check if this is a real iteration (has actual work) or padded (K mcast sync only)
+            const bool is_padded_iter = (q_iter >= q_per_core);
+
+            // Calculate global_q_chunk for all iterations (including padded).
+            // For padded iterations, global index may be out of bounds, but q_chunk = global_q_chunk % num_q_chunks
+            // gives a valid position that correctly determines whether to skip this iteration.
             uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
 
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -256,6 +302,8 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
+            // Skip logic applies to all iterations (including padded) so injector and receivers
+            // make the same skip decisions, keeping K mcast sync aligned
             if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
                 continue;
             }
@@ -282,7 +330,13 @@ void kernel_main() {
 
             // K chain forwarding conditions (batch-level, for MLA mode)
             // K chain is active when k_is_chain_participant is true (NHK < NH case)
-            const bool should_receive_k = k_is_chain_participant && !k_is_injector && (nb == k_chain_batch);
+            // For K mcast: all non-injectors receive via mcast (batch condition handled by k_use_mcast)
+            const bool should_receive_k_unicast = k_is_chain_participant && !k_is_injector && (nb == k_chain_batch);
+            const bool should_receive_k_mcast = k_use_mcast && !k_is_injector;
+            // When k_mcast_enabled is true but k_use_mcast is false at runtime, fall back to unicast
+            const bool should_receive_k = k_mcast_enabled
+                                              ? (k_use_mcast ? should_receive_k_mcast : should_receive_k_unicast)
+                                              : should_receive_k_unicast;
             // Note: should_forward_k depends on k_total_reads which is updated inside the k_chunk loop
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
@@ -342,10 +396,26 @@ void kernel_main() {
                 if (should_receive_k) {
                     // Receive forwarded K chunk from K chain (batch-level chain for MLA)
                     noc_semaphore_set(k_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(k_sender_semaphore_noc_addr, 1);
+                    if constexpr (k_mcast_enabled) {
+                        if (k_use_mcast) {
+                            // For K mcast: signal the injector's semaphore
+                            noc_semaphore_inc(k_injector_sender_semaphore_noc_addr, 1);
+                        } else {
+                            // Fall back to unicast: signal the previous core's semaphore
+                            noc_semaphore_inc(k_sender_semaphore_noc_addr, 1);
+                        }
+                    } else {
+                        // For K unicast: signal the previous core's semaphore
+                        noc_semaphore_inc(k_sender_semaphore_noc_addr, 1);
+                    }
                     noc_semaphore_wait(k_receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_k_in, k_chunk_tiles);
+                    // Only push K to compute CB for real iterations, not padded ones
+                    if (!is_padded_iter) {
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                    }
                 } else {
+                    // Injector or non-participant: read K from DRAM
+                    // For padded iterations, injector still reads K to broadcast to receivers
                     read_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
@@ -358,19 +428,58 @@ void kernel_main() {
                 }
 
                 // Forward K chunk via K chain (batch-level, for MLA mode)
-                // Compute should_forward_k here since it depends on k_total_reads
-                const bool should_forward_k = k_is_chain_participant && !k_is_sink && (nb == k_chain_batch) &&
-                                              (q_iter_local < k_next_core_total_reads);
+                // For K mcast: injector multicasts to all receivers
+                // For K unicast: forward to next core based on q_iter condition
+                const bool should_forward_k_mcast = k_use_mcast && k_is_injector;
+                const bool should_forward_k_unicast = k_is_chain_participant && !k_is_sink && (nb == k_chain_batch) &&
+                                                      (q_iter_local < k_next_core_total_reads);
+                // When k_mcast_enabled is true but k_use_mcast is false at runtime, fall back to unicast
+                const bool should_forward_k = k_mcast_enabled
+                                                  ? (k_use_mcast ? should_forward_k_mcast : should_forward_k_unicast)
+                                                  : should_forward_k_unicast;
+
                 if (should_forward_k) {
-                    noc_semaphore_wait(k_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
-                    uint64_t k_unicast_data_addr =
-                        get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
-                    noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                    noc_async_writes_flushed();
-                    noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
+                    if constexpr (k_mcast_enabled) {
+                        if (k_use_mcast) {
+                            // K multicast: wait for ALL receivers, then broadcast
+                            noc_semaphore_wait(k_sender_semaphore_addr_ptr, k_sender_wait_count);
+                            noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
+                            uint64_t k_mcast_addr = k_mcast_base_noc_addr | cb_k_start_address;
+                            noc_async_write_multicast(
+                                cb_k_start_address,
+                                k_mcast_addr,
+                                k_chunk_tiles * k_tile_bytes,
+                                k_mcast_num_dests,
+                                true /* linked: semaphore mcast follows */);
+                            noc_semaphore_set_multicast(
+                                k_valid_semaphore_addr, k_mcast_sem_noc_addr, k_mcast_num_dests);
+                        } else {
+                            // Fall back to K unicast: forward to next core
+                            noc_semaphore_wait(k_sender_semaphore_addr_ptr, 1);
+                            noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
+                            uint64_t k_unicast_data_addr =
+                                get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
+                            noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                            noc_async_writes_flushed();
+                            noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
+                        }
+                    } else {
+                        // K unicast: forward to next core
+                        noc_semaphore_wait(k_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
+                        uint64_t k_unicast_data_addr =
+                            get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
+                        noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                        noc_async_writes_flushed();
+                        noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
+                    }
                 }
                 k_total_reads++;
+
+                // Skip Q, V reads and V forward for padded iterations (K mcast sync only)
+                if (is_padded_iter) {
+                    continue;
+                }
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
