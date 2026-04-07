@@ -55,7 +55,7 @@ void BM_AdamW(benchmark::State& state) {
     const auto tensor_spec = ttnn::TensorSpec(
         shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
 
-    const auto make_tensor = [&](float min, float max, uint32_t tensor_seed) {
+    const auto make_random_tensor = [&](float min, float max, uint32_t tensor_seed) {
         auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), min, max, tensor_seed);
         return ttnn::Tensor::from_vector(data, tensor_spec, device.get());
     };
@@ -65,10 +65,10 @@ void BM_AdamW(benchmark::State& state) {
     const uint64_t tensor_bytes = shape.volume() * sizeof(uint16_t);  // bf16 = 2 bytes
     const uint64_t total_dram_bytes = 7ULL * tensor_bytes;
 
-    auto param = make_tensor(-1.0F, 1.0F, seed);
-    auto grad = make_tensor(-1.0F, 1.0F, seed + 1);
-    auto exp_avg = make_tensor(-1.0F, 1.0F, seed + 2);
-    auto exp_avg_sq = make_tensor(0.0F, 1.0F, seed + 3);
+    auto param = make_random_tensor(-1.0F, 1.0F, seed);
+    auto grad = make_random_tensor(-1.0F, 1.0F, seed + 1);
+    auto exp_avg = make_random_tensor(-1.0F, 1.0F, seed + 2);
+    auto exp_avg_sq = make_random_tensor(0.0F, 1.0F, seed + 3);
 
     const float lr = 1e-3f;
     const float beta1 = 0.9f;
