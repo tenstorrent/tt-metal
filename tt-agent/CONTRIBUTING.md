@@ -85,6 +85,18 @@ Create `adapters/<platform-name>/` and add the platform's entrypoint file
 (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex, etc.). Reference the same
 `skills/` and `knowledge/` directories — content does not change per platform.
 
+## Commit Messages
+
+Short subject + optional context bullets. Never list files or technical details — the diff has those.
+
+```
+scope: add X for Y                          ✓
+scope: add X for Y                          ✓
+- why it matters or what changed at a high level
+
+scope: add X — file.md: update foo, bar.md: fix baz   ✗
+```
+
 ## PR Conventions
 
 - One skill per PR when possible
