@@ -5,8 +5,6 @@
 """
 Reduce-to-All B1 — Ring + Cross-Column
 
-Requires FABRIC_2D_TORUS_X (or TORUS_XY) for 1-hop ring wrap-around.
-
 Phase 1 — Column all-reduce (2-round ring, A/B split, all 1-hop):
     Type A workers: R1 → FWD (row+1), R2 → BWD (row-1).
     Type B workers: R1 → BWD (row-1), R2 → FWD (row+1).

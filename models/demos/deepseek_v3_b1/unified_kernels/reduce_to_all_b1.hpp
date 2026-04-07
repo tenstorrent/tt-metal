@@ -18,7 +18,6 @@
  *
  * After both phases every device holds sum(all 8 inputs).
  * All Phase 1 traffic is exactly 1 hop (ring/torus topology).
- * Requires FABRIC_2D_TORUS_X for the wrap-around link.
  */
 
 #include "kernel_op_api.hpp"
@@ -27,7 +26,6 @@
 #if defined(COMPILE_FOR_BRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "api/socket_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -37,7 +35,6 @@
 #elif defined(COMPILE_FOR_NCRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "api/socket_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -48,7 +45,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/debug/dprint.h"
 #endif
 
 namespace deepseek_b1_ops {
