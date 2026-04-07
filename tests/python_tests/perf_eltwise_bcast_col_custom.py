@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
@@ -16,7 +15,6 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     LOOP_FACTOR,
@@ -56,9 +54,6 @@ def test_perf_eltwise_bcast_col_custom(
     loop_factor,
     workers_tensix_coordinates,
 ):
-    if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
-        pytest.skip("Custom blocked sub_bcast_cols not supported on Wormhole")
-
     configuration = PerfConfig(
         "sources/eltwise_bcast_col_custom_perf.cpp",
         formats,

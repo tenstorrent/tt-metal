@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -78,12 +77,6 @@ def test_eltwise_bcast_col_custom(
     input_dimensions_B,
     workers_tensix_coordinates,
 ):
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and cpp_source == "sources/multiple_tiles_eltwise_custom_test.cpp"
-    ):
-        pytest.skip("Custom test not supported on Wormhole")
-
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
