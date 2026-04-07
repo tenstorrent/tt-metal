@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
+#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -412,11 +413,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     }
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = operation_attributes.eps;  // epsilon
+    uint32_t eps_u = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
     // Set runtime arguments based on kernel layout type
     if (use_2d_kernel) {
@@ -442,7 +439,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tiles_per_core_y,
                      tile_offset,
                      stats_offset,
-                     e.u,
+                     eps_u,
                      gamma_dram_addr,
                      beta_dram_addr,
                      stats_addr,
@@ -478,7 +475,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  Wt,
                  tile_offset,
                  stats_offset,
-                 e.u,
+                 eps_u,
                  gamma_dram_addr,
                  beta_dram_addr,
                  stats_addr,
