@@ -58,7 +58,7 @@ static void run_global_checkpoint_test(
     CoreRange core_range(core0, core1);
 
     // Coordinator is core0 in physical coords
-    CoreCoord coord_phys = device->worker_core_from_logical_core(core0);
+    CoreCoord barrier_coord = device->worker_core_from_logical_core(core0);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -120,7 +120,7 @@ static void run_global_checkpoint_test(
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_global_checkpoint.cpp",
         core_range,
         ComputeConfig{
-            .compile_args = {static_cast<uint32_t>(NUM_TILES), sem_id, coord_phys.x, coord_phys.y, NUM_CORES}});
+            .compile_args = {static_cast<uint32_t>(NUM_TILES), sem_id, barrier_coord.x, barrier_coord.y, NUM_CORES}});
 
     // Set runtime args for both cores
     for (uint32_t i = 0; i < NUM_CORES; i++) {
@@ -136,8 +136,8 @@ static void run_global_checkpoint_test(
              0u,
              static_cast<uint32_t>(NUM_TILES),
              sem_id,
-             coord_phys.x,
-             coord_phys.y,
+             barrier_coord.x,
+             barrier_coord.y,
              NUM_CORES});
 
         SetRuntimeArgs(
@@ -148,8 +148,8 @@ static void run_global_checkpoint_test(
              0u,
              static_cast<uint32_t>(NUM_TILES),
              sem_id,
-             coord_phys.x,
-             coord_phys.y,
+             barrier_coord.x,
+             barrier_coord.y,
              NUM_CORES});
     }
 

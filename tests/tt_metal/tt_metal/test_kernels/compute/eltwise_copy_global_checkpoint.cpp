@@ -18,8 +18,8 @@ void kernel_main() {
     // TRISC doesn't execute the cross-core barrier, but still participates
     // in intra-core barriers.
     uint32_t sem_id = get_compile_time_arg_val(1);
-    uint32_t coord_x = get_compile_time_arg_val(2);
-    uint32_t coord_y = get_compile_time_arg_val(3);
+    uint32_t barrier_coord_x = get_compile_time_arg_val(2);
+    uint32_t barrier_coord_y = get_compile_time_arg_val(3);
     uint32_t num_cores = get_compile_time_arg_val(4);
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
@@ -33,7 +33,7 @@ void kernel_main() {
     }
 
     // Global checkpoint: synchronize all RISCs on all cores
-    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores);
+    DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         pack_tile(b, tt::CBIndex::c_16);

@@ -275,7 +275,7 @@ state across the entire grid.
 
 .. code-block:: c++
 
-    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, coord_x, coord_y, num_cores)
+    DEBUG_CHECKPOINT_GLOBAL(id, sem_id, barrier_coord_x, barrier_coord_y, num_cores)
 
 .. list-table::
    :header-rows: 1
@@ -286,8 +286,8 @@ state across the entire grid.
      - Checkpoint identifier (for DPRINT output labeling)
    * - ``sem_id``
      - Semaphore ID allocated by host via ``CreateSemaphore``
-   * - ``coord_x``, ``coord_y``
-     - Physical NOC coordinates of the coordinator core
+   * - ``barrier_coord_x``, ``barrier_coord_y``
+     - Physical NOC coordinates of the coordinator core for the cross-core semaphore barrier. These do NOT affect what gets printed — each core's CB dump is always local.
    * - ``num_cores``
      - Total number of cores participating
 
@@ -300,12 +300,13 @@ state across the entire grid.
     uint32_t sem_id = CreateSemaphore(program, cores, 0);
 
     // Get coordinator's physical coordinates
-    CoreCoord coord_phys = device->worker_core_from_logical_core({0, 0});
+    // Get coordinator's physical NOC coordinates (for the barrier, not for printing)
+    CoreCoord barrier_coord = device->worker_core_from_logical_core({0, 0});
 
     // Pass to all kernels as runtime args
     SetRuntimeArgs(program, kernel, core, {
         ...,
-        sem_id, coord_phys.x, coord_phys.y, num_cores
+        sem_id, barrier_coord.x, barrier_coord.y, num_cores
     });
 
 **Kernel usage** (all RISCs on all cores must call with the same args):
@@ -316,23 +317,28 @@ state across the entire grid.
 
     void kernel_main() {
         uint32_t sem_id = get_arg_val<uint32_t>(3);
-        uint32_t coord_x = get_arg_val<uint32_t>(4);
-        uint32_t coord_y = get_arg_val<uint32_t>(5);
+        uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);  // coordinator for barrier (not for printing)
+        uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
         uint32_t num_cores = get_arg_val<uint32_t>(6);
 
         // ... work ...
 
-        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, coord_x, coord_y, num_cores);
+        // All cores synchronize here, then each core prints its OWN local CB state
+        DEBUG_CHECKPOINT_GLOBAL(1, sem_id, barrier_coord_x, barrier_coord_y, num_cores);
     }
 
 **How it works:**
 
 1. Intra-core barrier — all RISCs on each core arrive
-2. Cross-core barrier — BRISC on each core does ``noc_semaphore_inc`` to a coordinator,
-   then polls until all cores have arrived
+2. Cross-core barrier — BRISC on each core does ``noc_semaphore_inc`` to the coordinator
+   core (identified by ``barrier_coord_x/y``), then polls until all cores have arrived
 3. Intra-core barrier — BRISC releases other RISCs
-4. CB dump — all RISCs print their CB state
+4. CB dump — all RISCs print their own **local** CB state (no remote reads — each core
+   only inspects its own CB interfaces)
 5. Exit barriers — intra-core + cross-core ensure all cores finish before proceeding
+
+The ``barrier_coord_x/y`` parameters only affect synchronization (which core accumulates
+the semaphore). They do not affect what gets printed — the dump is always local to each core.
 
 Only BRISC participates in the NOC cross-core operations. TRISC and NCRISC threads wait via
 the intra-core barriers that bracket the cross-core phase.
