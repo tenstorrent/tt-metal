@@ -1,0 +1,524 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+import math
+from dataclasses import dataclass
+from enum import Enum
+from typing import List, Optional, Tuple
+
+import ml_dtypes
+import numpy as np
+
+# ============================================================================
+# MX (Microscaling) Format Constants - OCP Specification
+# ============================================================================
+
+MXFP8_BLOCK_SIZE = 32  # Fixed block size per OCP MX specification
+MXFP8_E5M2_MAX_NORMAL = float(
+    ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
+)  # 57344.0 from dtype
+MXFP8_E4M3_MAX_NORMAL = float(
+    ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
+)  # 448.0 from dtype
+
+
+# ============================================================================
+# Data Format Classes
+# ============================================================================
+
+
+class DataFormatInfo:
+    """
+    A helper class that encapsulates metadata for a data format.
+
+    Attributes:
+        name (str): A human-readable name for the data format.
+        byte_size (int): The size in bytes of one unit of the data format.
+    """
+
+    def __init__(self, name: str, byte_size: int):
+        self.name = name
+        self.byte_size = byte_size
+
+    def __str__(self) -> str:
+        """Returns the string representation of the data format info."""
+        return f"{self.name}/{self.byte_size}B"
+
+    def __repr__(self) -> str:
+        """Returns the representation of the data format info."""
+        return self.__str__()
+
+
+class DataFormat(Enum):
+    """
+    An enumeration of data formats supported by the LLKs.
+    Holds format name and byte size, and is extendable.
+    """
+
+    Float16 = DataFormatInfo("Float16", 2)
+    Float16_b = DataFormatInfo("Float16_b", 2)
+    Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
+    Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
+    Bfp4_b = DataFormatInfo("Bfp4_b", 1)  # WH/BH specific
+    Float32 = DataFormatInfo("Float32", 4)
+    Int32 = DataFormatInfo("Int32", 4)
+    Tf32 = DataFormatInfo("Tf32", 3)
+    UInt32 = DataFormatInfo("UInt32", 4)  # WH/BH specific
+    Int16 = DataFormatInfo("Int16", 2)  # QSR specific
+    UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
+    Int8 = DataFormatInfo("Int8", 1)
+    UInt8 = DataFormatInfo("UInt8", 1)
+    MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
+    MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
+
+    @property
+    def size(self) -> int:
+        """Returns the byte size of the data format."""
+        return self.value.byte_size
+
+    def __str__(self) -> str:
+        """Returns the string representation of the data format."""
+        return self.value.name
+
+    def is_integer(self) -> bool:
+        """Checks if the data format is an integer type."""
+        return self in {
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.Int16,
+            DataFormat.UInt16,
+            DataFormat.Int8,
+            DataFormat.UInt8,
+        }
+
+    def is_32_bit(self) -> bool:
+        """Checks if the data format is a 32-bit type."""
+        return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}
+
+    def is_exponent_A(self) -> bool:
+        """Checks if the data format is an exponent A format."""
+
+        return self in {
+            DataFormat.Float16,
+            DataFormat.Bfp8,
+        }
+
+    def is_exponent_B(self) -> bool:
+        """Checks if the data format is an exponent B format."""
+        return self in {
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Tf32,
+            DataFormat.Float32,
+        }
+
+    def num_bytes_per_tile(self, num_datums: int = 1024) -> int:
+        """Returns the number of bytes per tile for the data format."""
+        num_exponents = 0
+        if self in {DataFormat.Bfp8, DataFormat.Bfp8_b}:
+            num_exponents = num_datums // 16
+        elif self in {DataFormat.Bfp4_b}:
+            num_exponents = num_datums // 16
+            return (num_datums // 2) + num_exponents
+        elif self.is_mx_format():
+            # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
+            num_exponents = num_datums // 32
+        return (self.size * num_datums) + num_exponents
+
+    def is_float32(self) -> bool:
+        """Checks if the data format is a Float32 type."""
+        return self == DataFormat.Float32
+
+    def is_mx_format(self) -> bool:
+        """Checks if the data format is an MX (Microscaling) format."""
+        return self in {
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+        }
+
+
+# ============================================================================
+# MX (Microscaling) Format Utilities
+# ============================================================================
+
+
+def encode_e8m0_scale(max_abs_value, element_max_normal):
+    """
+    Encode a scale factor as E8M0 (8-bit exponent, no mantissa, bias=127).
+
+    Per OCP MX spec Section 2.B (Gorodecky et al., 5 Nov 2024):
+    e = ⌈log₂(amax/destmax)⌉ (round up to ensure no overflow)
+    E8M0 = clamp(e, -127, 127) + bias
+
+    This "round up" approach ensures post-scaling values do not exceed
+    representable FP8 range, minimizing quantization error.
+
+    Args:
+        max_abs_value: Maximum absolute value in the block
+        element_max_normal: Maximum normal value for element format (e.g., 448 for E4M3, 57344 for E5M2)
+
+    Returns:
+        E8M0 encoded scale (0-255), where 255 = NaN
+    """
+    # Handle special cases
+    if max_abs_value == 0 or np.isnan(max_abs_value):
+        return 127  # Scale = 2^0 = 1 (neutral scale)
+    if np.isinf(max_abs_value):
+        return 254  # Max representable scale
+
+    # Calculate exponent: ceil(log2(max_value / element_max)) per OCP spec
+    scale_ratio = max_abs_value / element_max_normal
+    exponent = math.ceil(math.log2(scale_ratio))
+
+    # Clamp to E8M0 range and add bias
+    return int(max(-127, min(127, exponent)) + 127)
+
+
+def decode_e8m0_scale(e8m0_value):
+    """
+    Decode E8M0 scale factor to float.
+
+    Args:
+        e8m0_value: E8M0 encoded scale (0-255)
+
+    Returns:
+        Scale factor as float (2**exponent), or NaN if e8m0_value = 255
+    """
+    if e8m0_value == 255:
+        return float("nan")  # NaN encoding per OCP spec
+
+    exponent = int(e8m0_value) - 127  # Remove bias
+    return 2.0**exponent
+
+
+@dataclass
+class FormatConfig:
+    """
+    A data class that holds configuration details for formats passed to LLKs
+
+    Attributes:
+    unpack_A_src (DataFormat): The source format for source register A in the Unpacker, which is the format of our data in L1.
+    unpack_A_dst (DataFormat): The destination format for source register A in the Unpacker, which is the format of our data in the source register.
+    unpack_B_src (Optional[DataFormat]): The source format for source register B in the Unpacker, which is the format of our data in L1. Optional; defaults to `unpack_A_src` if `same_src_format=True`.
+    unpack_B_dst (Optional[DataFormat]): The destination format for source register B in the Unpacker, which is the format of our data in the source register. Optional; defaults to `unpack_A_dst` if `same_src_format=True`.
+    unpack_S_src (DataFormat): The source format for source register S in the Unpacker (L1). Defaults to `unpack_A_src` when omitted.
+    unpack_S_dst (DataFormat): The destination format for source register S in the Unpacker (register). Defaults to `unpack_A_dst` when omitted.
+    pack_src (DataFormat): The source format for the Packer.
+    pack_dst (DataFormat): The destination format for the Packer.
+    pack_S_src (DataFormat): The source format for the S path in the Packer. Defaults to `pack_src` when omitted.
+    pack_S_dst (DataFormat): The destination format for the S path in the Packer. Defaults to `pack_dst` when omitted.
+    math (DataFormat): The format used for _llk_math_ functions.
+
+    Optional Parameters:
+    same_src_format (bool): If `True`, the formats for source registers A and B will be the same for unpack operations.
+    If `False`, source registers A and B have different formats formats must be specified. Defaults to `True`.
+
+    unpack_B_src (Optional[DataFormat]): The source format for source register B in the Unpacker which is the format of our data in L1, used only if `same_src_format=False` i.e when source registers don't share the same formats we distinguish source register A and B formats.
+    unpack_B_dst (Optional[DataFormat]): The destination format for source register B in the Unpacker, which is the format of our data in src register used only if `same_src_format=False` i.e when source registers don't share the same formats we distinguish source register A and B formats.
+    unpack_S_src (Optional[DataFormat]): Optional override for `unpack_S_src`; otherwise defaults to `unpack_A_src`.
+    unpack_S_dst (Optional[DataFormat]): Optional override for `unpack_S_dst`; otherwise defaults to `unpack_A_dst`.
+    pack_S_src (Optional[DataFormat]): Optional override for `pack_S_src`; otherwise defaults to `pack_src`.
+    pack_S_dst (Optional[DataFormat]): Optional override for `pack_S_dst`; otherwise defaults to `pack_dst`.
+
+    Example:
+    >>> formats = FormatConfig(
+    >>>     unpack_A_src=DataFormat.Float32,
+    >>>     unpack_A_dst=DataFormat.Float16,
+    >>>     pack_src=DataFormat.Float16,
+    >>>     pack_dst=DataFormat.Float32,
+    >>>     math=DataFormat.Float32    # same_src_format defaults to True, thus our source registers have same formats and we don't need to define formats for source register B
+    >>> )
+    >>> print(formats.unpack_A_src)
+    DataFormat.Float32
+    >>> print(formats.unpack_B_src)
+    DataFormat.Float32                 # B formats match A if same_src_format=True
+    """
+
+    unpack_A_src: DataFormat
+    unpack_A_dst: DataFormat
+    unpack_B_src: Optional[DataFormat]
+    unpack_B_dst: Optional[DataFormat]
+    unpack_S_src: DataFormat
+    unpack_S_dst: DataFormat
+    pack_src: DataFormat
+    pack_dst: DataFormat
+    pack_S_src: DataFormat
+    pack_S_dst: DataFormat
+    math: DataFormat
+
+    def __init__(
+        self,
+        unpack_A_src: DataFormat,
+        unpack_A_dst: DataFormat,
+        pack_src: DataFormat,
+        pack_dst: DataFormat,
+        math: DataFormat,
+        same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
+        # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
+        unpack_B_src: Optional[DataFormat] = None,
+        unpack_B_dst: Optional[DataFormat] = None,
+        unpack_S_src: Optional[DataFormat] = None,
+        unpack_S_dst: Optional[DataFormat] = None,
+        pack_S_src: Optional[DataFormat] = None,
+        pack_S_dst: Optional[DataFormat] = None,
+    ):
+
+        self.unpack_A_src = unpack_A_src
+        self.unpack_A_dst = unpack_A_dst
+        self.pack_src = pack_src
+        self.pack_dst = pack_dst
+        self.math = math
+        if same_src_format:
+            self.unpack_B_src = unpack_A_src
+            self.unpack_B_dst = unpack_A_dst
+        else:
+            if unpack_B_src is None or unpack_B_dst is None:
+                raise ValueError(
+                    "When same_src_format is False, both unpack_B_src and unpack_B_dst must be provided."
+                )
+            self.unpack_B_src = unpack_B_src
+            self.unpack_B_dst = unpack_B_dst
+        self.unpack_S_src = (
+            unpack_S_src if unpack_S_src is not None else self.unpack_A_src
+        )
+        self.unpack_S_dst = (
+            unpack_S_dst if unpack_S_dst is not None else self.unpack_A_dst
+        )
+        self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
+        self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
+
+    @property
+    def output_format(self) -> DataFormat:
+        return self.pack_dst
+
+    @property
+    def input_format(self) -> DataFormat:
+        return self.unpack_A_src
+
+    @property
+    def input_format_B(self) -> DataFormat:
+        return self.unpack_B_src
+
+
+FORMATS_CONFIG_STRUCT_RUNTIME = [
+    """
+struct FormatConfig
+{
+    std::uint32_t unpack_A_src = 0;
+    std::uint32_t unpack_B_src = 0;
+    std::uint32_t unpack_S_src = 0;
+    std::uint32_t unpack_A_dst = 0;
+    std::uint32_t unpack_B_dst = 0;
+    std::uint32_t unpack_S_dst = 0;
+    std::uint32_t math = 0;
+    std::uint32_t pack_src = 0;
+    std::uint32_t pack_dst = 0;
+    std::uint32_t pack_S_src = 0;
+    std::uint32_t pack_S_dst = 0;
+};
+"""
+]
+
+FORMATS_CONFIG_STRUCT_COMPILETIME = [
+    "// Formats struct",
+    "struct FormatConfig",
+    "{",
+    "    const std::uint32_t unpack_A_src;",
+    "    const std::uint32_t unpack_B_src;",
+    "    const std::uint32_t unpack_S_src;",
+    "    const std::uint32_t unpack_A_dst;",
+    "    const std::uint32_t unpack_B_dst;",
+    "    const std::uint32_t unpack_S_dst;",
+    "    const std::uint32_t math;",
+    "    const std::uint32_t pack_src;",
+    "    const std::uint32_t pack_dst;",
+    "    const std::uint32_t pack_S_src;",
+    "    const std::uint32_t pack_S_dst;",
+    "",
+    "    constexpr FormatConfig(",
+    "        std::uint32_t unpack_A_src_,",
+    "        std::uint32_t unpack_B_src_,",
+    "        std::uint32_t unpack_S_src_,",
+    "        std::uint32_t unpack_A_dst_,",
+    "        std::uint32_t unpack_B_dst_,",
+    "        std::uint32_t unpack_S_dst_,",
+    "        std::uint32_t math_,",
+    "        std::uint32_t pack_src_,",
+    "        std::uint32_t pack_dst_,",
+    "        std::uint32_t pack_S_src_,",
+    "        std::uint32_t pack_S_dst_) :",
+    "        unpack_A_src(unpack_A_src_),",
+    "        unpack_B_src(unpack_B_src_),",
+    "        unpack_S_src(unpack_S_src_),",
+    "        unpack_A_dst(unpack_A_dst_),",
+    "        unpack_B_dst(unpack_B_dst_),",
+    "        unpack_S_dst(unpack_S_dst_),",
+    "        math(math_),",
+    "        pack_src(pack_src_),",
+    "        pack_dst(pack_dst_),",
+    "        pack_S_src(pack_S_src_),",
+    "        pack_S_dst(pack_S_dst_)",
+    "    {",
+    "    }",
+    "};",
+    "",
+]
+
+WORMHOLE_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Float16: 1,
+    DataFormat.Bfp8: 2,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16_b: 5,
+    DataFormat.Bfp8_b: 6,
+    DataFormat.Bfp4_b: 7,
+    DataFormat.Int32: 8,
+    DataFormat.UInt16: 9,
+    DataFormat.Int8: 14,
+    DataFormat.UInt32: 24,
+    DataFormat.UInt8: 30,
+}
+
+BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Float16: 1,
+    DataFormat.Bfp8: 2,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16_b: 5,
+    DataFormat.Bfp8_b: 6,
+    DataFormat.Bfp4_b: 7,
+    DataFormat.Int32: 8,
+    DataFormat.UInt16: 9,
+    DataFormat.Int8: 14,
+    DataFormat.UInt32: 24,
+    DataFormat.Fp8_e4m3: 26,
+    DataFormat.UInt8: 30,
+}
+
+QUASAR_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16: 1,
+    DataFormat.Float16_b: 5,
+    DataFormat.MxFp8R: 18,
+    DataFormat.MxFp8P: 20,
+    DataFormat.Int32: 8,
+    DataFormat.Int8: 14,
+    DataFormat.UInt8: 17,
+    DataFormat.UInt16: 130,
+    DataFormat.Int16: 9,
+}
+
+
+@dataclass
+class InputOutputFormat:
+    """
+    A data class that holds configuration details for formats passed to LLKs.
+    This class is used to hold input and output DataFormat that the client wants to test.
+    They are used for format inference model to infer the rest of the formats for the LLk pipeline, instead of the user.
+
+    If input_B is not specified, it defaults to the same as input (input_A).
+    """
+
+    input: DataFormat
+    output: DataFormat
+    input_B: Optional[DataFormat] = None
+
+    def __init__(
+        self,
+        input_format: DataFormat,
+        output_format: DataFormat,
+        input_format_B: Optional[DataFormat] = None,
+    ):
+        self.input = input_format
+        self.output = output_format
+        self.input_B = input_format_B if input_format_B is not None else input_format
+
+    @property
+    def output_format(self) -> DataFormat:
+        return self.output
+
+    @property
+    def input_format(self) -> DataFormat:
+        return self.input
+
+    @property
+    def input_format_B(self) -> DataFormat:
+        return self.input_B
+
+    def __str__(self):
+        return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self):
+        return f"InputOutputFormat[{self.input},{self.output}]"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:
+    """
+    A function that creates a list of FormatConfig objects from a list of DataFormat objects that client wants to test.
+    This function is useful for creating a list of FormatConfig objects for testing multiple formats combinations
+    and cases which the user has specifically defined and wants to particularly test instead of a full format flush.
+
+    Args:
+    formats (List[Tuple[DataFormat]]): A list of tuples of DataFormat objects for which FormatConfig objects need to be created.
+
+    Returns:
+    List[FormatConfig]: A list of FormatConfig objects created from the list of DataFormat objects passed as input.
+
+    Example:
+    >>> formats = [(DataFormat.Float16, DataFormat.Float32, DataFormat.Float16, DataFormat.Float32, DataFormat.Float32)]
+    >>> format_configs = create_formats_for_testing(formats)
+    >>> print(format_configs[0].unpack_A_src)
+    DataFormat.Float16
+    >>> print(format_configs[0].unpack_B_src)
+    DataFormat.Float16
+    """
+    format_configs = []
+    for format_tuple in formats:
+        if len(format_tuple) == 5:
+            format_configs.append(
+                FormatConfig(
+                    unpack_A_src=format_tuple[0],
+                    unpack_A_dst=format_tuple[1],
+                    pack_src=format_tuple[2],
+                    pack_dst=format_tuple[3],
+                    math=format_tuple[4],
+                )
+            )
+        else:
+            format_configs.append(
+                FormatConfig(
+                    unpack_A_src=format_tuple[0],
+                    unpack_A_dst=format_tuple[1],
+                    unpack_B_src=format_tuple[2],
+                    unpack_B_dst=format_tuple[3],
+                    pack_src=format_tuple[4],
+                    pack_dst=format_tuple[5],
+                    math=format_tuple[6],
+                    same_src_format=False,
+                )
+            )
+    return format_configs
+
+
+def is_dest_acc_needed(format: InputOutputFormat) -> bool:
+    """
+    This function is called when a format configuration for input and output is called without dest accumulation.
+    If the input-output combination is an outlier that is not supported when dest accumulation is on
+    then the data format inference model will turn dest accumulation off for this combination to work.
+
+    We must notify the user that this has happened and change the test output to reflect this.
+    """
+    return (
+        format.input_format
+        in [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float16_b]
+        and format.output_format == DataFormat.Float16
+    )

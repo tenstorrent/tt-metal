@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -109,7 +109,7 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args});
 
-    std::vector<uint32_t> compute_kernel_args = {num_tensor_tiles};
+    std::vector<uint32_t> compute_kernel_args = {num_tensor_tiles, /*use_dfbs=*/false};
 
     CreateKernel(
         program,

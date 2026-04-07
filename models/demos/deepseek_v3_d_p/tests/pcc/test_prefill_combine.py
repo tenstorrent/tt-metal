@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -208,6 +208,7 @@ def test_ttnn_combine(
     use_predictable_data,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
+    torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
 
@@ -254,7 +255,6 @@ def test_ttnn_combine(
             num_routed_experts,
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
-            seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.debug("Using RANDOM test data")

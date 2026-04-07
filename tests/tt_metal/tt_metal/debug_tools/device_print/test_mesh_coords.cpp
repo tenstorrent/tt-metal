@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -208,7 +208,7 @@ TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsFiltersAllCo
 }
 
 // Test 3: Every mesh coordinate resolves to the correct chip_id and the device prints its coord.
-TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsAllDevicesMapping) {
+TEST_F(DevicePrintFixture, TensixTestDevicePrintMeshCoordsAllDevicesMapping) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunAllChipsVerificationTest, mesh_device);
     }

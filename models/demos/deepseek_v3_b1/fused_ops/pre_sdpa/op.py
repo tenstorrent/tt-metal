@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1261,6 +1261,7 @@ class PreSDPA:
             ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_num_mcast_dests", num_mcast_dests),
         ]
         mla_trisc_named_compile_time_args = [
             ("St", St),
@@ -1994,6 +1995,8 @@ class PreSDPA:
                                 is_mcast_sender,
                                 mcast_start_x,
                                 mcast_start_y,
+                                mcast_end_x,
+                                mcast_end_y,
                                 vc,
                             ],
                         )

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -135,8 +135,8 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
         buffer_descriptor_u bd_val = {0};
         bd_val.f.l1_addr_16B = g_dfb_interface[i].tc_slots[0].base_addr;
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
-        bd_val.f.x_dim = pack_tile_face_r_dim[i];
-        bd_val.f.y_dim = ckernel::trisc::FACE_C_DIM;
+        bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
+        bd_val.f.y_dim = pack_tile_face_r_dim[i];
         bd_val.f.z_dim = pack_tile_num_faces[i];
 
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
