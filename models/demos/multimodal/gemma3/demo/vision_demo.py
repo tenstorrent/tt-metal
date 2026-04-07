@@ -145,6 +145,8 @@ def _gemma3_vision_demo_device_params():
         "fabric_config": True,
         "trace_region_size": 21448704,
         "num_command_queues": 1,
+        # avg_pool2d (multimodal projector) and other ops may use L1_SMALL; match gemma3 tests (e.g. test_mmp.py)
+        "l1_small_size": 24576,
     }
 
 
