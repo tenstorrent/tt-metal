@@ -19,18 +19,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    _MTP_LAYER_IDX,
-    CURRENT_TRANSFORM_VERSION,
-    NUM_ROUTED_EXPERTS,
-    DeepSeekV3DenseLayerWeights,
-    DeepSeekV3EmbeddingLayerWeights,
-    DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
-    DeepSeekV3MTPWeights,
-    MoERoutedExpertWeights,
-    OverlappedTensor,
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.adapter import (
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
@@ -40,7 +32,17 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.catalog import CURRENT_TRANSFORM_VERSION
+from models.demos.deepseek_v3_b1.weights.types import (
+    _MTP_LAYER_IDX,
+    NUM_ROUTED_EXPERTS,
+    DeepSeekV3DenseLayerWeights,
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
+    DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
+    MoERoutedExpertWeights,
+)
 
 
 class WeightProvider(Protocol):

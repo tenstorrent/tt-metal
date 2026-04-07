@@ -960,6 +960,13 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
         weights.gate_bias.shape == expected_gate_bias
     ), f"Expected gate_bias {expected_gate_bias}, got {weights.gate_bias.shape}"
 
+    # Cold vs warm: standalone TensorTarget artifact (shared_down_proj) + fusion (q_ab_kv_a via q_a_proj).
+    # Snapshot host copies before deallocate (cold path tensors are freed before warm load).
+    _mesh_composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
+    cold_sd = ttnn.to_torch(weights.shared_down_proj, mesh_composer=_mesh_composer).clone()
+    cold_qa = ttnn.to_torch(weights.q_a_proj.fused_tensor, mesh_composer=_mesh_composer).clone()
+    cold_q_a_meta = weights.q_a_proj
+
     _deallocate_layer(weights)
 
     weights_hit = prepare_moe_layer_weights(
@@ -970,6 +977,12 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
         cache_config=cache_config,
     )
     assert weights_hit.gate_bias.shape == expected_gate_bias
+
+    warm_sd = ttnn.to_torch(weights_hit.shared_down_proj, mesh_composer=_mesh_composer)
+    warm_qa = ttnn.to_torch(weights_hit.q_a_proj.fused_tensor, mesh_composer=_mesh_composer)
+    assert torch.allclose(cold_sd, warm_sd, rtol=1e-2, atol=0.2)
+    assert torch.allclose(cold_qa, warm_qa, rtol=1e-2, atol=0.2)
+    _assert_overlapped_tensors_match(cold_q_a_meta, weights_hit.q_a_proj)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))

@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Content-addressed tensor cache for preprocessed weight artifacts."""
+"""Layer-1 (generic) content-addressed **artifact** cache for preprocessed tensors.
+
+Model-specific source keys, preprocess, and fusion pack logic for DeepSeek live in
+:mod:`models.demos.deepseek_v3_b1.weights`.
+"""
 
 from __future__ import annotations
 

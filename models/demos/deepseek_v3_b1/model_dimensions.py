@@ -4,7 +4,7 @@
 
 """DeepSeek V3 B1 logical model dimensions (HF / full-model shapes).
 
-Single source of truth for dimension constants used by prepare_weights,
+Single source of truth for dimension constants used by ``weights`` / ``prepare_weights``,
 weight_provider, stage, and tests.
 """
 

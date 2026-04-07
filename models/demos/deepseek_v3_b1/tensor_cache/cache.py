@@ -9,6 +9,11 @@ serialize to NVMe, load to device -> on hit: load from NVMe to device.
 
 Use :meth:`get_or_create` for both standalone tensors (:class:`TensorTarget`) and
 fusion groups (:class:`FusionGroupSpec`); return type follows ``fingerprint.target``.
+
+**Layer boundary:** No HuggingFace parameter names, DeepSeek-only preprocess, or model layout
+constants belong here — those live in :mod:`models.demos.deepseek_v3_b1.weights`. Fused-buffer
+packing for DeepSeek is reached through :mod:`models.demos.deepseek_v3_b1.tensor_cache.fuse`
+(a shim to :mod:`models.demos.deepseek_v3_b1.weights.fusion_runtime`).
 """
 
 from __future__ import annotations
