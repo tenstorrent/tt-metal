@@ -529,7 +529,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RELU: return make_with_int32("relu", idst, input_dtype);
         case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::SIGN: return make_simple("sign", idst);
-        case UnaryOpType::SIGNBIT: return make_with_int32("signbit", idst, input_dtype);
+        case UnaryOpType::SIGNBIT:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (*input_dtype == DataType::INT32) {
+                return {"signbit_tile_int32_init();", fmt::format("signbit_tile_int32({});", idst)};
+            }
+            return make_simple("signbit", idst);
         case UnaryOpType::SILU: return make_simple("silu", idst);
         case UnaryOpType::SIN: return make_simple("sin", idst);
         case UnaryOpType::SQUARE: {
