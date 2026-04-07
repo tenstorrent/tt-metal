@@ -18,7 +18,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
 
 @pytest.fixture
 def device_with_program_cache(device):
-    # Enable program cache for the tests andd reset device cache on exit.
+    # Enable program cache for the tests and reset device cache on exit.
     device.enable_program_cache()
     device.clear_program_cache()
     try:
