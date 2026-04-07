@@ -15,6 +15,10 @@ on:
         description: "Repository to analyze workflow data from"
         type: string
         default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum issues to create (0 = unlimited, useful for testing)"
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -27,6 +31,7 @@ jobs:
       create-issues: ${{ inputs.create-issues }}
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
+      max-issues: ${{ inputs.max-issues }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
