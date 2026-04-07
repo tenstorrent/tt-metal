@@ -14,7 +14,6 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
-from models.demos.deepseek_v3.tt.generator import DEFAULT_MAX_SEQ_LEN
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import (
     DEFAULT_MAX_SEQ_LEN,

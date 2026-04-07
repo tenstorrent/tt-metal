@@ -242,13 +242,6 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
 
     assert len(results["generations"]) == expected_generations
 
-    requested_system_name = os.getenv("MESH_DEVICE")
-    assert requested_system_name is not None, "MESH_DEVICE must be set for demo tests"
-    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    expected_generations = min(len(prompts), case["max_users_per_row"] * int(mesh_shape[0]))
-
-    assert len(results["generations"]) == expected_generations
-
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.
     generated_lengths = [len(generation["tokens"]) for generation in results["generations"]]

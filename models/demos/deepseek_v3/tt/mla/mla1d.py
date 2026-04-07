@@ -1618,7 +1618,10 @@ class MLA1D(AbstractModule):
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after RMSNorm")
         wq_b_program_config = build_prefill_matmul_program_config(
-            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim
+            seq_len,
+            k=q_lora_rank,
+            n=num_heads_local * qk_head_dim,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
         _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after linear")
@@ -1635,7 +1638,11 @@ class MLA1D(AbstractModule):
 
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
         wkv_b1_program_config = build_prefill_matmul_program_config(
-            seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q_nope = ttnn.linear(
             tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
@@ -1691,7 +1698,11 @@ class MLA1D(AbstractModule):
             _print_memory_stats(device, "_run_wkv_b2_prefill_matmul pad")
 
             wkv_b2_program_config = build_prefill_matmul_program_config(
-                padded_chunk_seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
+                padded_chunk_seq_len,
+                k=kv_lora_rank,
+                n=v_head_dim,
+                batch=num_heads_padded,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
             )
             v_out_chunk = ttnn.linear(v_out_chunk_input, **cfg["wkv_b2"], program_config=wkv_b2_program_config)
             _print_memory_stats(device, "_run_wkv_b2_prefill_matmul linear wkv_b2")
