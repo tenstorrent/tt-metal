@@ -100,7 +100,7 @@ class TtLingbotVA:
             save_dir = lingbot_demo._SCRIPT_DIR
         config.save_root = str(save_dir)
 
-        models = lingbot_demo._load_models_phase1(config, load_text_encoder=False, mesh_device=mesh_device)
+        models = lingbot_demo._load_models_phase1(config, mesh_device=mesh_device)
         state: dict = {}
         prompt = message.get("prompt", "")
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
