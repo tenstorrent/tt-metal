@@ -43,6 +43,8 @@
 // Checkpoint state lives at a fixed L1 address (start of MEM_LLK_DEBUG region).
 // Uses per-RISC byte flags (not a shared bitmask) to avoid read-modify-write
 // races — each RISC writes only its own byte.
+// Tensix cores (WH/BH): 5 RISCs (BRISC, NCRISC, TRISC0-2).
+// Quasar NEO is not yet supported — checkpoint init is only in Tensix firmware.
 constexpr uint32_t DEBUG_CHECKPOINT_MAX_RISCS = 5;
 struct debug_checkpoint_state_t {
     volatile uint32_t proceed;                             // Monotonically increasing epoch
@@ -138,7 +140,7 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
         DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " dest regs ===" << ENDL();
-        DEVICE_PRINT("=== CKPT {} dest regs ===\n", (uint32_t)checkpoint_id);
+        DEVICE_PRINT("=== CKPT {} dest regs ===\n", checkpoint_id);
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -158,7 +160,7 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
                         break;
                     default:
                         DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
-                        DEVICE_PRINT("Unsupported data format: {}\n", data_format_reg_field_value);
+                        DEVICE_PRINT("Unsupported data format: {}\n", (DataFormat)data_format_reg_field_value);
                         break;
                 }
                 row++;
@@ -173,7 +175,7 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
     // so each RISC's view is different. Prefix with RISC index for disambiguation.
     uint32_t risc_idx = internal_::get_hw_thread_idx();
     DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " RISC" << risc_idx << " CBs ===" << ENDL();
-    DEVICE_PRINT("=== CKPT {} RISC{} CBs ===\n", (uint32_t)checkpoint_id, risc_idx);
+    DEVICE_PRINT("=== CKPT {} RISC{} CBs ===\n", checkpoint_id, risc_idx);
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
