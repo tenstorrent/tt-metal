@@ -180,6 +180,7 @@ def run_conv2d_short_sweep(
     config_tensors_in_dram=False,
     output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
     compute_config=None,  # ttnn compute config object
+    conv_config=None,  # optional pre-built ttnn.Conv2dConfig
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -258,7 +259,8 @@ def run_conv2d_short_sweep(
     )
 
     tt_bias_tensor = None
-    conv_config = ttnn.Conv2dConfig()
+    if conv_config is None:
+        conv_config = ttnn.Conv2dConfig()
     # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
     if config_tensors_in_dram:
         conv_config.config_tensors_in_dram = True

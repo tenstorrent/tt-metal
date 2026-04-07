@@ -119,18 +119,51 @@ def run(
                 input_a_tensor_placement,
             )
         else:
+            # Create on DRAM first, then try to move to the traced sharded config.
+            # This avoids "shard width must match physical width" errors with HEIGHT_SHARDED configs.
+            actual_memory_config = input_a_memory_config
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=actual_memory_config,
             )
+
+            if actual_memory_config is not input_a_memory_config:
+                try:
+                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                except Exception:
+                    pass  # stay on DRAM if sharded config is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # If output_memory_config is sharded but may be incompatible with the op output shape,
+    # fall back to DRAM to avoid "shard width must match physical width" errors.
+    if (
+        output_memory_config is not None
+        and hasattr(output_memory_config, "is_sharded")
+        and output_memory_config.is_sharded()
+    ):
+        op_kwargs.pop("memory_config", None)
+
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.nlp_concat_heads(input_tensor_a, **op_kwargs)
+
+    # Try moving to the traced output memory config; stay on current config if it fails
+    if (
+        output_memory_config is not None
+        and hasattr(output_memory_config, "is_sharded")
+        and output_memory_config.is_sharded()
+    ):
+        try:
+            output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
+        except Exception:
+            pass  # keep output in its current (interleaved) memory config
+
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
@@ -84,6 +84,17 @@ def run(
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs)
+
+    # scale_causal_mask_hw_dims_softmax_in_place needs memory_config paired with
+    # program_config for the kernel to compute correct block_w.  build_op_kwargs
+    # filters memory_config by default, so we add it back when a program_config
+    # is present.
+    output_memory_config = kwargs.get("output_memory_config") or kwargs.get("memory_config")
+    if output_memory_config is not None and isinstance(output_memory_config, dict):
+        output_memory_config = parse_dict_value("memory_config", output_memory_config)
+    if "program_config" in op_kwargs and output_memory_config is not None:
+        op_kwargs["memory_config"] = output_memory_config
+
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     # Scale factor (arg1 in JSON, passed as scalar by loader)

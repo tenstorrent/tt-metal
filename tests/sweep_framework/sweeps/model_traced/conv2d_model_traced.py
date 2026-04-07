@@ -150,6 +150,34 @@ def run(
             }
             parsed_dtype = dtype_map.get(dtype, ttnn.bfloat16)
 
+    # Build Conv2dConfig from traced kwargs if any config parameters are present
+    conv_config = None
+    conv_config_attrs = {
+        "shard_layout": kwargs.get("shard_layout"),
+        "act_block_h_override": kwargs.get("act_block_h_override"),
+        "act_block_w_div": kwargs.get("act_block_w_div"),
+        "transpose_shards": kwargs.get("transpose_shards"),
+        "enable_act_double_buffer": kwargs.get("enable_act_double_buffer"),
+        "enable_weights_double_buffer": kwargs.get("enable_weights_double_buffer"),
+        "deallocate_activation": kwargs.get("deallocate_activation"),
+        "reshard_if_not_optimal": kwargs.get("reshard_if_not_optimal"),
+        "override_sharding_config": kwargs.get("override_sharding_config"),
+        "output_layout": kwargs.get("output_layout"),
+        "enable_kernel_stride_folding": kwargs.get("enable_kernel_stride_folding"),
+        "enable_activation_reuse": kwargs.get("enable_activation_reuse"),
+        "full_inner_dim": kwargs.get("full_inner_dim"),
+    }
+    # Filter out None/absent values
+    conv_config_attrs = {k: v for k, v in conv_config_attrs.items() if v is not None and v != "__ABSENT__"}
+
+    if conv_config_attrs:
+        conv_config = ttnn.Conv2dConfig()
+        for attr, value in conv_config_attrs.items():
+            # Convert integer values where needed
+            if attr in ("act_block_h_override", "act_block_w_div"):
+                value = int(value)
+            setattr(conv_config, attr, value)
+
     # Call the short sweep function with parsed ttnn objects
     if is_conv1d:
         result = run_conv1d_short_sweep(input_specs, device)
@@ -160,6 +188,7 @@ def run(
             config_tensors_in_dram=config_tensors_in_dram,
             output_dtype=parsed_dtype,
             compute_config=parsed_compute_config,
+            conv_config=conv_config,
         )
 
     # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]

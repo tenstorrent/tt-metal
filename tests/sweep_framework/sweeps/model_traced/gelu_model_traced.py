@@ -108,10 +108,23 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                # Pre-validate shard spec core coords against device grid (TT_FATAL cannot be caught)
+                shard_fits_device = True
                 try:
-                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                    shard_spec = input_a_memory_config.shard_spec
+                    if shard_spec is not None:
+                        grid = device.compute_with_storage_grid_size()
+                        for cr in shard_spec.grid:
+                            if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                                shard_fits_device = False
+                                break
                 except Exception:
-                    pass  # Stay on DRAM if shard spec is incompatible
+                    shard_fits_device = False
+                if shard_fits_device:
+                    try:
+                        input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                    except Exception:
+                        pass  # Stay on DRAM if shard spec is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 

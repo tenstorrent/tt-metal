@@ -234,13 +234,13 @@ def run(
     program_config = None
     pc_dict = kwargs.get("program_config")
     if isinstance(pc_dict, dict):
-        # Check grid size before constructing program config
+        # Check grid dimensions AND total core count before constructing program config
         cg = pc_dict.get("compute_with_storage_grid_size", {})
         if isinstance(cg, dict):
             pc_x, pc_y = int(cg.get("x", 8)), int(cg.get("y", 8))
         else:
             pc_x, pc_y = 0, 0
-        if pc_x <= device_grid.x and pc_y <= device_grid.y:
+        if pc_x <= device_grid.x and pc_y <= device_grid.y and pc_x * pc_y <= device_cores:
             from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
 
             program_config = dict_to_program_config(pc_dict)
@@ -251,7 +251,7 @@ def run(
         else:
             grid = (8, 8)
 
-        if grid[0] * grid[1] <= device_cores:
+        if grid[0] <= device_grid.x and grid[1] <= device_grid.y and grid[0] * grid[1] <= device_cores:
             program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=int(program_config_q_chunk_size),

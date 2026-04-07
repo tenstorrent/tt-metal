@@ -232,9 +232,9 @@ def run(
         dtype_e = uit_info["dtype"]
         layout_e = uit_info["layout"]
         mem_config_e = uit_info["memory_config"]
-        torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=0, high=32, dtype=torch.float32), dtype_e)(
-            shape_e
-        )
+        # update_idxs_tensor holds sequence position indices - must be integers in [0, seq_len)
+        seq_len = max(1, shape_a[2])  # shape_a[2] is the sequence/cache length dimension
+        torch_input_e = torch.randint(0, seq_len, tuple(shape_e), dtype=torch.int32)
         update_idxs_tensor_ttnn = _to_ttnn(
             torch_input_e, dtype_e, layout_e, mem_config_e, "update_idxs_tensor_tensor_placement"
         )
@@ -246,9 +246,9 @@ def run(
         dtype_f = pt_info["dtype"]
         layout_f = pt_info["layout"]
         mem_config_f = pt_info["memory_config"]
-        torch_input_f = gen_func_with_cast_tt(partial(torch_random, low=0, high=1024, dtype=torch.float32), dtype_f)(
-            shape_f
-        )
+        # page_table holds page indices - must be integers in [0, num_pages)
+        num_pages = max(1, shape_a[0])  # shape_a[0] is the batch/page dimension of the cache
+        torch_input_f = torch.randint(0, num_pages, tuple(shape_f), dtype=torch.int32)
         page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, mem_config_f, "page_table_tensor_placement")
 
     start_time = start_measuring_time()

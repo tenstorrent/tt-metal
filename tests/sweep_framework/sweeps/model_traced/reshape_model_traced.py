@@ -133,6 +133,10 @@ def run(
 
     in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
+    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
+    if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
+        in_shape = (1, in_shape[0])
+
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         in_shape
     )

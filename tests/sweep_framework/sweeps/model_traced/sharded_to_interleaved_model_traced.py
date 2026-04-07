@@ -159,14 +159,21 @@ def run(
                 num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
                 if num_shards > num_cores:
                     shard_ok = False
-                # Also validate core coordinates fit device grid
+                # Validate all core coordinates fit within compute grid (excludes dispatch cores)
                 shard_grid = shard_spec.grid
                 for cr in shard_grid:
-                    if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                    if cr.start.x >= grid.x or cr.start.y >= grid.y or cr.end.x >= grid.x or cr.end.y >= grid.y:
                         shard_ok = False
                         break
+                # Also check total cores in shard grid don't exceed available compute cores
+                if shard_ok:
+                    total_shard_cores = 0
+                    for cr in shard_grid:
+                        total_shard_cores += (cr.end.x - cr.start.x + 1) * (cr.end.y - cr.start.y + 1)
+                    if total_shard_cores > num_cores:
+                        shard_ok = False
         except Exception:
-            pass
+            shard_ok = False
 
         if shard_ok:
             # Convert to sharded using the traced config
