@@ -24,10 +24,10 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -238,7 +238,7 @@ def test_multimodal_demo_text(
         model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
     )
 
-    generator = Generator(model, model_args, mesh_device)
+    generator = GemmaMultimodalGenerator(model, model_args, mesh_device)
 
     # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
     logger.info("Warming up model...")
