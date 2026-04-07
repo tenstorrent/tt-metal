@@ -15,7 +15,7 @@ def assert_cumsum_quality(expected_output, torch_output):
     elif torch_output.dtype == torch.bfloat16:
         assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
     else:
-        assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-6)
+        assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-4)
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):

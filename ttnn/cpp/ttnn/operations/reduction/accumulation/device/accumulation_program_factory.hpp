@@ -26,7 +26,7 @@ struct AccumulationProgramFactory {
     enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
         SRC = tt::CBIndex::c_0,
         DST = tt::CBIndex::c_1,
-        ACC = tt::CBIndex::c_3
+        ACC = tt::CBIndex::c_2
     };
 
     static constexpr std::array<const char*, 3> KERNEL_PATHS{

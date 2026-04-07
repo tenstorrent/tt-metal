@@ -25,9 +25,9 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_acc_obj(cb_acc);  // note: only used in compute kernel
+    experimental::CircularBuffer cb_in_obj(CB_IN);
+    experimental::CircularBuffer cb_out_obj(CB_OUT);
+    experimental::CircularBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
 
     BINARY_OP_INIT();
 
@@ -42,10 +42,10 @@ void kernel_main() {
         // This is necessary to avoid data-races on cb_acc
         cb_acc_obj.wait_front(ONE_TILE);
         cb_acc_obj.pop_front(ONE_TILE);
-        unary_op_init_common(cb_acc, cb_acc);
+        unary_op_init_common(CB_ACC, CB_ACC);
 
         tile_regs_acquire();
-        reconfig_data_format(cb_acc, cb_acc);
+        reconfig_data_format(CB_ACC, CB_ACC);
 
         fill_tile_init();
         fill_tile(DST_ACC, default_acc_value);
@@ -55,11 +55,11 @@ void kernel_main() {
         tile_regs_wait();
 
         // out_of_order_output to keep packing to cb_acc at the same location
-        pack_reconfig_data_format(cb_acc);
-        pack_tile(DST_ACC, cb_acc);
+        pack_reconfig_data_format(CB_ACC);
+        pack_tile(DST_ACC, CB_ACC);
         tile_regs_release();
 
-        binary_op_init_common(cb_in, cb_acc, cb_out);
+        binary_op_init_common(CB_IN, CB_ACC, CB_OUT);
 
         cb_acc_obj.reserve_back(ONE_TILE);
         cb_acc_obj.push_back(ONE_TILE);
@@ -72,13 +72,13 @@ void kernel_main() {
             tile_regs_acquire();
             cb_in_obj.wait_front(ONE_TILE);
 
-            reconfig_data_format(cb_in, cb_in);
-            copy_tile_to_dst_init_short(cb_in);
-            copy_tile(cb_in, 0, DST_IN);
+            reconfig_data_format(CB_IN, CB_IN);
+            copy_tile_to_dst_init_short(CB_IN);
+            copy_tile(CB_IN, 0, DST_IN);
 
-            reconfig_data_format(cb_acc, cb_acc);
-            copy_tile_to_dst_init_short(cb_acc);
-            copy_tile(cb_acc, 0, DST_ACC);
+            reconfig_data_format(CB_ACC, CB_ACC);
+            copy_tile_to_dst_init_short(CB_ACC);
+            copy_tile(CB_ACC, 0, DST_ACC);
 
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);
 
@@ -89,12 +89,12 @@ void kernel_main() {
             tile_regs_wait();
 
             cb_out_obj.reserve_back(ONE_TILE);
-            pack_reconfig_data_format(cb_acc, cb_out);  // Needed for fp32_acc_to_dest=True
-            pack_tile(DST_ACC, cb_out);
+            pack_reconfig_data_format(CB_ACC, CB_OUT);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, CB_OUT);
             cb_out_obj.push_back(ONE_TILE);
 
-            pack_reconfig_data_format(cb_out, cb_acc);  // Needed for fp32_acc_to_dest=True
-            pack_tile(DST_ACC, cb_acc);
+            pack_reconfig_data_format(CB_OUT, CB_ACC);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, CB_ACC);
 
             tile_regs_release();
 

@@ -97,21 +97,24 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dst[static_cast<unsigned>(AccumulationCB::ACC)] = UnpackToDestMode::UnpackToDestFp32;
 
+    if (input_dataformat != DataFormat::Float16_b) {
+        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     std::map<std::string, std::string> defines_kernel_args = {};
 
     if (is_integer_format(dst_cb_data_format)) {
         defines_kernel_args["BINARY_OP_INIT"] = operation_attributes.op == AccumulationOp::CUMSUM
                                                     ? "add_int_tile_init"
                                                     : "mul_int_tile_init<DataFormat::Int32>";
-        defines_kernel_args["BINARY_OP"] =
-            operation_attributes.op == AccumulationOp::CUMSUM ? "add_int_tile" : "mul_int_tile<DataFormat::Int32>";
-        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
+        defines_kernel_args["BINARY_OP"] = operation_attributes.op == AccumulationOp::CUMSUM
+                                               ? "add_int_tile<DataFormat::Int32>"
+                                               : "mul_int_tile<DataFormat::Int32>";
     } else {
         defines_kernel_args["BINARY_OP_INIT"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile_init" : "mul_binary_tile_init";
         defines_kernel_args["BINARY_OP"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile" : "mul_binary_tile";
-        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     float default_acc_value = 0.f;

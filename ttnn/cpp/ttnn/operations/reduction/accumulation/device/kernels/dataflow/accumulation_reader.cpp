@@ -28,9 +28,9 @@ void kernel_main() {
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
     experimental::Noc noc;
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_in_obj(CB_IN);
 
-    const uint32_t ublock_size_bytes = get_tile_size(cb_in);
+    const uint32_t ublock_size_bytes = get_tile_size(CB_IN);
     const uint32_t input_tile_bytes = ublock_size_bytes;
 
     const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr, input_tile_bytes);
