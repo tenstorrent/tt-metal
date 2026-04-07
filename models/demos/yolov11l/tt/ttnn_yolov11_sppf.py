@@ -34,7 +34,12 @@ class TtnnSPPF:
     def __init__(self, device, parameter, conv_pt):
         self.parameter = parameter
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
+        self.cv2 = TtnnConv(
+            device,
+            parameter.cv2,
+            conv_pt.cv2,
+            reshard=False,
+        )
 
     def __call__(self, device, x, use_sharded_concat=True):
         x = self.cv1(device, x)
@@ -79,24 +84,9 @@ class TtnnSPPF:
             dilation=[1, 1],
         )
         if use_sharded_concat:
-            y = sharded_concat([x1, m1, m2, m3], to_interleaved=False)
+            y = sharded_concat([x1, m1, m2, m3], to_interleaved=True)
         else:
             y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # cv2 (reshard=True) uses conv2d_L1, which rejects activations whose storage is still INTERLEAVED at the C++
-        # tensor level. Python memory_config can disagree with that; normalize by round-tripping sharded → interleaved
-        # → height-sharded when needed, else interleaved → sharded.
-        num_cores = 64
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-        shard_height = (y.shape[2] + num_cores - 1) // num_cores
-        y_shard = ttnn.create_sharded_memory_config(
-            (shard_height, y.shape[-1]),
-            core_grid=shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        if y.is_sharded():
-            y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
-        y = ttnn.interleaved_to_sharded(y, y_shard)
         x = self.cv2(device, y)
         deallocate_tensors(x1, m1, m2, m3)
         return x
