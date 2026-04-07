@@ -854,20 +854,33 @@ class WanVAEDecoderWrapper:
     def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
         self.cleanup_all()
 
-    def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        """Decode latents (B, C, T, H, W) to video (B, C, T, H, W). Latents are normalized with mean/std before calling."""
-        latents = latents.to(self.vae.dtype)
-        tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
-        tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
-        tt_latents_BTHWC, logical_h = conv_pad_height(tt_latents_BTHWC, self.parallel_config.height_parallel.factor)
-        tt_latents_BTHWC = ttnn.from_torch(
-            tt_latents_BTHWC,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-        )
+    def decode(self, latents: ttnn.Tensor) -> torch.Tensor:
+        """Decode **denormalized** latents ``(B, C, T, H, W)`` on device to a **torch** video ``(B, C, T, H, W)``.
+
+        ``latents`` must be a ``ttnn.Tensor`` on ``self.mesh_device`` (typically BCTHW bf16), same scale as
+        reference ``vae.decode`` input after ``latents / latents_std + latents_mean``. Host readback uses
+        :func:`~models.experimental.lingbot_va.tests.mesh_utils.vae_bcthw_to_torch`; crop, patch unshuffle,
+        and clamp run on CPU ``torch`` tensors (same as reference).
+        """
         tt_video_BCTHW = None
+        tt_latents_BTHWC = None
         try:
+            x = latents
+            if x.dtype != ttnn.bfloat16:
+                x = ttnn.typecast(latents, ttnn.bfloat16)
+            tt_latents_BTHWC = ttnn.permute(x, (0, 2, 3, 4, 1))
+            if x is not latents:
+                _safe_deallocate_tensor(x, "decode ttnn dtype cast")
+            prev = tt_latents_BTHWC
+            tt_latents_BTHWC = _conv_pad_in_channels_ttnn(tt_latents_BTHWC)
+            if prev is not tt_latents_BTHWC:
+                _safe_deallocate_tensor(prev, "decode ttnn pre C pad")
+            prev = tt_latents_BTHWC
+            tt_latents_BTHWC, logical_h = _conv_pad_height_ttnn(
+                tt_latents_BTHWC, self.parallel_config.height_parallel.factor
+            )
+            if prev is not tt_latents_BTHWC:
+                _safe_deallocate_tensor(prev, "decode ttnn pre H pad")
             tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
             ttnn.synchronize_device(self.mesh_device)
             video_torch = vae_bcthw_to_torch(tt_video_BCTHW, self.mesh_device, self.parallel_config, self.ccl_manager)
