@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -206,6 +206,8 @@ class MLA2D(MLA1D):
         batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
         x_out = super().forward_prefill(
             x_next,
+            batch_idx=batch_idx % batch_size_per_row,
+            row_idx=batch_idx // batch_size_per_row,
             batch_idx=batch_idx % batch_size_per_row,
             row_idx=batch_idx // batch_size_per_row,
             cfg=cfg["mla1d"],

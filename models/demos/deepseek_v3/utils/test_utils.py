@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import itertools
 import os
 from copy import deepcopy
@@ -516,7 +517,7 @@ def get_model_config(
     else:
         raise ValueError(f"Unsupported mode: {mode}. Supported modes are 'prefill' and 'decode'.")
 
-    if mode == "decode" and batch_size_per_row is not None:
+    if batch_size_per_row is not None and "batch_size_per_row" in inspect.signature(config_fn).parameters:
         kwargs.setdefault("batch_size_per_row", batch_size_per_row)
 
     return config_fn(*args, **kwargs)

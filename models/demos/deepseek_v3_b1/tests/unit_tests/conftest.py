@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,21 @@ _REF_HF_O_PROJ = (7168, 16384)
 _REF_HF_KV_B = (32768, 512)
 _REF_HF_SHARED_GATE_UP = (2048, 7168)
 _REF_K = 7168
+
+
+# This is a workaround to avoid hanging when crashing during tests since __repr__ is called on traceback, which causes
+# tensors to be brought back to host which is very slow in slow-dispatch mode.
+def _safe_tensor_repr(self):
+    try:
+        return f"ttnn.Tensor(shape={self.shape}, dtype={self.dtype}, layout={self.layout})"
+    except Exception:
+        return object.__repr__(self)
+
+
+try:
+    ttnn.Tensor.__repr__ = _safe_tensor_repr
+except (TypeError, AttributeError):
+    pass
 
 
 def _scaled_randn(*shape, generator, dtype=torch.bfloat16):

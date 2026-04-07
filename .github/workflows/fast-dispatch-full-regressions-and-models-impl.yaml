@@ -47,6 +47,7 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
+            {"model":"bge_m3"},
             {"model":"common_models"},
             {"model":"functional_unet"},
             {"model":"ttt-llama3.2-1B"},
@@ -71,7 +72,7 @@ jobs:
             {"model":"retinanet"},
             {"model":"ufld_v2"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout": 100},
+            {"model":"stable_diffusion_xl_base","timeout": 120},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
@@ -401,7 +402,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
-          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '7,7' || '' }}
         run: |
           $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
       - name: Prepare Tracy reports

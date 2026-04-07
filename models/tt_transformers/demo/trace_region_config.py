@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -100,6 +100,9 @@ def get_supported_trace_region_size(request, mesh_device):
             "P300": 90000000,
             "P150x4": 90000000,
             "P150x8": 90000000,
+        },
+        "Llama-3.2-90B": {
+            "T3K": 20000000,
         },
         "Qwen3-32B": {
             "T3K": 90000000,

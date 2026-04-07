@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -386,6 +386,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // log scale
     log_debug(tt::LogOp, "scale: {}", scale_union.f);
 
+    // Enable per-head zigzag for load balancing in balanced causal mode
+    // Requires even num_q_chunks for symmetric light/heavy work distribution
+    const bool enable_zigzag_balancing = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -409,7 +413,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         qk_out_subblock_h,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -462,6 +467,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)use_streaming_compute,
         args.is_causal,
         args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing),
+        (std::uint32_t)out_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -518,7 +525,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -690,6 +698,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
+
+        // Signal CB (c_12): compute signals writer when last K-chunk starts.
+        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+        constexpr uint32_t signal_page_size = 16;
+        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
+                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
+        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();

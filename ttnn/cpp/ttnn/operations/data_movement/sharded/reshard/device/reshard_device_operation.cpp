@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -182,7 +182,7 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
-            input_tensor.layout(),
+            PageConfig(input_tensor.layout()),
             args.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));

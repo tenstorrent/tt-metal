@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
@@ -68,6 +69,7 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     }
 
     std::memset(ptr, 0, size);
+    ShmResourceTracker::instance().track_shm(name);
     return NamedShm(name, ptr, size);
 }
 
@@ -108,8 +110,11 @@ void NamedShm::close() {
 void NamedShm::unlink() {
     close();
     if (!name_.empty()) {
-        shm_unlink(name_.c_str());
-        name_.clear();
+        int rc = shm_unlink(name_.c_str());
+        if (rc == 0 || errno == ENOENT) {
+            ShmResourceTracker::instance().untrack_shm(name_);
+            name_.clear();
+        }
     }
 }
 

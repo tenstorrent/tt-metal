@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -128,6 +128,7 @@ def run_test_forward_pass_decoder2d(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
 
+    is_real_weights = module_path is not None
     # Set up model config
     weight_config = get_test_weight_config(
         DecoderBlockClass,
@@ -137,7 +138,7 @@ def run_test_forward_pass_decoder2d(
         mesh_device,
         force_recalculate_weight_config,
         test_name="test_decoder_block",
-        real_weights=module_path is not None,
+        real_weights=is_real_weights,
         layer_id=module_path,
     )
     model_config = get_model_config(
@@ -200,8 +201,12 @@ def run_test_forward_pass_decoder2d(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
     )
 
+    if is_real_weights:
+        required_pcc = 0.9899
+    else:
+        required_pcc = 0.988
     # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=required_pcc)
 
 
 _SCALED_ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)

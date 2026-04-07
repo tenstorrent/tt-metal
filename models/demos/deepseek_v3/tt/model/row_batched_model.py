@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -133,7 +133,12 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             "lm_head": LMHead1D.prefill_model_config(mesh_device),
         }
         if cls._has_mtp_layer(hf_config):
-            model_cfg["mtp"] = MTP2D.prefill_model_config(hf_config, mesh_device, get_fabric_config())
+            model_cfg["mtp"] = MTP2D.prefill_model_config(
+                hf_config,
+                mesh_device,
+                get_fabric_config(),
+                batch_size_per_row=batch_size_per_row,
+            )
         return model_cfg
 
     @classmethod

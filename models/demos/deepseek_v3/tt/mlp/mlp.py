@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -165,9 +165,10 @@ class MLP(AbstractModule):
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
+        grid_size = mesh_device.compute_with_storage_grid_size()
         matmul_core_grid_size = ttnn.CoreCoord(
-            mesh_device.core_grid.x,
-            mesh_device.core_grid.y,
+            grid_size.x,
+            grid_size.y,
         )  # NOTE: we might modify this later during optimization stage
 
         # Calculate device metrics
@@ -239,7 +240,8 @@ class MLP(AbstractModule):
 
         # Calculate device metrics
         _, mesh_width = mesh_device.shape
-        max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        max_num_cores = grid_size.x * grid_size.y
         input_num_cores = input_num_cores or max(
             get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores)
         )
@@ -363,7 +365,7 @@ class MLP(AbstractModule):
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
                 activation_sharding_num_cores,
-                ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y),
+                mesh_device.compute_with_storage_grid_size(),
                 row_wise=True,
             ),
             strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,

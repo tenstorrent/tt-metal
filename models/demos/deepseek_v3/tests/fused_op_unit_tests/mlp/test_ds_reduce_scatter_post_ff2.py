@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -366,7 +366,9 @@ def _build_reduce_scatter_inputs(
         output_num_cores = max(
             get_activation_sharding_core_counts_for_dram_matmul(even_int_div(dim, mesh_width), max_num_cores)
         )
-        input_memory_config = MLP._get_decode_activation_memory_config(dim, output_num_cores, mesh_device)
+        input_memory_config = MLP._get_decode_activation_memory_config(
+            dim, output_num_cores, mesh_device, batch_size_per_row=USERS_PER_ROW
+        )
     else:
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 

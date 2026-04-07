@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,28 +83,30 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
+    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -166,6 +168,8 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
+    TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
+    TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -622,6 +626,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->enable_2_erisc_mode = false;
             break;
 
+        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
+        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
+        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
+            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
+            break;
+
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
         // Default: false (uses MGD 1.0)
@@ -685,6 +697,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (use SFPLOADMACRO instructions)
         // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
         case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
+
+        // TT_METAL_DRAM_BACKED_CQ
+        // Store command queues in device DRAM.
+        // Default: false (use hugepages)
+        // Usage: export TT_METAL_DRAM_BACKED_CQ=1
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
 
         // ========================================
         // PROFILING & PERFORMANCE
@@ -1204,6 +1222,29 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.serialize_on_dispatch_timeout = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.serialize_on_dispatch_timeout = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS
+        // Controls whether tensor specs are captured on every op dispatch.
+        // Default: true (enabled). Set to 0 to disable.
+        // Usage: export TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS=1
+        case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS:
+            this->inspector_settings.capture_tensor_specs = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.capture_tensor_specs = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES
+        // Enables logging of runtime entries (operation name, parameters, runtime ID) to YAML.
+        // WARNING: This is expensive and will cause significant log file growth.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES:
+            this->inspector_settings.log_runtime_entries = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_runtime_entries = true;
             }
             break;
 
