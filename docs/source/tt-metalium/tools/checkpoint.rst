@@ -18,14 +18,28 @@ circular buffer state visible to each one.
 Enabling
 --------
 
-Checkpoints are automatically enabled when DPRINT is enabled. Set the ``TT_METAL_DPRINT_CORES``
-environment variable as described in :doc:`kernel_print`:
+**Checkpoints** (synchronized barriers) are enabled with:
+
+.. code-block:: bash
+
+    export TT_METAL_CHECKPOINT=1
+
+Without a print backend, checkpoints act as barriers only (no dump output). To get CB dump
+output, also enable DPRINT or DEVICE_PRINT:
+
+.. code-block:: bash
+
+    export TT_METAL_CHECKPOINT=1
+    export TT_METAL_DPRINT_CORES=0,0
+
+**Standalone dump utilities** (``debug_dump_cb``, ``debug_dump_l1``, etc.) require only DPRINT
+or DEVICE_PRINT — no ``TT_METAL_CHECKPOINT`` needed:
 
 .. code-block:: bash
 
     export TT_METAL_DPRINT_CORES=0,0
 
-When DPRINT is disabled, all checkpoint macros are no-ops with zero overhead.
+When neither is set, all dump functions and checkpoint macros are no-ops with zero overhead.
 
 Usage
 -----
@@ -157,6 +171,75 @@ The CB metadata fields are:
 - **ack**: tiles acked (consumed)
 - **rcv**: tiles received (produced)
 
+Standalone Dump Utilities
+-------------------------
+
+In addition to the full checkpoint barrier, standalone dump functions are available for quick
+inspection of individual CBs or arbitrary L1 memory. These can be called from any kernel at any
+point — no barrier or synchronization required. Include ``api/debug/dump.h``.
+
+``debug_dump_cb(cb_id, num_words)``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Prints CB metadata and optionally raw hex data starting at the read pointer. Available on
+BRISC, NCRISC, TRISC0, and TRISC2 (not TRISC1/Math, which cannot access CB interfaces).
+
+.. code-block:: c++
+
+    #include "api/debug/dump.h"
+
+    debug_dump_cb(0);       // CB0 metadata only
+    debug_dump_cb(0, 8);    // CB0 metadata + 8 hex words from read pointer
+    debug_dump_cb(16, 4);   // CB16 metadata + 4 hex words
+
+Output:
+
+.. code-block:: text
+
+    CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
+      [0] 3f800000 40000000 40400000 40800000
+      [4] 40a00000 40c00000 40e00000 41000000
+
+``debug_dump_cb_typed(cb_id, tile_idx)``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Prints tile data interpreted according to the CB's data format, showing actual float/int values.
+Uses TileSlice internally. DPRINT only (not supported with DEVICE_PRINT).
+
+Available on TRISC0 (Unpack), TRISC2 (Pack), BRISC, and NCRISC. On BRISC/NCRISC, an additional
+``cb_type`` parameter specifies whether the CB is an input or output.
+
+.. code-block:: c++
+
+    // On TRISC0 (Unpack) or TRISC2 (Pack):
+    debug_dump_cb_typed(0, 0);              // CB0, tile 0, untilized
+
+    // On BRISC or NCRISC (need to specify input vs output):
+    debug_dump_cb_typed(0, 0, TSLICE_INPUT_CB);   // CB0 as input CB
+    debug_dump_cb_typed(16, 0, TSLICE_OUTPUT_CB);  // CB16 as output CB
+
+``debug_dump_l1(addr, num_words)``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hex-dumps arbitrary L1 memory. Available from all RISCs. Useful for inspecting semaphores,
+scratch space, or any L1 region.
+
+.. code-block:: c++
+
+    debug_dump_l1(0x100000, 16);   // 16 words starting at L1 address 0x100000
+
+Output:
+
+.. code-block:: text
+
+    L1[0x100000] 16 words:
+      [0x100000] 3f800000 40000000 40400000 40800000
+      [0x100010] 40a00000 40c00000 40e00000 41000000
+      [0x100020] 41100000 41200000 41300000 41400000
+      [0x100030] 41500000 41600000 41700000 41800000
+
+All three functions are no-ops when DPRINT/DEVICE_PRINT is not enabled.
+
 Comparison with dprint_tensix_dest_regs
 ---------------------------------------
 
@@ -207,8 +290,10 @@ Files
    * - File
      - Purpose
    * - ``tt_metal/hw/inc/api/debug/checkpoint.h``
-     - User API, barrier logic, CB dump, dest reg dump
+     - Checkpoint API: barrier logic, CB dump, dest reg dump
+   * - ``tt_metal/hw/inc/api/debug/dump.h``
+     - Standalone dump utilities: ``debug_dump_cb``, ``debug_dump_cb_typed``, ``debug_dump_l1``
    * - ``tt_metal/jit_build/build.cpp``
-     - Adds ``-DDEBUG_CHECKPOINT_ENABLED`` when DPRINT is on
+     - ``TT_METAL_CHECKPOINT`` env var enables ``-DDEBUG_CHECKPOINT_ENABLED``
    * - ``tt_metal/hw/firmware/src/tt-1xx/brisc.cc``
      - Calls ``debug_checkpoint_init()`` before kernel launch
