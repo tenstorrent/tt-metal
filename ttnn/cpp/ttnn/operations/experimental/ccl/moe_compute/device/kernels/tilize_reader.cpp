@@ -949,14 +949,8 @@ void kernel_main() {
         l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
         noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
 
-        auto* expert_counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
-        for (uint32_t i = 0; i < experts_per_device; ++i) {
-            DPRINT << "tilize expert: " << i << " counts " << expert_counts_ptr[i] << "\n";
-        }
-
         // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
         // (drain core only issued these writes)
-
         noc_async_write_barrier();
 
         // signal to A2A combine that metadata is available

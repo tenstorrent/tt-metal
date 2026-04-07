@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from models.demos.deepseek_v3.tt.moe import cluster_distance, map_shared_experts
+from ttnn.experimental.moe.utils import cluster_distance, map_shared_experts
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     get_mesh_mapper,
     gen_tensors,

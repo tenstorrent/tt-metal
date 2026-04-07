@@ -225,10 +225,6 @@ void kernel_main() {
         token_split_offsets[e] = token_counts_l1_ptr[num_local_experts + e];
         token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
         token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
-
-        DPRINT << "expert: " << e << " split offset " << token_split_offsets[e]
-               << " split counts: " << token_split_counts[e] << " activation offset: " << token_activation_offsets[e]
-               << "\n";
     }
     cb_pop_front(token_counts_cb_id, 1);
 
@@ -267,14 +263,10 @@ void kernel_main() {
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
-        if (e == 2) {
-            DPRINT << "COMBINE DOING SHARED \n";
-        }
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
-        DPRINT << "COMBINE WRITER EXPERT: " << e << "\n";
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
@@ -343,8 +335,6 @@ void kernel_main() {
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
-        DPRINT << "COMBINE WRITER SYNC TEARDOWN \n";
-
         fabric_multicast_bidirectional_atomic_inc_ring_1d<
             linearized_mesh_coord,
             mesh_rows,
@@ -371,7 +361,6 @@ void kernel_main() {
             Num_Directions,
             fabric_mux_num_buffers_per_channel,
             fabric_mux_termination_signal_address>(directions, fabric_connections, false);
-        DPRINT << "COMBINE WRITER WORKER TEARDOWN \n";
 
         const uint64_t safe_termination_sync_address = safe_get_noc_addr(
             sync_args.termination_master_noc_x,

@@ -17,7 +17,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
-    get_shared_experts_per_device,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (

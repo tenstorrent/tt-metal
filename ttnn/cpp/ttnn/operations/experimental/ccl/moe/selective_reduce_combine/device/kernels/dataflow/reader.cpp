@@ -181,9 +181,6 @@ void kernel_main() {
         token_counts_l1_ptr[num_local_experts + e] = token_split_offsets[e];
         token_counts_l1_ptr[num_local_experts + num_local_experts + e] = token_split_counts[e];
         token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e] = token_activation_offsets[e];
-
-        // DPRINT<<"expert: "<<e" split offset "<<token_split_offsets[e]<<" split counts: "<<token_split_counts[e]<<"
-        // activation offset: "<<token_activation_offsets[e]<<"\n";
     }
 
     cb_push_back(token_counts_cb_id, 1);

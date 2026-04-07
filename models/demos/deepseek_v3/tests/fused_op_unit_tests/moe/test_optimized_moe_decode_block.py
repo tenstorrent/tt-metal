@@ -2,17 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import random
 
 import pytest
 import torch
 from loguru import logger
+from ttnn.experimental.moe.utils import (
+    add_shared_expert_weights,
+    get_shared_experts_per_device,
+    map_shared_experts,
+    prepare_w0_w1_tensor,
+    prepare_w2_tensor,
+)
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.deepseek_v3.tt.experts import add_shared_expert_weights
-from models.demos.deepseek_v3.tt.moe import map_shared_experts
-from models.demos.deepseek_v3.utils.config_helpers import get_shared_experts_per_device
 from tests.nightly.tg.ccl.moe.test_all_to_all_dispatch_metadata_6U import get_shared_expert_to_device_map
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
@@ -47,10 +52,6 @@ def create_torch_w0_tensors(L, E, H, N):
         torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w0_tensors.append(torch_w0)
 
-    #     torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    #     for e in range(E):
-    #         torch_w0_tensors.append(torch_w0.clone())
-
     # [E, L, 1, H, N]
     return torch_w0_tensors
 
@@ -61,10 +62,6 @@ def create_torch_w1_tensors(L, E, H, N):
         torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w1_tensors.append(torch_w1)
 
-    #     torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    #     for e in range(E):
-    #         torch_w1_tensors.append(torch_w1.clone())
-
     # [E, L, 1, H, N]
     return torch_w1_tensors
 
@@ -74,10 +71,6 @@ def create_torch_w2_tensors(L, E, N, H):
     for e in range(E):
         torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
         torch_w2_tensors.append(torch_w2)
-
-    #     torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
-    #     for e in range(E):
-    #         torch_w2_tensors.append(torch_w2.clone())
 
     # [E, L, 1, N, H]
     return torch_w2_tensors
@@ -616,18 +609,17 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
     return [expert_tensor[:, i : i + 1, ...] for i in range(num_experts)]
 
 
-# @pytest.mark.requires_device(["QUAD"])
-# @pytest.mark.skipif(
-#     (os.getenv("USE_TORUS_MODE") is None),
-#     reason=f"Requires ring fabric",
-# )
+@pytest.mark.requires_device(["QUAD"])
+@pytest.mark.skipif(
+    (os.getenv("USE_TORUS_MODE") is None),
+    reason=f"Requires ring fabric",
+)
 @pytest.mark.parametrize(
-    "mesh_shape, root_mesh_device",
+    "mesh_shape, mesh_device",
     [
-        pytest.param((16, 1), (16, 1), id="16x1_grid"),
-        #        pytest.param((16, 8), (16, 8), id="16x8_grid"),
+        pytest.param((16, 8), (16, 8), id="16x8_grid"),
     ],
-    indirect=["root_mesh_device"],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
@@ -645,7 +637,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("num_iterations", [2])
+@pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -662,7 +654,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 @torch.no_grad()
 def test_optimized_moe_decode_block(
     mesh_shape,
-    root_mesh_device,
+    mesh_device,
     cluster_axis,
     layer_id,
     num_layers,
@@ -686,8 +678,6 @@ def test_optimized_moe_decode_block(
     ############################################
     # initial setup
     ############################################
-
-    mesh_device = root_mesh_device
 
     torch.manual_seed(42)
     random.seed(42)
