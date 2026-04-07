@@ -112,7 +112,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         emb_dim_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
@@ -120,8 +119,10 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
+        num_experts,
         emb_dim_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -157,7 +158,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
 
         std::vector<uint32_t> reader_runtime_args = {
             combine_buffer->address(),
-            weight_buffer->address(),
             token_start,
         };
 
@@ -166,6 +166,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         };
 
         std::vector<uint32_t> writer_runtime_args = {
+            weight_buffer->address(),
             output_buffer->address(),
             token_start,
         };
@@ -205,10 +206,10 @@ void DeepseekMoEPostCombineReduceProgramFactory::override_runtime_arguments(
     for (const auto& core : cores) {
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
         reader_runtime_args[0] = combine_buffer->address();
-        reader_runtime_args[1] = weight_buffer->address();
 
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_runtime_args[0] = output_buffer->address();
+        writer_runtime_args[0] = weight_buffer->address();
+        writer_runtime_args[1] = output_buffer->address();
     }
 }
 
