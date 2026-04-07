@@ -15,6 +15,10 @@ on:
         description: "Repository to analyze workflow data from"
         type: string
         default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum issues to create (0 = unlimited, useful for testing)"
+        type: number
+        default: 0
 
 permissions:
   contents: read
