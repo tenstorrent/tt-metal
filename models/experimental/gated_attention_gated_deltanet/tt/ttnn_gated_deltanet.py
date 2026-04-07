@@ -474,13 +474,13 @@ def gated_deltanet_forward_ttnn(
     # 1. Linear projections — fused QKV when available (1 matmul instead of 3)
     ckc = compute_kernel_config
 
-    # Mega-fused decode path: one matmul for QKV + a + b + g, fused conv on QKV
+    # Mega-fused path: one matmul for QKV + a + b + g instead of 3-5 separate matmuls.
+    # Works for both decode (T=1) and prefill (T>1). Conv path differs by T.
     use_mega_fused = (
-        T == 1
-        and mega_fused_weight is not None
-        and fused_conv_weight_taps is not None
-        and fused_conv_state is not None
+        mega_fused_weight is not None
         and mega_qkv_dim is not None
+        and (T == 1 or fused_conv_weight_taps is not None)  # T>1 needs fused conv taps for FIR path
+        and (T > 1 or (fused_conv_state is not None and fused_conv_weight_taps is not None))  # T=1 needs conv state
     )
 
     # Fused conv decode path: keep QKV concatenated through conv, split after
@@ -494,7 +494,8 @@ def gated_deltanet_forward_ttnn(
     )
 
     if use_mega_fused:
-        # Single matmul for everything: [B, 1, 4096] × [4096, 12352]
+        # Single matmul for everything: [B, T, 4096] × [4096, 12352] → [B, T, 12352]
+        # Saves 2 matmul launches vs separate QKV + ab + g projections.
         mega_out = ttnn.linear(hidden_states, mega_fused_weight, memory_config=mc, compute_kernel_config=ckc)
         # Split: QKV | a | b | g
         qkv = mega_out[:, :, :mega_qkv_dim]
@@ -507,8 +508,30 @@ def gated_deltanet_forward_ttnn(
         gate_raw = ttnn.to_layout(gate_raw, ttnn.TILE_LAYOUT)
         ttnn.deallocate(mega_out)
 
-        # Fused conv1d on QKV — prefer split state (eliminates slice+to_layout ops)
-        if fused_conv_state_split is not None:
+        # Fused conv1d on QKV — route by T
+        if T > 1:
+            # Prefill: FIR decomposition conv on concatenated QKV
+            qkv, new_fused_conv_state_raw = _causal_conv1d_fir(
+                qkv,
+                None,
+                None,
+                conv_kernel_size,
+                device,
+                memory_config=mc,
+                conv_state=fused_conv_state,
+                weight_taps=fused_conv_weight_taps,
+                bias_dev=fused_conv_bias_dev,
+            )
+            new_fused_conv_state = new_fused_conv_state_raw
+            # Extract per-stream conv states for decode transition
+            new_conv_q = new_fused_conv_state_raw[:, :, :q_dim]
+            new_conv_q = ttnn.to_layout(new_conv_q, ttnn.TILE_LAYOUT)
+            new_conv_k = new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim]
+            new_conv_k = ttnn.to_layout(new_conv_k, ttnn.TILE_LAYOUT)
+            new_conv_v = new_fused_conv_state_raw[:, :, q_dim + k_dim :]
+            new_conv_v = ttnn.to_layout(new_conv_v, ttnn.TILE_LAYOUT)
+        elif fused_conv_state_split is not None:
+            # Decode with split state (eliminates slice+to_layout ops)
             conv_fn = _causal_conv1d_decode_t1_split_inplace if use_inplace_state else _causal_conv1d_decode_t1_split
             qkv, new_fused_conv_state = conv_fn(
                 qkv,
@@ -519,7 +542,11 @@ def gated_deltanet_forward_ttnn(
                 weight_taps=fused_conv_weight_taps,
                 bias_dev=fused_conv_bias_dev,
             )
+            new_conv_q = None
+            new_conv_k = None
+            new_conv_v = None
         else:
+            # Decode with fused state
             conv_fn = _causal_conv1d_decode_t1_inplace if use_inplace_state else _causal_conv1d_decode_t1
             qkv, new_fused_conv_state = conv_fn(
                 qkv,
@@ -530,6 +557,10 @@ def gated_deltanet_forward_ttnn(
                 weight_taps=fused_conv_weight_taps,
                 bias_dev=fused_conv_bias_dev,
             )
+            new_conv_q = None
+            new_conv_k = None
+            new_conv_v = None
+
         # Split QKV after conv
         q = qkv[:, :, :q_dim]
         k = qkv[:, :, q_dim : q_dim + k_dim]
@@ -538,9 +569,6 @@ def gated_deltanet_forward_ttnn(
         k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
         v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
         ttnn.deallocate(qkv)
-        new_conv_q = None
-        new_conv_k = None
-        new_conv_v = None
 
         # Pre-extracted a, b, g from mega projection
         _mega_extracted = True
