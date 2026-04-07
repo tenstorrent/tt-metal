@@ -84,6 +84,8 @@ class TtGemmaModel(Transformer):
             )[: vision_output.shape[0], :]
 
             image_features = comp_vision_output.squeeze(0)
+            if self.args.embed_scale is not None:
+                image_features = image_features * self.args.embed_scale
             special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(tokens_embd)
             image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
