@@ -132,7 +132,7 @@ python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 
 **Environment variables**:
 - `BUG_CHECKER_API_KEY` or `ANTHROPIC_API_KEY` — Claude API key
-- `BUG_CHECKER_MODEL` — Override the default model (default: `claude-sonnet-4-20250514`)
+- `BUG_CHECKER_MODEL` — Override the default model (default: `claude-sonnet-4-6`)
 
 ## Adding a New Rule
 
@@ -169,7 +169,7 @@ good_code();
        file: your-rule-name.md
        severity: warning       # "blocking" fails the check, "warning" is informational
        suggest_fix: false      # true = LLM includes suggested code fixes
-       model: null             # null = use default, or e.g. "claude-sonnet-4-20250514"
+       model: null             # null = use default, or e.g. "claude-sonnet-4-6"
        paths:                  # rule runs if any changed file matches these globs
          - "path/to/relevant/code/**"
        labels:                 # rule runs if any PR label matches
