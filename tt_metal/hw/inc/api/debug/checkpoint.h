@@ -14,8 +14,9 @@
 // All active RISCs must call the same checkpoint ID. The macro is a no-op when
 // DEBUG_CHECKPOINT_ENABLED is not defined.
 //
-// The checkpoint state (12 bytes) is stored at MEM_LLK_DEBUG_BASE in L1,
+// The checkpoint state (20 bytes) is stored at MEM_LLK_DEBUG_BASE in L1,
 // which is a 1024-byte debug region shared by all RISCs on the core.
+// No other debug tool should use MEM_LLK_DEBUG_BASE concurrently.
 
 #pragma once
 

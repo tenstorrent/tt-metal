@@ -87,25 +87,18 @@ inline void debug_dump_cb([[maybe_unused]] uint32_t cb_id, [[maybe_unused]] uint
 // for input and output CBs respectively. Also available on BRISC/NCRISC with
 // explicit cb_type parameter.
 // ---------------------------------------------------------------------------
-#if !defined(USE_DEVICE_PRINT)
+#if defined(USE_DEVICE_PRINT)
+// TileSlice is a DPRINT-specific type, not supported by DEVICE_PRINT.
+// Provide no-op stubs so code compiles without #ifdef at the call site.
+inline void debug_dump_cb_typed(
+    [[maybe_unused]] uint32_t cb_id, [[maybe_unused]] uint32_t tile_idx = 0, [[maybe_unused]] bool untilize = true) {
+    DEVICE_PRINT("debug_dump_cb_typed: not supported with DEVICE_PRINT, use DPRINT");
+}
+#else  // DPRINT path
 #include "api/debug/dprint_tile.h"
 
-#if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 0)
-// Unpack thread: CBs are inputs, use read pointer
-inline void debug_dump_cb_typed(uint32_t cb_id, uint32_t tile_idx = 0, bool untilize = true) {
-    DPRINT << "CB" << cb_id << " tile " << tile_idx << " (typed):" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << TileSlice(
-                      cb_id,
-                      tile_idx,
-                      SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-}
-#elif defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 2)
-// Pack thread: CBs are outputs, use write pointer
+#if (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 0)) || (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 2))
+// Unpack (TRISC0) or Pack (TRISC2) thread
 inline void debug_dump_cb_typed(uint32_t cb_id, uint32_t tile_idx = 0, bool untilize = true) {
     DPRINT << "CB" << cb_id << " tile " << tile_idx << " (typed):" << ENDL();
     for (uint16_t r = 0; r < 32; ++r) {
@@ -143,7 +136,7 @@ inline void debug_dump_cb_typed(
 }
 #endif
 
-#endif  // !USE_DEVICE_PRINT
+#endif  // USE_DEVICE_PRINT
 
 // ---------------------------------------------------------------------------
 // debug_dump_l1: Hex-dump arbitrary L1 memory.
@@ -160,12 +153,13 @@ inline void debug_dump_l1(uint32_t addr, uint32_t num_words) {
 
     for (uint32_t w = 0; w < num_words; w += 4) {
         uint32_t chunk = (num_words - w > 4) ? 4 : (num_words - w);
+        uint32_t byte_addr = addr + w * 4;
 #if defined(USE_DEVICE_PRINT)
         for (uint32_t j = 0; j < chunk; j++) {
-            DEVICE_PRINT("  [{0}] {1:#010x}", w + j, ptr[w + j]);
+            DEVICE_PRINT("  [{:#x}] {:#010x}", byte_addr + j * 4, ptr[w + j]);
         }
 #else
-        DPRINT << "  [" << HEX() << (addr + w * 4) << "] ";
+        DPRINT << "  [" << HEX() << byte_addr << "] ";
         for (uint32_t j = 0; j < chunk; j++) {
             DPRINT << ptr[w + j] << " ";
         }
@@ -177,6 +171,8 @@ inline void debug_dump_l1(uint32_t addr, uint32_t num_words) {
 #else  // !DEBUG_PRINT_ENABLED || FORCE_DPRINT_OFF — no-ops
 
 inline void debug_dump_cb([[maybe_unused]] uint32_t cb_id, [[maybe_unused]] uint32_t num_words = 0) {}
+inline void debug_dump_cb_typed(
+    [[maybe_unused]] uint32_t cb_id, [[maybe_unused]] uint32_t tile_idx = 0, [[maybe_unused]] bool untilize = true) {}
 inline void debug_dump_l1([[maybe_unused]] uint32_t addr, [[maybe_unused]] uint32_t num_words) {}
 
 #endif  // DEBUG_PRINT_ENABLED
