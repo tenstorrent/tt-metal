@@ -21,6 +21,8 @@ DeviceAddr get_per_core_address(
     const distributed::MeshBuffer& mesh_buffer,
     const distributed::MeshCoordinate& device_coord,
     const CoreCoord& core) {
+    TT_FATAL(
+        mesh_buffer.device()->impl().is_local(device_coord), "get_per_core_address requires a local device coordinate");
     auto* buffer = mesh_buffer.get_device_buffer(device_coord);
     TT_FATAL(is_per_core_allocation(*buffer), "Buffer does not use per-core allocation");
     return get_per_core_address(*buffer, core);

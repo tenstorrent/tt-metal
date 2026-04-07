@@ -33,11 +33,11 @@ def device(request):
 @pytest.fixture(scope="function")
 def mesh_device():
     """Function-scoped mesh device with HYBRID allocator mode for multi-device tests."""
+    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
+
     num_devices = ttnn.get_num_devices()
     if num_devices < 2:
         pytest.skip("Multi-device per-core allocation tests require at least 2 devices")
-
-    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, min(num_devices, 2)))
     yield mesh
     ttnn.close_mesh_device(mesh)

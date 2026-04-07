@@ -212,6 +212,11 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
+
+    // ========================================
+    // ALLOCATOR CONFIGURATION
+    // ========================================
+    TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1425,6 +1430,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (legacy DPRINT is used)
         // Usage: export TT_METAL_DEVICE_PRINT=1
         case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+
+        // TT_METAL_ALLOCATOR_MODE_HYBRID
+        // Enable hybrid lockstep + per-core L1 allocator mode.
+        // Default: false (lockstep-only allocation)
+        // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
+        case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
     }
 }
 
