@@ -79,7 +79,7 @@ static void run_dump_cb_test(DPrintMeshFixture* fixture, const std::shared_ptr<d
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {dump_test::INPUT_CB_INDEX}});
+            .compile_args = {dump_test::INPUT_CB_INDEX, 0}});
 
     // Writer (BRISC)
     auto writer_kernel = CreateKernel(
@@ -89,7 +89,7 @@ static void run_dump_cb_test(DPrintMeshFixture* fixture, const std::shared_ptr<d
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {dump_test::OUTPUT_CB_INDEX}});
+            .compile_args = {dump_test::OUTPUT_CB_INDEX, 0}});
 
     // Compute with debug_dump_cb
     CreateKernel(
@@ -174,7 +174,7 @@ static void run_dump_l1_test(DPrintMeshFixture* fixture, const std::shared_ptr<d
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {INPUT_CB_INDEX}});
+            .compile_args = {INPUT_CB_INDEX, 0}});
     auto writer_kernel = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
@@ -182,7 +182,7 @@ static void run_dump_l1_test(DPrintMeshFixture* fixture, const std::shared_ptr<d
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {OUTPUT_CB_INDEX}});
+            .compile_args = {OUTPUT_CB_INDEX, 0}});
     // Compute kernel that calls debug_dump_cb + debug_dump_l1
     CreateKernel(
         program_,
@@ -263,7 +263,7 @@ static void run_dump_cb_typed_test(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {INPUT_CB_INDEX}});
+            .compile_args = {INPUT_CB_INDEX, 0}});
     auto writer_kernel = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
@@ -271,7 +271,7 @@ static void run_dump_cb_typed_test(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {OUTPUT_CB_INDEX}});
+            .compile_args = {OUTPUT_CB_INDEX, 0}});
     CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_dump_typed.cpp",

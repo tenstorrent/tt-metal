@@ -211,7 +211,7 @@ void JitBuildEnv::init(
         }
     }
 
-    if (std::getenv("TT_METAL_CHECKPOINT")) {
+    if (rtoptions.get_checkpoint_enabled()) {
         this->defines_ += "-DDEBUG_CHECKPOINT_ENABLED ";
     }
 

@@ -121,6 +121,8 @@ inline void debug_checkpoint_barrier() {
 // CB interfaces are shared L1 — only BRISC prints CB metadata to avoid
 // redundant output. TRISC1 (Math) prints dest registers if dump_dest=true.
 // All other RISCs skip the dump but still participate in the barriers.
+// Both DPRINT and DEVICE_PRINT calls are present — the compiler disables
+// whichever backend is not active.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
@@ -132,11 +134,8 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
-#if defined(USE_DEVICE_PRINT)
-        DEVICE_PRINT("=== CKPT {} dest regs ===", (uint32_t)checkpoint_id);
-#else
         DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " dest regs ===" << ENDL();
-#endif
+        DEVICE_PRINT("=== CKPT {} dest regs ===\n", (uint32_t)checkpoint_id);
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -154,7 +153,10 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
-                    default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
+                    default:
+                        DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
+                        DEVICE_PRINT("Unsupported data format: {}\n", data_format_reg_field_value);
+                        break;
                 }
                 row++;
             }
@@ -164,11 +166,8 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
 
 #elif defined(COMPILE_FOR_BRISC)
     // BRISC prints CB metadata. CBs are shared L1 so only one RISC needs to print.
-#if defined(USE_DEVICE_PRINT)
-    DEVICE_PRINT("=== CKPT {} CBs ===", (uint32_t)checkpoint_id);
-#else
     DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " CBs ===" << ENDL();
-#endif
+    DEVICE_PRINT("=== CKPT {} CBs ===\n", (uint32_t)checkpoint_id);
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
@@ -177,36 +176,28 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
             continue;
         }
 
-#if defined(USE_DEVICE_PRINT)
+        DPRINT << "CB" << cb << " sz=" << iface.fifo_size << " rd=" << iface.fifo_rd_ptr << " wr=" << iface.fifo_wr_ptr
+               << " ack=" << iface.tiles_acked << " rcv=" << iface.tiles_received << ENDL();
         DEVICE_PRINT(
-            "CB{} sz={} rd={} wr={} ack={} rcv={}",
+            "CB{} sz={} rd={} wr={} ack={} rcv={}\n",
             cb,
             iface.fifo_size,
             iface.fifo_rd_ptr,
             iface.fifo_wr_ptr,
             (uint32_t)iface.tiles_acked,
             (uint32_t)iface.tiles_received);
-#else
-        DPRINT << "CB" << cb << " sz=" << iface.fifo_size << " rd=" << iface.fifo_rd_ptr << " wr=" << iface.fifo_wr_ptr
-               << " ack=" << iface.tiles_acked << " rcv=" << iface.tiles_received << ENDL();
-#endif
 
         if constexpr (words_per_cb > 0) {
             volatile tt_l1_ptr uint32_t* data_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.fifo_rd_ptr << cb_addr_shift);
             for (uint16_t w = 0; w < words_per_cb; w += 4) {
                 uint16_t chunk = (words_per_cb - w > 4) ? 4 : (words_per_cb - w);
-#if defined(USE_DEVICE_PRINT)
-                for (uint16_t j = 0; j < chunk; j++) {
-                    DEVICE_PRINT("  [{0}] {1:#010x}", (uint32_t)(w + j), data_ptr[w + j]);
-                }
-#else
                 DPRINT << "  [" << w << "] ";
                 for (uint16_t j = 0; j < chunk; j++) {
                     DPRINT << HEX() << data_ptr[w + j] << " ";
+                    DEVICE_PRINT("  [{}] {:#010x}\n", (uint32_t)(w + j), data_ptr[w + j]);
                 }
                 DPRINT << DEC() << ENDL();
-#endif
             }
         }
     }
