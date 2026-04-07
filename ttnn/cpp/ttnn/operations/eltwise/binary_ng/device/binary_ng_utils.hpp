@@ -76,6 +76,7 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        ATAN2,
         LT,
         GT,
         GE,

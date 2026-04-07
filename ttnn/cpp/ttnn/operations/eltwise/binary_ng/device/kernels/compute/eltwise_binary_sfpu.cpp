@@ -22,6 +22,7 @@
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
+#include "api/compute/atan2.h"
 #include "api/compute/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
