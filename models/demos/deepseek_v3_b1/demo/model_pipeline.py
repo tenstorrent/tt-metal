@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Literal
 
 import torch
 from loguru import logger
-import time
+from transformers import AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -30,8 +31,6 @@ from models.demos.deepseek_v3_b1.model import (
     page_size_bytes,
     to_spec_input,
 )
-
-from transformers import AutoTokenizer
 
 
 class ModelPipeline:
@@ -105,7 +104,7 @@ class ModelPipeline:
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
-    def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
+    def prefill_forward(self, tokens: list[int], slot_id: int) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
@@ -115,14 +114,14 @@ class ModelPipeline:
             to_spec_input(
                 tokens[i],
                 tokens[i + 1] if i < len(tokens) - 1 else -1,
-                user_id=0,
+                user_id=slot_id,
                 position_id=i,
                 page_size_datums=self._page_size_datums,
                 token_type=TokenType.BASE,
             )
             for i in range(len(tokens))
         ]
-        results = self.model.prefill(prompt_token_tensors)
+        results = self.model.prefill(prompt_token_tensors, slot_id)
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
 
@@ -148,7 +147,7 @@ class ModelPipeline:
 
     def run_inference(
         self,
-        prompt_token_ids: list[int],
+        prompt_token_ids: list[list[int]],
         max_new_tokens: int,
         on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
@@ -171,7 +170,7 @@ class ModelPipeline:
         assert self.model is not None
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        generated_tokens: list[int] = []
+        generated_tokens: list[list[int]] = [[] for _ in range(2)]
         verified_spec_tokens: list[int] = []
         unverified_spec_tokens: list[int] = []
 
@@ -179,91 +178,104 @@ class ModelPipeline:
             """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
-        def emit(token_id: int) -> None:
+        def emit(token_id: int, slot_id: int) -> None:
             """Emit a token to the caller"""
             if on_token is not None:
                 on_token(token_id)
-            generated_tokens.append(token_id)
+            generated_tokens[slot_id].append(token_id)
 
-        # --- Prefill --------------------------------------------------------
-        prefill_results = self.prefill_forward(prompt_token_ids)
-
-        # Seed the state machine with both pages from the last prefill write,
-        # then read from the pipeline for all subsequent results.
-        pending: deque[DecodeResult] = deque(prefill_results)
-        base_accept = 0
-        spec_accept = 0
-        base_reject = 0
-        spec_reject = 0
         tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
-        # --- Speculative decode state machine --------------------------------
-        iteration = 0
-        start_time = time.time()
-        num_emits = 0
-        while len(generated_tokens) < max_new_tokens:
-            iteration += 1
-            print("\n\n")
-            print(f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}")
 
-            result = pending.popleft() if pending else self.model.read_result()
+        for slot_id in range(2):
+            # --- Prefill --------------------------------------------------------
+            prefill_results = self.prefill_forward(prompt_token_ids[slot_id], slot_id)
 
-            print("Got MD from Device: ")
-            print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-            print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-            print(f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}")
-            print(f"Slot ID: {result.slot_id}")
+            # Seed the state machine with both pages from the last prefill write,
+            # then read from the pipeline for all subsequent results.
+            pending: deque[DecodeResult] = deque(prefill_results)
+            self._position_id = self.model._position[slot_id]
 
-            if not unverified_spec_tokens and not verified_spec_tokens:
-                unverified_spec_tokens.append(result.token_1)
-                emit(result.token_0)
-                num_emits += 1
-                print("Prefill done")
-            else:
-                if result.token_0_type == TokenType.BASE:
-                    # On acceptance, we check that the base token matches the first token of the last unverified spec token
-                    if result.token_0 == unverified_spec_tokens[-1]:
-                        verified_spec_tokens.append(unverified_spec_tokens.pop())
-                        emit(result.token_0)
-                        base_accept += 1
-                        print("Base Accept")
-                        num_emits += 1
-                        continue
-                    # On rejection, we discard the last unverified spec token and populate the new spec token
-                    else:
-                        unverified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
-                        emit(result.token_0)
-                        base_reject += 1
-                        print("Base Reject")
-                        num_emits += 1
-                if result.token_0_type == TokenType.SPEC:
-                    # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
-                    if verified_spec_tokens:
-                        verified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
-                        emit(result.token_0)
-                        spec_accept += 1
-                        num_emits += 1
-                        print("Spec Accept")
-                    else:
-                        spec_reject += 1
-                        print("Spec Reject")
-                        continue
+            base_accept = 0
+            spec_accept = 0
+            base_reject = 0
+            spec_reject = 0
 
-            if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
-                break
+            # --- Speculative decode state machine --------------------------------
+            iteration = 0
+            start_time = time.time()
+            num_emits = 0
+            while len(generated_tokens[slot_id]) < max_new_tokens:
+                iteration += 1
+                print("\n\n")
+                print(
+                    f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+                )
 
-            self._write_spec_pair(
-                result.token_0,
-                result.token_0_pos,
-                result.token_1,
-                result.token_1_pos,
-            )
+                result = pending.popleft() if pending else self.model.read_result()
+
+                print("Got MD from Device: ")
+                print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+                print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+                print(
+                    f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
+                )
+                print(f"Slot ID: {result.slot_id}")
+
+                if not unverified_spec_tokens and not verified_spec_tokens:
+                    unverified_spec_tokens.append(result.token_1)
+                    emit(result.token_0, slot_id)
+                    num_emits += 1
+                    print("Prefill done")
+                else:
+                    if result.token_0_type == TokenType.BASE:
+                        # On acceptance, we check that the base token matches the first token of the last unverified spec token
+                        if result.token_0 == unverified_spec_tokens[-1]:
+                            verified_spec_tokens.append(unverified_spec_tokens.pop())
+                            emit(result.token_0, slot_id)
+                            base_accept += 1
+                            print("Base Accept")
+                            num_emits += 1
+                            continue
+                        # On rejection, we discard the last unverified spec token and populate the new spec token
+                        else:
+                            unverified_spec_tokens.pop()
+                            unverified_spec_tokens.append(result.token_1)
+                            emit(result.token_0, slot_id)
+                            base_reject += 1
+                            print("Base Reject")
+                            num_emits += 1
+                    if result.token_0_type == TokenType.SPEC:
+                        # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
+                        if verified_spec_tokens:
+                            verified_spec_tokens.pop()
+                            unverified_spec_tokens.append(result.token_1)
+                            emit(result.token_0, slot_id)
+                            spec_accept += 1
+                            num_emits += 1
+                            print("Spec Accept")
+                        else:
+                            spec_reject += 1
+                            print("Spec Reject")
+                            continue
+
+                if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+                    break
+
+                self._write_spec_pair(
+                    result.token_0,
+                    result.token_0_pos,
+                    result.token_1,
+                    result.token_1_pos,
+                )
+            logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+
         end_time = time.time()
         print(f"Time taken: {end_time - start_time} seconds")
         print(f"Tokens per second: {num_emits / (end_time - start_time)}")
-        print(f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}")
-        logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+        print(
+            f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+        )
+
         return generated_tokens if return_generated_tokens else None
 
     def barrier(self) -> None:

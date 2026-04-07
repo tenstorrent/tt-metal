@@ -181,11 +181,11 @@ class DeepSeekV3:
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
-        self._position: int = 0
+        self._position: list[int] = [0 for _ in range(2)]
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
+    def prefill(self, prompt_tokens: list[ttnn.Tensor], slot_id: int) -> list[DecodeResult]:
         """
         Prefill-by-decode with overlapped I/O: enqueue tokens until the pipeline is
         saturated, then overlap readback per additional write, and finally drain
@@ -215,6 +215,7 @@ class DeepSeekV3:
 
         # Phase 1: saturate the pipeline (no reads yet)
         while write_idx < num_writes_before_readback:
+            print(f"Writing to index {write_idx}")
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
 
@@ -228,12 +229,14 @@ class DeepSeekV3:
         # Phase 3: drain remaining outputs; save the last output
         last_results: list[DecodeResult] = []
         while read_count < total_reads:
+            print(f"Reading from index {read_count}")
             self._read_fn(self._output_buffer)
+            print(f"Done reading from index {read_count}")
             read_count += 1
             if read_count > total_reads - 1:
                 last_results.append(parse_output_page(self._output_buffer))
 
-        self._position += len(prompt_tokens)
+        self._position[slot_id] += len(prompt_tokens)
         return last_results
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
