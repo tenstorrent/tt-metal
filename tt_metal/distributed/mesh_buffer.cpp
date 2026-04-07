@@ -200,27 +200,17 @@ void MeshBuffer::initialize_device_buffers() {
     // In HYBRID mode, mirror the lockstep L1 allocation into each device's lockstep allocator
     // so that per-core allocations on individual devices avoid this address range.
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
-    // Check HYBRID via individual device->allocator_impl() (safe),
-    // not mesh_device->allocator_impl() which crashes on remote-only MeshDevices.
-    if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr &&
-                                                std::holds_alternative<OwnedBufferState>(state_) &&
-                                                device_local_config_.buffer_type == BufferType::L1) {
-        bool is_hybrid = false;
+    // Note: we check HYBRID via env var rather than mesh_device->allocator_impl() because
+    // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
+    if (auto mesh_device = mesh_device_.lock();
+        mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
+        device_local_config_.buffer_type == BufferType::L1 && tt::parse_env("TT_METAL_ALLOCATOR_MODE_HYBRID", false)) {
+        auto* backing = get_backing_buffer();
+        auto alloc_size = backing->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
-                is_hybrid = mesh_device->impl().get_device(coord)->allocator_impl()->get_config().allocator_mode ==
-                            AllocatorMode::HYBRID;
-                break;
-            }
-        }
-        if (is_hybrid) {
-            auto* backing = get_backing_buffer();
-            auto alloc_size = backing->aligned_size_per_bank();
-            for (const auto& [coord, device_buffer] : buffers_) {
-                if (mesh_device->impl().is_local(coord)) {
-                    auto* device = mesh_device->impl().get_device(coord);
-                    device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
-                }
+                auto* device = mesh_device->impl().get_device(coord);
+                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
             }
         }
     }
@@ -272,18 +262,10 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
 void MeshBuffer::deallocate() {
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
-        // Check HYBRID mode via individual device->allocator_impl() (safe),
-        // not mesh_device->allocator_impl() which crashes on remote-only MeshDevices.
-        bool is_hybrid = false;
-        for (const auto& [coord, device_buffer] : buffers_) {
-            if (mesh_device->impl().is_local(coord)) {
-                is_hybrid = mesh_device->impl().get_device(coord)->allocator_impl()->get_config().allocator_mode ==
-                            AllocatorMode::HYBRID;
-                break;
-            }
-        }
-
-        if (is_hybrid) {
+        // Check HYBRID mode via env var rather than mesh_device->allocator_impl() because:
+        // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
+        // 2. During teardown, device state may be partially destroyed, causing segfaults.
+        if (tt::parse_env("TT_METAL_ALLOCATOR_MODE_HYBRID", false)) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
