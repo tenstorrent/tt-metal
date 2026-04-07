@@ -21,21 +21,23 @@
 
 #include "dev_mem_map.h"
 #include "internal/hw_thread.h"
-#include "api/debug/dprint.h"
 #include "api/debug/waypoint.h"
 
-#if defined(DEBUG_CHECKPOINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
-
-#if !defined(DEBUG_PRINT_ENABLED)
-#error "DEBUG_CHECKPOINT_ENABLED requires DEBUG_PRINT_ENABLED"
-#endif
-
+// Checkpoints work independently of DPRINT/DEVICE_PRINT. When a print backend
+// is available, the dump phase prints CB metadata and optionally L1 data / dest
+// registers. When no print backend is enabled, the checkpoint still acts as a
+// barrier (all RISCs synchronize) but skips the dump.
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#define CHECKPOINT_PRINT_ENABLED 1
+#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/circular_buffer_interface.h"
-
-// Include dest reg printing support for TRISC math thread
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
 #include "api/debug/dprint_tensix.h"
 #endif
+#endif
+
+#if defined(DEBUG_CHECKPOINT_ENABLED)
 
 // Checkpoint state lives at a fixed L1 address (start of MEM_LLK_DEBUG region).
 // This struct is 12 bytes. All RISCs on the core share this L1 location.
@@ -92,19 +94,30 @@ inline void debug_checkpoint_barrier(uint32_t expected_proceed) {
 }
 
 // ---------------------------------------------------------------------------
-// CB dump: each RISC prints its view of circular buffer state
+// CB dump: each RISC prints its view of circular buffer state.
+// Supports DPRINT, DEVICE_PRINT, or no-print (barrier-only) mode.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
-inline void debug_checkpoint_dump_cbs(uint8_t checkpoint_id) {
+inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
+#if !defined(CHECKPOINT_PRINT_ENABLED)
+    // No print backend available — checkpoint acts as barrier only, skip dump.
+    return;
+#else
     uint32_t my_idx = internal_::get_hw_thread_idx();
 
+#if defined(USE_DEVICE_PRINT)
+    DEVICE_PRINT("=== CKPT {} RISC {} ===", (uint32_t)checkpoint_id, my_idx);
+#else
     DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " RISC " << my_idx << " ===" << ENDL();
+#endif
 
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
     // Math thread cannot access CB interfaces
     if constexpr (dump_dest) {
         // Read and print dest register contents directly (no dbg_halt/dbg_unhalt
-        // since the checkpoint barrier already synchronizes all RISCs)
+        // since the checkpoint barrier already synchronizes all RISCs).
+        // Note: dest reg row helpers use DPRINT internally, so dump_dest is only
+        // supported with the DPRINT backend.
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -123,19 +136,17 @@ inline void debug_checkpoint_dump_cbs(uint8_t checkpoint_id) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
-                    case (uint32_t)DataFormat::UInt8:
-                        dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row);
-                        break;
-                    case (uint32_t)DataFormat::Int8:
-                        dprint_tensix_dest_reg_row_int8(data_format_reg_field_value, row);
-                        break;
                     default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
                 }
                 row++;
             }
         }
     } else {
+#if defined(USE_DEVICE_PRINT)
+        DEVICE_PRINT("(math thread, no CB access)");
+#else
         DPRINT << "(math thread, no CB access)" << ENDL();
+#endif
     }
 #else
     // BRISC, NCRISC, TRISC0, TRISC2 can access CB interfaces
@@ -147,8 +158,19 @@ inline void debug_checkpoint_dump_cbs(uint8_t checkpoint_id) {
         }
 
         // Print CB metadata
+#if defined(USE_DEVICE_PRINT)
+        DEVICE_PRINT(
+            "CB{} sz={} rd={} wr={} ack={} rcv={}",
+            cb,
+            iface.fifo_size,
+            iface.fifo_rd_ptr,
+            iface.fifo_wr_ptr,
+            (uint32_t)iface.tiles_acked,
+            (uint32_t)iface.tiles_received);
+#else
         DPRINT << "CB" << cb << " sz=" << iface.fifo_size << " rd=" << iface.fifo_rd_ptr << " wr=" << iface.fifo_wr_ptr
                << " ack=" << iface.tiles_acked << " rcv=" << iface.tiles_received << ENDL();
+#endif
 
         // Optionally dump L1 data starting at read pointer
         if constexpr (words_per_cb > 0) {
@@ -156,15 +178,22 @@ inline void debug_checkpoint_dump_cbs(uint8_t checkpoint_id) {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.fifo_rd_ptr << cb_addr_shift);
             for (uint16_t w = 0; w < words_per_cb; w += 4) {
                 uint16_t chunk = (words_per_cb - w > 4) ? 4 : (words_per_cb - w);
+#if defined(USE_DEVICE_PRINT)
+                for (uint16_t j = 0; j < chunk; j++) {
+                    DEVICE_PRINT("  [{0}] {1:#010x}", (uint32_t)(w + j), data_ptr[w + j]);
+                }
+#else
                 DPRINT << "  [" << w << "] ";
                 for (uint16_t j = 0; j < chunk; j++) {
                     DPRINT << HEX() << data_ptr[w + j] << " ";
                 }
                 DPRINT << DEC() << ENDL();
+#endif
             }
         }
     }
-#endif
+#endif  // COMPILE_FOR_TRISC
+#endif  // CHECKPOINT_PRINT_ENABLED
 }
 
 // ---------------------------------------------------------------------------
