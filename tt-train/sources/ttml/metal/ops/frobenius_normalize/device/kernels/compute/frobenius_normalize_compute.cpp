@@ -2,18 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Frobenius normalize compute kernel — all-FP32 data path.
+//
+// Phase 1:   square + accumulate (SFPU FP32 in DST)
+// Phase 2:   sfpu_reduce (FP32 in DST) — within-tile sum-of-squares
+// Phase 3/4: copy_tile (UnpackToDestFp32) + add_binary_tile (SFPU FP32) — chain reduction
+// Phase 5:   copy_tile (UnpackToDestFp32) + sqrt/recip (SFPU FP32) — origin norm compute
+// Phase 6:   copy_tile (UnpackToDestFp32) + mul_binary_tile (SFPU FP32) — normalize
+//
+// The only BF16 truncation points are input unpack and output pack.
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
-#include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
-// reduce.h not needed — using sfpu_reduce
 #include "api/compute/tile_move_copy.h"
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
@@ -24,10 +32,8 @@ constexpr auto cb_scalar = tt::CBIndex::c_2;
 constexpr auto cb_recv = tt::CBIndex::c_3;
 constexpr auto cb_norm = tt::CBIndex::c_4;
 constexpr auto cb_output = tt::CBIndex::c_5;
-// c_6 unused — was for reduce_tile scaler, not needed with sfpu_reduce
 
 void kernel_main() {
-    // Runtime args for per-core role
     uint32_t rt = 0;
     uint32_t do_row_receive = get_arg_val<uint32_t>(rt++);
     uint32_t do_row_send = get_arg_val<uint32_t>(rt++);
@@ -43,31 +49,25 @@ void kernel_main() {
 
     // =========================================================================
     // Phase 1: Square and accumulate all input tiles into one FP32 tile
-    // For cores with 0 tiles, reader generates a zero tile in cb_sq_acc.
     // =========================================================================
     if (num_tiles_per_core > 0) {
         cb_reserve_back(cb_sq_acc, 1);
         tile_regs_acquire();
         for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
             cb_wait_front(cb_input, 1);
-
             auto reg = (i == 0) ? accum_reg : work_reg;
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, reg);
-
             mul_binary_tile_init();
-            mul_binary_tile(reg, reg, reg);  // square
-
+            mul_binary_tile(reg, reg, reg);
             if (i > 0) {
                 add_binary_tile_init();
-                add_binary_tile(accum_reg, work_reg, accum_reg);  // accumulate
+                add_binary_tile(accum_reg, work_reg, accum_reg);
             }
-
             cb_pop_front(cb_input, 1);
         }
         tile_regs_commit();
         tile_regs_wait();
-
         pack_reconfig_data_format(cb_sq_acc);
         pack_tile(accum_reg, cb_sq_acc);
         tile_regs_release();
@@ -76,16 +76,12 @@ void kernel_main() {
     // else: reader has generated a zero tile in cb_sq_acc for us
 
     // =========================================================================
-    // Phase 2: Reduce 32x32 accumulated tile to a scalar tile
-    // Uses sfpu_reduce for full FP32 precision in DST registers.
-    // init_sfpu configures the unpack-to-dest path so copy_tile writes
-    // directly to DST (required for SFPLOAD in sfpu_reduce to read data).
+    // Phase 2: sfpu_reduce — within-tile reduction to scalar (FP32 in DST)
     // =========================================================================
     {
         cb_wait_front(cb_sq_acc, 1);
         cb_reserve_back(cb_scalar, 1);
 
-        // Reinitialize for sfpu_reduce: unpack/math/pack for cb_sq_acc→cb_scalar
         init_sfpu(cb_sq_acc, cb_scalar);
 
         tile_regs_acquire();
@@ -106,69 +102,55 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // Phase 3: Row chain add — receive from right neighbor and add
+    // Phase 3: Row chain add (FP32: copy_tile UnpackToDestFp32 + add_binary_tile SFPU)
     // =========================================================================
     if (do_row_receive) {
         cb_wait_front(cb_recv, 1);
         cb_wait_front(cb_scalar, 1);
-
         cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
-
-        // FP32 add via copy_tile (UnpackToDestFp32 → DST) + add_binary_tile (SFPU)
         copy_tile_init(cb_scalar);
         copy_tile(cb_scalar, 0, 0);
         copy_tile_init(cb_recv);
         copy_tile(cb_recv, 0, 1);
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);
-
         tile_regs_commit();
         tile_regs_wait();
-
         pack_reconfig_data_format(cb_scalar);
         pack_tile(0, cb_scalar);
         tile_regs_release();
-
         cb_pop_front(cb_recv, 1);
         cb_pop_front(cb_scalar, 1);
         cb_push_back(cb_scalar, 1);
     }
 
-    // Reader handles sending cb_scalar to left neighbor (if do_row_send).
-    // Reader will pop cb_scalar after sending.
-
     // =========================================================================
-    // Phase 4: Column chain add — receive from below and add (row leaders only)
+    // Phase 4: Column chain add (same as Phase 3)
     // =========================================================================
     if (do_col_receive) {
         cb_wait_front(cb_recv, 1);
         cb_wait_front(cb_scalar, 1);
-
         cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
-
         copy_tile_init(cb_scalar);
         copy_tile(cb_scalar, 0, 0);
         copy_tile_init(cb_recv);
         copy_tile(cb_recv, 0, 1);
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);
-
         tile_regs_commit();
         tile_regs_wait();
-
         pack_reconfig_data_format(cb_scalar);
         pack_tile(0, cb_scalar);
         tile_regs_release();
-
         cb_pop_front(cb_recv, 1);
         cb_pop_front(cb_scalar, 1);
         cb_push_back(cb_scalar, 1);
     }
 
     // =========================================================================
-    // Phase 5: Origin core computes recip(sqrt(sum) + eps) → cb_norm
+    // Phase 5: Origin: sqrt + eps + recip → pack to cb_norm
     // =========================================================================
     if (is_origin) {
         cb_wait_front(cb_scalar, 1);
@@ -181,74 +163,51 @@ void kernel_main() {
         sqrt_tile_init();
         sqrt_tile(0);
 
-        // Add epsilon: we need the eps value. Reader generated an eps tile in cb_recv
-        // (repurposed after chain reduction is done). Actually, reader puts eps in a
-        // scratch area. Let's use a different approach: pass eps as a bfloat16 tile.
-        // For simplicity, we'll use the scaler CB (c_6) which already has a ones tile,
-        // and add eps via a separate mechanism.
-        //
-        // Actually, the simplest approach: reader generates an eps tile in cb_sq_acc
-        // (reused, since phase 1 is done). But we can't control timing between reader
-        // and compute for that.
-        //
-        // Best approach: add eps as a compile-time constant in the compute kernel.
-        // We pack eps as bfloat16 and add it to the scalar value in register.
-        // Since the scalar is in register after sqrt, we can add a constant.
-        //
-        // Use SFPU approach: the value in dest[0] is sqrt(sum). We need to add eps.
-        // We'll copy the eps tile (generated by reader in cb_sq_acc, repurposed) and add.
-        //
-        // Simplest: reader pre-generates eps tile in cb_recv (after chain reduction
-        // finishes, cb_recv is free). But ordering is tricky.
-        //
-        // Let's just use cb_sq_acc for eps tile. Reader generates it after phase 1
-        // reads are done and before broadcast. We know cb_sq_acc is free after phase 2.
-        // The reader can generate it right after the chain reduction completes.
-        //
-        // Actually, simplest safe approach: use a dedicated CB for eps. But we're
-        // already using 7 CBs. Let me reuse cb_sq_acc (c_1) since it's consumed in
-        // phase 2. Reader generates eps tile into cb_sq_acc for origin core only.
-
-        // Wait for eps tile from reader (in cb_sq_acc, repurposed)
+        // eps tile from reader in cb_sq_acc (repurposed)
         cb_wait_front(cb_sq_acc, 1);
         copy_tile_init(cb_sq_acc);
         copy_tile(cb_sq_acc, 0, 1);
         cb_pop_front(cb_sq_acc, 1);
 
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0);  // sqrt(sum) + eps
+        add_binary_tile(0, 1, 0);
 
         recip_tile_init();
-        recip_tile(0);  // 1 / (sqrt(sum) + eps)
+        recip_tile(0);
 
         tile_regs_commit();
         tile_regs_wait();
-
         pack_reconfig_data_format(cb_norm);
         pack_tile(0, cb_norm);
         tile_regs_release();
-
         cb_push_back(cb_norm, 1);
         cb_pop_front(cb_scalar, 1);
     }
 
     // =========================================================================
-    // Phase 6: Multiply each input tile by reciprocal norm
-    // Reader re-reads tiles from DRAM into cb_input.
-    // Reader/broadcast ensures cb_norm is filled on all cores.
+    // Phase 6: Multiply each tile by 1/norm (FP32: mul_binary_tile SFPU)
+    //
+    // cb_norm has 1/norm in EVERY position (reader filled it via multicast scalar).
+    // We reload cb_norm into DST each iteration since tile_regs_release clears DST.
     // =========================================================================
     cb_wait_front(cb_norm, 1);
 
-    // Broadcast-scalar multiply: cb_norm has 1/norm at (0,0), broadcast to all elements
+    // cb_norm has 1/norm in EVERY position (reader filled it from multicast scalar).
+    // Reload norm into DST each iteration (tile_regs_release clears DST).
+    // copy_tile(cb_norm) goes through srcA (TF32 for a single scalar — negligible loss).
+    // mul_binary_tile does element-wise FP32 multiply in DST.
+    // Element-wise multiply: cb_input * cb_norm via FPU mul_tiles (TF32 on both operands).
+    // cb_norm has 1/norm in every position (generated by reader).
+    // TF32 truncation of a uniform scalar is negligible.
     reconfig_data_format(cb_input, cb_norm);
-    mul_tiles_bcast_scalar_init_short(cb_input, cb_norm);
+    mul_tiles_init(cb_input, cb_norm);
 
     for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
         cb_wait_front(cb_input, 1);
         cb_reserve_back(cb_output, 1);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar(cb_input, cb_norm, 0, 0, 0);
+        mul_tiles(cb_input, cb_norm, 0, 0, 0);
         tile_regs_commit();
         tile_regs_wait();
 
