@@ -610,8 +610,8 @@ def run_ring_joint_sdpa_perf(
     """Run ring joint SDPA with 1 compile run + num_perf_runs measured runs with signposts."""
     logger.info("Perf test: setting up sub-devices")
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
-    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+    sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
+    ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
 
     # Sub-device setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -834,7 +834,7 @@ def run_ring_joint_sdpa_perf(
     "seq_len, q_chunk_size, k_chunk_size",
     [
         (128 * 1024, 256, 128),
-        (100 * 1024, 320, 64),
+        (100 * 1024, 160, 160),
     ],
     ids=["seq128k", "seq100k"],
 )
