@@ -98,7 +98,6 @@ void kernel_main() {
     constexpr uint32_t num_local_experts = experts / num_devices;
     constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-    constexpr uint32_t token_chunk_size = 32;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;

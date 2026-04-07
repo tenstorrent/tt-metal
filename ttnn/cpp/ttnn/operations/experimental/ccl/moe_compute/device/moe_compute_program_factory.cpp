@@ -1182,6 +1182,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
     ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -1247,7 +1248,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
 
             // MoE compute op does not have an optional output tensor; do not pass it in tensor_args.
             ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
-                .dense_input_tensor = tilize_output_tensor,
+                .dense_input_tensor = matmul_output_tensor,
                 .dense_activations_tensor = tilize_expert_activation_output_tensor,
                 .dense_token_maps_tensor = tilize_e_t_output_tensor,
                 .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,

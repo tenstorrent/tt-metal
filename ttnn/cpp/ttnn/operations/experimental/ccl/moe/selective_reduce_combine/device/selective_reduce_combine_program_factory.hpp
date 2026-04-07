@@ -52,8 +52,6 @@ private:
         const GlobalSemaphore& cross_device_semaphore);
 };
 
-using SelectiveReduceCombineProgramArtifacts = experimental::prim::SelectiveReduceCombineProgramArtifacts;
-
 // Builder function that creates kernels and returns artifacts
 SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
     tt::tt_metal::Program& program,
@@ -61,7 +59,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const MeshCoordinate& mesh_coordinate,
     const std::vector<MeshCoordinate>& all_mesh_coordinates,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
-    Tensor& output_tensor,
+    Tensor& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
