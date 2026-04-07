@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,12 +35,11 @@ void bind_clone_operation(nb::module_& mod) {
     ttnn::bind_function<"clone">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::clone,
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::clone,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::clone

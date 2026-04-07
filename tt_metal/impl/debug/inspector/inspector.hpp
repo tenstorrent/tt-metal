@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <vector>
 #include <string>
 #include "impl/program/program_impl.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
@@ -26,7 +29,7 @@ class Inspector {
 public:
     static bool is_enabled();
 
-    static std::unique_ptr<inspector::Data> initialize();
+    static std::unique_ptr<inspector::Data> initialize(std::optional<int> rank);
     static void serialize_rpc();
 
     static void program_created(const detail::ProgramImpl* program) noexcept;
@@ -58,12 +61,11 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-    static void mesh_workload_set_operation_name_and_parameters(
+    static void emit_debug_entry(
         const distributed::MeshWorkloadImpl* mesh_workload,
+        uint64_t runtime_id,
         std::string_view operation_name,
-        std::string_view operation_parameters) noexcept;
-    static void mesh_workload_set_runtime_id(
-        const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept;
+        std::vector<TensorSpec> tensor_specs) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(

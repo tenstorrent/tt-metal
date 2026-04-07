@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -211,7 +211,12 @@ void MetalContext::initialize(
 
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
-        inspector_data_ = Inspector::initialize();
+        std::optional<int> rank;
+        const auto& distributed_context = global_distributed_context();
+        if (*(distributed_context.size()) > 1) {
+            rank = *distributed_context.rank();
+        }
+        inspector_data_ = Inspector::initialize(rank);
         // Set fw_compile_hash for Inspector RPC build environment info
         Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
     }
@@ -224,10 +229,10 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
+        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
+        CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());

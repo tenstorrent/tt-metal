@@ -187,8 +187,8 @@ jobs:
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -210,8 +210,8 @@ jobs:
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -257,8 +257,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -279,8 +279,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -435,4 +435,4 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "S0985AN7TC5,U0AK4BVCFM0"
+          owner: "U0AK4BVCFM0,S0985AN7TC5"

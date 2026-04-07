@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +72,7 @@ script_config = ScriptConfig(
 )
 
 # Core filtering
-BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
 # Display limits
 MAX_CORES_DISPLAYED = 5  # Maximum cores shown per operation
@@ -196,6 +196,9 @@ def _collect_dispatcher_data(
     Returns:
         DispatcherCoreData if relevant, None otherwise
     """
+    if not dispatcher_data.risc_enabled(risc_name):
+        return None
+
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     except TimeoutDeviceRegisterError:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "repeat_and_interleave_eltwise_mul_device_operation_types.hpp"
 

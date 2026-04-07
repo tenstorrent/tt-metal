@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,12 +23,14 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,
@@ -37,15 +39,8 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     SharedExpert,
     extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -89,6 +84,7 @@ def create_decoder_block_tensors(
     num_routed_experts: int = 0,
     preloaded_weights=None,
     rigged_group_count: int | None = None,
+    validate_debug_tensors: bool = False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -330,24 +326,27 @@ def create_decoder_block_tensors(
             tile=tile_1x16,
             mesh_mapper=mesh_mapper,
         )
-        moe_ref_gate_output_scores = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
-        moe_ref_gate_output_indices = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.uint16),
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
+        moe_ref_gate_output_scores = None
+        moe_ref_gate_output_indices = None
+        if validate_debug_tensors:
+            moe_ref_gate_output_scores = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
+            moe_ref_gate_output_indices = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.uint16),
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
@@ -486,14 +485,16 @@ def create_decoder_block_tensors(
     kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
+    ttnn_kv_cache_attn_ref = None
+    if validate_debug_tensors:
+        ttnn_kv_cache_attn_ref = ttnn.from_torch(
+            torch_kv_cache_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=kv_mem,
+            mesh_mapper=kv_cache_2d_mesh_mapper,
+        )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
@@ -509,15 +510,17 @@ def create_decoder_block_tensors(
     sdpa_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
-    ttnn_sdpa_output = ttnn.from_torch(
-        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=sdpa_mem,
-        mesh_mapper=mesh_mapper,
-        tile=sdpa_tile,
-    )
+    ttnn_sdpa_output = None
+    if validate_debug_tensors:
+        ttnn_sdpa_output = ttnn.from_torch(
+            torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=sdpa_mem,
+            mesh_mapper=mesh_mapper,
+            tile=sdpa_tile,
+        )
 
     # ── Post-SDPA tensors ──
     a_tile = ttnn.Tile([M, 32])
@@ -542,15 +545,17 @@ def create_decoder_block_tensors(
         memory_config=output_mem_config,
         mesh_mapper=shard_mesh_mapper,
     )
-    attn_ref_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    attn_ref_output = None
+    if validate_debug_tensors:
+        attn_ref_output = ttnn.from_torch(
+            mesh_output_torch,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            tile=a_tile,
+            dtype=ttnn.bfloat16,
+            memory_config=output_mem_config,
+            mesh_mapper=shard_mesh_mapper,
+        )
 
     # ── SDPA worker/forwarder tensors ──
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
@@ -589,6 +594,8 @@ def create_decoder_block_tensors(
         num_cores=NUM_SDPA_WORKERS,
     )
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
     sdpa_forwarder_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -654,24 +661,27 @@ def create_decoder_block_tensors(
 
     # ── Standalone MoE ref reduce tensors (MoE only) ──
     if is_moe:
-        moe_ref_reduce_intermediate = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=intermediate_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        moe_ref_reduce_output = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=reduce_output_mem,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
+        moe_ref_reduce_intermediate = None
+        moe_ref_reduce_output = None
+        if validate_debug_tensors:
+            moe_ref_reduce_intermediate = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=intermediate_mem_config,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
+            moe_ref_reduce_output = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=reduce_output_mem,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
 
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
@@ -868,8 +878,6 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -939,14 +947,13 @@ def create_decoder_block_tensors(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1003,6 +1010,7 @@ def test_decoder(
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_count=rigged_group_count,
+        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -1012,7 +1020,11 @@ def test_decoder(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links_bcast = 1
+    num_links_allreduce = 2
+    attn_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
@@ -1021,7 +1033,9 @@ def test_decoder(
     ttnn_attn_ref_output_torch = None
     if validate_standalone_mla:
         logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+        attn_ref_semaphores = AttentionBlock.create_semaphores(
+            submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+        )
         ttnn_attn_ref_result = AttentionBlock.op(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -1053,16 +1067,16 @@ def test_decoder(
             d["device_chunk_size"],
             d["ttnn_attn_ref_output"],
             attn_ref_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links_bcast,
+            num_links_allreduce,
             epsilon,
             use_fp32,
             False,  # skip_ccl
             noc_mode,
             num_iterations=1,
+            fabric_config=device_params["fabric_config"],
         )
         ttnn.synchronize_device(submesh)
         ttnn_attn_ref_output_torch = ttnn.to_torch(
@@ -1074,79 +1088,80 @@ def test_decoder(
     # Run decoder operation
     # ========================================================================
     logger.info(f"Running decoder operation with position_id={position_id}...")
+    decoder_program_context = DecoderBlock.get_program_context(
+        # AttentionBlock parameters
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        # Post-SDPA parameters
+        # Post-SDPA
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attention_block_output"],
+        attention_block_semaphores=attn_semaphores,
+        # MoE parameters
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=d["gate_mm_overlapped"],
+        gate_bias_tensor=d["ttnn_gate_bias"],
+        gate_indices_tensor=d["ttnn_gate_indices"],
+        gate_output_scores_tensor=d["gate_output_scores_tensor"],
+        gate_output_indices_tensor=d["gate_output_indices_tensor"],
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        moe_semaphores=moe_semaphores,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=d["reduce_root_coord"],
+        # Shared parameters
+        enable_routing=True,
+        reduce_cluster_axis=reduce_cluster_axis,
+        sdpa_cluster_axis=0,  # sdpa_cluster_axis
+        num_links_bcast=num_links_bcast,
+        num_links_allreduce=num_links_allreduce,
+        epsilon=epsilon,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=False,
+        noc_mode=noc_mode,
+        num_iterations=num_internal_iterations,
+        upstream_socket=None,
+        downstream_sockets=None,
+        fabric_config=device_params["fabric_config"],
+        persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+        persistent_mode=False,
+    )
     for i in range(num_iters):
-        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
-            # AttentionBlock parameters
-            d["input_tensor_mesh"],
-            d["gamma_overlapped"],
-            d["matmul_weights_overlapped"],
-            d["rmsnorm2_gamma_overlapped"],
-            d["matmul2_weights_overlapped"],
-            d["matmul3_weights_overlapped"],
-            d["ttnn_qrope_sin"],
-            d["ttnn_qrope_cos"],
-            d["ttnn_trans_mat"],
-            d["ttnn_krope_cos"],
-            d["ttnn_krope_sin"],
-            d["dkv_matmul_weights_overlapped"],
-            d["dkv_rmsnorm_gamma_overlapped"],
-            d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
-            d["scale"],
-            d["sdpa_kv_cache_buffer"],
-            d["sdpa_out_interm_buffer"],
-            d["sender_coord"],
-            # Post-SDPA parameters
-            # Post-SDPA
-            d["kv_b2_overlapped"],
-            d["o_proj_overlapped"],
-            d["ttnn_sdpa_input_l"],
-            d["ttnn_sdpa_input_ms"],
-            d["ttnn_sdpa_output_l"],
-            d["ttnn_sdpa_intermediate_recv"],
-            d["ttnn_sdpa_forwarder_scratch"],
-            d["device_chunk_size"],
-            d["ttnn_attention_block_output"],
-            attention_block_semaphores=attn_semaphores,
-            # MoE parameters
-            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
-            gate_mm_weights_tensor=d["gate_mm_overlapped"],
-            gate_bias_tensor=d["ttnn_gate_bias"],
-            gate_indices_tensor=d["ttnn_gate_indices"],
-            gate_output_scores_tensor=d["gate_output_scores_tensor"],
-            gate_output_indices_tensor=d["gate_output_indices_tensor"],
-            gate_proj_weights_tensor=d["gate_proj_weights"],
-            up_proj_weights_tensor=d["up_proj_weights"],
-            down_proj_weights_tensor=d["down_proj_weights"],
-            moe_final_output_tensor=None,
-            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-            shared_down_weights_tensor=d["shared_down_weights_tensor"],
-            shared_k_parallel=d["shared_k_parallel"],
-            shared_n_parallel=d["shared_n_parallel"],
-            moe_semaphores=moe_semaphores,
-            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
-            reduce_output_tensor=d["reduce_output_tensor"],
-            reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=d["reduce_root_coord"],
-            # Shared parameters
-            enable_routing=True,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
-            reduce_cluster_axis=reduce_cluster_axis,
-            sdpa_cluster_axis=0,  # sdpa_cluster_axis
-            num_links=1,  # num_links
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
-            noc_mode=noc_mode,
-            num_iterations=num_internal_iterations,
-            upstream_socket=None,
-            downstream_sockets=None,
-            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            persistent_mode=True,
-        )
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
     kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
@@ -1390,8 +1405,6 @@ def test_decoder(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -1403,6 +1416,7 @@ def test_decoder(
         127,
         pytest.param(511, marks=pytest.mark.skip_post_commit),
         pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )
 @pytest.mark.parametrize(
@@ -1421,14 +1435,13 @@ def test_decoder(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1475,83 +1488,88 @@ def test_decoder_mlp(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links_bcast = 1
+    num_links_allreduce = 2
+    attn_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     logger.info(f"Running dense decoder operation with position_id={position_id}...")
+    decoder_program_context = DecoderBlock.get_program_context(
+        # AttentionBlock parameters
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        # Post-SDPA parameters
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attention_block_output"],
+        attention_block_semaphores=attn_semaphores,
+        # MoE parameters (no gate_mm / routing tensors for dense MLP)
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=None,
+        gate_bias_tensor=None,
+        gate_indices_tensor=None,
+        gate_output_scores_tensor=None,
+        gate_output_indices_tensor=None,
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        moe_semaphores=moe_semaphores,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+        # Shared parameters
+        enable_routing=False,
+        reduce_cluster_axis=reduce_cluster_axis,
+        sdpa_cluster_axis=0,
+        num_links_bcast=num_links_bcast,
+        num_links_allreduce=num_links_allreduce,
+        epsilon=epsilon,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=False,
+        use_hardcoded_expert_index=False,
+        noc_mode=noc_mode,
+        num_iterations=num_internal_iterations,
+        upstream_socket=None,
+        downstream_sockets=None,
+        fabric_config=device_params["fabric_config"],
+        persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+        persistent_mode=False,
+    )
     for i in range(num_iters):
-        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
-            # AttentionBlock parameters
-            d["input_tensor_mesh"],
-            d["gamma_overlapped"],
-            d["matmul_weights_overlapped"],
-            d["rmsnorm2_gamma_overlapped"],
-            d["matmul2_weights_overlapped"],
-            d["matmul3_weights_overlapped"],
-            d["ttnn_qrope_sin"],
-            d["ttnn_qrope_cos"],
-            d["ttnn_trans_mat"],
-            d["ttnn_krope_cos"],
-            d["ttnn_krope_sin"],
-            d["dkv_matmul_weights_overlapped"],
-            d["dkv_rmsnorm_gamma_overlapped"],
-            d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
-            d["scale"],
-            d["sdpa_kv_cache_buffer"],
-            d["sdpa_out_interm_buffer"],
-            d["sender_coord"],
-            # Post-SDPA parameters
-            d["kv_b2_overlapped"],
-            d["o_proj_overlapped"],
-            d["ttnn_sdpa_input_l"],
-            d["ttnn_sdpa_input_ms"],
-            d["ttnn_sdpa_output_l"],
-            d["ttnn_sdpa_intermediate_recv"],
-            d["ttnn_sdpa_forwarder_scratch"],
-            d["device_chunk_size"],
-            d["ttnn_attention_block_output"],
-            attention_block_semaphores=attn_semaphores,
-            # MoE parameters (no gate_mm / routing tensors for dense MLP)
-            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
-            gate_mm_weights_tensor=None,
-            gate_bias_tensor=None,
-            gate_indices_tensor=None,
-            gate_output_scores_tensor=None,
-            gate_output_indices_tensor=None,
-            gate_proj_weights_tensor=d["gate_proj_weights"],
-            up_proj_weights_tensor=d["up_proj_weights"],
-            down_proj_weights_tensor=d["down_proj_weights"],
-            moe_final_output_tensor=None,
-            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-            shared_down_weights_tensor=d["shared_down_weights_tensor"],
-            shared_k_parallel=d["shared_k_parallel"],
-            shared_n_parallel=d["shared_n_parallel"],
-            moe_semaphores=moe_semaphores,
-            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
-            reduce_output_tensor=d["reduce_output_tensor"],
-            reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
-            # Shared parameters
-            enable_routing=False,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
-            reduce_cluster_axis=reduce_cluster_axis,
-            sdpa_cluster_axis=0,
-            num_links=1,
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
-            use_hardcoded_expert_index=False,
-            noc_mode=noc_mode,
-            num_iterations=num_internal_iterations,
-            upstream_socket=None,
-            downstream_sockets=None,
-            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            persistent_mode=True,
-        )
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
     # ========================================================================

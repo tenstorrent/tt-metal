@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,8 @@ import torch
 from models.demos.deepseek_v3.utils import lazy_state_dict as lsd
 from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
+
+pytestmark = pytest.mark.t3k_compat
 
 
 def _write_index(model_dir: Path, weight_map: dict[str, str]) -> None:

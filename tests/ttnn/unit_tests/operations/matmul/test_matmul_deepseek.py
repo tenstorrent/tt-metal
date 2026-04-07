@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
 from models.common.utility_functions import comp_pcc, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def pad_batch_to_dram_banks(batch, num_dram_banks=12):
@@ -326,7 +326,15 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
         output_tensor = output_tensor[:, :batch, :seq_len, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
 
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.01 * k,
+        rtol=20.75 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=expected_pcc,
+        check_ulp=False,
+    )
 
 
 @skip_for_blackhole("Deepseek tests target Wormhole")
@@ -692,7 +700,28 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    if in1_dtype == ttnn.bfloat4_b or out_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.0347 * k,
+            rtol=24.625 * k,
+            frobenius_threshold=0.0005 * k,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    elif in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.0028 * k,
+            rtol=1.5 * k,
+            frobenius_threshold=0.0001 * k,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99, check_ulp=False)
 
 
 @pytest.mark.parametrize(
@@ -912,8 +941,15 @@ def test_matmul_batched_dram_sharded(device, test_case):
     pt_out = torch.matmul(in0_orig, in1_orig)
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    assert pcc_passed
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.0235 * k,
+        rtol=27.875 * k,
+        frobenius_threshold=0.0007 * k,
+        pcc_threshold=expected_pcc,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1026,21 +1062,30 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         )
 
         # Run batched matmul
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_memory_config,
-            dtype=ttnn.bfloat16,
-            output_tile=ttnn.Tile((tile_h, tile_w)),
-        )
+        with device.cache_entries_counter.measure():
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_memory_config,
+                dtype=ttnn.bfloat16,
+                output_tile=ttnn.Tile((tile_h, tile_w)),
+            )
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
         # Slice off padding from output to get original dimensions [1, batch, m, n]
         output_tensor = output_tensor[:, :batch, :m, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
-        assert_with_pcc(pt_out, output_tensor, expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.012 * k,
+            rtol=6.032 * k,
+            frobenius_threshold=0.0004 * k,
+            pcc_threshold=expected_pcc,
+            check_ulp=False,
+        )
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)
         dummy_shape = [1, 1, 32, 32]
@@ -1053,7 +1098,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize(
@@ -1115,6 +1160,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 )
 @pytest.mark.parametrize("seq_len", [128])  # Longer sequence lengths are 1024, 4096, 8192, 32768, 131072
 @skip_for_blackhole("Deepseek tests target Wormhole")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     """
     Tests the MLA prefill matmuls with in0 DRAM interleaved and in1 DRAM sharded.
@@ -1135,3 +1181,153 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         num_dram_banks=test_case.get("num_dram_banks", 12),
         expected_pcc=test_case["expected_pcc"],
     )
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {
+            "in0_shape": [1, 1, 3200, 512],
+            "in1_shape": [1, 32, 512, 128],
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        {
+            "in0_shape": [1, 1, 1024, 256],
+            "in1_shape": [1, 8, 256, 128],
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        {
+            "in0_shape": [1, 1, 3200, 512],
+            "in1_shape": [1, 32, 512, 128],
+            "in0_dtype": ttnn.bfloat8_b,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        {
+            "in0_shape": [1, 1, 6400, 512],  # Large M: Mt=200 > num_cores, forces per_core_M > 1
+            "in1_shape": [1, 32, 512, 128],
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+    ],
+    ids=[
+        "3200x512_32heads_bf16act",
+        "1024x256_8heads_bf16act",
+        "3200x512_32heads_bf8act",
+        "6400x512_32heads_per_core_M_gt_1",
+    ],
+)
+def test_kv_wm_matmul(device, test_case):
+    torch.manual_seed(0)
+
+    in0_shape = test_case["in0_shape"]
+    in1_shape = test_case["in1_shape"]
+    in0_dtype = test_case["in0_dtype"]
+    in1_dtype = test_case["in1_dtype"]
+    out_dtype = test_case["out_dtype"]
+    expected_pcc = test_case["expected_pcc"]
+
+    _, in0_H, M, K = in0_shape
+    _, in1_H, _, N = in1_shape
+
+    assert in0_H == 1, "Optimization requires single activation batch (in0_H=1)"
+    assert in1_H > 1, "Optimization requires multiple weight batches (in1_H>1)"
+
+    logger.info(f"DeepSeek decode test: {in0_shape} @ {in1_shape}")
+    logger.info(f"Activation dtype: {in0_dtype}, Weight dtype: {in1_dtype}, Output dtype: {out_dtype}")
+
+    compute_grid = device.compute_with_storage_grid_size()
+
+    Mt = M // 32
+    Kt = K // 32
+    Nt = N // 32
+
+    max_cores = compute_grid.x * compute_grid.y
+    num_cores = 1
+    for cores in range(min(max_cores, Mt), 0, -1):
+        if Mt % cores == 0:
+            num_cores = cores
+            break
+
+    per_core_M = Mt // num_cores
+    per_core_N = Nt
+
+    logger.info(f"Mt={Mt}, num_cores={num_cores}, per_core_M={per_core_M}, per_core_N={per_core_N}")
+
+    in0_block_w = min(8, Kt)
+
+    out_block_h = per_core_M  # Must match per_core_M for validation
+    out_block_w = 4
+
+    out_subblock_h = min(2, out_block_h)
+    out_subblock_w = min(4, out_block_w)
+    while out_subblock_h * out_subblock_w > 8:
+        if out_subblock_w > out_subblock_h:
+            out_subblock_w //= 2
+        else:
+            out_subblock_h //= 2
+
+    prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.x, compute_grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    torch_input_a = torch.randn(in0_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    torch_output = torch.matmul(torch_input_a.repeat(1, in1_H, 1, 1), torch_input_b)
+
+    tt_input_a = ttnn.from_torch(
+        torch_input_a,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in0_dtype,
+        memory_config=input_mem_config,
+    )
+
+    tt_input_b = ttnn.from_torch(
+        torch_input_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in1_dtype,
+        memory_config=input_mem_config,
+    )
+
+    tt_output = ttnn.matmul(
+        tt_input_a,
+        tt_input_b,
+        memory_config=output_mem_config,
+        dtype=out_dtype,
+        program_config=prog_config,
+    )
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert (
+        tt_output_torch.shape == torch_output.shape
+    ), f"Output shape mismatch: {tt_output_torch.shape} vs {torch_output.shape}"
+
+    passed, pcc = comp_pcc(torch_output, tt_output_torch, expected_pcc)
+    logger.info(f"PCC: {pcc}")
+
+    assert passed, f"1D matmul weight batch > activation batch optimization test failed with PCC {pcc} < {expected_pcc}"
+    logger.info("✓ 1D matmul weight batch > activation batch optimization test PASSED!")

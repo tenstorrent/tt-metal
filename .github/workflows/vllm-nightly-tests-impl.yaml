@@ -102,8 +102,11 @@ jobs:
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
+              "tt_mm_throttle_perf": 2,
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "structured-output": true,
+              "sampling-tests": true,
+              "sampling-test-filter": "not test_bad_words and not test_mixed_params_batch",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -117,7 +120,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 65000000}",
               "structured-output": true,
               "sampling-tests": true,
               "multimodal": false,
@@ -162,6 +165,7 @@ jobs:
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
+              "override-tt-config": "{\"trace_region_size\": 67000000}",
               "tt-llama-text-ver": "tt_transformers",
               "structured-output": true,
               "multimodal": false,
@@ -325,7 +329,8 @@ jobs:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
       - in-service
-      - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
+      # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
+      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -575,7 +580,12 @@ jobs:
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: 10
         run: |
-          pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+          FILTER="${{ matrix.test-group.sampling-test-filter }}"
+          if [ -n "$FILTER" ]; then
+            pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+          else
+            pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+          fi
 
       - name: 🧹 Cleanup server process
         if: always()

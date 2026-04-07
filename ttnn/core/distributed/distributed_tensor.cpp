@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -192,7 +192,7 @@ public:
             const auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), tensor_spec, tensor_topology);
+            return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -256,6 +256,8 @@ public:
 
         return create_tensor<T>(sharded_xtensor_views, layout, pad_value, buffer_pin, tensor_dims);
     }
+
+    const MeshMapperConfig& config() const { return config_; }
 
 private:
     template <typename T>
@@ -362,7 +364,7 @@ private:
         const auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), shard_spec, tensor_topology);
+        return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
     // MeshDevice parameters.
@@ -544,6 +546,8 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
         config));
 }
 
+const MeshMapperConfig& TensorToMesh::config() const { return impl_->config(); }
+
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(
         mesh_device,
@@ -639,7 +643,7 @@ Tensor create_distributed_tensor(
 
 #define INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(TYPE)                    \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        ttsl::Span<TYPE> buffer,                                    \
+        ttsl::Span<TYPE> buffer,                                       \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::MemoryPin& buffer_pin,                     \
         const tt::tt_metal::TensorLayout& shard_layout,                \
@@ -648,7 +652,7 @@ Tensor create_distributed_tensor(
         std::optional<ttnn::QueueId> cq_id,                            \
         TYPE pad_value);                                               \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        ttsl::Span<const TYPE> buffer,                              \
+        ttsl::Span<const TYPE> buffer,                                 \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::TensorLayout& shard_layout,                \
         const TensorToMesh& mapper,                                    \

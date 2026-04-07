@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -43,7 +44,8 @@ PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgr
     auto shard_spec_padded = output.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
-    auto& all_cores_padded = shard_spec_padded.grid;
+    const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
+    auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

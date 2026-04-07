@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -371,6 +371,7 @@ class TestMemoryEfficientRunner:
             np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
             layout=ttnn.Layout.TILE,
         )
+        input.set_requires_grad(True)
         mask = ttml.autograd.Tensor.from_numpy(
             np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
             layout=ttnn.Layout.TILE,

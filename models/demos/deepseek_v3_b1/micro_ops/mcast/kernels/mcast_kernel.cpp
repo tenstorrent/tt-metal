@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Mcast unified kernel
@@ -95,5 +95,5 @@ void kernel_main() {
     Mcast::Op<McastCTArgs, Core::is_sender_core, Core::is_receiver_core, Core::is_receiver_core, true> mcast;
     mcast.init(mcast_args);
     mcast(mcast_args);
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 }

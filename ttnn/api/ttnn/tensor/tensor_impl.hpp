@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -124,21 +124,34 @@ void copy_to_device(
 //                                  .to_layout()
 // ======================================================================================
 
-Tensor to_layout(const Tensor& tensor, Layout target_layout);
-
-Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
+HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
-Tensor pad(
-    const Tensor& tensor,
+HostTensor pad(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-Tensor unpad(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
+HostTensor pad_to_tile(const HostTensor& tensor, float pad_value);
+
+HostTensor unpad(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end);
+
+HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape);
+
+// ======================================================================================
+//                                  .view()
+// ======================================================================================
+
+HostTensor view(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
 
 // ======================================================================================
 //                                         Print
@@ -170,7 +183,7 @@ std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
