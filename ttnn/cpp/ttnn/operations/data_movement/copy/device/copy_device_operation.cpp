@@ -154,8 +154,10 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
 
     const Tensor& input_tensor = tensor_args.input;
 
-    auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(input_tensor.layout()), operation_attributes.output_mem_config);
+    auto output_layout = tt::tt_metal::TensorLayout(
+        operation_attributes.output_dtype,
+        tt::tt_metal::PageConfig(input_tensor.layout()),
+        operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
                                         // padded_shape due to having a different shard_spec.
