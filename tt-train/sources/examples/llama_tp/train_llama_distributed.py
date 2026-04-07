@@ -582,7 +582,7 @@ def main():
             MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")
             print_memory_stats("MODEL_DISTRIBUTION")
 
-        print("   Hooks installed.")
+        print("   Model distributed.")
     else:
         print("\n4. TP/CP not enabled, skipping distribution...")
 

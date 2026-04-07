@@ -84,33 +84,12 @@ def _to_tensor(arr, layout=None, mesh_device=None):
             stamp_layout = layout
         else:
             ndim = _mesh_ndim(mesh_device)
-            # Use 2D replicate mapper so topology matches mesh dimensionality
-            mapper = ttml.core.distributed.create_tensor_to_mesh_mapper(mesh_device, [None] * ndim)
             stamp_layout = DistributedLayout(ndim=ndim)
+            mapper = stamp_layout.build_mapper(mesh_device, tensor_rank=rank)
     tensor = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, mapper=mapper)
     if stamp_layout is not None:
         set_layout(tensor, stamp_layout)
     return tensor
-
-
-def _layout_to_mapper(layout, mesh_device, tensor_rank=4):
-    """Convert a DistributedLayout + mesh_device to a MeshMapperConfig."""
-    if mesh_device is None:
-        return None
-    from ttml.distributed.layout import Shard
-
-    if layout is None:
-        mesh_shape = mesh_device.shape
-        ndim = mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
-        return ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate() for _ in range(ndim)])
-    placements = []
-    for p in layout.placements:
-        if isinstance(p, Shard):
-            dim = p.dim if p.dim >= 0 else tensor_rank + p.dim
-            placements.append(ttnn.PlacementShard(dim))
-        else:
-            placements.append(ttnn.PlacementReplicate())
-    return ttnn.MeshMapperConfig(placements=placements)
 
 
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
@@ -200,7 +179,7 @@ def uniform(a: float = 0.0, b: float = 1.0):
 
     def uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         if on_device_init and mesh_device is not None:
-            mapper = _layout_to_mapper(layout, mesh_device, len(shape))
+            mapper = _resolve_layout(layout, mesh_device).build_mapper_config(tensor_rank=len(shape))
             tensor = ttml.ops.rand(shape, a, b, mapper=mapper)
             return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
         arr = np.random.uniform(a, b, shape).astype(ml_dtypes.bfloat16)
@@ -214,7 +193,7 @@ def normal(mean: float = 0.0, std: float = 1.0):
 
     def normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         if on_device_init and mesh_device is not None:
-            mapper = _layout_to_mapper(layout, mesh_device, len(shape))
+            mapper = _resolve_layout(layout, mesh_device).build_mapper_config(tensor_rank=len(shape))
             tensor = ttml.ops.randn(shape, mean, std, mapper=mapper)
             return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
         arr = np.random.normal(mean, std, shape).astype(ml_dtypes.bfloat16)

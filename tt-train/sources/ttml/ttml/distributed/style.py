@@ -110,48 +110,14 @@ class ColwiseParallel(ParallelStyle):
         mesh_device,
         tp_axis: int,
     ) -> "AbstractModuleBase":
-        from ttml.modules import LinearLayer
-
-        if not isinstance(module, LinearLayer):
-            raise NotImplementedError("ColwiseParallel currently only supports LinearLayer!")
-
-        from .training import distribute_tensor
-        from .layout import get_layout
-
-        layouts = self.get_layouts(mesh_device, tp_axis)
-        layout = layouts["weight"]
-
-        # Skip distribute_tensor if weight is already in the correct layout.
-        # This happens when the model was built with lazy init (mesh_device + tp_plan).
-        current_layout = None
-        try:
-            current_layout = get_layout(module.weight.tensor)
-        except Exception:
-            pass
-
-        if current_layout != layout:
-            # Distribute weight
-            new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
-            module.weight.tensor = new_w
-            module.override_tensor(new_w, "weight")
-
-            # Distribute bias (sharded on last dim for column-parallel)
-            if module.bias is not None:
-                bias_layout = layouts["bias"]
-                new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
-                module.bias.tensor = new_b
-                module.override_tensor(new_b, "bias")
-
         import ttml
         from .layout import get_layout, set_layout
 
         _original_forward = module.forward
 
         def _wrapped_forward(x):
-            # Pre: broadcast input on TP axis (colwise needs replicated input)
             x_bc = ttml.ops.distributed.broadcast(x, cluster_axis=tp_axis)
             out = _original_forward(x_bc)
-            # Post: all_gather with replicated grad for LM head
             if self.gather_output:
                 out = ttml.ops.distributed.all_gather(
                     out,
@@ -166,19 +132,11 @@ class ColwiseParallel(ParallelStyle):
             return out
 
         module.forward = _wrapped_forward
-
         return module
 
 
 class RowwiseParallel(ParallelStyle):
-    """Partition a LinearLayer in row-wise fashion.
-
-    Weight is sharded on in_features (dim -1 in TTML's [1,1,out,in] layout).
-    Output is replicated (via all_reduce); input should be sharded on last dim.
-
-    Example:
-        parallelize_module(model, mesh, {"w2": RowwiseParallel()})
-    """
+    """Row-parallel: weight sharded on in_features (dim -1)."""
 
     def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, DistributedLayout]:
         ndim = _mesh_ndim(mesh_device)
@@ -193,42 +151,8 @@ class RowwiseParallel(ParallelStyle):
         mesh_device,
         tp_axis: int,
     ) -> "AbstractModuleBase":
-        from ttml.modules import LinearLayer
-
-        if not isinstance(module, LinearLayer):
-            raise NotImplementedError("RowwiseParallel currently only supports LinearLayer!")
-
-        from .training import distribute_tensor
-        from .layout import get_layout
-
-        layouts = self.get_layouts(mesh_device, tp_axis)
-        layout = layouts["weight"]
-
-        # Skip distribute_tensor if weight is already in the correct layout.
-        # This happens when the model was built with lazy init (mesh_device + tp_plan).
-        current_layout = None
-        try:
-            current_layout = get_layout(module.weight.tensor)
-        except Exception:
-            pass
-
-        if current_layout != layout:
-            # Distribute weight
-            new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
-            module.weight.tensor = new_w
-            module.override_tensor(new_w, "weight")
-
-            # Bias stays replicated for row-parallel
-            if module.bias is not None:
-                bias_layout = layouts["bias"]
-                new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
-                module.bias.tensor = new_b
-                module.override_tensor(new_b, "bias")
-
-        # Post: all_reduce on output (row-parallel partial sums)
-        from .layout import get_layout, set_layout
-
         import ttml
+        from .layout import get_layout, set_layout
 
         _original_forward = module.forward
 
@@ -245,5 +169,4 @@ class RowwiseParallel(ParallelStyle):
             return out
 
         module.forward = _wrapped_forward
-
         return module

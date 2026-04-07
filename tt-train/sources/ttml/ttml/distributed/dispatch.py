@@ -46,10 +46,7 @@ def _tensor_input_shapes_for_trace(tensor_args: List[Any]) -> List[Tuple[int, ..
     """Logical shapes at the Python op boundary (``tuple(t.shape())`` per tensor input)."""
     shapes: List[Tuple[int, ...]] = []
     for t in tensor_args:
-        try:
-            shapes.append(tuple(int(x) for x in t.shape()))
-        except (TypeError, ValueError, AttributeError):
-            shapes.append(())
+        shapes.append(tuple(int(x) for x in t.shape()))
     return shapes
 
 

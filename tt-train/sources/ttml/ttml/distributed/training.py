@@ -1,78 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training helpers: distribute_tensor, parallelize_module, sync_gradients.
-
-These are the main user-facing entry points that wire the rule-based layout
-system into the model initialization and gradient synchronization steps.
-"""
+"""Training helpers: parallelize_module."""
 
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
-import ttnn
-
-import ttml
 from ttml.modules import AbstractModuleBase
 
-from .layout import DistributedLayout, Shard, set_layout
 from .mesh_runtime import MeshRuntime, set_runtime
 from .rules.registry import get_module_rule
 from .style import ParallelStyle
 from ._register_ops import init_ops
-
-# ---------------------------------------------------------------------------
-# distribute_tensor
-# ---------------------------------------------------------------------------
-
-
-def distribute_tensor(
-    tensor,
-    mesh_device,
-    layout: DistributedLayout,
-    requires_grad: Optional[bool] = None,
-) -> Any:
-    """Distribute a single ttml autograd tensor to *mesh_device* with *layout*.
-
-    The underlying ttnn tensor is round-tripped through NumPy for sharding.
-    The TensorPtr wrapper preserves ``requires_grad`` status.
-    Layout metadata is stamped on the result.
-
-    Args:
-        tensor: The tensor to distribute
-        mesh_device: The mesh device to distribute to
-        layout: The target layout
-        requires_grad: If provided, override requires_grad on result.
-                       If None, preserves original tensor's requires_grad status.
-    """
-    # Preserve requires_grad and dtype from original tensor (ttml.autograd.Tensor: get_requires_grad, dtype)
-    orig_requires_grad = tensor.get_requires_grad()
-    final_requires_grad = requires_grad if requires_grad is not None else orig_requires_grad
-    orig_dtype = tensor.dtype()
-
-    # Use composer to gather multi-device tensor back to single numpy array.
-    # Tensors are already replicated across the mesh when the device is open.
-    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
-    np_data = tensor.to_numpy(orig_dtype, composer)
-
-    # Composer concatenates all devices along dim 0, take first slice for replicated data
-    if np_data.shape[0] > 1:
-        np_data = np_data[:1]
-
-    mapper = layout.build_mapper(mesh_device, tensor_rank=len(np_data.shape))
-
-    result = ttml.autograd.Tensor.from_numpy(
-        np_data,
-        ttnn.Layout.TILE,
-        orig_dtype,
-        mapper,
-    )
-    # Restore requires_grad status
-    result.set_requires_grad(final_requires_grad)
-    set_layout(result, layout)
-    return result
 
 
 # ---------------------------------------------------------------------------

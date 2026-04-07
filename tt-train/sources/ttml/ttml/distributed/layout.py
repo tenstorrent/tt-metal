@@ -112,26 +112,19 @@ class DistributedLayout:
                 axis_placements[i] = p
         return DistributedLayout(ndim=ndim, axis_placements=axis_placements)
 
-    def build_mapper(self, mesh_device, tensor_rank: int = 4):
-        """Build a TensorToMesh mapper for this layout.
-
-        Returns a shard mapper for the first ``Shard`` placement found,
-        or a replicate mapper if fully replicated.
-        """
-        import ttml
-
-        for mesh_axis, placement in enumerate(self.placements):
-            if isinstance(placement, Shard):
-                dim = placement.dim if placement.dim >= 0 else tensor_rank + placement.dim
-                return ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, dim, mesh_axis)
-        return ttml.core.distributed.replicate_tensor_to_mesh_mapper(mesh_device)
+    def build_mapper_config(self, tensor_rank: int = 4) -> "ttnn.MeshMapperConfig":
+        """Build a MeshMapperConfig from this layout."""
+        placements = []
+        for p in self.placements:
+            if isinstance(p, Shard):
+                dim = p.dim if p.dim >= 0 else tensor_rank + p.dim
+                placements.append(ttnn.PlacementShard(dim))
+            else:
+                placements.append(ttnn.PlacementReplicate())
+        return ttnn.MeshMapperConfig(placements=placements)
 
     def build_mapper(self, mesh_device, tensor_rank: int = 4):
-        """Build a TensorToMesh mapper for this layout.
-
-        Returns a shard mapper for the first ``Shard`` placement found,
-        or a replicate mapper if fully replicated.
-        """
+        """Build a CppTensorToMesh mapper for from_numpy."""
         import ttml
 
         for mesh_axis, placement in enumerate(self.placements):
