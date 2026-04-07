@@ -22,9 +22,12 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_tile_size(cb_combine_input);
     constexpr uint32_t combine_page_size = emb_dim_tiles * tile_size;
 
+    // NOLINTBEGIN: InterleavedAddrGen is required here because:
+    // - combine uses a custom page_size (one expert's embedding row)
+    // - weights use the tensor's page_size but are read into tile-sized CB slots
     const InterleavedAddrGen<true> combine_addrg = {.bank_base_address = combine_addr, .page_size = combine_page_size};
-
     const InterleavedAddrGen<true> weight_addrg = {.bank_base_address = weight_addr, .page_size = weight_page_size};
+    // NOLINTEND
 
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
