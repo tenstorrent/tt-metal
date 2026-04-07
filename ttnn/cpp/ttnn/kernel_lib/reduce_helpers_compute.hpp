@@ -377,9 +377,9 @@ template <
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
-    uint32_t input_cb,
-    uint32_t scaler_cb,
-    uint32_t output_cb,
+    uint32_t input_cb_id,
+    uint32_t scaler_cb_id,
+    uint32_t output_cb_id,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
