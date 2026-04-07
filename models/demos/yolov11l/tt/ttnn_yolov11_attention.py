@@ -36,6 +36,7 @@ class TtnnAttention:
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
         v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
         v = ttnn.permute(v, (0, 1, 3, 2))
+
         x2 = self.pe(device=device, x=v)
         x = ttnn.add(x1, x2, memory_config=x2.memory_config())
         x = self.proj(device=device, x=x)
