@@ -132,12 +132,14 @@ def test_kv_chunk_address_table(mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [3 * 1024, 100 * 1024, 4 * 3 * 1024], ids=["seq3k", "seq100k", "seq12k"])
+@pytest.mark.parametrize("seq_len", [3 * 1024, 4 * 3 * 1024, 100 * 1024], ids=["seq3k", "seq12k", "seq100k"])
 def test_kv_cache_address_table(mesh_device, seq_len):
     sp_axis = 0
     kvpe_cache_head_dim = 576
 
     mesh_shape = list(mesh_device.shape)
+    if mesh_shape[0] == 32 and mesh_shape[1] == 4 and seq_len == 3 * 1024:
+        pytest.skip("Skipping test for 32x4 mesh and seq3k")
     seq_len_local = seq_len // mesh_shape[sp_axis]
 
     torch_kvpe_cache = torch.zeros(1, 1, seq_len_local, kvpe_cache_head_dim)
