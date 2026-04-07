@@ -73,9 +73,10 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
     const std::optional<MeshCoordinate>& w_forward_coord_in,
     const std::optional<MeshCoordinate>& w_backward_coord_in,
     uint32_t w_device_index_in,
-    // Progress semaphore for fused op pipelining (W-writer signals conv3d readers once at end)
+    // Progress semaphore for T-batch pipelining: H-writer signals per T-batch, W-reader signals once at end.
     uint32_t progress_sem_addr,
-    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords) {
+    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords,
+    uint32_t progress_t_batch_size) {
     // Use the buffer's aligned page size (architecture-specific: 32B on WH, 64B on BH).
     uint32_t page_size = input_buffer->aligned_page_size();
 
@@ -311,7 +312,13 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                          // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(ring_size);                  // ring_size
-    // H-writer does NOT signal conv3d readers — W-reader handles that after w_nbr_sem.
+    // H-writer signals conv3d readers per T-batch when progress semaphore is active.
+    // W-reader additionally signals once at end (after W-halo completes). The extra W-reader signal
+    // is harmless since Conv3d uses noc_semaphore_wait_min (>= threshold, not == threshold).
+    if (progress_sem_addr != 0) {
+        h_writer_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
+    }
+    h_writer_kernel_config.compile_args.push_back(progress_t_batch_size);  // progress_t_batch_size (0 if no pipelining)
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -320,15 +327,20 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         h_writer_kernel_config);
     {
         // Build H writer common runtime args.
-        // H-writer does NOT signal conv3d readers (W-reader handles that).
+        // H-writer signals conv3d readers per T-batch when pipelining is enabled (NP_PROGRESS_SEM defined).
+        // W-reader handles final W-halo ordering signal; H-writer handles per-T-batch progress.
         std::vector<uint32_t> h_writer_crta = {
             input_buffer->address(),
             halo_buffer->address(),
             h_neighbor_semaphore.address(),
             barrier_semaphore.address(),
-            0u,  // progress_sem (unused for H-writer)
-            0u,  // num_reader_cores (H-writer no longer signals conv3d)
+            progress_sem_addr,                                // progress_sem (0 if no pipelining)
+            static_cast<uint32_t>(reader_noc_coords.size()),  // num_reader_cores
         };
+        for (const auto& [x, y] : reader_noc_coords) {
+            h_writer_crta.push_back(x);
+            h_writer_crta.push_back(y);
+        }
         SetCommonRuntimeArgs(program, h_writer_kernel_id, h_writer_crta);
     }
 
@@ -430,12 +442,13 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
                 writer_rt_args.push_back(false);
             }
             // In fabric_only mode: override writer rt_args to index into the compact halo buffer.
-            // In fabric_only mode: route ALL H-halo sticks through L1→CB→local DRAM to guarantee
-            // ordering before Phase 2. BH does not provide fabric-DRAM-write vs NOC-read ordering.
+            // In fabric_only mode: only corner sticks (pad2_left + pad2_right per row) go through
+            // L1→CB→local DRAM to guarantee ordering. Non-corner sticks go directly to DRAM via fabric
+            // (BH ordering limitation: tracked as known issue). All-L1 routing would require per-link
+            // semaphores to avoid a race with num_links=2 — deferred to future work.
             //   stick_start_id=0: no W-offset in compact buffer
             //   num_sticks_per_halo_dim=W: compact buffer row width (not W+pad)
-            //   padding_left=W/2: makes pad2_left_sticks=W/2, pad2_right_sticks=W/2 (all sticks = corners)
-            //   All W sticks go through L1 → committed before Phase 2 via noc_async_write_barrier()
+            //   padding_left kept at pad2_left: gives pad2_left_sticks=1, pad2_right_sticks=1 (corners only)
             if (fabric_only) {
                 // Compact buffer layout: [H-top: outer_dim_size×ph×W | H-bot: same | W-left | W-right]
                 // outer_dim_size (function param) = total T-slices per device.
@@ -772,7 +785,11 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         hw[1] = output_addr;
         hw[2] = h_sem_addr;
         hw[3] = barrier_sem_addr;
-        // hw[4] = 0 (H-writer no longer signals conv3d; W-writer does that)
+        // hw[4] = progress_sem_addr (ping-pong, update each call) — only if NP_PROGRESS_SEM
+        // hw[5] = num_reader_cores, hw[6+] = NOC coords — static, set once in create()
+        if (operation_attributes.progress_semaphore.has_value() && hw.size() > 4) {
+            hw[4] = operation_attributes.progress_semaphore->address();
+        }
 
         if (shared_vars.has_local_copy) {
             auto& lr = GetCommonRuntimeArgs(program, shared_vars.local_reader_kernel_id);
@@ -979,9 +996,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_forward_coord,
         w_backward_coord,
         w_device_index,
-        // Progress sem (W-writer signals conv3d readers once at end)
+        // Progress sem: H-writer signals per T-batch, W-reader signals once at end for W-halo ordering.
         progress_sem_addr,
-        reader_noc_coords);
+        reader_noc_coords,
+        operation_attributes.progress_t_batch_size);
 
     // Local copy workers on cores not used by fabric: AllCores - FabricCores
     // In fabric_only mode, local_copy is skipped entirely — conv3d reads interior from original tensor.
