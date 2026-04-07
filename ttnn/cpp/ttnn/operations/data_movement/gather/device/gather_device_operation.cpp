@@ -113,15 +113,6 @@ GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output
     return tensor_specs;
 }
 
-GatherDeviceOperation::tensor_return_value_t GatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output_tensor.has_value()) {
-        return tensor_args.output_tensor.value();
-    }
-    const auto output_specs = compute_output_specs(attributes, tensor_args);
-    return create_device_tensor(output_specs, tensor_args.input_tensor.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<GatherDeviceOperation::tensor_return_value_t>
 GatherDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {

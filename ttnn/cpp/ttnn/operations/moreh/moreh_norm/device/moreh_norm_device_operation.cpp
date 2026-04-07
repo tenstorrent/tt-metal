@@ -159,16 +159,6 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
-MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output = tensor_args.output;
-    if (output.has_value()) {
-        return output.value();
-    }
-    const auto& input = tensor_args.input;
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input.device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_norm
 
 namespace ttnn::prim {

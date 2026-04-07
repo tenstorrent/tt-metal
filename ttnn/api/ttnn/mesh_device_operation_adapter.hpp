@@ -95,9 +95,10 @@ struct MeshDeviceOperationAdapter {
         if constexpr (HasCreateOutputTensors<DeviceOperation>) {
             return DeviceOperation::create_output_tensors(attrs, tensor_args);
         } else {
-            if constexpr (HasPreallocatedOutput<tensor_args_t>) {
-                if (tensor_args.preallocated_output.has_value()) {
-                    return tensor_args.preallocated_output.value();
+            if constexpr (HasOptionalTensorField<tensor_args_t>) {
+                auto preallocated = detail::get_preallocated_output(tensor_args);
+                if (preallocated.has_value()) {
+                    return preallocated.value();
                 }
             }
             auto specs = DeviceOperation::compute_output_specs(attrs, tensor_args);

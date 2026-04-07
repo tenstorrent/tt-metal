@@ -90,16 +90,6 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
 }
-
-MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output = tensor_args.output;
-    if (output.has_value()) {
-        return {output.value()};
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
 }  // namespace ttnn::operations::moreh::moreh_mean
 
 namespace ttnn::prim {

@@ -83,15 +83,6 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
             operation_attributes.memory_config));
 };
 
-MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t>
 moreh_fold_build_operation_args(
     const Tensor& input,

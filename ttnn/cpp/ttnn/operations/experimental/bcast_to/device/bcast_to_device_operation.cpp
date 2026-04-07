@@ -89,15 +89,6 @@ BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
             operation_attributes.memory_config));
 };
 
-BcastToOperation::tensor_return_value_t BcastToOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Let's just require it to be allocated ahead of time for now
-    if (tensor_args.output.has_value()) {
-        return {tensor_args.output.value()};
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
 }  // namespace ttnn::operations::experimental::broadcast_to
 
 namespace ttnn::prim {

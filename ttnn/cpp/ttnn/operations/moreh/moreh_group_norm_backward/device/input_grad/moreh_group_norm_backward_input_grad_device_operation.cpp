@@ -71,17 +71,6 @@ MorehGroupNormBackwardInputGradOperation::compute_output_specs(
             tensor_args.output_grad.dtype(), PageConfig(Layout::TILE), operation_attributes.input_grad_memory_config));
 }
 
-MorehGroupNormBackwardInputGradOperation::tensor_return_value_t
-MorehGroupNormBackwardInputGradOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value()) {
-        return {tensor_args.input_grad.value()};
-    }
-
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward
 
 namespace ttnn::prim {

@@ -51,16 +51,6 @@ MorehBiasAddBackwardOperation::spec_return_value_t MorehBiasAddBackwardOperation
         TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.bias_grad_memory_config));
 };
 
-MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.bias_grad.has_value()) {
-        return tensor_args.bias_grad.value();
-    }
-
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.bias->device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_linear_backward
 
 namespace ttnn::prim {

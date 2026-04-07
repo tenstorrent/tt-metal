@@ -105,17 +105,6 @@ MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation
             operation_attributes.memory_config));
 }
 
-MorehSoftmaxBackwardOperation::tensor_return_value_t MorehSoftmaxBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_grad_tensor = tensor_args.input_grad_tensor;
-    if (input_grad_tensor.has_value()) {
-        return input_grad_tensor.value();
-    }
-
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.output_tensor.device());
-}
-
 MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get_parallelization_strategy(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output_tensor;

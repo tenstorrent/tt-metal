@@ -108,16 +108,6 @@ BatchNormOperation::spec_return_value_t BatchNormOperation::compute_output_specs
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
-BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_tensor = tensor_args.output;
-    if (output_tensor.has_value()) {
-        return output_tensor.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;

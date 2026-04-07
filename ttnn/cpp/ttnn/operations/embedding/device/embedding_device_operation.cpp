@@ -126,15 +126,6 @@ TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
         TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-Tensor EmbeddingsDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return *tensor_args.optional_output_tensor;
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_arg.device());
-}
-
 Tensor embedding(
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,

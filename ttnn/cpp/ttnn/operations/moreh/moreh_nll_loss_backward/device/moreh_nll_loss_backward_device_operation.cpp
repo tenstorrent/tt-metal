@@ -87,16 +87,6 @@ MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDev
     TT_FATAL(false, "moreh_nll_loss_backward not support creating output tensors.");
 }
 
-MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad_tensor.has_value()) {
-        return {tensor_args.input_grad_tensor.value()};
-    }
-
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
 
 namespace ttnn::prim {

@@ -170,14 +170,6 @@ TensorSpec ArgMaxDeviceOperation::compute_output_specs(
         TensorLayout(args.output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-Tensor ArgMaxDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 ttnn::Tensor argmax(
     const ttnn::Tensor& input,
     tt::tt_metal::DataType output_dtype,

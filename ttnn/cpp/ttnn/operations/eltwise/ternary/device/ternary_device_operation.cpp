@@ -474,14 +474,6 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
-Tensor TernaryDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return *tensor_args.optional_output_tensor;
-    }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
-}
-
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;

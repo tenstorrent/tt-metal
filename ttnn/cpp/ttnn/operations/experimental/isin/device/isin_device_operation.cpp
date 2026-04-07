@@ -42,17 +42,6 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
     };
 }
 
-IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_out) {
-        TT_FATAL(
-            tensor_args.optional_out->dtype() == OUTPUT_TENSOR_DATA_TYPE,
-            "Preallocated output should be of uint32 dtype");
-        return *tensor_args.optional_out;
-    }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
-}
-
 ttsl::hash::hash_t IsInDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_memory_layout = tensor_args.elements_tensor.layout();

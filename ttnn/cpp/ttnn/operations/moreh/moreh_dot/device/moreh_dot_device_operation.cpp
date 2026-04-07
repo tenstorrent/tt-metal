@@ -51,14 +51,6 @@ MorehDotOperation::spec_return_value_t MorehDotOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }
 
-MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_a.device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_dot
 
 namespace ttnn::prim {

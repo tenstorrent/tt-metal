@@ -319,15 +319,6 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
         TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
-BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output_tensor.has_value()) {
-        return *tensor_args.output_tensor;
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
 ttsl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;

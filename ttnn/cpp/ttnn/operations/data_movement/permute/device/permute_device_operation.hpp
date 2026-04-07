@@ -166,9 +166,6 @@ struct PermuteDeviceOperation {
 
     // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-
-    // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };

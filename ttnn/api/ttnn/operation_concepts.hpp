@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <reflect>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -14,10 +15,12 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt_stl/concepts.hpp>
 
 #include <cstdint>
 
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation {
 
@@ -109,12 +112,39 @@ concept HasCreateOutputTensors = requires(
     } -> std::same_as<typename device_operation_t::tensor_return_value_t>;
 };
 
-// Detect if tensor_args_t has a preallocated_output field (std::optional<Tensor>).
-// Used by the default create_output_tensors to return a preallocated output when provided.
+// Check at compile time whether TensorArgs has any std::optional<Tensor> field.
+// Used to decide if the default create_output_tensors should look for a preallocated output.
+namespace detail {
+template <typename TensorArgs, std::size_t... Is>
+consteval bool has_optional_tensor_field(std::index_sequence<Is...>) {
+    return (
+        std::is_same_v<
+            std::optional<tt::tt_metal::Tensor>,
+            std::decay_t<decltype(reflect::get<Is>(std::declval<TensorArgs>()))>> ||
+        ...);
+}
+
 template <typename TensorArgs>
-concept HasPreallocatedOutput = requires(const TensorArgs& args) {
-    { args.preallocated_output.has_value() } -> std::same_as<bool>;
-};
+std::optional<tt::tt_metal::Tensor> get_preallocated_output(const TensorArgs& args) {
+    std::optional<tt::tt_metal::Tensor> result;
+    reflect::for_each(
+        [&](auto I) {
+            using field_t = std::decay_t<decltype(reflect::get<I>(args))>;
+            if constexpr (std::is_same_v<field_t, std::optional<tt::tt_metal::Tensor>>) {
+                if (!result.has_value() && reflect::get<I>(args).has_value()) {
+                    result = reflect::get<I>(args);
+                }
+            }
+        },
+        args);
+    return result;
+}
+}  // namespace detail
+
+template <typename TensorArgs>
+concept HasOptionalTensorField =
+    ttsl::concepts::Reflectable<TensorArgs> &&
+    detail::has_optional_tensor_field<TensorArgs>(std::make_index_sequence<reflect::size<TensorArgs>()>{});
 
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {

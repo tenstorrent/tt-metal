@@ -69,17 +69,6 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
             input_tensor.padded_shape()));
 }
 
-InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output_tensor.has_value()) {
-        return tensor_args.output_tensor.value();
-    }
-
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(spec, input_tensor.device());
-}
-
 ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

@@ -75,15 +75,6 @@ PermuteDeviceOperation::create_op_performance_model(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
-
-PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {

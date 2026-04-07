@@ -35,14 +35,6 @@ MorehNormBackwardOperation::spec_return_value_t MorehNormBackwardOperation::comp
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
 };
 
-MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value()) {
-        return tensor_args.input_grad.value();
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_norm_backward
 
 namespace ttnn::prim {

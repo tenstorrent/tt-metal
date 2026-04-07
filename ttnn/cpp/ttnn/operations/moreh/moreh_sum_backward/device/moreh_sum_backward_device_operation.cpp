@@ -111,15 +111,6 @@ MorehSumBackwardOperation::spec_return_value_t MorehSumBackwardOperation::comput
         TensorLayout(tensor_args.input->dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
-MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_grad = tensor_args.input_grad;
-    if (input_grad.has_value()) {
-        return input_grad.value();
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input->device());
-}
-
 }  // namespace ttnn::operations::moreh::moreh_sum_backward
 
 namespace ttnn::prim {

@@ -96,16 +96,6 @@ void MorehMatmulOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-MorehMatmulOperation::tensor_return_value_t MorehMatmulOperation::create_output_tensors(
-    const MorehMatmulOperation::operation_attributes_t& operation_attributes,
-    const MorehMatmulOperation::tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-};
-
 MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input.padded_shape();

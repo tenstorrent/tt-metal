@@ -94,12 +94,6 @@ RunningStatistics::spec_return_value_t RunningStatistics::compute_output_specs(
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
-RunningStatistics::tensor_return_value_t RunningStatistics::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.batch_mean.device());
-}
-
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {

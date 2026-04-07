@@ -109,15 +109,6 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
         tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), mem_config));
 }
 
-AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-    return create_device_tensor(output_specs, tensor_args.input_tensor.device());
-}
-
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

@@ -135,14 +135,6 @@ TensorSpec UnaryNgDeviceOperation::compute_output_specs(
             tensor_args.input.padded_shape()));
 }
 
-Tensor UnaryNgDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.output_tensor.has_value()) {
-        return *tensor_args.output_tensor;
-    }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

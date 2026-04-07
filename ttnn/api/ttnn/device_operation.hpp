@@ -446,9 +446,10 @@ typename device_operation_t::tensor_return_value_t launch(
             return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
         } else {
             using tensor_args_t = typename device_operation_t::tensor_args_t;
-            if constexpr (HasPreallocatedOutput<tensor_args_t>) {
-                if (tensor_args.preallocated_output.has_value()) {
-                    return tensor_args.preallocated_output.value();
+            if constexpr (HasOptionalTensorField<tensor_args_t>) {
+                auto preallocated = detail::get_preallocated_output(tensor_args);
+                if (preallocated.has_value()) {
+                    return preallocated.value();
                 }
             }
             TT_FATAL(

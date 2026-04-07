@@ -52,15 +52,6 @@ BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_
             operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
-BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;

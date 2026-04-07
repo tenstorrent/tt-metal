@@ -75,16 +75,6 @@ AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::co
     return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
 }
 
-AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.opt_output.has_value()) {
-        // a copy of a Python object (referencing to the same tensor though) is returned here
-        return *tensor_args.opt_output;
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
 operation::Hash AccumulationDeviceOperation::compute_program_hash(
     const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
     return operation::hash_operation<AccumulationDeviceOperation>(

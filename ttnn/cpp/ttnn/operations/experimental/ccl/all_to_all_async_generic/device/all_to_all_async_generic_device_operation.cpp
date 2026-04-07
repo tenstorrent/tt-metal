@@ -118,15 +118,6 @@ AllToAllAsyncGenericDeviceOperation::spec_return_value_t AllToAllAsyncGenericDev
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
 }
 
-AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.persistent_output_buffer.has_value()) {
-        return tensor_args.persistent_output_buffer.value();
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllToAllAsyncGenericDeviceOperation::compute_program_hash is called");

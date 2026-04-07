@@ -456,17 +456,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
-BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_tensor = tensor_args.output_tensor;
-    if (output_tensor.has_value()) {
-        return output_tensor.value();
-    }
-
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
 ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;

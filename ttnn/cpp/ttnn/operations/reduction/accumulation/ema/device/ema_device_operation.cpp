@@ -69,14 +69,6 @@ TensorSpec EmaDeviceOperation::compute_output_specs(
     return tensor_args.input.tensor_spec().with_memory_config(operation_attributes.output_mem_config);
 }
 
-Tensor EmaDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttnn::Tensor ema_device(
     const Tensor& input,
     float alpha,
