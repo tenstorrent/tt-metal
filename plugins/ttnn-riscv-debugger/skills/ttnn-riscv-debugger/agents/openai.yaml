@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Riscv Debugger"
+  short_description: "User-defined ttnn-riscv-debugger workflow role"
+  icon_small: "./assets/ttnn-riscv-debugger.svg"
+  icon_large: "./assets/ttnn-riscv-debugger.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-riscv-debugger for this workflow task."

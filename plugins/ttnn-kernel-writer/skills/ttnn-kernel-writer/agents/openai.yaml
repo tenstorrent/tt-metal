@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Kernel Writer"
+  short_description: "User-defined ttnn-kernel-writer workflow role"
+  icon_small: "./assets/ttnn-kernel-writer.svg"
+  icon_large: "./assets/ttnn-kernel-writer.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-kernel-writer for this workflow task."

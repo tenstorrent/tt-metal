@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Generic Op Builder"
+  short_description: "User-defined ttnn-generic-op-builder workflow role"
+  icon_small: "./assets/ttnn-generic-op-builder.svg"
+  icon_large: "./assets/ttnn-generic-op-builder.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-generic-op-builder for this workflow task."

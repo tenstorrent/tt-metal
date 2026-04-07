@@ -1,0 +1,41 @@
+{
+  "name": "ttnn-pipeline-analyzer",
+  "version": "0.1.0",
+  "description": "User-defined ttnn-pipeline-analyzer agent with workflow launch support.",
+  "author": {
+    "name": "User Defined",
+    "email": "noreply@example.com",
+    "url": "https://github.com/tenstorrent/tt-metal"
+  },
+  "homepage": "https://github.com/tenstorrent/tt-metal",
+  "repository": "https://github.com/tenstorrent/tt-metal",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ttnn",
+    "tt-metal",
+    "workflow",
+    "ttnn-pipeline-analyzer"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "TTNN Pipeline Analyzer",
+    "shortDescription": "User-defined ttnn-pipeline-analyzer workflow role",
+    "longDescription": "Run ttnn-pipeline-analyzer as a user-defined, spawnable workflow agent.",
+    "developerName": "User Defined",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/tenstorrent/tt-metal",
+    "privacyPolicyURL": "https://github.com/tenstorrent/tt-metal/blob/main/CODE_OF_CONDUCT.md",
+    "termsOfServiceURL": "https://github.com/tenstorrent/tt-metal/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use $ttnn-pipeline-analyzer for this workflow task."
+    ],
+    "brandColor": "#0A7D59",
+    "composerIcon": "./assets/ttnn-pipeline-analyzer.svg",
+    "logo": "./assets/ttnn-pipeline-analyzer.svg",
+    "screenshots": []
+  }
+}

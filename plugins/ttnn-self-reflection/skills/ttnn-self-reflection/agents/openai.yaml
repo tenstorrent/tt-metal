@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Self Reflection"
+  short_description: "User-defined ttnn-self-reflection workflow role"
+  icon_small: "./assets/ttnn-self-reflection.svg"
+  icon_large: "./assets/ttnn-self-reflection.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-self-reflection for this workflow task."

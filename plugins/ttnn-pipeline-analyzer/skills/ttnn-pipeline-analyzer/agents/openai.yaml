@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Pipeline Analyzer"
+  short_description: "User-defined ttnn-pipeline-analyzer workflow role"
+  icon_small: "./assets/ttnn-pipeline-analyzer.svg"
+  icon_large: "./assets/ttnn-pipeline-analyzer.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-pipeline-analyzer for this workflow task."

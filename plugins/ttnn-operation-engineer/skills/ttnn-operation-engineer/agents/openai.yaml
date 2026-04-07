@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Operation Engineer"
+  short_description: "User-defined ttnn-operation-engineer workflow role"
+  icon_small: "./assets/ttnn-operation-engineer.svg"
+  icon_large: "./assets/ttnn-operation-engineer.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-operation-engineer for this workflow task."

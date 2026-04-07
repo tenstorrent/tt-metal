@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Operation Analyzer"
+  short_description: "User-defined ttnn-operation-analyzer workflow role"
+  icon_small: "./assets/ttnn-operation-analyzer.svg"
+  icon_large: "./assets/ttnn-operation-analyzer.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-operation-analyzer for this workflow task."

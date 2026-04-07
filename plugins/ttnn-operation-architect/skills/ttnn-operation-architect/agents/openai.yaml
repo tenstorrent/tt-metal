@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTNN Operation Architect"
+  short_description: "User-defined ttnn-operation-architect workflow role"
+  icon_small: "./assets/ttnn-operation-architect.svg"
+  icon_large: "./assets/ttnn-operation-architect.svg"
+  brand_color: "#0A7D59"
+  default_prompt: "Use $ttnn-operation-architect for this workflow task."

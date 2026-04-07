@@ -1,0 +1,116 @@
+{
+  "name": "tt-metal-local",
+  "interface": {
+    "displayName": "TT-Metal Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "ttnn-generic-op-builder",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-generic-op-builder"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-kernel-writer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-kernel-writer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-kernel-writer-tdd",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-kernel-writer-tdd"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-operation-analyzer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-operation-analyzer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-operation-architect",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-operation-architect"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-operation-engineer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-operation-engineer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-pipeline-analyzer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-pipeline-analyzer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-riscv-debugger",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-riscv-debugger"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ttnn-self-reflection",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ttnn-self-reflection"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
