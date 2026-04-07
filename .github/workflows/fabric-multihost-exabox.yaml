@@ -54,6 +54,7 @@ jobs:
         uses: ./.github/actions/ttop-create-allocation
         with:
           allocationName: ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
           spec: |
             allocationType: MGD
             matchLabels:
@@ -102,6 +103,7 @@ jobs:
         with:
           environmentName:  ci-${{ github.run_id }}-reset
           allocationName:  ci-${{ github.run_id }}-metal
+          allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
 
@@ -133,6 +135,7 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-reset
+          namespace: ttop-ci
 
   run:
     name: Run test
@@ -168,6 +171,7 @@ jobs:
         with:
           environmentName:  ci-${{ github.run_id }}-metal
           allocationName:  ci-${{ github.run_id }}-metal
+          allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
           sharedVolumeEnabled: 'true'
@@ -246,14 +250,17 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
 
       # Redundantly try to drop reset env - reset job might have failed
       - name: Delete reset environment
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-reset
+          namespace: ttop-ci
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation
         with:
           allocationName:  ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
