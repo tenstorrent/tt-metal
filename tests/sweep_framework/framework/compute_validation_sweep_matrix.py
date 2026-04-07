@@ -239,7 +239,7 @@ def main():
         required=False,
         nargs="?",
         const=DEFAULT_PRETTY_MATRIX_PATH,
-        default=DEFAULT_PRETTY_MATRIX_PATH,
+        default=None,
         help=(
             "Optional path to write a pretty-printed matrix JSON for human review. "
             f"If provided without a value, defaults to {DEFAULT_PRETTY_MATRIX_PATH}."
