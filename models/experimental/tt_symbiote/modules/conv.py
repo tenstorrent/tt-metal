@@ -337,7 +337,8 @@ class TTNNConv1d(TTNNModule):
         new = cls()
         new._fallback_torch_layer = conv1d
         equiv = _conv1d_to_height1_conv2d(conv1d)
-        new.conv2d = TTNNConv2dNHWC.from_torch(equiv, slice_config=slice_config)
+        # Qwen Omni NHWC permute + mesh width-shard gather live on TTNNQwenOmniConv2dNHWC (defined below).
+        new.conv2d = TTNNQwenOmniConv2dNHWC.from_torch(equiv, slice_config=slice_config)
         return new
 
     def set_output_tensors_config_impl(self, output_tensors):
@@ -630,17 +631,22 @@ class TTNNConvTranspose1d(TTNNModule):
 _CONV3D_CHANNEL_ALIGNMENT = 32
 
 
+def _conv3d_chunk_n_from_env() -> int:
+    """Chunk size along conv3d / patch-embed batch dim (env ``TT_SYMBIOTE_CONV3D_CHUNK_N``, default 1024)."""
+    import os
+
+    return max(1, int(os.environ.get("TT_SYMBIOTE_CONV3D_CHUNK_N", "1024")))
+
+
 def _conv3d_mesh_max_n_per_chunk(dev) -> int:
-    """Upper bound on leading batch N for one conv3d upload on a mesh (patch embed flattens many patches).
+    """Upper bound on leading batch N for one conv3d compute slice on a mesh (patch embed).
 
     Without chunking, ``from_torch`` + ``experimental.conv3d`` + output readback can request 100+ GiB DRAM
     for large ``N``.  Set ``TT_SYMBIOTE_CONV3D_CHUNK_N`` to tune (default 1024).
     """
     if dev is None or not hasattr(dev, "get_num_devices") or dev.get_num_devices() <= 1:
         return 0
-    import os
-
-    return max(1, int(os.environ.get("TT_SYMBIOTE_CONV3D_CHUNK_N", "1024")))
+    return _conv3d_chunk_n_from_env()
 
 
 def _int_triplet_3d(x) -> tuple:
@@ -722,17 +728,19 @@ def _ttnn_conv3d_output_to_torch_ncdhw(
 ) -> torch.Tensor:
     """Match ``reshape_output`` in ``test_conv3d``; host ``[N,C,D,H,W]``."""
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        t = ttnn.to_torch(tt_out).float()
+        t = ttnn.to_torch(tt_out)
     else:
         shards = ttnn.get_device_tensors(tt_out)
         if shards:
-            t = ttnn.to_torch(shards[0]).float()
+            t = ttnn.to_torch(shards[0])
         else:
             composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-            t = ttnn.to_torch(tt_out, mesh_composer=composer).float()
+            t = ttnn.to_torch(tt_out, mesh_composer=composer)
             lead = int(tt_out.shape[0])
             if t.dim() >= 1 and int(t.shape[0]) > lead:
                 t = t[:lead].contiguous()
+    if t.dtype != torch.bfloat16:
+        t = t.to(torch.bfloat16)
     t = t.reshape(n, d_out, h_out, w_out, out_channels)
     return t.permute(0, 4, 1, 2, 3).contiguous()
 
@@ -1047,15 +1055,20 @@ class TTNNConv3d(TTNNModule):
         else:
             out_torch = self._experimental_conv3d_ncdhw_torch(x)
 
-        mesh_mapper_out = None
+        self.deallocate_weights()
+
+        c_out = int(out_torch.shape[1])
+        out_2d = out_torch.reshape(-1, c_out).to(dtype=torch.bfloat16).contiguous()
+
+        mesh_mapper = None
         if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
-            mesh_mapper_out = ttnn.ReplicateTensorToMesh(dev)
+            mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
         return ttnn.from_torch(
-            out_torch,
-            dtype=torch_dtype_to_ttnn_dtype(out_torch.dtype),
+            out_2d,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=dev,
-            mesh_mapper=mesh_mapper_out,
+            mesh_mapper=mesh_mapper,
         )
 
 
@@ -1563,15 +1576,15 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
 
 
 def _qwen_omni_conv2d_mesh_output_config(mesh_device):
-    """Mesh readback for Qwen Omni audio/vision conv outputs (replicated activations per device).
+    """Mesh readback for Qwen Omni audio/vision conv outputs.
 
     Default ``DistributedConfig`` uses ``ConcatMesh2dToTensor`` + ``logical_shape_for_batch_channel_sharding``,
     which does **not** match full spatial NHWC conv outputs and can inflate a dimension (e.g. time/freq
     13 → 104 on an 8-device mesh), breaking ``padded_embed[mask]`` in the HF audio encoder.
 
-    Use the same pattern as :func:`models.experimental.tt_symbiote.modules.qwen_omni_lm_head._lm_head_logits_dtensor_config`:
-    replicate mapper, compose on batch dim, then slice to one replica. (TTNN ``conv2d`` selects cores from
-    ``device.compute_with_storage_grid_size()`` in the runtime; this path only fixes host logical shape.)
+    Uses replicate mapper + ``ConcatMeshToTensor(dim=0)`` + batch slice for **replicated** activations.
+    When TTNN conv2d width-shards across the mesh (e.g. 48×8 = 384), :meth:`TTNNQwenOmniConv2dNHWC.forward`
+    runs ``all_gather`` on NHWC width (dim 2) so activations are full-width before LayerNorm/residual.
     """
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
         return None
@@ -1580,6 +1593,71 @@ def _qwen_omni_conv2d_mesh_output_config(mesh_device):
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         replicate_compose_slice_dim0_to_leading=True,
     )
+
+
+def _pair_int2_conv(x) -> tuple:
+    if isinstance(x, int):
+        return (x, x)
+    t = tuple(int(v) for v in x)
+    if len(t) == 1:
+        return (t[0], t[0])
+    return (t[0], t[1])
+
+
+def _expected_nhwc_conv2d_out_width(w_in: int, conv_mod: TTNNConv2dNHWC) -> int:
+    _, kw = _pair_int2_conv(conv_mod.kernel_size)
+    _, sw = _pair_int2_conv(conv_mod.stride)
+    _, pw = _pair_int2_conv(conv_mod.padding)
+    _, dw = _pair_int2_conv(conv_mod.dilation)
+    return (w_in + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+
+
+def _nhwc_spatial_w_per_device_shard(out: ttnn.Tensor, mesh_num_devices: int) -> int | None:
+    """If ``out`` is one width shard per mesh device, return local W; else None.
+
+    ``out.shape[2]`` can still reflect the **logical** full width while each device's tensor
+    only holds ``W_full / nd`` (e.g. 48 vs 384). Using shard geometry avoids skipping
+    ``all_gather`` and fixes residual adds that saw ``T=48`` vs ``T=384``.
+    """
+    if mesh_num_devices <= 1:
+        return None
+    shards = ttnn.get_device_tensors(out)
+    if len(shards) != mesh_num_devices:
+        return None
+    return int(shards[0].shape[2])
+
+
+def _maybe_all_gather_nhwc_width_across_mesh(
+    conv_mod: TTNNConv2dNHWC, out: ttnn.Tensor, input_nhwc: ttnn.Tensor
+) -> ttnn.Tensor:
+    """Stitch per-device width shards (``W_local * num_devices == W_full``) before NCHW permute."""
+    dev = conv_mod.device
+    if dev is None or not hasattr(dev, "get_num_devices") or dev.get_num_devices() <= 1:
+        return out
+    nd = int(dev.get_num_devices())
+    w_in = int(input_nhwc.shape[2])
+    w_exp = _expected_nhwc_conv2d_out_width(w_in, conv_mod)
+    w_meta = int(out.shape[2])
+    w_shard = _nhwc_spatial_w_per_device_shard(out, nd)
+    # Prefer per-device width when we see a full mesh of spatial shards (avoids false w_meta == w_exp).
+    w_cur = w_shard if w_shard is not None else w_meta
+    if w_cur == w_exp:
+        return out
+    if w_cur * nd == w_exp:
+        ds = getattr(conv_mod, "device_state", None)
+        if ds is not None and getattr(ds, "ccl_manager", None) is not None:
+            out = ttnn.experimental.all_gather_async(
+                out,
+                dim=2,
+                multi_device_global_semaphore=ds.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=ds.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        else:
+            out = ttnn.all_gather(out, dim=2, num_links=1, topology=ttnn.Topology.Linear)
+        ttnn.synchronize_device(dev)
+    return out
 
 
 @trace_enabled
@@ -1678,6 +1756,7 @@ class TTNNQwenOmniConv2dNHWC(TTNNConv2dNHWC):
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
 
         out = TTNNConv2dNHWC.forward(self, input_tensor, reshape_output=reshape_output)
+        out = _maybe_all_gather_nhwc_width_across_mesh(self, out, input_tensor)
         if nchw_in:
             out = ttnn.permute(out, (0, 3, 1, 2))
         return out

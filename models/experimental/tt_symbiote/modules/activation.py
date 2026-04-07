@@ -15,6 +15,30 @@ from models.experimental.tt_symbiote.core.run_config import DistributedTensorCon
 from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
 
 
+def _mesh_host_stitch_device_shards(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor | None:
+    """Concat host tensors when each mesh device holds a slice of dim ``d`` (e.g. conv width 48×8=384)."""
+    if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
+        return None
+    nd = int(mesh_device.get_num_devices())
+    if nd <= 1:
+        return None
+    shards = ttnn.get_device_tensors(tt_tensor)
+    if len(shards) != nd:
+        return None
+    local = tuple(int(x) for x in shards[0].shape)
+    for t in (tt_tensor.shape, getattr(tt_tensor, "padded_shape", None)):
+        if t is None:
+            continue
+        logical = tuple(int(x) for x in t)
+        if len(logical) != len(local):
+            continue
+        for d in range(len(logical)):
+            if local[d] != logical[d] and local[d] * nd == logical[d]:
+                parts = [ttnn.to_torch(s).contiguous() for s in shards]
+                return torch.cat(parts, dim=d)
+    return None
+
+
 def _code2wav_bct_replicated_mesh_config(mesh_device):
     """code2wav ``[B, C, T]`` activations are replicated per mesh device (see ``TTNNQwenOmniConv2dNHWC``)."""
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
@@ -30,6 +54,9 @@ def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torc
     """Host ``torch`` tensor matching one logical replica (avoids bad concat/slice on rank-3 BCT)."""
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
         return ttnn.to_torch(tt_tensor).contiguous()
+    stitched = _mesh_host_stitch_device_shards(tt_tensor, mesh_device)
+    if stitched is not None:
+        return stitched.contiguous()
     shards = ttnn.get_device_tensors(tt_tensor)
     if shards:
         return ttnn.to_torch(shards[0]).contiguous()
@@ -179,6 +206,65 @@ class TTNNSnakeBeta(TTNNModule):
         return ttnn.add(input_tensor, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
+    """Stitch width-sharded BCT conv output and re-upload as replicated.
+
+    TTNN conv2d on a mesh can distribute spatial width across devices even for replicated
+    input, producing ``[B, C, T_local]`` where ``T_local * nd == T_full``.  When
+    ``shard_t == expected_t`` (replicated, each device already has full T) this is a no-op.
+    Otherwise reads all device shards, cats on time, and re-uploads with
+    ``ReplicateTensorToMesh``.
+    """
+    if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
+        return out
+    nd = int(mesh_device.get_num_devices())
+    if nd <= 1:
+        return out
+
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    tt = None
+    if isinstance(out, TorchTTNNTensor):
+        tt = out.ttnn_tensor if out.ttnn_tensor is not None else None
+    elif isinstance(out, ttnn.Tensor):
+        tt = out
+    if tt is None:
+        return out
+
+    shards = ttnn.get_device_tensors(tt)
+    if len(shards) != nd:
+        return out
+    shard_t = int(shards[0].shape[-1])
+    if shard_t == expected_t:
+        return out
+    if shard_t * nd != expected_t:
+        return out
+
+    parts = [ttnn.to_torch(s).contiguous() for s in shards]
+    full = torch.cat(parts, dim=-1)
+    return ttnn.from_torch(
+        full,
+        dtype=torch_dtype_to_ttnn_dtype(full.dtype),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _upload_bct_replicated(x_t: torch.Tensor, mesh_device):
+    """Upload a host ``[B, C, T]`` torch tensor to TTNN with ``ReplicateTensorToMesh``."""
+    mesh_mapper = None
+    if mesh_device is not None and hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    return ttnn.from_torch(
+        x_t.contiguous(),
+        dtype=torch_dtype_to_ttnn_dtype(x_t.dtype),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
+    )
+
+
 def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
     """One logical ``[B, C, T]`` on host.
 
@@ -240,8 +326,11 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
     def forward(self, hidden_state):
         x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
         extra_padding = self._get_extra_padding_for_conv1d(x_t)
+        t_padded = int(x_t.shape[-1]) + self.padding + int(extra_padding)
+        expected_t = (t_padded - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
         x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
-        return self.conv(x_t)
+        out = self.conv(x_t)
+        return _ensure_code2wav_bct_full_t(out, self.device, expected_t)
 
 
 class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
@@ -292,8 +381,66 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
         )
 
 
+class TTNNQwen3OmniMoeConvNeXtBlock(TTNNModule):
+    """Qwen3-Omni ConvNeXtBlock: TTNN depthwise conv, host norm/linear/residual.
+
+    ``dwconv`` (depthwise conv) runs on TTNN via :class:`TTNNQwen3OmniMoeCausalConvNet` which
+    stitches width-sharded output back to full ``T``.  LayerNorm, pointwise linears, GELU, and
+    the residual add execute on host torch (cheap element-wise / small matmul) so that the
+    shortcut and branch always match in time dimension.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.dwconv = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        new = cls()
+        new._fallback_torch_layer = m
+        new.dwconv = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.dwconv)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _code2wav_bct_replicated_mesh_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, hidden_states):
+        dev = self.device
+        residual = _materialize_code2wav_chain_output(hidden_states, dev)
+
+        hidden_states = self.dwconv(hidden_states)
+        x = _materialize_code2wav_chain_output(hidden_states, dev)
+
+        hf = self._fallback_torch_layer
+        x = x.permute(0, 2, 1)
+        x = hf.norm(x)
+        x = hf.pwconv1(x)
+        x = hf.act(x)
+        x = hf.pwconv2(x)
+        x = hf.gamma * x
+        x = x.permute(0, 2, 1)
+
+        result = x + residual
+        return _upload_bct_replicated(result, dev)
+
+
 class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
-    """code2wav residual block: materialize shortcut and branch output so ``+`` sees matching ``[B,C,T]`` on mesh."""
+    """code2wav residual block: TTNN SnakeBeta + CausalConvNet, host-side residual add.
+
+    :class:`TTNNQwen3OmniMoeCausalConvNet` stitches width-sharded conv output to full ``T``
+    so the branch and shortcut match when added on host.
+    """
 
     def __init__(self):
         super().__init__()
@@ -328,18 +475,18 @@ class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
 
     def forward(self, hidden_state):
         dev = self.device
-        # TTNN children of a TTNN parent default to bypass=True, so ``module_run`` skips
-        # ``post_process_ttnn_module_output``. SnakeBeta then returns a raw ``ttnn.Tensor``;
-        # :class:`TTNNQwen3OmniMoeCausalConvNet` materializes to torch for ``F.pad`` before
-        # :class:`TTNNConv1d`. Disable bypass so act outputs are wrapped / materialized.
         if self.act1 is not None:
             self.act1._bypass_tensor_wrapping = False
         if self.act2 is not None:
             self.act2._bypass_tensor_wrapping = False
-        residual = _materialize_code2wav_bct_from_ttnn(hidden_state, dev)
+
+        residual = _materialize_code2wav_chain_output(hidden_state, dev)
+
         hidden_state = self.act1(hidden_state)
         hidden_state = self.conv1(hidden_state)
         hidden_state = self.act2(hidden_state)
         hidden_state = self.conv2(hidden_state)
-        hidden_state = _materialize_code2wav_chain_output(hidden_state, dev)
-        return hidden_state + residual
+
+        branch = _materialize_code2wav_chain_output(hidden_state, dev)
+        result = branch + residual
+        return _upload_bct_replicated(result, dev)

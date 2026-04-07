@@ -3641,6 +3641,43 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
 
+    def _prepare_code2wav_rotary_cos_sin(self, cos, sin, seq_len: int):
+        """Full sequence on every chip for RoPE; skip dim=-1 gather on replicated cos (breaks head dim)."""
+        if not self._is_distributed or self.device.get_num_devices() <= 1:
+            return self._maybe_all_gather_if_col_sharded(cos), self._maybe_all_gather_if_col_sharded(sin)
+
+        nd = int(self.device.get_num_devices())
+        cos_t = self._to_ttnn(cos)
+        sin_t = self._to_ttnn(sin)
+        gather_dim = None
+        for d in range(len(cos_t.shape)):
+            sl = int(cos_t.shape[d])
+            if sl != seq_len and sl * nd == seq_len:
+                gather_dim = d
+                break
+        if gather_dim is not None:
+            cos_t = ttnn.experimental.all_gather_async(
+                cos_t,
+                dim=gather_dim,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+            sin_t = ttnn.experimental.all_gather_async(
+                sin_t,
+                dim=gather_dim,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+            return cos_t, sin_t
+
+        if self._is_symbiote_replicated(cos):
+            return cos_t, sin_t
+        return self._maybe_all_gather_if_col_sharded(cos), self._maybe_all_gather_if_col_sharded(sin)
+
     @staticmethod
     def _to_raw_ttnn(tensor):
         """Unwrap TorchTTNNTensor to raw ttnn.Tensor for ttnn ops that don't accept the wrapper."""
@@ -3739,8 +3776,7 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
         value = ttnn.permute(value, (0, 2, 1, 3))
 
         cos, sin = position_embeddings
-        cos = self._maybe_all_gather_if_col_sharded(cos)
-        sin = self._maybe_all_gather_if_col_sharded(sin)
+        cos, sin = self._prepare_code2wav_rotary_cos_sin(cos, sin, S)
         query, key = self.rope(query, key, cos, sin)
         query = self._to_ttnn(query)
         key = self._to_ttnn(key)
