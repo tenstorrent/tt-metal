@@ -45,6 +45,9 @@ class DistributedTensorConfig:
     mesh_mapper: Any
     mesh_composer: Any
     logical_shape_fn: Optional[Any] = None
+    # Replicated mesh + ``ConcatMeshToTensor(dim=0)`` stacks one copy per device on dim 0; set True to
+    # take ``result[: ttnn_tensor.shape[0]]`` after readback so logical batch matches a single replica.
+    replicate_compose_slice_dim0_to_leading: bool = False
 
     def get_logical_shape(self, sharded_shape):
         if self.logical_shape_fn is not None:
@@ -89,11 +92,11 @@ class DistributedConfig:
                 print(
                     f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                 )
+                # Replicated mesh: compose with dim=0 only. Do not use MeshComposerConfig([0, len(shape)]);
+                # the second entry is a dimension index, so rank 3 yields [0, 3] which is invalid (dims 0..2).
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
                 )
         return self.tensor_config
 
@@ -180,7 +183,6 @@ class DispatchManager:
     timings: Dict[str, Any] = {}
     _modules_in_progress: List[str] = []
     current_module_name: Optional[str] = None
-    ENABLED = True
 
     @staticmethod
     def set_current_module_name(module_name: Optional[str]) -> None:
@@ -246,13 +248,7 @@ class DispatchManager:
         return rs
 
     @staticmethod
-    def DisableTiming():
-        DispatchManager.ENABLED = False
-
-    @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
-        if not DispatchManager.ENABLED:
-            return
         if backend not in DispatchManager.timings:
             DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
@@ -548,9 +544,13 @@ class NormalRun:
         def _to_torch_from_device(self):
             is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                return ttnn.to_torch(
-                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
-                ).to(self.device, self.dtype)
+                cfg = self.ttnn_distributed_tensor_config
+                result = ttnn.to_torch(self.ttnn_tensor, mesh_composer=cfg.mesh_composer).to(self.device, self.dtype)
+                if getattr(cfg, "replicate_compose_slice_dim0_to_leading", False) and result.dim() >= 1:
+                    lead = int(self.ttnn_tensor.shape[0])
+                    if result.shape[0] > lead:
+                        result = result[:lead].contiguous()
+                return result
             return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
 
         if self.ttnn_tensor is None:
@@ -594,6 +594,7 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
+        begin_full = time.time()
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
@@ -627,6 +628,10 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
+        end_full = time.time()
+        DispatchManager.record_timing(
+            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
+        )
         return result
 
 
@@ -890,7 +895,6 @@ class TraceEntry:
 
     trace_id: int
     trace_inputs: List[Any]
-    trace_kwargs: Dict[str, Any]  # Pre-allocated kwarg tensor buffers
     trace_output: Any
     device: Any
 
@@ -931,21 +935,12 @@ class TracedRun(LightweightRun):
     """
     Traced execution mode with automatic caching.
     Only traces modules decorated with @trace_enabled.
-
-    Per-(module, cache_key) three-phase lifecycle:
-      1. **Warm-up** (first encounter): Normal forward execution, no trace
-         capture. Primes JIT, CCL, and device memory allocator.
-      2. **Capture** (second encounter): ``_capture_trace`` records the op
-         sequence into a DRAM buffer. The system is already in steady state.
-      3. **Replay** (third encounter onward): ``execute_trace`` replays the
-         clean trace with near-zero host dispatch overhead.
     """
 
     _device: Any = None
     _cq_id: int = 0
     _input_memory_config: Any = None
     _trace_cache: Dict[Tuple, TraceEntry] = {}
-    _warmup_keys: Set[Tuple] = set()  # keys that have completed warm-up (run 1)
 
     @classmethod
     def configure(
@@ -959,7 +954,6 @@ class TracedRun(LightweightRun):
         cls._cq_id = cq_id
         cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
         cls._trace_cache = {}
-        cls._warmup_keys = set()
 
     @classmethod
     def cache_size(cls) -> int:
@@ -1010,35 +1004,6 @@ class TracedRun(LightweightRun):
                 trace_idx += 1
 
     @staticmethod
-    def _copy_one_to_trace_buffer(new_val, trace_buf) -> None:
-        """Copy a single value into its pre-allocated trace buffer."""
-        if isinstance(new_val, ttnn.Tensor):
-            ttnn.copy(new_val, trace_buf)
-        elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
-            ttnn.copy(new_val.ttnn_tensor, trace_buf)
-
-    @staticmethod
-    def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
-        """Copy new kwargs to trace kwarg buffers.
-
-        Handles both scalar tensors and list/tuple of tensors (e.g.
-        position_embeddings = [cos, sin]).
-        """
-        for key, trace_buf in trace_kwargs.items():
-            if trace_buf is None:
-                continue
-            new_val = new_kwargs.get(key)
-            if new_val is None:
-                continue
-            if isinstance(trace_buf, (list, tuple)):
-                # List/tuple of trace buffers — copy element-wise
-                for tb, nv in zip(trace_buf, new_val):
-                    if tb is not None:
-                        TracedRun._copy_one_to_trace_buffer(nv, tb)
-            else:
-                TracedRun._copy_one_to_trace_buffer(new_val, trace_buf)
-
-    @staticmethod
     def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
         """Capture trace for module."""
         from loguru import logger
@@ -1073,73 +1038,17 @@ class TracedRun(LightweightRun):
                 trace_inputs.append(None)
                 trace_func_args.append(arg)
 
-        # Pre-allocate persistent keyword argument buffers
-        trace_func_kwargs = {}
-        trace_kwargs_map = {}  # key -> trace buffer (or list of trace buffers)
-
-        def _alloc_kwarg_tensor(t):
-            """Pre-allocate a single device buffer for a kwarg tensor."""
-            host = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
-            return ttnn.to_device(host, device, memory_config=mem_config)
-
-        for key, val in func_kwargs.items():
-            if isinstance(val, ttnn.Tensor):
-                trace_kwarg = _alloc_kwarg_tensor(val)
-                trace_kwargs_map[key] = trace_kwarg
-                trace_func_kwargs[key] = trace_kwarg
-            elif hasattr(val, "ttnn_tensor") and val.ttnn_tensor is not None:
-                trace_kwarg = _alloc_kwarg_tensor(val.ttnn_tensor)
-                trace_kwargs_map[key] = trace_kwarg
-                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-                trace_func_kwargs[key] = TorchTTNNTensor(trace_kwarg)
-            elif isinstance(val, (list, tuple)):
-                # Handle list/tuple of tensors (e.g. position_embeddings = [cos, sin])
-                bufs = []
-                func_vals = []
-                has_tensors = False
-                for elem in val:
-                    if isinstance(elem, ttnn.Tensor):
-                        tb = _alloc_kwarg_tensor(elem)
-                        bufs.append(tb)
-                        func_vals.append(tb)
-                        has_tensors = True
-                    elif hasattr(elem, "ttnn_tensor") and elem.ttnn_tensor is not None:
-                        tb = _alloc_kwarg_tensor(elem.ttnn_tensor)
-                        bufs.append(tb)
-                        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-                        func_vals.append(TorchTTNNTensor(tb))
-                        has_tensors = True
-                    else:
-                        bufs.append(None)
-                        func_vals.append(elem)
-                if has_tensors:
-                    trace_kwargs_map[key] = bufs
-                    trace_func_kwargs[key] = type(val)(func_vals)
-                else:
-                    trace_func_kwargs[key] = val
-            else:
-                trace_func_kwargs[key] = val
-
-        # Warm-up — run forward once to populate caches and prime ops.
-        # The warm-up output is discarded; we only keep the trace-capture output.
-        module.forward(*func_args, **func_kwargs)
-        # Synchronize device to ensure all warm-up ops (including CCL) complete
-        # before starting trace capture. Without this, in-flight CCL ops can
-        # cause "Writes/Reads are not supported during trace capture" errors.
-        ttnn.synchronize_device(device)
-        # Capture — the output from THIS forward is the trace_output whose
-        # device buffer will be rewritten by every subsequent execute_trace.
+        # Warm-up
+        trace_output = module.forward(*func_args, **func_kwargs)
+        # Capture
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
+        _ = module.forward(*trace_func_args, **func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
 
         entry = TraceEntry(
             trace_id=trace_id,
             trace_inputs=trace_inputs,
-            trace_kwargs=trace_kwargs_map,
             trace_output=trace_output,
             device=device,
         )
@@ -1201,24 +1110,22 @@ class TracedRun(LightweightRun):
                 return result
             return post_process_ttnn_module_output(self, result)
 
-        # Traced execution path — per-(module, cache_key) lifecycle:
-        #   1st encounter: warm-up forward (no trace capture)
-        #   2nd encounter: _capture_trace (clean capture)
-        #   3rd+ encounter: execute_trace (replay)
+        # Traced execution path
         cache_key = TracedRun._make_cache_key(self.module_name, func_args)
 
         if cache_key in TracedRun._trace_cache:
-            # === RUN 3+: REPLAY ===
-            entry = TracedRun._trace_cache[cache_key]
+            # Execute cached trace
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            entry = TracedRun._trace_cache[cache_key]
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
-            TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
-        elif cache_key in TracedRun._warmup_keys:
-            # === RUN 2: CAPTURE (system already warmed up for this key) ===
+        else:
             _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
+            print(
+                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
+            )
+            # Capture new trace
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
             end2 = time.time()
@@ -1226,13 +1133,6 @@ class TracedRun(LightweightRun):
                 "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
             )
             result = entry.trace_output
-            _TRACE_RUNNING = False
-        else:
-            # === RUN 1: WARM-UP (normal forward, no trace) ===
-            TracedRun._warmup_keys.add(cache_key)
-            _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
-            result = self.forward(*func_args, **func_kwargs)
             _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
