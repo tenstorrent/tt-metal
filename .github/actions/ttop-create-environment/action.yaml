@@ -18,10 +18,6 @@ inputs:
   workerTag:
     description: 'Worker tag'
     required: true
-  ranks:
-    description: 'Node-to-rank JSON mapping'
-    required: false
-    default: ''
   sharedVolumeEnabled:
     description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
     required: false
