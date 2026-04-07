@@ -688,10 +688,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
     m_tensor
         .def(
             "dump_overlapped_tensors",
-            [](const std::string& file_name, nb::dict py_views) {
+            [](const std::string& file_name, const nb::dict& py_views) {
                 constexpr std::string_view kExt = ".overlappedtensorbin";
-                if (file_name.size() < kExt.size() ||
-                    file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
+                if (!file_name.ends_with(kExt)) {
                     throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
                 }
                 std::vector<OverlappedTensorView> views;
@@ -713,8 +712,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "load_overlapped_tensors",
             [](const std::string& file_name, MeshDevice* device) -> nb::dict {
                 constexpr std::string_view kExt = ".overlappedtensorbin";
-                if (file_name.size() < kExt.size() ||
-                    file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
+                if (!file_name.ends_with(kExt)) {
                     throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
                 }
                 auto views = load_overlapped_tensors(file_name, device);
