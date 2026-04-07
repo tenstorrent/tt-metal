@@ -10,7 +10,8 @@ constexpr uint32_t cb_weights = tt::CBIndex::c_1;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
 constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t weight_page_size = get_compile_time_arg_val(2);
+constexpr auto combine_accessor_args = TensorAccessorArgs<2>();
+constexpr auto weight_accessor_args = TensorAccessorArgs<combine_accessor_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TOKENS_PER_CORE = 32;
 
@@ -22,12 +23,8 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_tile_size(cb_combine_input);
     constexpr uint32_t combine_page_size = emb_dim_tiles * tile_size;
 
-    // NOLINTBEGIN: InterleavedAddrGen is required here because:
-    // - combine uses a custom page_size (one expert's embedding row)
-    // - weights use the tensor's page_size but are read into tile-sized CB slots
-    const InterleavedAddrGen<true> combine_addrg = {.bank_base_address = combine_addr, .page_size = combine_page_size};
-    const InterleavedAddrGen<true> weight_addrg = {.bank_base_address = weight_addr, .page_size = weight_page_size};
-    // NOLINTEND
+    const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr, combine_page_size);
+    const auto weight_addrg = TensorAccessor(weight_accessor_args, weight_addr);
 
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;

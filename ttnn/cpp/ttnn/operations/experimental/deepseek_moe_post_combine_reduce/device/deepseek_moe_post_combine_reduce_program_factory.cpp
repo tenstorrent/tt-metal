@@ -111,8 +111,9 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         emb_dim_tiles,
-        static_cast<uint32_t>(weight_buffer->page_size()),
     };
+    tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
