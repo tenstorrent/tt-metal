@@ -29,15 +29,12 @@ Ethernet (ERISC) cores also contain L1 performance counters with the same interf
 ### How to Run
 
 ```bash
-# Enable profiler + perf counters (47 = FPU|PACK|UNPACK|L1_0|INSTRN)
-TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=47 \
-    pytest your_test.py -x -v
-
-# Generate metrics report
-python tools/tracy/process_ops_logs.py --device-only
+# Capture all counter groups (fpu, pack, unpack, l1_0, instrn)
+python -m tracy --profiler-capture-perf-counters=all \
+    -m "pytest your_test.py -x -v"
 ```
 
-The `TT_METAL_PROFILE_PERF_COUNTERS` value selects which counter banks to enable. Use `47` to capture FPU, PACK, UNPACK, L1_0, and INSTRN — this covers all Tensix pipeline stages and L1 Ring 0 ports. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for the full bitfield reference.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Architecture Summary
 
