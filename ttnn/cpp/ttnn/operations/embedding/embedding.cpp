@@ -42,16 +42,23 @@ ttnn::Tensor embedding(
 
     // Compute batch_size as product of all dimensions except the last (sequence dimension)
     // This correctly handles ND inputs like [B, 1, 1, S] or [d1, d2, ..., dn]
-    uint32_t batch_size = 1;
+    uint64_t batch_size = 1;
     for (size_t i = 0; i < original_input_rank - 1; ++i) {
         batch_size *= input_shape[i];
     }
     // For rank 1, batch_size remains 1
+
+    TT_FATAL(batch_size <= std::numeric_limits<uint32_t>::max(), "Batch size overflow: {}", batch_size);
+
+    uint32_t batch_size_u32 = static_cast<uint32_t>(batch_size);
     auto sentence_size = input_shape[-1];
 
     auto embedding_input_tensor = input_tensor;
-    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
+    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+        !(original_input_rank == 4 &&
+          input_shape[1] == 1 &&
+          input_shape[2] == 1)) {
+        embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size_u32, 1, 1, sentence_size}));
     }
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
