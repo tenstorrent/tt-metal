@@ -639,7 +639,6 @@ class WanTransformer3DModel(Module):
 
     def _prepare_rope_cos_sin(self, grid_id: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Build RoPE cos/sin from ``grid_id`` ``(B, 3, L)``. Pads for sequence parallel."""
-        logger.debug("Preparing rope cos/sin for shape {}", grid_id.shape)
         grid_was_intermediate = False
         grid_id_tt = grid_id
         if grid_id_tt.layout != ttnn.TILE_LAYOUT:
@@ -820,7 +819,6 @@ class WanTransformer3DModel(Module):
         b, c, f, h, w = (int(spatial.shape[i]) for i in range(5))
         if b != 1:
             raise NotImplementedError("Batch size > 1 is not currently supported")
-        logger.debug("Preprocessing spatial ttnn input with shape {}", spatial.shape)
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = f // pF, h // pH, w // pW
         n = patch_F * patch_H * patch_W
