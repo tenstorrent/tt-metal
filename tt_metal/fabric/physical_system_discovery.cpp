@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <climits>
 #include <fstream>
+#include <iostream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
@@ -49,21 +50,16 @@ TrayID get_tray_id_for_chip(
     };
 
     auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
-    log_info(
-        tt::LogAlways,
-        "get_tray_id_for_chip: chip_id={}, mobo_name='{}', bus_id=0x{:x}, using_mock={}",
-        chip_id,
-        mobo_name,
-        bus_id,
-        using_mock_cluster_desc);
+    std::cout << "[get_tray_id_for_chip] chip_id=" << chip_id
+              << " mobo_name='" << mobo_name << "'"
+              << " bus_id=0x" << std::hex << bus_id << std::dec
+              << " using_mock=" << using_mock_cluster_desc
+              << " mobo_known=" << mobo_to_bus_ids.contains(mobo_name)
+              << std::endl;
     if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
-        log_warning(
-            tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
-            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
-            mobo_name,
-            chip_id,
-            bus_id);
+        std::cout << "[get_tray_id_for_chip] DEFAULTING tray_id=0 for chip_id=" << chip_id
+                  << " (mobo='" << mobo_name << "', mock=" << using_mock_cluster_desc << ")"
+                  << std::endl;
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -84,15 +80,14 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     auto arch = cluster_desc->get_arch(chip_id);
     auto board_id = cluster_desc->get_board_id_for_chip(chip_id);
     uint64_t upi = (board_id >> 36) & 0xFFFFF;
-    log_info(
-        tt::LogAlways,
-        "get_asic_position: chip_id={}, arch={}, board_type={} ({}), board_id=0x{:x}, upi=0x{:x}",
-        chip_id,
-        arch,
-        static_cast<uint32_t>(board_type),
-        tt::board_type_to_string(board_type),
-        board_id,
-        upi);
+    std::cout << "[get_asic_position] chip_id=" << chip_id
+              << " arch=" << tt::arch_to_str(arch)
+              << " board_type=" << static_cast<uint32_t>(board_type)
+              << " (" << tt::board_type_to_string(board_type) << ")"
+              << " board_id=0x" << std::hex << board_id
+              << " upi=0x" << upi << std::dec
+              << " using_mock=" << using_mock_cluster_desc
+              << std::endl;
     if (board_type == BoardType::UBB_WORMHOLE ||
         board_type == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -103,12 +98,10 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
-        log_info(
-            tt::LogAlways,
-            "get_asic_position result: chip_id={}, tray_id={}, asic_location={} (UBB path)",
-            chip_id,
-            ubb_id.tray_id,
-            ubb_id.asic_id);
+        std::cout << "[get_asic_position] result: chip_id=" << chip_id
+                  << " tray_id=" << ubb_id.tray_id
+                  << " asic_location=" << ubb_id.asic_id
+                  << " (UBB path)" << std::endl;
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
     auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
@@ -132,13 +125,11 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     } else {
         TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
     }
-    log_info(
-        tt::LogAlways,
-        "get_asic_position result: chip_id={}, tray_id={}, asic_location={} (non-UBB path, arch={})",
-        chip_id,
-        *tray_id,
-        *asic_location,
-        arch);
+    std::cout << "[get_asic_position] result: chip_id=" << chip_id
+              << " tray_id=" << *tray_id
+              << " asic_location=" << *asic_location
+              << " (non-UBB path, arch=" << tt::arch_to_str(arch) << ")"
+              << std::endl;
     return {tray_id, asic_location};
 }
 
