@@ -52,9 +52,9 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = output.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        num_units_height = (input.physical_volume() / input.padded_shape()[-1])/ TILE_HEIGHT;
+        num_units_height = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -65,9 +65,9 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.logical_shape()[-1] * input.element_size();
+        num_units_per_row = output.padded_shape()[-1] * output.element_size();
         num_units_offset = 1;
-        num_units_height = input.logical_volume() / input.logical_shape()[-1];
+        num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -136,7 +136,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
             used_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
-        std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
+        std::vector<uint32_t> writer_compile_time_args = {out_cb_index, num_units_per_row};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
@@ -251,7 +251,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
                  num_units_per_row,
                  shard_height,
                  shard_width,
-                 padded_shard_width,
+                 (is_blackhole) ? shard_width : padded_shard_width,
                  curr_idx_w,
                  curr_idx_h});
             curr_idx_w += output_unit_size;
