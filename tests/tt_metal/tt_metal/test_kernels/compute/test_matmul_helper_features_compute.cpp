@@ -70,13 +70,6 @@ void kernel_main() {
     constexpr bool l1_acc = false;
 #endif
 
-    // PACK_RELU on the non-bias path only; with bias, caller manages RELU between helpers
-#if defined(PACK_RELU) && !defined(FUSE_BIAS)
-    constexpr bool do_relu = true;
-#else
-    constexpr bool do_relu = false;
-#endif
-
     // ── Initialize matmul block engine (caller-managed, per design doc) ──
     mm_block_init(in0_cb, in1_cb, interm_cb, xpose, out_subblock_w, out_subblock_h, in0_block_w);
 
@@ -96,7 +89,6 @@ void kernel_main() {
 #endif
 
     // Bias add: reads matmul output from interm_cb, adds row-broadcast bias, packs to out_cb.
-    // The helper handles data format reconfiguration internally.
     constexpr uint32_t bias_width_tiles = in1_per_core_w;
     compute_kernel_lib::add_bias_bcast_rows<interm_cb, bias_cb, out_cb>(
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, bias_width_tiles);
@@ -107,10 +99,23 @@ void kernel_main() {
 
 #else  // !FUSE_BIAS
     // ── Path: matmul → pack directly to out ──
+    // PACK_RELU: use HwRelu (zero-cost packer hardware), otherwise NoPostCompute.
+#ifdef PACK_RELU
+    using ReluPostFn = compute_kernel_lib::matmul_block_config::HwRelu;
+#else
+    using ReluPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
+#endif
 
     compute_kernel_lib::
-        matmul_block<in0_cb, in1_cb, out_cb, interm_cb, xpose, l1_acc, /*pack_last_to_interm=*/false, do_relu>(
-            in0_block_w, in0_num_subblocks, in1_num_subblocks, num_blocks, out_subblock_h, out_subblock_w, batch);
+        matmul_block<in0_cb, in1_cb, out_cb, interm_cb, xpose, l1_acc, /*pack_last_to_interm=*/false, ReluPostFn>(
+            in0_block_w,
+            in0_num_subblocks,
+            in1_num_subblocks,
+            num_blocks,
+            out_subblock_h,
+            out_subblock_w,
+            batch,
+            ReluPostFn{});
 
 #endif  // FUSE_BIAS
 }

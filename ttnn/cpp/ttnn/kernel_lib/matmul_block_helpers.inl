@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <type_traits>
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 
 /**
@@ -24,7 +25,6 @@ template <
     bool transpose,
     bool packer_l1_acc,
     bool pack_last_to_interm,
-    bool pack_relu,
     typename PostComputeFn,
     typename PreKBlockFn>
 ALWI void matmul_block(
@@ -45,6 +45,11 @@ ALWI void matmul_block(
     static_assert(in1_cb < 32, "matmul_block: in1_cb must be less than 32");
     static_assert(out_cb < 32, "matmul_block: out_cb must be less than 32");
     static_assert(interm_cb < 32, "matmul_block: interm_cb must be less than 32");
+
+    constexpr bool hw_relu = std::is_same_v<PostComputeFn, matmul_block_config::HwRelu>;
+    static_assert(
+        !(hw_relu && pack_last_to_interm),
+        "matmul_block: HwRelu cannot be used with pack_last_to_interm (relu should be applied after bias)");
 
     // Derive dependent quantities from independent parameters
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
@@ -82,8 +87,8 @@ ALWI void matmul_block(
         for (uint32_t block = 0; block < num_k_blocks; block++) {
             bool last_out = block == (num_k_blocks - 1);
 
-            // PACK_RELU: enable on last block when packing directly to output
-            if constexpr (pack_relu && !pack_last_to_interm) {
+            // HwRelu: configure packer RELU on last block when packing directly to output
+            if constexpr (hw_relu) {
                 if (last_out) {
                     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                 }
@@ -134,8 +139,10 @@ ALWI void matmul_block(
                     }
 
                     if (last_out) {
-                        // Apply optional post-compute operation (e.g., SFPU activation)
-                        post_compute(out_num_tiles);
+                        // Apply optional SFPU activation (skipped for HwRelu — packer handles it)
+                        if constexpr (!hw_relu) {
+                            post_compute(out_num_tiles);
+                        }
 
                         tile_regs_commit();
                         cb_reserve_back(pack_target, out_num_tiles);

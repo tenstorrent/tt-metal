@@ -21,6 +21,14 @@ struct NoPostCompute {
     ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
 };
 
+// Hardware RELU activation applied by the packer during pack (zero cost).
+// Pass as PostComputeFn to use hardware RELU instead of SFPU-based activation.
+// The helper detects this type and configures the packer RELU register
+// instead of calling SFPU instructions.
+struct HwRelu {
+    ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
+};
+
 // Default no-op pre-K-block functor.
 // Called at the start of each K-block iteration, before input CB waits.
 // Receives (block_index, num_k_blocks, is_last_block).
@@ -62,11 +70,11 @@ struct NoPreKBlock {
  *   pack_last_to_interm  If true, the last K-block packs to interm_cb instead of
  *                     out_cb. Use when a post-processing phase (bias add, untilize)
  *                     reads from interm_cb. (default: false)
- *   pack_relu         If true, enable PACK_RELU on the last K-block when
- *                     !pack_last_to_interm. Has no effect when pack_last_to_interm=true.
- *                     (default: false)
- *   PostComputeFn     Functor called per output sub-block on the last K-block,
- *                     after matmul but before packing. (default: NoPostCompute)
+ *   PostComputeFn     Activation applied per output sub-block on the last K-block.
+ *                     Pass HwRelu for zero-cost packer hardware RELU.
+ *                     Pass a custom functor for SFPU activations (gelu, silu, etc.).
+ *                     HwRelu cannot be used with pack_last_to_interm (enforced
+ *                     by static_assert). (default: NoPostCompute)
  *   PreKBlockFn       Functor called at the start of each K-block iteration,
  *                     before input CB waits. Receives (block, num_k_blocks,
  *                     is_last). Use for per-K-block preprocessing such as
@@ -92,7 +100,6 @@ template <
     bool transpose = false,
     bool packer_l1_acc = false,
     bool pack_last_to_interm = false,
-    bool pack_relu = false,
     typename PostComputeFn = matmul_block_config::NoPostCompute,
     typename PreKBlockFn = matmul_block_config::NoPreKBlock>
 ALWI void matmul_block(

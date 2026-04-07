@@ -274,13 +274,12 @@ void kernel_main() {
         false;
 #endif
 
-    // PACK_RELU without bias: helper handles it via pack_relu template param.
+    // PACK_RELU without bias: helper handles it via HwRelu PostComputeFn.
     // PACK_RELU with bias: caller manages RELU config between matmul and bias phases.
-    constexpr bool do_relu =
 #if defined(PACK_RELU) && !defined(FUSE_BIAS)
-        true;
+    using ReluPostFn = compute_kernel_lib::matmul_block_config::HwRelu;
 #else
-        false;
+    using ReluPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
 #endif
 
     mm_block_init(
@@ -518,11 +517,13 @@ void kernel_main() {
                         mm_partials_cb_id,
                         in1_transpose_tile,
                         l1_acc,
-                        /*pack_last_to_interm=*/false,
-                        do_relu
+                        /*pack_last_to_interm=*/false
 #ifdef SFPU_OP_INIT_ACTIVATION
                         ,
                         PostMatmulSFPU
+#else
+                        ,
+                        ReluPostFn
 #endif
                         >(
                         in0_block_w,
@@ -535,7 +536,7 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
                         PostMatmulSFPU{},
 #else
-                        compute_kernel_lib::matmul_block_config::NoPostCompute{},
+                        ReluPostFn{},
 #endif
                         PreFn{});
 #endif  // FUSE_BIAS
