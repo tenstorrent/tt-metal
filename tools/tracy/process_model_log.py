@@ -108,6 +108,89 @@ def _merge_l1_pass2_csv(pass1_csv_path, pass2_csv_path):
     logger.info(f"Merged {len(l1_1_cols)} L1 bank 1 columns from pass 2 into {pass1_csv_path}")
 
 
+def _needs_l1_two_pass(capture_perf_counters_groups):
+    """Check if both L1 banks are requested, requiring two-pass execution.
+
+    L1_0 and L1_1 share a hardware mux and cannot be captured simultaneously.
+    When both are requested, we run the profiler twice and merge the results.
+    """
+    if not capture_perf_counters_groups:
+        return False
+    groups_lower = [g.lower() for g in capture_perf_counters_groups]
+    has_l1_0 = "l1_0" in groups_lower or "all" in groups_lower
+    has_l1_1 = "l1_1" in groups_lower
+    return has_l1_0 and has_l1_1
+
+
+def _split_l1_groups(capture_perf_counters_groups):
+    """Split counter groups into pass 1 (L1 bank 0) and pass 2 (L1 bank 1) groups."""
+    groups_lower = [g.lower() for g in capture_perf_counters_groups]
+    groups_pass1 = [g for g in capture_perf_counters_groups if g.lower() != "l1_1"]
+
+    if "all" in groups_lower:
+        groups_pass2 = ["fpu", "pack", "unpack", "l1_1", "instrn"]
+    else:
+        groups_pass2 = [g for g in capture_perf_counters_groups if g.lower() not in ("l1_0", "all")]
+        if "l1_1" not in [g.lower() for g in groups_pass2]:
+            groups_pass2.append("l1_1")
+
+    return groups_pass1, groups_pass2
+
+
+def _run_l1_two_pass(
+    command,
+    output_logs_subdir,
+    check_test_return_code,
+    device_analysis_types,
+    python_post_process,
+    capture_perf_counters_groups,
+    sum_profiling,
+    op_support_count,
+    is_command_binary_exe,
+):
+    """Run profiler twice to capture both L1 banks, then merge results."""
+    groups_pass1, groups_pass2 = _split_l1_groups(capture_perf_counters_groups)
+
+    # Pass 1: all groups except L1_1
+    output_profiler_dir = get_profiler_folder(output_logs_subdir)
+    profiler_cmd = _build_profiler_cmd(
+        command,
+        output_profiler_dir,
+        check_test_return_code,
+        device_analysis_types,
+        python_post_process,
+        groups_pass1,
+        sum_profiling,
+        op_support_count,
+        is_command_binary_exe,
+    )
+    logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {profiler_cmd}")
+    subprocess.run([profiler_cmd], shell=True, check=True)
+
+    # Pass 2: L1_1 instead of L1_0
+    pass2_subdir = f"{output_logs_subdir}_l1_pass2"
+    output_profiler_dir_pass2 = get_profiler_folder(pass2_subdir)
+    profiler_cmd_pass2 = _build_profiler_cmd(
+        command,
+        output_profiler_dir_pass2,
+        check_test_return_code,
+        device_analysis_types,
+        python_post_process,
+        groups_pass2,
+        sum_profiling,
+        op_support_count,
+        is_command_binary_exe,
+    )
+    logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {profiler_cmd_pass2}")
+    subprocess.run([profiler_cmd_pass2], shell=True, check=True)
+
+    # Merge L1_1 columns from pass 2 into pass 1 CSV
+    if python_post_process:
+        pass1_csv = get_latest_ops_log_filename(output_logs_subdir)
+        pass2_csv = get_latest_ops_log_filename(pass2_subdir)
+        _merge_l1_pass2_csv(pass1_csv, pass2_csv)
+
+
 def run_device_profiler(
     command,
     output_logs_subdir,
@@ -124,61 +207,18 @@ def run_device_profiler(
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
 ):
-    # Check if both L1 banks are requested (requires two-pass execution)
-    needs_l1_two_pass = False
-    if capture_perf_counters_groups:
-        groups_lower = [g.lower() for g in capture_perf_counters_groups]
-        has_l1_0 = "l1_0" in groups_lower or "all" in groups_lower
-        has_l1_1 = "l1_1" in groups_lower
-        needs_l1_two_pass = has_l1_0 and has_l1_1
-
-    if needs_l1_two_pass:
-        # Pass 1: all groups except l1_1
-        groups_pass1 = [g for g in capture_perf_counters_groups if g.lower() != "l1_1"]
-        output_profiler_dir = get_profiler_folder(output_logs_subdir)
-        profiler_cmd = _build_profiler_cmd(
+    if _needs_l1_two_pass(capture_perf_counters_groups):
+        _run_l1_two_pass(
             command,
-            output_profiler_dir,
+            output_logs_subdir,
             check_test_return_code,
             device_analysis_types,
             python_post_process,
-            groups_pass1,
+            capture_perf_counters_groups,
             sum_profiling,
             op_support_count,
             is_command_binary_exe,
         )
-        logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {profiler_cmd}")
-        subprocess.run([profiler_cmd], shell=True, check=True)
-
-        # Pass 2: replace l1_0/all with l1_1
-        groups_pass2 = [g for g in capture_perf_counters_groups if g.lower() not in ("l1_0", "all")]
-        if "all" in groups_lower:
-            # "all" includes fpu,pack,unpack,l1_0,instrn — replace l1_0 with l1_1 and keep the rest
-            groups_pass2 = ["fpu", "pack", "unpack", "l1_1", "instrn"]
-        elif "l1_1" not in groups_pass2:
-            groups_pass2.append("l1_1")
-
-        pass2_subdir = f"{output_logs_subdir}_l1_pass2"
-        output_profiler_dir_pass2 = get_profiler_folder(pass2_subdir)
-        profiler_cmd_pass2 = _build_profiler_cmd(
-            command,
-            output_profiler_dir_pass2,
-            check_test_return_code,
-            device_analysis_types,
-            python_post_process,
-            groups_pass2,
-            sum_profiling,
-            op_support_count,
-            is_command_binary_exe,
-        )
-        logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {profiler_cmd_pass2}")
-        subprocess.run([profiler_cmd_pass2], shell=True, check=True)
-
-        # Merge L1_1 columns from pass 2 into pass 1 CSV
-        if python_post_process:
-            pass1_csv = get_latest_ops_log_filename(output_logs_subdir)
-            pass2_csv = get_latest_ops_log_filename(pass2_subdir)
-            _merge_l1_pass2_csv(pass1_csv, pass2_csv)
     else:
         output_profiler_dir = get_profiler_folder(output_logs_subdir)
         profiler_cmd = _build_profiler_cmd(
