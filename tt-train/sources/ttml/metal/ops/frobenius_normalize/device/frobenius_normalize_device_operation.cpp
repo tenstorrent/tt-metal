@@ -28,8 +28,9 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.layout()));
 
     TT_FATAL(
-        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "FrobeniusNormalize requires BFLOAT16. Got: {}",
+        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "FrobeniusNormalize requires BFLOAT16 or FLOAT32. Got: {}",
         enchantum::to_string(input_tensor.dtype()));
 
     TT_FATAL(

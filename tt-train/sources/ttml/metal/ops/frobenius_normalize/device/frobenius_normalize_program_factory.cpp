@@ -57,7 +57,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     tt::DataFormat bf16_format = tt::DataFormat::Float16_b;
     tt::DataFormat fp32_format = tt::DataFormat::Float32;
 
-    uint32_t bf16_tile_size = tt::tile_size(bf16_format);
+    [[maybe_unused]] uint32_t bf16_tile_size = tt::tile_size(bf16_format);
     uint32_t fp32_tile_size = tt::tile_size(fp32_format);
 
     // -------------------------------------------------------------------------
@@ -85,7 +85,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     constexpr uint32_t output_double_buf = 2;
 
     [[maybe_unused]] auto cb_input =
-        create_circular_buffer(program, all_cores, kCbInput, bf16_format, bf16_tile_size, input_double_buf);
+        create_circular_buffer(program, all_cores, kCbInput, fp32_format, fp32_tile_size, input_double_buf);
     [[maybe_unused]] auto cb_sq_acc =
         create_circular_buffer(program, all_cores, kCbSqAcc, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_scalar =
@@ -95,7 +95,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     [[maybe_unused]] auto cb_norm =
         create_circular_buffer(program, all_cores, kCbNorm, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kCbOutput, bf16_format, bf16_tile_size, output_double_buf);
+        create_circular_buffer(program, all_cores, kCbOutput, fp32_format, fp32_tile_size, output_double_buf);
     // c_6 (scaler) removed — not needed with sfpu_reduce
 
     // -------------------------------------------------------------------------
@@ -158,6 +158,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // cb_sq_acc: required for sfpu_reduce
     // cb_scalar, cb_recv: FP32 chain adds via copy_tile + add_binary_tile
     std::vector<UnpackToDestMode> unpack_to_dest(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest[kCbInput] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[kCbSqAcc] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[kCbScalar] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[kCbRecv] = UnpackToDestMode::UnpackToDestFp32;
