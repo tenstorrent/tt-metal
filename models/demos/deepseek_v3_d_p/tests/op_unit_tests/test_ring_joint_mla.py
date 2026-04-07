@@ -802,6 +802,7 @@ def run_ring_joint_sdpa_perf(
             topology=all_gather_topology,
             subdevice_id=worker_sub_device_id,
             ccl_core_grid_offset=ccl_core_grid_offset,
+            use_column_major_ccl=True,
             is_causal=is_causal,
             is_balanced=is_balanced,
         )
