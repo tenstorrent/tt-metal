@@ -7,6 +7,7 @@
 import html
 import os
 from contextlib import nullcontext
+from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
 import ftfy
@@ -83,6 +84,16 @@ def whitespace_clean(text):
 def prompt_clean(text):
     text = whitespace_clean(basic_clean(text))
     return text
+
+
+@dataclass
+class TransformerState:
+    model: WanTransformer3DModel
+    subfolder: str
+    torch_model: TorchWanTransformer3DModel
+    guidance_scale: float
+    prompt_buffer: object = field(default=None)
+    negative_prompt_buffer: object = field(default=None)
 
 
 class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
@@ -267,23 +278,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         )
 
+        self.transformer_states = [
+            TransformerState(self.transformer, "transformer", self.torch_transformer, guidance_scale=4.0),
+            TransformerState(self.transformer_2, "transformer_2", self.torch_transformer_2, guidance_scale=3.0),
+        ]
+
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            self.tt_umt5_encoder.register_coresident_exclusions(self.transformer_2)
             if ttnn.device.is_blackhole():
+                self.tt_umt5_encoder.register_coresident_exclusions(self.transformer_2)
                 self.transformer.register_coresident_exclusions(self.transformer_2)
                 self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_umt5_encoder)
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
                 self.transformer.register_coresident_exclusions(self.transformer_2, self.tt_vae)
-                self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_vae)
                 self.tt_vae.register_coresident_exclusions(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
-        self._prepare_transformer2()
-        self._prepare_transformer1()
+        self._prepare_transformer(1)
+        self._prepare_transformer(0)
         self._prepare_text_encoder()
         self._prepare_vae()
 
@@ -302,11 +318,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.prompt_t1_buffer = None
-        self.prompt_t2_buffer = None
-        self.negative_prompt_t1_buffer = None
-        self.negative_prompt_t2_buffer = None
-
         self.warmup_buffers(**self.get_default_resolution())
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
@@ -456,26 +467,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
 
-    def _prepare_transformer1(self):
+    def _prepare_transformer(self, idx: int):
+        state = self.transformer_states[idx]
         cache.load_model(
-            self.transformer,
+            state.model,
             model_name=os.path.basename(self.checkpoint_name),
-            subfolder="transformer",
+            subfolder=state.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
-            get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
-        )
-
-    def _prepare_transformer2(self):
-        cache.load_model(
-            self.transformer_2,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="transformer_2",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            is_fsdp=self.is_fsdp,
-            get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+            get_torch_state_dict=lambda: state.torch_model.state_dict(),
         )
 
     def _prepare_vae(self):
@@ -708,12 +709,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         return latents, None
 
     @property
-    def guidance_scale(self):
-        return self._guidance_scale
-
-    @property
     def do_classifier_free_guidance(self):
-        return self._guidance_scale > 1.0
+        return self.transformer_states[0].guidance_scale > 1.0
 
     @property
     def num_timesteps(self):
@@ -822,8 +819,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.config.boundary_ratio is not None and guidance_scale_2 is None:
             guidance_scale_2 = guidance_scale
 
-        self._guidance_scale = guidance_scale
-        self._guidance_scale_2 = guidance_scale_2
+        self.transformer_states[0].guidance_scale = guidance_scale
+        self.transformer_states[1].guidance_scale = guidance_scale_2
 
         # device = self._execution_device
         device = "cpu"
@@ -879,7 +876,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.config.boundary_ratio is not None:
             boundary_timestep = self.config.boundary_ratio * self.scheduler.config.num_train_timesteps
         else:
-            boundary_timestep = None
+            boundary_timestep = -1
 
         if profiler:
             profiler.start("denoising", profiler_iteration)
@@ -892,43 +889,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_tranformer_2 = i == 1 and len(timesteps) == 2
+                warmup_t2 = i == 1 and len(timesteps) == 2
 
-                if (boundary_timestep is None or t >= boundary_timestep) and not warmup_tranformer_2:
-                    self._prepare_transformer1()
-                    # wan2.1 or high-noise stage in wan2.2
-                    current_model = self.transformer
-                    prompt_embeds_buffer = self.prompt_t1_buffer
-                    negative_prompt_embeds_buffer = self.negative_prompt_t1_buffer
-                    current_guidance_scale = guidance_scale
-                    prep_idx = 0
-                else:
-                    # low-noise stage in wan2.2
-                    self._prepare_transformer2()
-                    current_model = self.transformer_2
-                    prompt_embeds_buffer = self.prompt_t2_buffer
-                    negative_prompt_embeds_buffer = self.negative_prompt_t2_buffer
-                    current_guidance_scale = guidance_scale_2
-                    prep_idx = 1
-
-                if not prepared_prompts[prep_idx]:
+                # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
+                transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
+                self._prepare_transformer(transformer_idx)
+                ts = self.transformer_states[transformer_idx]
+                if not prepared_prompts[transformer_idx]:
                     # Prepare the text conditioning in an optional persistent buffer depending on traced
-                    prompt_embeds_buffer = self.prepare_text_conditioning(
-                        current_model, prompt_embeds, prompt_embeds_buffer, traced
+                    ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
+                    ts.negative_prompt_buffer = self.prepare_text_conditioning(
+                        ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
                     )
-                    negative_prompt_embeds_buffer = self.prepare_text_conditioning(
-                        current_model, negative_prompt_embeds, negative_prompt_embeds_buffer, traced
-                    )
-                    prepared_prompts[prep_idx] = True
+                    prepared_prompts[transformer_idx] = True
 
                 if permuted_latent is None:
                     # First iteration, preprocess spatial input and prepare rope features
-                    permuted_latent, patchified_seqlen = current_model.preprocess_spatial_input_host(latents)
+                    permuted_latent, patchified_seqlen = ts.model.preprocess_spatial_input_host(latents)
 
                     if cond_latents is not None:
-                        cond_latents, _ = current_model.preprocess_spatial_input_host(cond_latents)
+                        cond_latents, _ = ts.model.preprocess_spatial_input_host(cond_latents)
 
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents)
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
                         "rope_sin_1HND": rope_sin_1HND,
@@ -957,15 +939,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
                 )
 
-                permuted_noise_pred_tt = current_model.combined_step(
+                permuted_noise_pred_tt = ts.model.combined_step(
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
                     spatial_1BNI=permuted_model_input,
-                    prompt_1BLP=prompt_embeds_buffer,
-                    negative_prompt_1BLP=negative_prompt_embeds_buffer,
+                    prompt_1BLP=ts.prompt_buffer,
+                    negative_prompt_1BLP=ts.negative_prompt_buffer,
                     N=patchified_seqlen,
                     timestep=timestep,
                     **rope_args,
-                    guidance_scale=current_guidance_scale,
+                    guidance_scale=ts.guidance_scale,
                     traced=traced,
                 )
 
@@ -980,7 +962,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     progress_bar.update()
 
         # Postprocess spatial output
-        latents = current_model.postprocess_spatial_output_host(
+        latents = ts.model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
         )
 

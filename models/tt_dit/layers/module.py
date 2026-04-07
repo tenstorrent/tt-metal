@@ -152,7 +152,7 @@ class Module(ABC):
         """
         missing_keys = []
         unexpected_keys = []
-
+        self.evict_coresident_exclusions()
         self._load_torch_state_dict_inner(
             state_dict,
             module_key_prefix="",
@@ -188,6 +188,8 @@ class Module(ABC):
 
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
+
+        self.evict_coresident_exclusions()
 
         for name, child in self.named_children():
             child.load(directory, prefix=f"{prefix}{name}.")
