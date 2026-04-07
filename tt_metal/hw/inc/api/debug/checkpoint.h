@@ -40,11 +40,15 @@
 #if defined(DEBUG_CHECKPOINT_ENABLED)
 
 // Checkpoint state lives at a fixed L1 address (start of MEM_LLK_DEBUG region).
-// This struct is 12 bytes. All RISCs on the core share this L1 location.
+// Uses per-RISC byte flags (not a shared bitmask) to avoid read-modify-write
+// races — each RISC writes only its own byte.
+constexpr uint32_t DEBUG_CHECKPOINT_MAX_RISCS = 5;
 struct debug_checkpoint_state_t {
-    volatile uint32_t participant_mask;  // Bitmask of active RISC thread indices
-    volatile uint32_t arrived_mask;      // Each RISC sets its bit on arrival
-    volatile uint32_t proceed;           // Monotonically increasing release counter
+    volatile uint32_t proceed;                             // Monotonically increasing epoch
+    volatile uint32_t participant_mask;                    // Bitmask of active RISC thread indices
+    volatile uint8_t arrived[DEBUG_CHECKPOINT_MAX_RISCS];  // Per-RISC arrival epoch
+    uint8_t orchestrator_idx;                              // Lowest active RISC index
+    uint8_t pad[2];
 };
 static_assert(sizeof(debug_checkpoint_state_t) <= 1024, "Checkpoint state must fit in MEM_LLK_DEBUG region");
 
@@ -54,40 +58,58 @@ inline volatile debug_checkpoint_state_t tt_l1_ptr* get_checkpoint_state() {
 
 // ---------------------------------------------------------------------------
 // Init: called by BRISC/DM0 before launching subordinate kernels.
-// Sets participant_mask and clears barrier state.
+// Sets participant_mask, selects orchestrator, and clears barrier state.
 // ---------------------------------------------------------------------------
 inline void debug_checkpoint_init(uint32_t enables) {
     volatile debug_checkpoint_state_t tt_l1_ptr* ckpt = get_checkpoint_state();
-    ckpt->participant_mask = enables;
-    ckpt->arrived_mask = 0;
+    // Mask to valid RISC indices only
+    uint32_t valid_mask = enables & ((1u << DEBUG_CHECKPOINT_MAX_RISCS) - 1u);
+    ckpt->participant_mask = valid_mask;
     ckpt->proceed = 0;
+    for (uint32_t i = 0; i < DEBUG_CHECKPOINT_MAX_RISCS; i++) {
+        ckpt->arrived[i] = 0;
+    }
+    // Select lowest active RISC as orchestrator
+    uint32_t orch = 0;
+    while (orch < DEBUG_CHECKPOINT_MAX_RISCS && !(valid_mask & (1u << orch))) {
+        orch++;
+    }
+    ckpt->orchestrator_idx = static_cast<uint8_t>(orch);
 }
 
 // ---------------------------------------------------------------------------
 // Barrier: all active RISCs synchronize at a checkpoint.
-// Uses a monotonically increasing proceed counter to avoid race conditions
-// when the barrier is called multiple times (e.g., before and after dump).
+// Each RISC writes its own arrival byte (no shared read-modify-write).
+// The orchestrator (lowest active RISC) polls all arrival bytes, then
+// increments the proceed epoch. Subordinates spin on the proceed epoch.
 // ---------------------------------------------------------------------------
-inline void debug_checkpoint_barrier(uint32_t expected_proceed) {
+inline void debug_checkpoint_barrier() {
     volatile debug_checkpoint_state_t tt_l1_ptr* ckpt = get_checkpoint_state();
     uint32_t my_idx = internal_::get_hw_thread_idx();
-    uint32_t my_bit = 1u << my_idx;
     uint32_t mask = ckpt->participant_mask;
+    uint32_t orch = ckpt->orchestrator_idx;
+    // Capture current epoch before signaling arrival
+    uint32_t current_epoch = ckpt->proceed;
+    uint32_t next_epoch = current_epoch + 1;
 
-    // Signal arrival by setting our bit
-    ckpt->arrived_mask |= my_bit;
+    // Signal arrival by writing next epoch to our byte
+    ckpt->arrived[my_idx] = static_cast<uint8_t>(next_epoch & 0xFF);
 
-    if (my_idx == 0) {
-        // Orchestrator (BRISC/DM0): wait for all participants to arrive
-        while (ckpt->arrived_mask != mask) {
-            invalidate_l1_cache();
+    if (my_idx == orch) {
+        // Orchestrator: wait for all participants to arrive at next_epoch
+        uint8_t expected = static_cast<uint8_t>(next_epoch & 0xFF);
+        for (uint32_t i = 0; i < DEBUG_CHECKPOINT_MAX_RISCS; i++) {
+            if (mask & (1u << i)) {
+                while (ckpt->arrived[i] != expected) {
+                    invalidate_l1_cache();
+                }
+            }
         }
-        // Clear arrived for next barrier, then release
-        ckpt->arrived_mask = 0;
-        ckpt->proceed = expected_proceed;
+        // Release all subordinates
+        ckpt->proceed = next_epoch;
     } else {
-        // Subordinate: wait for orchestrator to release
-        while (ckpt->proceed != expected_proceed) {
+        // Subordinate: wait for orchestrator to advance epoch
+        while (ckpt->proceed != next_epoch) {
             invalidate_l1_cache();
         }
     }
@@ -202,13 +224,12 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint(uint8_t checkpoint_id) {
     WAYPOINT("CKW");  // Checkpoint Wait
-    // Use checkpoint_id * 2 and checkpoint_id * 2 + 1 as the two barrier phases
-    debug_checkpoint_barrier(checkpoint_id * 2);
+    debug_checkpoint_barrier();
 
     debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(checkpoint_id);
 
     // Second barrier ensures all RISCs finish dumping before any proceeds
-    debug_checkpoint_barrier(checkpoint_id * 2 + 1);
+    debug_checkpoint_barrier();
     WAYPOINT("CKD");  // Checkpoint Done
 }
 
