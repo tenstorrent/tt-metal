@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <optional>
 
 namespace tt::tt_metal::inspector {
 
@@ -18,7 +19,7 @@ public:
     ~Data();
 
 private:
-    Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(std::optional<int> rank);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -33,6 +34,7 @@ private:
     void rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results);
     void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
+    void rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);

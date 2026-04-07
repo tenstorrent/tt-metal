@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,7 @@ def test_ttnn_reduce(
     use_weights,
 ):
     """Test TTNN reduce module in isolation using synthetic sparse inputs."""
+    torch.manual_seed(42)
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
 
@@ -85,7 +86,6 @@ def test_ttnn_reduce(
         topk=topk,
         emb_dim=emb_dim,
         sparsity=0.75,
-        seed=42,
     )
     logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
 
@@ -99,7 +99,6 @@ def test_ttnn_reduce(
             num_routed_experts=64,
             num_experts_per_tok=topk,
             max_dispatched_tokens_per_expert=1000,
-            seed=123,
             validate=False,
             skip_x_initialization=True,
         )

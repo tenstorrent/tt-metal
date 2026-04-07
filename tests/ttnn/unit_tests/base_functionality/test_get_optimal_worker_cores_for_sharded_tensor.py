@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,22 @@ import math
 import pytest
 import torch
 import ttnn
+
+
+def skip_if_grid_exceeds_device(device, grid, is_dram=False):
+    """Skip test if any core coordinate in the grid exceeds the device's available cores."""
+    if is_dram:
+        max_x = device.dram_grid_size().x
+        max_y = device.dram_grid_size().y
+        label = "DRAM"
+    else:
+        compute_grid = device.compute_with_storage_grid_size()
+        max_x = compute_grid.x
+        max_y = compute_grid.y
+        label = "compute"
+    for cr in grid.ranges():
+        if cr.end.x >= max_x or cr.end.y >= max_y:
+            pytest.skip(f"Core coordinate ({cr.end.x}, {cr.end.y}) exceeds device {label} grid ({max_x}, {max_y})")
 
 
 def corerange_to_cores_python(core_range_set, max_cores=None, row_wise=False):
@@ -216,6 +232,7 @@ def assert_cores_match(actual_cores, expected_cores):
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_nd_sharded_round_robin(device, tensor_shape, shard_shape, grid, orientation, description):
+    skip_if_grid_exceeds_device(device, grid)
     num_shards = compute_num_shards_nd(tensor_shape, shard_shape)
     row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
     expected_cores = compute_expected_cores_round_robin(grid, num_shards, row_major)
@@ -297,6 +314,7 @@ def test_nd_sharded_round_robin(device, tensor_shape, shard_shape, grid, orienta
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_legacy_height_sharded(device, tensor_shape, shard_h, grid, orientation, description):
+    skip_if_grid_exceeds_device(device, grid)
     shard_w = tensor_shape[-1]
     shard_shape = [shard_h, shard_w]
     num_shards = compute_num_shards_legacy(tensor_shape, shard_shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
@@ -362,6 +380,7 @@ def test_legacy_height_sharded(device, tensor_shape, shard_h, grid, orientation,
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientation, description):
+    skip_if_grid_exceeds_device(device, grid)
     total_height = 1
     for dim in tensor_shape[:-1]:
         total_height *= dim
@@ -439,6 +458,7 @@ def test_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientation, 
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_legacy_block_sharded(device, tensor_shape, shard_shape, grid, orientation, description):
+    skip_if_grid_exceeds_device(device, grid)
     total_height = 1
     for dim in tensor_shape[:-1]:
         total_height *= dim
@@ -590,11 +610,7 @@ def compute_expected_dram_worker_cores_grid_2d(
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_dram_legacy_height_sharded(device, tensor_shape, shard_h, grid, orientation, description):
-    num_device_dram_banks = device.dram_grid_size().x
-    required_banks = grid.num_cores()
-    if required_banks > num_device_dram_banks:
-        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
-
+    skip_if_grid_exceeds_device(device, grid, is_dram=True)
     shard_w = tensor_shape[-1]
     shard_shape = [shard_h, shard_w]
     num_shards = compute_num_shards_legacy(tensor_shape, shard_shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
@@ -679,11 +695,7 @@ def test_dram_legacy_height_sharded(device, tensor_shape, shard_h, grid, orienta
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientation, description):
-    num_device_dram_banks = device.dram_grid_size().x
-    required_banks = grid.num_cores()
-    if required_banks > num_device_dram_banks:
-        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
-
+    skip_if_grid_exceeds_device(device, grid, is_dram=True)
     total_height = 1
     for dim in tensor_shape[:-1]:
         total_height *= dim
@@ -729,11 +741,7 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_dram_legacy_block_sharded_rank1(device, tensor_shape, shard_shape, grid, description):
-    num_device_dram_banks = device.dram_grid_size().x
-    required_banks = grid.num_cores()
-    if required_banks > num_device_dram_banks:
-        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
-
+    skip_if_grid_exceeds_device(device, grid, is_dram=True)
     total_height = 1
     width = tensor_shape[-1]
     shard_h, shard_w = shard_shape
@@ -861,11 +869,7 @@ def test_dram_legacy_block_sharded_rank1(device, tensor_shape, shard_shape, grid
     ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_dram_nd_sharded_round_robin(device, tensor_shape, shard_shape, grid, orientation, description):
-    num_device_dram_banks = device.dram_grid_size().x
-    required_banks = grid.num_cores()
-    if required_banks > num_device_dram_banks:
-        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
-
+    skip_if_grid_exceeds_device(device, grid, is_dram=True)
     num_shards = compute_num_shards_nd(tensor_shape, shard_shape)
     row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
     expected_cores = compute_expected_dram_worker_cores(device, grid, num_shards, row_major)
