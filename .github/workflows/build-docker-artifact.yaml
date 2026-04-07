@@ -66,8 +66,8 @@ on:
         type: choice
         default: "Ubuntu 22.04"
         options:
-            - "Ubuntu 22.04"
-            - "Ubuntu 24.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
         description: "Platform to build Docker images for"
       architecture:
         required: false
