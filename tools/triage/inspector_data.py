@@ -5,12 +5,13 @@
 
 """
 Usage:
-    inspector_data [--inspector-rpc-port=<inspector_rpc_port>] [--inspector-rpc-host=<inspector_rpc_host>] [--inspector-log-path=<inspector_log_path>]
+    inspector_data [--inspector-rpc-port=<inspector_rpc_port>] [--inspector-rpc-host=<inspector_rpc_host>] [--inspector-disable-rank] [--inspector-log-path=<inspector_log_path>]
 
 Options:
     --inspector-rpc-port=<inspector_rpc_port>  Port for the inspector RPC server. [default: 50051]
     --inspector-rpc-host=<inspector_rpc_host>  Host for the inspector RPC server. [default: localhost]
     --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
+    --inspector-disable-rank                   If you want to manually connect to the RPC and do not want rank to be automatically added to the RPC port and log directory.
 
 Description:
     Provides inspector data for other scripts.
@@ -24,6 +25,7 @@ Owner:
 
 from triage import triage_singleton, ScriptConfig, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
+from mpi4py import MPI
 import asyncio
 import capnp
 import os
@@ -165,15 +167,30 @@ def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     rpc_port = args["--inspector-rpc-port"]
     rpc_host = args["--inspector-rpc-host"]
+    rank: int | None = None
+
+    if not args["--inspector-disable-rank"]:
+        # If MPI is available, add rank to the RPC host and port
+        try:
+            size = MPI.COMM_WORLD.Get_size()
+            if size > 1:
+                rank = MPI.COMM_WORLD.Get_rank()
+        except Exception:
+            # If MPI is not available or fails, fall back to rank-less mode without aborting.
+            pass
 
     # First try to connect to Inspector RPC
     try:
+        if rank is not None:
+            rpc_port = int(rpc_port) + rank
         return InspectorRpcController(rpc_host, rpc_port)
-    except:
+    except Exception:
         pass
 
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
+    if rank is not None:
+        log_directory = os.path.join(log_directory, f"_rank_{rank}")
     if not os.path.exists(log_directory):
         raise ValueError(
             f"\n\tLog directory {log_directory} does not exist."

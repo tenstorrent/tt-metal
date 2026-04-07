@@ -117,7 +117,6 @@ struct InspectorSettings {
     bool serialize_on_dispatch_timeout = true;
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
-    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
 template <typename T>
@@ -438,9 +437,6 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
     bool get_inspector_capture_tensor_specs() const { return inspector_settings.capture_tensor_specs; }
     void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
