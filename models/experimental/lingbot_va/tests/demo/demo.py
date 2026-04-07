@@ -46,6 +46,10 @@ from diffusers.video_processor import VideoProcessor
 from PIL import Image
 from tqdm import tqdm
 
+from models.experimental.lingbot_va.tests.download_pretrained_weights import (
+    ensure_checkpoint_path_for_run,
+    resolve_demo_checkpoint_arg,
+)
 from models.experimental.lingbot_va.tests.mesh_utils import (
     inference_work_mesh_from_opened,
     ttnn_mesh_shape_for_inference_demo,
@@ -1656,7 +1660,12 @@ def main() -> None:
         "--checkpoint",
         type=str,
         default=os.environ.get("LINGBOT_VA_CHECKPOINT", ""),
-        help="Path to checkpoint dir (vae, tokenizer, text_encoder, transformer). Default: env LINGBOT_VA_CHECKPOINT.",
+        help=(
+            "Path to checkpoint dir (vae, tokenizer, text_encoder, transformer). "
+            "Default: env LINGBOT_VA_CHECKPOINT, else TT_METAL_HOME/"
+            "models/experimental/lingbot_va/reference/checkpoints. Missing weights may be downloaded "
+            "unless LINGBOT_VA_SKIP_CHECKPOINT_DOWNLOAD=1."
+        ),
     )
     parser.add_argument(
         "--images-dir",
@@ -1704,10 +1713,13 @@ def main() -> None:
     save_dir = args.save_dir or str(_SCRIPT_DIR)
     images_dir = Path(args.images_dir) if args.images_dir else _REPO_ROOT / "example" / "robotwin"
 
+    try:
+        checkpoint_path = ensure_checkpoint_path_for_run(resolve_demo_checkpoint_arg(args.checkpoint))
+    except FileNotFoundError as e:
+        logger.error("%s", e)
+        sys.exit(1)
+
     if args.generate:
-        if not args.checkpoint:
-            logger.error("--generate requires --checkpoint (or LINGBOT_VA_CHECKPOINT).")
-            sys.exit(1)
         for key in (
             "observation.images.cam_high",
             "observation.images.cam_left_wrist",
@@ -1717,7 +1729,7 @@ def main() -> None:
                 logger.error("Missing %s for generate(). Use --images-dir.", images_dir / f"{key}.png")
                 sys.exit(1)
         run_generate(
-            args.checkpoint,
+            str(checkpoint_path),
             images_dir,
             args.prompt,
             save_dir,
@@ -1743,10 +1755,7 @@ def main() -> None:
         prompt=args.prompt,
     )
 
-    if not args.checkpoint:
-        return
-
-    out = run_inference(message, args.checkpoint, save_dir=save_dir, log_time=args.log_time)
+    out = run_inference(message, str(checkpoint_path), save_dir=save_dir, log_time=args.log_time)
 
 
 if __name__ == "__main__":

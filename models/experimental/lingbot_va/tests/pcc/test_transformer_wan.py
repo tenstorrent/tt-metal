@@ -16,6 +16,7 @@ os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 import pytest
 import torch
 from loguru import logger
+from safetensors.torch import load_file
 
 import ttnn
 
@@ -30,9 +31,12 @@ from models.experimental.lingbot_va.tt.transformer_wan import WanTransformer3DMo
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.cache import model_cache_dir
+from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params
+
+setup_checkpoint_root_for_tests()
 
 DIM = 24 * 128  # 3072
 FFN_DIM = 14336
@@ -93,8 +97,6 @@ def _load_state_dict_from_diffusers_safetensors(checkpoint_dir: Path) -> dict[st
     Used after deleting the reference PyTorch model so TT weights load without a second ~10GB copy in RAM
     (avoids ``torch.save`` to ``/tmp`` when disk is full).
     """
-    from safetensors.torch import load_file
-
     index_path = checkpoint_dir / "diffusion_pytorch_model.safetensors.index.json"
     single_path = checkpoint_dir / "diffusion_pytorch_model.safetensors"
     if index_path.is_file():

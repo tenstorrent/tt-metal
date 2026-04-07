@@ -22,11 +22,14 @@ import torch
 import ttnn
 from diffusers import AutoencoderKLWan
 
+from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_shape_request_param,
     vae_bthwc_to_torch,
     vae_hw_parallel_config_for_mesh,
 )
+
+setup_checkpoint_root_for_tests()
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality

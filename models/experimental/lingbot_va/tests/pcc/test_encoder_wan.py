@@ -25,6 +25,7 @@ import torch
 import ttnn
 from transformers import UMT5EncoderModel
 
+from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_num_devices,
     mesh_shape_request_param,
@@ -33,6 +34,8 @@ from models.experimental.lingbot_va.tests.mesh_utils import (
     umt5_pad_input_ids_and_mask,
     umt5_post_encoder_hidden_states,
 )
+
+setup_checkpoint_root_for_tests()
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager

@@ -12,7 +12,10 @@ import pytest
 from tracy.process_model_log import run_device_profiler
 
 import models
+from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+
+setup_checkpoint_root_for_tests()
 
 
 def _run_device_profiler_op_support_count(*args, **kwargs):

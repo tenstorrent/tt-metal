@@ -14,11 +14,15 @@ from __future__ import annotations
 import gc
 import math
 import os
+import warnings
 
 import torch
 from loguru import logger
-
 import ttnn
+from transformers import UMT5EncoderModel
+
+from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
+from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
 from models.tt_dit.parallel.config import (
     DiTParallelConfig,
     EncoderParallelConfig,
@@ -26,14 +30,16 @@ from models.tt_dit.parallel.config import (
     VaeHWParallelConfig,
 )
 from models.tt_dit.parallel.manager import CCLManager
-from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
-from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
+from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_in_channels, conv_pad_height, conv_unpad_height
+from models.experimental.lingbot_va.reference.transformer_wan import (
+    WanTransformer3DModel as TorchWanTransformer3DModel,
+)
 from models.experimental.lingbot_va.tests.mesh_utils import (
     vae_bcthw_to_torch,
     vae_hw_parallel_config_for_mesh,
 )
-from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
-from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_in_channels, conv_pad_height, conv_unpad_height
+from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
+from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
 
 from .transformer_wan import (
     CROSS_ATTN_NORM,
@@ -59,15 +65,6 @@ def _safe_deallocate_tensor(tensor, label: str = "") -> None:
         ttnn.deallocate(tensor)
     except Exception as e:
         logger.warning("Failed to deallocate{}: {}", f" {label}" if label else "", e)
-
-
-# Lazy import to avoid loading reference/diffusers when only load_transformer_from_state_dict is used
-def _get_torch_wan_transformer():
-    from models.experimental.lingbot_va.reference.transformer_wan import (
-        WanTransformer3DModel as TorchWanTransformer3DModel,
-    )
-
-    return TorchWanTransformer3DModel
 
 
 def _local_path(p: str | os.PathLike) -> str:
@@ -105,7 +102,6 @@ def load_transformer(
     Returns:
         WanTransformer3DModel (TT) with weights loaded.
     """
-    TorchWanTransformer3DModel = _get_torch_wan_transformer()
     torch_model = TorchWanTransformer3DModel.from_pretrained(
         _local_path(transformer_path),
         torch_dtype=torch_dtype,
@@ -206,9 +202,6 @@ def load_text_encoder(
     Returns:
         TT UMT5Encoder with weights loaded.
     """
-    from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
-    from transformers import UMT5EncoderModel
-
     hf_encoder = UMT5EncoderModel.from_pretrained(
         _local_path(text_encoder_path),
         torch_dtype=torch_dtype,
@@ -656,8 +649,6 @@ class WanVAEStreamingWrapper:
         if hasattr(self.vae, "_cached_conv_counts"):
             ref_n = self.vae._cached_conv_counts.get("encoder")
             if ref_n is not None and ref_n != self.enc_conv_num:
-                import warnings
-
                 warnings.warn(
                     f"TT encoder num_causal_conv_slots={self.enc_conv_num} != "
                     f"vae._cached_conv_counts['encoder']={ref_n}; streaming feat_cache may be misaligned.",

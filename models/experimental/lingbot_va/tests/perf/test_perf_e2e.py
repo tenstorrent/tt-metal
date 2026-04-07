@@ -25,7 +25,10 @@ if str(_tt_metal_root) not in sys.path:
     sys.path.insert(0, str(_tt_metal_root))
 
 from models.experimental.lingbot_va.tests.demo.demo import build_infer_message
+from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
+
+setup_checkpoint_root_for_tests()
 from models.experimental.lingbot_va.tests.perf.tt_lingbot_va_perf import TtLingbotVA
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
