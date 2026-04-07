@@ -161,9 +161,7 @@ def build_all_reduce_test_inputs(
     )
 
 
-@skip_with_llk_assert(
-    "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many LLK_ASSERT-s. Issue: #41480."
-)
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
@@ -319,9 +317,7 @@ def test_ccl_all_reduce(
     logger.info("CCL all-reduce test passed!")
 
 
-@skip_with_llk_assert(
-    "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many LLK_ASSERT-s. Issue: #41480."
-)
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [

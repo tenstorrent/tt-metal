@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -30,7 +29,6 @@ pytestmark = pytest.mark.use_module_device
         (0, 32000, 0, 32000),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -134,7 +132,6 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 @pytest.mark.parametrize("ttnn_fn", ("add", "mul", "logical_and", "logical_or", "logical_xor"))
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
     ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
@@ -192,7 +189,6 @@ def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device
         (32001, 65000, 0, 32000),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -268,7 +264,6 @@ def test_binary_sub_uint16_edge_cases(device):
         block_sharded_memory_config,
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(151, 300, num_elements, dtype=torch.int32)
@@ -332,7 +327,6 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
         ttnn.bitwise_xor,
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b, bitwise_op, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -393,7 +387,6 @@ def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b
         ttnn.bitwise_xor,
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
@@ -456,7 +449,6 @@ def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op,
         (0, 1, 32767, 65535),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
     num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     if high_a in (32, 4, 2, 1):
@@ -552,7 +544,6 @@ def test_binary_mul_uint16_edge_cases(device):
         (0, 32000, 0, 32000),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
@@ -645,7 +636,6 @@ def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
         (305, 400, 150, 300),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
     num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
@@ -685,7 +675,6 @@ def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a,
         (0, 32000, 32001, 65535),
     ],
 )
-@skip_with_llk_assert("Skip due to precision loss with assert enabled. Issue: #41334.")
 def test_binary_rsub_uint16(low_a, high_a, low_b, high_b, device):
     torch_input_tensor_a = torch.randint(low_a, high_a, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
     torch_input_tensor_b = torch.randint(low_b, high_b, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
