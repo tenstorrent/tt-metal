@@ -2,6 +2,10 @@
 
 Matches VocosBackbone Attention: non-causal, fused QKV Linear(d, 3d),
 RoPE applied along heads axis (interleaved pairs), output projection Linear(d, d).
+
+All ops on device -- no host roundtrip. RoPE is computed via element-wise
+multiply with precomputed cos/sin + matmul with a transformation matrix
+for the pair-swap rotation.
 """
 
 import math
@@ -18,59 +22,64 @@ from models.demos.inworld_tts.tt.model_config import (
 )
 
 
-def build_rope_cache(n_positions: int, dim: int, base: float = 10000.0) -> torch.Tensor:
-    """Build RoPE cache matching torchtune RotaryPositionalEmbeddings.
+def _build_rope_cos_sin_interleaved(n_heads: int, head_dim: int, base: float = 10000.0) -> tuple:
+    """Build cos/sin in interleaved format for on-device RoPE.
 
-    Returns cache of shape [n_positions, dim//2, 2] containing [cos, sin].
-    """
-    theta = 1.0 / (base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    seq_idx = torch.arange(n_positions, dtype=theta.dtype)
-    idx_theta = torch.einsum("i, j -> ij", seq_idx, theta).float()
-    cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
-    return cache
+    RoPE in VocosBackbone rotates along the HEAD axis (dim=1), not the
+    sequence axis. Each of the n_heads gets a fixed rotation; all sequence
+    positions within that head share the same rotation.
 
-
-def apply_rope_bf16(x: torch.Tensor, rope_cache: torch.Tensor) -> torch.Tensor:
-    """Apply interleaved-pair RoPE IN BFLOAT16 precision to avoid requantization.
-
-    The key insight: if input x is bf16 from device, applying RoPE in float32
-    then converting back to bf16 adds quantization error. Instead, we stay in
-    bf16 throughout so the output has the same precision as the input.
-
-    Args:
-        x: [B, H, T, D] tensor (bf16 from device)
-        rope_cache: [n_positions, D//2, 2] precomputed cos/sin
     Returns:
-        [B, H, T, D] with rotary embeddings applied (same dtype as input)
+        cos_interleaved: [1, n_heads, 1, head_dim] torch.bfloat16
+            Format: [c0, c0, c1, c1, ...] (interleaved duplicate)
+        sin_interleaved: [1, n_heads, 1, head_dim] torch.bfloat16
     """
-    input_dtype = x.dtype
-    seq_len = x.size(1)
-    cache = rope_cache[:seq_len]
+    half_dim = head_dim // 2
+    theta = 1.0 / (base ** (torch.arange(0, head_dim, 2)[:half_dim].float() / head_dim))
+    positions = torch.arange(n_heads, dtype=theta.dtype)
+    freqs = torch.einsum("i, j -> ij", positions, theta).float()  # [n_heads, half_dim]
 
-    # Stay in input dtype (bf16) to avoid requantization loss
-    x_work = x
-    cache_work = cache.to(input_dtype)
+    cos_raw = torch.cos(freqs)  # [n_heads, half_dim]
+    sin_raw = torch.sin(freqs)  # [n_heads, half_dim]
 
-    # Reshape to interleaved pairs: [B, H, T, D//2, 2]
-    xshaped = x_work.reshape(*x_work.shape[:-1], -1, 2)
+    # Interleave: [c0, c0, c1, c1, ...] -> [n_heads, head_dim]
+    cos_interleaved = torch.stack([cos_raw, cos_raw], dim=-1).flatten(-2)  # [n_heads, head_dim]
+    sin_interleaved = torch.stack([sin_raw, sin_raw], dim=-1).flatten(-2)
 
-    # Reshape cache for broadcasting: [1, H, 1, D//2, 2]
-    cache_bc = cache_work.view(-1, xshaped.size(1), 1, xshaped.size(3), 2)
+    # Add batch and seq dims for broadcasting: [1, n_heads, 1, head_dim]
+    cos_interleaved = cos_interleaved.unsqueeze(0).unsqueeze(2)
+    sin_interleaved = sin_interleaved.unsqueeze(0).unsqueeze(2)
 
-    # Apply rotation on interleaved pairs
-    x_out = torch.stack(
-        [
-            xshaped[..., 0] * cache_bc[..., 0] - xshaped[..., 1] * cache_bc[..., 1],
-            xshaped[..., 1] * cache_bc[..., 0] + xshaped[..., 0] * cache_bc[..., 1],
-        ],
-        -1,
-    )
+    return cos_interleaved.to(torch.bfloat16), sin_interleaved.to(torch.bfloat16)
 
-    return x_out.flatten(3).to(input_dtype)
+
+def _build_rope_transform_mat(head_dim: int) -> torch.Tensor:
+    """Build the pair-swap-with-sign transformation matrix for interleaved RoPE.
+
+    For interleaved pairs, the rotation is:
+        out[2i]   = x[2i] * cos - x[2i+1] * sin
+        out[2i+1] = x[2i+1] * cos + x[2i] * sin
+
+    This equals: out = x * cos + (x @ T) * sin
+    where T swaps adjacent pairs with a sign flip:
+        (x @ T)[2i]   = -x[2i+1]
+        (x @ T)[2i+1] =  x[2i]
+
+    Returns:
+        [1, 1, head_dim, head_dim] transformation matrix
+    """
+    T = torch.zeros(1, 1, head_dim, head_dim)
+    for i in range(0, head_dim, 2):
+        T[0, 0, i, i + 1] = 1  # x[2i] contributes positively to position 2i+1
+        T[0, 0, i + 1, i] = -1  # x[2i+1] contributes negatively to position 2i
+    return T
 
 
 class TtAttention(LightweightModule):
-    """Bidirectional MHA with fused QKV and RoPE for VocosBackbone."""
+    """Bidirectional MHA with fused QKV and RoPE for VocosBackbone.
+
+    All ops on device -- QKV split, reshape, RoPE, SDPA, head merge, output projection.
+    """
 
     def __init__(
         self,
@@ -115,11 +124,29 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.rope_cache = build_rope_cache(n_heads, pos_emb_dim)
+        # Precompute RoPE cos/sin on device [1, n_heads, 1, head_dim]
+        cos_bf16, sin_bf16 = _build_rope_cos_sin_interleaved(n_heads, pos_emb_dim)
+        self.rope_cos = ttnn.from_torch(
+            cos_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self.rope_sin = ttnn.from_torch(
+            sin_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # Transformation matrix for pair-swap rotation [1, 1, head_dim, head_dim]
+        trans_mat = _build_rope_transform_mat(pos_emb_dim)
+        self.rope_trans_mat = ttnn.from_torch(
+            trans_mat,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         self.compute_kernel_config = get_compute_kernel_config_hifi4()
 
     def forward(self, x):
-        """Forward pass.
+        """Forward pass -- all on device.
 
         Args:
             x: [1, 1, T, dim] in TILE_LAYOUT
@@ -135,26 +162,32 @@ class TtAttention(LightweightModule):
             x, self.c_attn, core_grid=self.core_grid, memory_config=L1, compute_kernel_config=self.compute_kernel_config
         )
 
-        # Host roundtrip for QKV reshape + RoPE (unavoidable: interleaved pairs need 5D)
-        qkv_torch = ttnn.to_torch(qkv)
-        qkv_torch = qkv_torch.view(1, seq_len, 3, self.n_heads, self.head_dim)
-        qkv_torch = qkv_torch.permute(2, 0, 3, 1, 4)  # [3, B, H, T, D]
-        q, k, v = qkv_torch[0], qkv_torch[1], qkv_torch[2]
+        # Split Q, K, V on device via slicing along last dim
+        q = qkv[:, :, :, : self.dim]
+        k = qkv[:, :, :, self.dim : 2 * self.dim]
+        v = qkv[:, :, :, 2 * self.dim :]
+        ttnn.deallocate(qkv)
 
-        # Apply RoPE in native dtype
-        q = apply_rope_bf16(q, self.rope_cache)
-        k = apply_rope_bf16(k, self.rope_cache)
+        # Reshape to multi-head: [1, 1, T, dim] -> [1, T, H, D] -> [1, H, T, D]
+        # The reshape splits the last dim: c = h * head_dim + d
+        # The permute swaps heads and sequence dims for SDPA format
+        q = ttnn.reshape(q, [1, seq_len, self.n_heads, self.head_dim])
+        q = ttnn.permute(q, (0, 2, 1, 3))
+        k = ttnn.reshape(k, [1, seq_len, self.n_heads, self.head_dim])
+        k = ttnn.permute(k, (0, 2, 1, 3))
+        v = ttnn.reshape(v, [1, seq_len, self.n_heads, self.head_dim])
+        v = ttnn.permute(v, (0, 2, 1, 3))
 
-        # Move Q,K,V to device L1 as bf16 (SDPA requires bf16)
-        q = ttnn.from_torch(
-            q.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=L1
-        )
-        k = ttnn.from_torch(
-            k.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=L1
-        )
-        v = ttnn.from_torch(
-            v.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=L1
-        )
+        # Apply RoPE on device: out = x * cos + (x @ T) * sin
+        # cos/sin broadcast over T (shape [1, n_heads, 1, head_dim])
+        # trans_mat broadcasts over n_heads and T (shape [1, 1, head_dim, head_dim])
+        q_rot = ttnn.matmul(q, self.rope_trans_mat)
+        q = ttnn.add(ttnn.mul(q, self.rope_cos), ttnn.mul(q_rot, self.rope_sin))
+        ttnn.deallocate(q_rot)
+
+        k_rot = ttnn.matmul(k, self.rope_trans_mat)
+        k = ttnn.add(ttnn.mul(k, self.rope_cos), ttnn.mul(k_rot, self.rope_sin))
+        ttnn.deallocate(k_rot)
 
         # SDPA on device -> L1
         attn_output = ttnn.transformer.scaled_dot_product_attention(
