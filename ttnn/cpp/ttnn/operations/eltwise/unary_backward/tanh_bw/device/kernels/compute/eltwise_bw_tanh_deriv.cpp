@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
 
