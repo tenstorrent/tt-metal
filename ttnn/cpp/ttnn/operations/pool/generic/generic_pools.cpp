@@ -181,6 +181,24 @@ static std::vector<Tensor> pool2d_L1(
         .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();
+    TT_FATAL(
+        output_shape[1] > 0 && output_shape[2] > 0,
+        "Pool2D: Computed output dimensions must be positive, got {}x{} "
+        "(input={}x{}, kernel={}x{}, stride={}x{}, dilation={}x{}, padding=[{},{},{},{}])",
+        output_shape[1],
+        output_shape[2],
+        input_h,
+        input_w,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation_h,
+        dilation_w,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3]);
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
@@ -226,14 +244,9 @@ static std::vector<Tensor> pool2d_L1(
 
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
-
-        Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
-
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
-        } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();

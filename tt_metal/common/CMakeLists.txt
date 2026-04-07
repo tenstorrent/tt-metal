@@ -25,7 +25,7 @@ target_link_libraries(
         fmt::fmt-header-only
         TT::STL
         umd::Firmware
-        umd::device
+        umd::tt-umd
         simde::simde
         Taskflow::Taskflow
     PRIVATE

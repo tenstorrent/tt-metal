@@ -185,7 +185,7 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srca<>(m_srca_cb, cb);
+            reconfig_data_format_srca<false, true>(m_srca_cb, cb);
         }
 
         DPRINT << "reconfig_data_format_srca - ";
@@ -196,7 +196,7 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srcb<>(m_srcb_cb, cb);
+            reconfig_data_format_srcb<false, true>(m_srcb_cb, cb);
         }
 
         DPRINT << "reconfig_data_format_srcb - ";
