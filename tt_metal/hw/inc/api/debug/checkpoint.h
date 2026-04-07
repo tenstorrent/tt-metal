@@ -90,18 +90,17 @@ inline void debug_checkpoint_barrier() {
     uint32_t mask = ckpt->participant_mask;
     uint32_t orch = ckpt->orchestrator_idx;
     // Capture current epoch before signaling arrival
-    uint32_t current_epoch = ckpt->proceed;
-    uint32_t next_epoch = current_epoch + 1;
+    uint8_t current_epoch = static_cast<uint8_t>(ckpt->proceed);
+    uint8_t next_epoch = current_epoch + 1;
 
     // Signal arrival by writing next epoch to our byte
-    ckpt->arrived[my_idx] = static_cast<uint8_t>(next_epoch & 0xFF);
+    ckpt->arrived[my_idx] = next_epoch;
 
     if (my_idx == orch) {
         // Orchestrator: wait for all participants to arrive at next_epoch
-        uint8_t expected = static_cast<uint8_t>(next_epoch & 0xFF);
         for (uint32_t i = 0; i < DEBUG_CHECKPOINT_MAX_RISCS; i++) {
             if (mask & (1u << i)) {
-                while (ckpt->arrived[i] != expected) {
+                while (ckpt->arrived[i] != next_epoch) {
                     invalidate_l1_cache();
                 }
             }
@@ -164,10 +163,13 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
     }
     // If dump_dest is false, Math thread prints nothing (no CB access).
 
-#elif defined(COMPILE_FOR_BRISC)
-    // BRISC prints CB metadata. CBs are shared L1 so only one RISC needs to print.
-    DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " CBs ===" << ENDL();
-    DEVICE_PRINT("=== CKPT {} CBs ===\n", (uint32_t)checkpoint_id);
+#else
+    // BRISC, NCRISC, TRISC0 (Unpack), TRISC2 (Pack) print CB metadata.
+    // CB pointers (rd_ptr, wr_ptr, tiles_acked, tiles_received) are RISC-specific,
+    // so each RISC's view is different. Prefix with RISC index for disambiguation.
+    uint32_t risc_idx = internal_::get_hw_thread_idx();
+    DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " RISC" << risc_idx << " CBs ===" << ENDL();
+    DEVICE_PRINT("=== CKPT {} RISC{} CBs ===\n", (uint32_t)checkpoint_id, risc_idx);
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
@@ -202,9 +204,7 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
         }
     }
 
-#endif  // COMPILE_FOR_TRISC / COMPILE_FOR_BRISC
-    // NCRISC, TRISC0, TRISC2: no output (CB data is same as BRISC's view).
-    // They still participate in the barriers.
+#endif  // COMPILE_FOR_TRISC == 1 / else
 #endif  // CHECKPOINT_PRINT_ENABLED
 }
 
@@ -231,6 +231,11 @@ inline void debug_checkpoint(uint8_t checkpoint_id) {
 #if defined(KERNEL_BUILD) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_DM))
 #include "api/dataflow/dataflow_api.h"
 
+// Persistent expected count — incremented by num_cores each barrier call.
+// Eliminates the need to reset the semaphore between barriers, avoiding the
+// race where increments from a new barrier arrive before the reset completes.
+static uint32_t cross_core_barrier_expected = 0;
+
 inline void debug_checkpoint_cross_core_barrier(
     uint32_t sem_id, uint32_t barrier_coord_x, uint32_t barrier_coord_y, uint32_t num_cores) {
     uint32_t sem_addr = get_semaphore(sem_id);
@@ -238,27 +243,22 @@ inline void debug_checkpoint_cross_core_barrier(
     uint64_t coord_noc_addr = get_noc_addr(barrier_coord_x, barrier_coord_y, sem_addr);
     bool is_coordinator = (my_x[noc_index] == barrier_coord_x && my_y[noc_index] == barrier_coord_y);
 
-    // Reset local semaphore on ALL cores before signaling arrival.
-    // This clears stale values from a previous barrier (the coordinator's copy
-    // accumulated to num_cores last time, and non-coordinator copies hold the
-    // polled value). Without this reset, a subsequent barrier would see the stale
-    // value and skip the wait.
-    noc_semaphore_set(local_sem, 0);
+    // Advance expected count — no reset needed, semaphore accumulates monotonically
+    cross_core_barrier_expected += num_cores;
 
     // Signal arrival (atomic increment on coordinator)
     noc_semaphore_inc(coord_noc_addr, 1);
     noc_async_atomic_barrier();
 
     if (is_coordinator) {
-        // Coordinator: wait locally for all cores to arrive
-        noc_semaphore_wait_min(local_sem, num_cores);
+        // Coordinator: wait locally for semaphore to reach expected count
+        noc_semaphore_wait_min(local_sem, cross_core_barrier_expected);
     } else {
-        // Non-coordinator: poll coordinator's semaphore via NOC read.
-        // Use our local copy of the semaphore as the read destination
-        // (it's unused on non-coordinator cores since all increments go to coordinator).
-        while (*local_sem < num_cores) {
+        // Non-coordinator: poll coordinator's semaphore via NOC read
+        while (*local_sem < cross_core_barrier_expected) {
             noc_async_read(coord_noc_addr, sem_addr, sizeof(uint32_t));
             noc_async_read_barrier();
+            invalidate_l1_cache();
         }
     }
 }

@@ -122,7 +122,7 @@ static void run_basic_checkpoint(
     std::vector<uint32_t> output;
     distributed::ReadShard(cq, output, s.output_dram, s.zero);
     EXPECT_EQ(input, output);
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 CBs ===", "CB0 sz=*"}));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 RISC* CBs ===", "CB0 sz=*"}));
 }
 
 TEST_F(DevicePrintCheckpointTest, BasicCheckpoint) {
@@ -176,7 +176,8 @@ static void run_checkpoint_loop(
     std::vector<uint32_t> output;
     distributed::ReadShard(cq, output, s.output_dram, s.zero);
     EXPECT_EQ(input, output);
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 CBs ===", "=== CKPT 2 dest regs ==="}));
+    EXPECT_TRUE(
+        FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 RISC* CBs ===", "=== CKPT 2 dest regs ==="}));
 }
 
 TEST_F(DevicePrintCheckpointTest, CheckpointLoopAndDumpDest) {
@@ -282,7 +283,7 @@ static void run_global_checkpoint(
     distributed::ReadShard(cq, o1, out1, zero);
     EXPECT_EQ(data0, o0);
     EXPECT_EQ(data1, o1);
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 CBs ===", "CB0 sz=*"}));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT 1 RISC* CBs ===", "CB0 sz=*"}));
 }
 
 TEST_F(DevicePrintCheckpointTest, GlobalCheckpoint) {
