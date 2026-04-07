@@ -47,6 +47,43 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
 
 
+class TokenAccuracy:
+    def __init__(self, model_name):
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+        reference_data_file = os.path.join("models/demos/gpt_oss/tests/reference_outputs/", model_name) + ".refpt"
+        assert os.path.exists(reference_data_file), f"Reference file not found: {reference_data_file}"
+        logger.info(f"Loading reference data from {reference_data_file}")
+        reference_data = torch.load(reference_data_file, weights_only=False)
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
+        self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
+        self.maxindex = len(self.reference_tokens) - 1
+
+    def prepare_ref_tokens(self, tokenizer):
+        return tokenizer.decode(self.input_prompt.tolist())
+
+    def collect_predicted_tokens(self, tokens):
+        self.store_predicted_tokens.append(tokens)
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+
+    def compute_accuracy(self):
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        for i in range(matching_sz):
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
+                count += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
+        accuracy_top1 = count / matching_sz
+        accuracy_top5 = count_t5 / matching_sz
+        return accuracy_top1, accuracy_top5
+
+
 def create_long_context_page_table(
     global_batch_size: int,
     mesh_rows: int,
@@ -178,7 +215,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
@@ -191,7 +228,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci, token_accuracy",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -209,6 +246,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             True,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -226,6 +264,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             True,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -243,6 +282,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -260,6 +300,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -277,6 +318,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -294,6 +336,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -311,6 +354,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             True,  # run_in_ci
+            False,  # token_accuracy
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -328,6 +372,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             True,  # run_in_ci
+            False,  # token_accuracy
         ),
         # Batch 128
         (
@@ -346,6 +391,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             True,  # run_in_ci
+            False,  # token_accuracy
         ),
         # Batch 128 with logprobs (top-5)
         (
@@ -369,6 +415,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
@@ -387,6 +434,7 @@ def prepare_gpt_oss_generator_args(
             True,  # long_context_mode - single user per row gets all page blocks
             True,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
         ),
         # Long-context mode: short prefill, long decode
         (
@@ -405,6 +453,26 @@ def prepare_gpt_oss_generator_args(
             True,  # long_context_mode - single user per row gets all page blocks
             False,  # stop_at_eos
             False,  # run_in_ci
+            False,  # token_accuracy
+        ),
+        # Token accuracy test - 64 prefill + 64 decode from Tale of Two Cities
+        (
+            None,  # input_prompts — overridden by TokenAccuracy
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            64,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 16},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy)
+            False,  # enable_decode_trace — MUST be False for teacher forcing
+            False,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            False,  # stop_at_eos — run all 64 decode tokens
+            False,  # run_in_ci
+            True,  # token_accuracy
         ),
     ],
     ids=[
@@ -420,6 +488,7 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "token_accuracy",
     ],
 )
 @parametrize_mesh_with_fabric()
@@ -442,6 +511,7 @@ def test_gpt_oss_demo(
     long_context_mode,
     stop_at_eos,
     run_in_ci,
+    token_accuracy,
     is_ci_env,
     request,
     state_dict,
@@ -493,6 +563,8 @@ def test_gpt_oss_demo(
         real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
         real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
+    elif input_prompts is None and token_accuracy:
+        real_prompts = []  # Will be overridden after TokenAccuracy init
     else:
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
@@ -527,6 +599,12 @@ def test_gpt_oss_demo(
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
+
+    # Initialize token accuracy testing (teacher forcing with .refpt reference data)
+    token_acc = None
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_name=model_args[0].model_name)
+        real_prompts = [token_acc.prepare_ref_tokens(tokenizer)]
 
     # Create on-device sampling params
     SAMPLING_BATCH_SIZE = 32
@@ -1046,6 +1124,10 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
+            # Teacher forcing: collect prediction, then feed ground truth for next step
+            if token_acc:
+                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+
             # Decode forward with on-device sampling
             out_tok, _ = generator.decode_forward(
                 out_tok,
@@ -1087,6 +1169,11 @@ def test_gpt_oss_demo(
             iteration += 1
 
         profiler.end(f"inference_decode", iteration=batch_idx)
+
+        if token_acc:
+            top1_acc, top5_acc = token_acc.compute_accuracy()
+            logger.info(f"=== Top1 and Top5 Token Accuracy ===")
+            logger.info(f" Top1 Accuracy: {top1_acc * 100:.2f}%, Top5 Accuracy: {top5_acc * 100:.2f}%")
 
         # Final output for this batch (like tt_transformers)
         logger.info("Finished decoding, printing the final outputs...\n")
