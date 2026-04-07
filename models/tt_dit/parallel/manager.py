@@ -453,6 +453,97 @@ class CCLManager:
         self._pending_np_event = None
         return result
 
+    def neighbor_pad_conv3d_fused(
+        self,
+        tensor: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        conv_config,
+        output_channels: int,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        padding_mode: str,
+        dtype,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        """
+        Fused NeighborPad + Conv3d: ONE program dispatch, no sub-device manager.
+        Equivalent to neighbor_pad_halo_only() + conv3d() but as a single C++ op.
+        Requires conv_config.use_h_halo_buffer=True and input_progress_t_batch_size>0.
+        """
+        barrier_sem = self.get_barrier_semaphore(axes[0])
+        dim2 = dims[1] if len(dims) > 1 else None
+        padding2 = pad_left[1] if dim2 is not None else 0
+        halo_buf = self.get_np_halo_buffer(
+            tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
+        )
+
+        # Update halo buffer fields in conv_config before dispatch
+        H_dev = tensor.shape[2]
+        W_dev = tensor.shape[3]
+        T_dev = tensor.shape[1]
+        ph = pad_left[0]
+        pw = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        conv_config.h_halo_buffer_addr = halo_buf.buffer_address()
+        conv_config.h_halo_outer_dim_size = T_dev
+        conv_config.h_halo_H = H_dev + 2 * ph
+        conv_config.h_halo_W = W_dev
+        conv_config.h_halo_padding_h = ph
+        conv_config.h_halo_padding_w = pw
+
+        # Progress sem: GlobalSemaphore for conv3d readers, reset before dispatch.
+        # W-writer cores signal this once each after completing W-halo work.
+        progress_sem = self.get_np_progress_semaphore(axes[0])
+        ttnn.reset_global_semaphore_value(progress_sem, 0)
+        conv_config.input_progress_sem_addr = ttnn.get_global_semaphore_address(progress_sem)
+
+        w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
+        np_pad2_left = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        np_pad2_right = pad_right[1] if dim2 is not None and len(pad_right) > 1 else 0
+        # nanobind expects int for np_pad_dim2 and np_pad2_cluster_axis (not Optional).
+        # Use 0 as sentinel when not in 2D mode — the factory checks is_2d via np_pad_dim2 != 0.
+        np_pad_dim2_val = dim2 if dim2 is not None else 0
+        np_pad2_cluster_axis_val = axes[1] if dim2 is not None and len(axes) > 1 else 0
+        np_pad2_num_links = num_links[1] if dim2 is not None and len(num_links) > 1 else 1
+
+        return ttnn.experimental.neighbor_pad_conv3d(
+            tensor,
+            weight,
+            bias,
+            halo_buf,
+            np_padding_h=pad_left[0],
+            np_padding_w=pw,
+            np_cluster_axis=axes[0],
+            np_num_links=num_links[0],
+            np_topology=self.topology,
+            h_neighbor_semaphore=neighbor_sems[0],
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=np_pad_dim2_val,
+            np_pad2_left=np_pad2_left,
+            np_pad2_right=np_pad2_right,
+            np_pad2_cluster_axis=np_pad2_cluster_axis_val,
+            np_pad2_num_links=np_pad2_num_links,
+            conv_config=conv_config,
+            output_channels=output_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            padding_mode=padding_mode,
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+
     def get_barrier_semaphore(self, mesh_axis):
         """
         Get semaphore for barrier operations.

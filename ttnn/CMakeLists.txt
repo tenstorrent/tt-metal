@@ -449,6 +449,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/neighbor_pad_conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
@@ -700,6 +701,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
+        TTNN::Ops::Experimental::NeighborPadConv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::IsIn
@@ -962,6 +964,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
+add_subdirectory(cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
