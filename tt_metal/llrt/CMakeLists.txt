@@ -15,7 +15,7 @@ add_dependencies(llrt hal_generate_dev_msgs_header)
 target_link_libraries(
     llrt
     PUBLIC
-        umd::device
+        umd::tt-umd
         TT::Metalium::HostDevCommon
     PRIVATE
         HAL::1xx
