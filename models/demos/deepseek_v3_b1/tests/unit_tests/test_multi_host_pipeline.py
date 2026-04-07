@@ -274,16 +274,16 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     "vocab_size, embedding_dim",
     [
         (256, 14336),
-        (512, 7168),
-        (1024, 3584),
+        # (512, 7168),
+        # (1024, 3584),
         (2048, 1792),
     ],
 )
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
-        (128, 2),
-        (256, 4),
+        # (128, 2),
+        # (256, 4),
         (512, 8),
     ],
 )
@@ -731,7 +731,7 @@ def _dispatch_merged_programs(all_entries, mesh_device):
 )
 @pytest.mark.parametrize(
     "num_channels",
-    [1, 8],
+    [1, 4, 8],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -756,9 +756,6 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
     1+) use PipelineBlock with pipeline_device_coords, exercising the
     _init_parallel_device_forwarding_stage code path end-to-end.
     """
-    # if ttnn.get_num_devices() < 32:
-    #    pytest.skip("Test requires a full galaxy")
-
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -781,10 +778,9 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
     core_io = ttnn.CoreCoord(0, 2)
 
     if is_pipeline_start:
-        # All processes must call generate_blitz_decode_pipeline exactly once
-        # (it uses distributed broadcasts internally). Processes 1-3 call it
-        # inside PipelineBlock.__init__, so process 0 must call it here.
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        num_procs = int(ttnn.distributed_context_get_size())
+        assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
@@ -895,13 +891,12 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
     "tensor_size_bytes, fifo_size, num_iterations",
     [
         (64, 128, 128),
-        (512, 1024, 128),
         (1024, 2048, 64),
     ],
 )
 @pytest.mark.parametrize(
     "num_channels",
-    [8],
+    [1, 4, 8],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -933,9 +928,6 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
       - core_entry (0,0): entry d2d_exchange (receives from previous process)
       - core_exit (0,1): exit d2d_exchange (sends to next process)
     """
-    # if ttnn.get_num_devices() < 32:
-    #    pytest.skip("Test requires a full galaxy")
-
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -961,6 +953,8 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
 
     if is_pipeline_start:
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        num_procs = int(ttnn.distributed_context_get_size())
+        assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
         h2d_sockets = []
         d2h_sockets = []

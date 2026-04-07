@@ -48,28 +48,18 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint32_t l1_read_addr,
     uint64_t dst_addr,
     uint64_t downstream_bytes_sent_noc_addr,
-    uint32_t packet_size,
-    uint32_t link_id = 0) {
+    uint32_t packet_size) {
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
         packet_size);
-    DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
-           << " pre_wait edm=(" << (uint32_t)fabric_connection.edm_noc_x << "," << (uint32_t)fabric_connection.edm_noc_y
-           << ") buf=" << (uint32_t)fabric_connection.edm_buffer_base_addr << ENDL();
     fabric_connection.wait_for_empty_write_slot();
-    DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id << " got_slot"
-           << ENDL();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
     if constexpr (flush) {
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-        DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
-               << " flushed" << ENDL();
     } else {
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-        DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
-               << " sent_nb" << ENDL();
     }
 }
 
@@ -97,16 +87,14 @@ FORCE_INLINE void send_pages_over_socket(
                 l1_read_addr_0,
                 dst_addr_0,
                 downstream_bytes_sent_noc_addr,
-                whole_packet_size,
-                0);
+                whole_packet_size);
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
                 l1_read_addr_1,
                 dst_addr_1,
                 downstream_bytes_sent_noc_addr,
-                whole_packet_size,
-                1);
+                whole_packet_size);
             l1_read_addr_0 += whole_packet_size;
             l1_read_addr_1 += whole_packet_size;
             dst_addr_0 += whole_packet_size;
@@ -119,16 +107,14 @@ FORCE_INLINE void send_pages_over_socket(
                 l1_read_addr_0,
                 dst_addr_0,
                 downstream_bytes_sent_noc_addr,
-                partial_packet_size,
-                0);
+                partial_packet_size);
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
                 l1_read_addr_1,
                 dst_addr_1,
                 downstream_bytes_sent_noc_addr,
-                partial_packet_size,
-                1);
+                partial_packet_size);
         }
         socket_push_pages(sender_socket, 1);
     } else {
