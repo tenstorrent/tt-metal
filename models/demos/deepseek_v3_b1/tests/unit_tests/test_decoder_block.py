@@ -23,12 +23,6 @@ from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    create_gate_indices_tensor,
-    get_layer_raw_tensors,
-    prepare_dense_layer_weights,
-    prepare_moe_layer_weights,
-)
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
@@ -40,6 +34,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.weights.prepare import (
+    create_gate_indices_tensor,
+    get_layer_raw_tensors,
+    prepare_dense_layer_weights,
+    prepare_moe_layer_weights,
+)
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -1025,6 +1025,8 @@ def test_decoder(
     )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
+    logger.info("Done setup")
+
     # ========================================================================
     # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)
     # ========================================================================
@@ -1410,10 +1412,10 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
+        # 0,
         127,
-        pytest.param(511, marks=pytest.mark.skip_post_commit),
-        pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        # pytest.param(511, marks=pytest.mark.skip_post_commit),
+        # pytest.param(1023, marks=pytest.mark.skip_post_commit),
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Union
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import fuse_kv_b12, fuse_o_proj_gate_mm_norms, fuse_q_ab_kv_a
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
@@ -25,6 +24,11 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
 )
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
+    fuse_q_ab_kv_a,
+)
 
 
 def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:

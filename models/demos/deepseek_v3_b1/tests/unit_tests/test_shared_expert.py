@@ -17,9 +17,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC, fuse_gate_up
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+from models.demos.deepseek_v3_b1.weights.transforms.moe import fuse_gate_up
 
 
 @pytest.mark.parametrize(

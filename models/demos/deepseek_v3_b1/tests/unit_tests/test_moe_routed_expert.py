@@ -22,8 +22,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import create_moe_routed_expert_tensors, fuse_o_proj_gate_mm_norms
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
+from models.demos.deepseek_v3_b1.weights.transforms.attention import fuse_o_proj_gate_mm_norms
+from models.demos.deepseek_v3_b1.weights.transforms.moe import create_moe_routed_expert_tensors
 
 
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])

@@ -39,7 +39,8 @@ if str(_REPO_ROOT) not in sys.path:
 from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.prepare import (
     CURRENT_TRANSFORM_VERSION,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -50,7 +51,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_moe_layer_weights,
     prepare_mtp_weights,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
 NUM_LAYERS = 62
 FIRST_K_DENSE_REPLACE = 3
