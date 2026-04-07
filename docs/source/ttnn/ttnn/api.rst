@@ -542,6 +542,7 @@ Pooling
    ttnn.adaptive_avg_pool2d
    ttnn.adaptive_max_pool2d
    ttnn.avg_pool2d
+   ttnn.global_avg_pool2d
    ttnn.max_pool2d
 
 Prefetcher
