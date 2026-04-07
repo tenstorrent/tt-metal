@@ -171,6 +171,12 @@ public:
     // Iterator over the range, provides access to coordinates in row-major order.
     class Iterator {
     public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = MeshCoordinate;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const MeshCoordinate*;
+        using reference = const MeshCoordinate&;
+
         Iterator& operator++();
         Iterator operator++(int);
         const MeshCoordinate& operator*() const;
@@ -618,3 +624,4 @@ struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
 };
 
 }  // namespace std
+

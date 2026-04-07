@@ -1198,5 +1198,17 @@ TEST(MeshCoordinateRangeTest, Wraparound4D_BasicIterationAndShape) {
 
 // Add more detailed assertions as needed
 
+TEST(MeshCoordinateRangeTest, VectorConstructionFromIterators) {
+    // Verify that MeshCoordinateRange::Iterator satisfies the requirements for
+    // std::vector range construction (requires standard iterator type aliases).
+    MeshShape shape({2, 4});
+    auto coord_range = MeshCoordinateRange(shape);
+    std::vector<MeshCoordinate> coords(coord_range.begin(), coord_range.end());
+    EXPECT_EQ(coords.size(), 8u);
+    EXPECT_EQ(coords.front(), MeshCoordinate({0, 0}));
+    EXPECT_EQ(coords.back(), MeshCoordinate({1, 3}));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
+
