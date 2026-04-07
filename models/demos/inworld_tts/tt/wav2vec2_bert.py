@@ -151,6 +151,9 @@ class TtW2vSelfAttention(LightweightModule):
 
         self.compute_kernel_config = get_compute_kernel_config_hifi4()
 
+        # Cache for distance indices (static per seq_len, avoids repeated from_torch)
+        self._dist_cache = {}  # seq_len -> ttnn distance indices tensor
+
     def forward(self, x):
         """Forward pass with relative position bias.
 
@@ -198,11 +201,15 @@ class TtW2vSelfAttention(LightweightModule):
         scores = ttnn.multiply(scores, self.scale)
 
         # Position bias on device via ttnn.embedding + ttnn.matmul
-        # 1. Distance indices (static per seq_len)
-        positions = torch.arange(seq_len)
-        distances = (positions[:, None] - positions[None, :]).clamp(-W2V_LEFT_MAX, W2V_RIGHT_MAX) + W2V_LEFT_MAX
-        dist_indices = distances.long().reshape(1, -1)  # [1, T*T] for ttnn.embedding
-        dist_tt = ttnn.from_torch(dist_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        # 1. Distance indices (static per seq_len, cached on device)
+        if seq_len not in self._dist_cache:
+            positions = torch.arange(seq_len)
+            distances = (positions[:, None] - positions[None, :]).clamp(-W2V_LEFT_MAX, W2V_RIGHT_MAX) + W2V_LEFT_MAX
+            dist_indices = distances.long().reshape(1, -1)
+            self._dist_cache[seq_len] = ttnn.from_torch(
+                dist_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+        dist_tt = self._dist_cache[seq_len]
 
         # 2. Embedding lookup: [1, T*T] -> [1, T*T, 64]
         pos_embed = ttnn.embedding(dist_tt, self.distance_embedding_tt)  # [1, T*T, 64]
@@ -537,25 +544,16 @@ class TtWav2Vec2Bert(LightweightModule):
         del hf_model
         return state_dict
 
-    def forward(self, input_features: torch.Tensor) -> torch.Tensor:
-        """Full forward pass: feature_projection + conformer layers.
+    def forward_ttnn(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Device-only forward: feature projection + conformer layers.
+
+        Accepts and returns ttnn tensors on device, avoiding PCIe round-trips.
 
         Args:
-            input_features: [B, T, 160] torch tensor (mel filterbank features)
+            x: [1, 1, T, 160] ttnn tensor on device (TILE_LAYOUT, bfloat16)
         Returns:
-            [B, T, 1024] torch tensor (hidden_states[num_layers])
+            [1, 1, T, 1024] ttnn tensor on device (TILE_LAYOUT)
         """
-        B, T, _ = input_features.shape
-
-        # Feature projection on device (160 = 5*32, tile-aligned)
-        x = ttnn.from_torch(
-            input_features.to(torch.bfloat16).unsqueeze(0),  # [1, B, T, 160]
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=L1,
-        )
-
         # LayerNorm(160) on device
         x = ttnn.layer_norm(
             x,
@@ -578,6 +576,30 @@ class TtWav2Vec2Bert(LightweightModule):
         # Run conformer layers on device
         for layer in self.layers:
             x = layer(x)
+
+        return x
+
+    def forward(self, input_features: torch.Tensor) -> torch.Tensor:
+        """Full forward pass: feature_projection + conformer layers.
+
+        Wrapper around forward_ttnn that handles torch<->ttnn conversion.
+
+        Args:
+            input_features: [B, T, 160] torch tensor (mel filterbank features)
+        Returns:
+            [B, T, 1024] torch tensor (hidden_states[num_layers])
+        """
+        # Convert to device: [B, T, 160] -> [1, B, T, 160]
+        x = ttnn.from_torch(
+            input_features.to(torch.bfloat16).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=L1,
+        )
+
+        # Run device pipeline
+        x = self.forward_ttnn(x)
 
         # Move result back to host
         x_torch = ttnn.to_torch(x).squeeze(0)  # [B, T, 1024]

@@ -545,23 +545,18 @@ class TtAcousticEncoder(LightweightModule):
             device=device,
         )
 
-    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Forward pass with all ops on device. Residual adds use ttnn.add.
+    def forward_ttnn(self, x_tt: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """Device-only forward: 5 encoder blocks + final activation + final conv.
+
+        Accepts and returns ttnn tensors on device, avoiding PCIe round-trips.
 
         Args:
-            waveform: [B, 1, samples] input audio
+            x_tt: [1, 1, T, 48] ttnn tensor on device (ROW_MAJOR_LAYOUT)
+            T: time dimension after initial conv
         Returns:
-            [B, 1024, T] acoustic features
+            [1, 1, T_final, 1024] ttnn tensor on device (ROW_MAJOR)
         """
-        # Initial conv: Conv1d(1, 48, k=7, pad=3) -- still torch interface for channels=1
-        x = self.initial_conv1d(waveform)  # [B, 48, T] torch
-
-        # Convert to TTNN NHWC: [B, C, T] -> [1, 1, T, C]
-        x_nhwc = x.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
-        x_tt = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-
         C = 48
-        T = x.shape[2]
         for block_idx in range(5):
             for res_idx in range(3):
                 res = x_tt
@@ -582,6 +577,28 @@ class TtAcousticEncoder(LightweightModule):
         # Final block: SnakeBeta(1536) + Conv1d(1536, 1024, k=3)
         x_tt = self.final_activation.forward_ttnn(x_tt, C, T)
         x_tt, _ = self.final_conv1d.forward_ttnn(x_tt, T)
+
+        return x_tt
+
+    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+        """Forward pass with all ops on device. Residual adds use ttnn.add.
+
+        Wrapper around forward_ttnn that handles torch<->ttnn conversion.
+
+        Args:
+            waveform: [B, 1, samples] input audio
+        Returns:
+            [B, 1024, T] acoustic features
+        """
+        # Initial conv: Conv1d(1, 48, k=7, pad=3) -- still torch interface for channels=1
+        x = self.initial_conv1d(waveform)  # [B, 48, T] torch
+
+        # Convert to TTNN NHWC: [B, C, T] -> [1, 1, T, C]
+        x_nhwc = x.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
+        x_tt = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+        T = x.shape[2]
+        x_tt = self.forward_ttnn(x_tt, T)
 
         # Convert back: [1, 1, T, 1024] -> [B, 1024, T]
         out = ttnn.to_torch(x_tt).float()
@@ -668,22 +685,19 @@ class TtSemanticEncoder(LightweightModule):
         self._cached[cache_key + "_b"] = db
         return ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
 
-    def forward(self, semantic_features: torch.Tensor) -> torch.Tensor:
-        """Forward pass on device.
+    def forward_ttnn(self, x_tt: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """Device-only forward: initial conv -> res blocks -> final conv.
+
+        Accepts and returns ttnn tensors on device, avoiding PCIe round-trips.
 
         Args:
-            semantic_features: [B, 1024, T] from Wav2Vec2-BERT (torch tensor)
+            x_tt: [1, 1, T, 1024] ttnn tensor on device (ROW_MAJOR_LAYOUT)
+            T: time dimension length
         Returns:
-            [B, 1024, T] (torch tensor)
+            [1, 1, T, 1024] ttnn tensor on device (ROW_MAJOR, in DRAM)
         """
-        B, C, T = semantic_features.shape
-
-        # Convert [B, C, T] -> [1, 1, T, C] NHWC ROW_MAJOR for TTNN conv1d
-        x_nhwc = semantic_features.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
-        x = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-
         # Initial conv
-        x = self._conv1d(x, "init", self.initial_w, self.initial_b, T)
+        x = self._conv1d(x_tt, "init", self.initial_w, self.initial_b, T)
 
         # Residual blocks: ReLU -> Conv -> ReLU -> Conv + skip
         for i, (c1w, c1b, c2w, c2b) in enumerate(self.res_blocks):
@@ -703,6 +717,26 @@ class TtSemanticEncoder(LightweightModule):
 
         # Final conv
         x = self._conv1d(x, "final", self.final_w, self.final_b, T)
+        return x
+
+    def forward(self, semantic_features: torch.Tensor) -> torch.Tensor:
+        """Forward pass on device.
+
+        Wrapper around forward_ttnn that handles torch<->ttnn conversion.
+
+        Args:
+            semantic_features: [B, 1024, T] from Wav2Vec2-BERT (torch tensor)
+        Returns:
+            [B, 1024, T] (torch tensor)
+        """
+        B, C, T = semantic_features.shape
+
+        # Convert [B, C, T] -> [1, 1, T, C] NHWC ROW_MAJOR for TTNN conv1d
+        x_nhwc = semantic_features.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
+        x = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+        # Run device pipeline
+        x = self.forward_ttnn(x, T)
 
         # Convert back [1, 1, T, C] -> [B, C, T]
         out = ttnn.to_torch(x).float()
@@ -786,6 +820,73 @@ class TtCodecEncoder(LightweightModule):
 
         # Transpose to channels-first [B, 1024, T] for SemanticEncoder
         return hidden.transpose(1, 2)
+
+    def forward_on_device(
+        self,
+        waveform: torch.Tensor,
+        semantic_features: Optional[torch.Tensor] = None,
+        sample_rate: int = 16000,
+    ) -> torch.Tensor:
+        """Full codec encoder forward, keeping data on device through the pipeline.
+
+        Eliminates PCIe round-trips between acoustic encoder, semantic encoder,
+        fusion concat, and fc_prior by using forward_ttnn methods.
+
+        Args:
+            waveform: [B, 1, samples] raw audio waveform
+            semantic_features: optional [B, 1024, T] pre-computed. If None, extracted via Wav2Vec2-BERT.
+            sample_rate: audio sample rate (default 16000)
+        Returns:
+            [B, 1, T] integer VQ codes
+        """
+        if self.quantizer is None:
+            raise ValueError("Quantizer required for FSQ quantization")
+
+        # Step 1: Acoustic encoder -- initial conv on host, rest on device
+        x_initial = self.acoustic_encoder.initial_conv1d(waveform)  # [B, 48, T_init] torch
+        T_init = x_initial.shape[2]
+        x_nhwc = x_initial.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
+        acoustic_tt = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        acoustic_tt = self.acoustic_encoder.forward_ttnn(acoustic_tt, T_init)
+        # acoustic_tt: [1, 1, T, 1024] ROW_MAJOR on device
+
+        # Step 2: Extract or use provided semantic features via Wav2Vec2-BERT
+        if semantic_features is None:
+            semantic_features = self._extract_semantic_features(waveform, sample_rate)
+        # semantic_features: [B, 1024, T] torch
+
+        # Step 3: Semantic encoder on device
+        B_sem, C_sem, T_sem = semantic_features.shape
+        sem_nhwc = semantic_features.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
+        semantic_tt = ttnn.from_torch(sem_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        semantic_tt = self.semantic_encoder.forward_ttnn(semantic_tt, T_sem)
+        # semantic_tt: [1, 1, T, 1024] ROW_MAJOR on device
+
+        # Step 4: Fuse on device -- both [1, 1, T, 1024] -> concat -> [1, 1, T, 2048]
+        # Convert to TILE for concat and fc_prior linear
+        acoustic_tt = ttnn.to_layout(acoustic_tt, ttnn.TILE_LAYOUT)
+        semantic_tt = ttnn.to_layout(semantic_tt, ttnn.TILE_LAYOUT)
+        fused_tt = ttnn.concat([acoustic_tt, semantic_tt], dim=-1)  # [1, 1, T, 2048]
+
+        # Step 5: fc_prior Linear(2048, 2048) on device
+        projected_tt = ttnn.linear(
+            fused_tt,
+            self.fc_prior_weight,
+            bias=self.fc_prior_bias,
+            core_grid=self.core_grid,
+            memory_config=L1,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        # Step 6: Back to CPU for FSQ quantization (needs float32)
+        projected_torch = ttnn.to_torch(projected_tt).float()
+        if projected_torch.dim() == 4:
+            projected_torch = projected_torch.squeeze(0)
+
+        _, indices = self.quantizer(projected_torch)
+        vq_codes = indices.squeeze(-1).unsqueeze(1)  # [B, 1, T]
+
+        return vq_codes
 
     def forward(
         self,

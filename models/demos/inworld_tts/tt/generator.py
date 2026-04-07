@@ -195,6 +195,10 @@ class CodecEncoderGenerator:
     """Generator with metal tracing for the codec encoder components.
 
     Traces:
+    - Wav2Vec2-BERT: feature projection LN + Linear + 16 conformer layers
+      Input: [1, 1, T, 160] TILE_LAYOUT
+      Output: [1, 1, T, 1024] TILE_LAYOUT
+
     - AcousticEncoder: 5-block encoder loop + final activation + final conv
       Input: [1, 1, T_initial, 48] ROW_MAJOR (after initial conv)
       Output: [1, 1, T_final, 1024] ROW_MAJOR
@@ -206,17 +210,19 @@ class CodecEncoderGenerator:
     Trace requires fixed input shapes, so waveform length must be known at setup time.
     """
 
-    def __init__(self, device, acoustic_encoder, semantic_encoder=None):
+    def __init__(self, device, acoustic_encoder, semantic_encoder=None, w2v_bert=None):
         """Initialize encoder generator.
 
         Args:
             device: TTNN device
             acoustic_encoder: TtAcousticEncoder instance
             semantic_encoder: Optional TtSemanticEncoder instance
+            w2v_bert: Optional TtWav2Vec2Bert instance
         """
         self.device = device
         self.acoustic_encoder = acoustic_encoder
         self.semantic_encoder = semantic_encoder
+        self.w2v_bert = w2v_bert
 
         # Acoustic encoder trace state
         self.acoustic_trace_id = None
@@ -229,6 +235,24 @@ class CodecEncoderGenerator:
         self.semantic_trace_input = None
         self.semantic_trace_output = None
         self.semantic_T = None
+
+        # Wav2Vec2-BERT trace state
+        self.w2v_trace_id = None
+        self.w2v_trace_input = None
+        self.w2v_trace_output = None
+        self.w2v_T = None
+
+    def _w2v_forward_ttnn(self, x_tt):
+        """The traceable portion of Wav2Vec2-BERT: feature projection + conformer layers.
+
+        All ops are pure device ops (no from_torch/to_torch).
+
+        Args:
+            x_tt: [1, 1, T, 160] TTNN TILE_LAYOUT on device
+        Returns:
+            [1, 1, T, 1024] TTNN TILE_LAYOUT on device
+        """
+        return self.w2v_bert.forward_ttnn(x_tt)
 
     def _acoustic_forward_ttnn(self, x_tt, T_initial):
         """The traceable portion of AcousticEncoder: 5-block loop + final.
@@ -299,6 +323,81 @@ class CodecEncoderGenerator:
         # Final conv
         x = enc._conv1d(x, "final", enc.final_w, enc.final_b, T)
         return x
+
+    def setup_w2v_trace(self, seq_len):
+        """Capture metal trace for Wav2Vec2-BERT.
+
+        Traces: feature projection LN + Linear(160, 1024) + 16 conformer layers.
+        The mel filterbank feature extraction stays on CPU.
+
+        The first warmup call populates the distance index cache in each
+        TtW2vSelfAttention layer, so the trace capture does not hit from_torch.
+
+        Args:
+            seq_len: Fixed sequence length T for mel features [1, 1, T, 160]
+        """
+        if self.w2v_bert is None:
+            raise RuntimeError("TtWav2Vec2Bert not provided")
+
+        self.w2v_T = seq_len
+
+        # Step 1: Warmup -- compile all ops and populate distance index caches
+        warmup_data = torch.randn(1, 1, seq_len, 160).to(torch.bfloat16)
+        warmup_tt = ttnn.from_torch(
+            warmup_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        warmup_out = self._w2v_forward_ttnn(warmup_tt)
+        _ = ttnn.to_torch(warmup_out)  # sync to ensure compilation is done
+
+        # Step 2: Allocate fixed input tensor on device
+        input_spec = ttnn.TensorSpec(
+            (1, 1, seq_len, 160),
+            ttnn.DataType.BFLOAT16,
+            ttnn.TILE_LAYOUT,
+        )
+        self.w2v_trace_input = ttnn.allocate_tensor_on_device(input_spec, self.device)
+
+        host_input = ttnn.from_torch(
+            warmup_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(host_input, self.w2v_trace_input)
+
+        # Step 3: Capture trace
+        self.w2v_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self.w2v_trace_output = self._w2v_forward_ttnn(self.w2v_trace_input)
+        ttnn.end_trace_capture(self.device, self.w2v_trace_id, cq_id=0)
+
+    def run_w2v_traced(self, input_features):
+        """Run Wav2Vec2-BERT using traced execution.
+
+        Args:
+            input_features: [B, T, 160] torch tensor (mel filterbank features)
+                            T must match the traced sequence length
+        Returns:
+            [B, T, 1024] torch tensor (hidden states)
+        """
+        if self.w2v_trace_id is None:
+            raise RuntimeError("Call setup_w2v_trace() first")
+
+        # Copy input to trace input: [B, T, 160] -> [1, B, T, 160]
+        host_tensor = ttnn.from_torch(
+            input_features.to(torch.bfloat16).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(host_tensor, self.w2v_trace_input)
+
+        # Execute trace (fast replay)
+        ttnn.execute_trace(self.device, self.w2v_trace_id, cq_id=0, blocking=True)
+
+        # Read output: [1, 1, T, 1024] -> [B, T, 1024]
+        out = ttnn.to_torch(self.w2v_trace_output).float()
+        return out.squeeze(0)  # [B, T, 1024]
 
     def setup_acoustic_trace(self, n_samples):
         """Capture metal trace for AcousticEncoder.
@@ -428,6 +527,11 @@ class CodecEncoderGenerator:
 
     def release_traces(self):
         """Release all captured traces."""
+        if self.w2v_trace_id is not None:
+            ttnn.release_trace(self.device, self.w2v_trace_id)
+            self.w2v_trace_id = None
+            self.w2v_trace_input = None
+            self.w2v_trace_output = None
         if self.acoustic_trace_id is not None:
             ttnn.release_trace(self.device, self.acoustic_trace_id)
             self.acoustic_trace_id = None
