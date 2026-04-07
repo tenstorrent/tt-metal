@@ -6,6 +6,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -65,6 +67,41 @@ ttnn::Tensor pad_impl(
     using ShardOrientation = tt::tt_metal::ShardOrientation;
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+
+    // WIDTH_SHARDED and BLOCK_SHARDED inputs do not have specialised program
+    // factories for pad.  Route them through sharded_to_interleaved → pad →
+    // interleaved_to_sharded so the existing interleaved factories handle the
+    // actual data movement.  HEIGHT_SHARDED inputs keep the existing path
+    // which uses PadRmShardedHeightOnly / PadRmShardedWidthOnly factories.
+    const auto input_layout = input_tensor.memory_config().memory_layout();
+    if (input_tensor.is_sharded() &&
+        (input_layout == TensorMemoryLayout::WIDTH_SHARDED || input_layout == TensorMemoryLayout::BLOCK_SHARDED)) {
+        MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        auto interleaved_input = ttnn::sharded_to_interleaved(input_tensor, interleaved_config, std::nullopt);
+
+        MemoryConfig working_output =
+            output_memory_config.is_sharded()
+                ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()}
+                : output_memory_config;
+
+        ttnn::Shape out_shape{output_padded_shape};
+        ttnn::Shape start{input_tensor_start};
+        auto padded = ttnn::prim::pad(
+            interleaved_input,
+            out_shape,
+            out_shape,
+            start,
+            value,
+            working_output,
+            use_multicore,
+            std::nullopt,
+            sub_core_grids);
+
+        if (output_memory_config.is_sharded()) {
+            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+        }
+        return padded;
+    }
 
     if (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&

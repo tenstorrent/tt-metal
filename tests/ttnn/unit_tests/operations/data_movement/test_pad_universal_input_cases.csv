@@ -1,0 +1,173 @@
+test_name,layout,input_config,output_config,scenario,shapes,combo,result
+test_pad_dram_input[TILE-pad_h_small],TILE,DRAM,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM | TILE | pad H by 32,PASS
+test_pad_dram_input[TILE-pad_h_large],TILE,DRAM,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM | TILE | pad H by 64,PASS
+test_pad_dram_input[TILE-pad_w_small],TILE,DRAM,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM | TILE | pad W by 64,PASS
+test_pad_dram_input[TILE-pad_w_large],TILE,DRAM,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM | TILE | pad W by 128,PASS
+test_pad_dram_input[TILE-pad_both_small],TILE,DRAM,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM | TILE | pad H+32 W+64,PASS
+test_pad_dram_input[TILE-pad_both_large],TILE,DRAM,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM | TILE | pad H+64 W+128,PASS
+test_pad_dram_input[TILE-pad_c_only],TILE,DRAM,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM | TILE | pad channel by 1,PASS
+test_pad_dram_input[ROW_MAJOR-pad_h_small],ROW_MAJOR,DRAM,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM | ROW_MAJOR | pad H by 32,PASS
+test_pad_dram_input[ROW_MAJOR-pad_h_large],ROW_MAJOR,DRAM,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM | ROW_MAJOR | pad H by 64,PASS
+test_pad_dram_input[ROW_MAJOR-pad_w_small],ROW_MAJOR,DRAM,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM | ROW_MAJOR | pad W by 64,PASS
+test_pad_dram_input[ROW_MAJOR-pad_w_large],ROW_MAJOR,DRAM,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM | ROW_MAJOR | pad W by 128,PASS
+test_pad_dram_input[ROW_MAJOR-pad_both_small],ROW_MAJOR,DRAM,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_dram_input[ROW_MAJOR-pad_both_large],ROW_MAJOR,DRAM,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_dram_input[ROW_MAJOR-pad_c_only],ROW_MAJOR,DRAM,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM | ROW_MAJOR | pad channel by 1,PASS
+test_pad_l1_input[TILE-pad_h_small],TILE,L1,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",L1 | TILE | pad H by 32,PASS
+test_pad_l1_input[TILE-pad_h_large],TILE,L1,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",L1 | TILE | pad H by 64,PASS
+test_pad_l1_input[TILE-pad_w_small],TILE,L1,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",L1 | TILE | pad W by 64,PASS
+test_pad_l1_input[TILE-pad_w_large],TILE,L1,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",L1 | TILE | pad W by 128,PASS
+test_pad_l1_input[TILE-pad_both_small],TILE,L1,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",L1 | TILE | pad H+32 W+64,PASS
+test_pad_l1_input[TILE-pad_both_large],TILE,L1,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",L1 | TILE | pad H+64 W+128,PASS
+test_pad_l1_input[TILE-pad_c_only],TILE,L1,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",L1 | TILE | pad channel by 1,PASS
+test_pad_l1_input[ROW_MAJOR-pad_h_small],ROW_MAJOR,L1,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",L1 | ROW_MAJOR | pad H by 32,PASS
+test_pad_l1_input[ROW_MAJOR-pad_h_large],ROW_MAJOR,L1,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",L1 | ROW_MAJOR | pad H by 64,PASS
+test_pad_l1_input[ROW_MAJOR-pad_w_small],ROW_MAJOR,L1,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",L1 | ROW_MAJOR | pad W by 64,PASS
+test_pad_l1_input[ROW_MAJOR-pad_w_large],ROW_MAJOR,L1,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",L1 | ROW_MAJOR | pad W by 128,PASS
+test_pad_l1_input[ROW_MAJOR-pad_both_small],ROW_MAJOR,L1,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",L1 | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_l1_input[ROW_MAJOR-pad_both_large],ROW_MAJOR,L1,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",L1 | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_l1_input[ROW_MAJOR-pad_c_only],ROW_MAJOR,L1,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",L1 | ROW_MAJOR | pad channel by 1,PASS
+test_pad_height_sharded_input[TILE-pad_h_small],TILE,H-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",H-shard→DRAM | TILE | pad H by 32,PASS
+test_pad_height_sharded_input[TILE-pad_h_large],TILE,H-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",H-shard→DRAM | TILE | pad H by 64,PASS
+test_pad_height_sharded_input[TILE-pad_w_small],TILE,H-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",H-shard→DRAM | TILE | pad W by 64,PASS
+test_pad_height_sharded_input[TILE-pad_w_large],TILE,H-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",H-shard→DRAM | TILE | pad W by 128,PASS
+test_pad_height_sharded_input[TILE-pad_both_small],TILE,H-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",H-shard→DRAM | TILE | pad H+32 W+64,PASS
+test_pad_height_sharded_input[TILE-pad_both_large],TILE,H-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",H-shard→DRAM | TILE | pad H+64 W+128,PASS
+test_pad_height_sharded_input[TILE-pad_c_only],TILE,H-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",H-shard→DRAM | TILE | pad channel by 1,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_h_small],ROW_MAJOR,H-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",H-shard→DRAM | ROW_MAJOR | pad H by 32,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_h_large],ROW_MAJOR,H-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",H-shard→DRAM | ROW_MAJOR | pad H by 64,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_w_small],ROW_MAJOR,H-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",H-shard→DRAM | ROW_MAJOR | pad W by 64,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_w_large],ROW_MAJOR,H-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",H-shard→DRAM | ROW_MAJOR | pad W by 128,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_both_small],ROW_MAJOR,H-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",H-shard→DRAM | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_both_large],ROW_MAJOR,H-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",H-shard→DRAM | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_height_sharded_input[ROW_MAJOR-pad_c_only],ROW_MAJOR,H-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",H-shard→DRAM | ROW_MAJOR | pad channel by 1,PASS
+test_pad_width_sharded_input[TILE-pad_h_small],TILE,W-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",W-shard→DRAM | TILE | pad H by 32,PASS
+test_pad_width_sharded_input[TILE-pad_h_large],TILE,W-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",W-shard→DRAM | TILE | pad H by 64,PASS
+test_pad_width_sharded_input[TILE-pad_w_small],TILE,W-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",W-shard→DRAM | TILE | pad W by 64,PASS
+test_pad_width_sharded_input[TILE-pad_w_large],TILE,W-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",W-shard→DRAM | TILE | pad W by 128,PASS
+test_pad_width_sharded_input[TILE-pad_both_small],TILE,W-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",W-shard→DRAM | TILE | pad H+32 W+64,PASS
+test_pad_width_sharded_input[TILE-pad_both_large],TILE,W-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",W-shard→DRAM | TILE | pad H+64 W+128,PASS
+test_pad_width_sharded_input[TILE-pad_c_only],TILE,W-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",W-shard→DRAM | TILE | pad channel by 1,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_h_small],ROW_MAJOR,W-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",W-shard→DRAM | ROW_MAJOR | pad H by 32,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_h_large],ROW_MAJOR,W-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",W-shard→DRAM | ROW_MAJOR | pad H by 64,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_w_small],ROW_MAJOR,W-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",W-shard→DRAM | ROW_MAJOR | pad W by 64,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_w_large],ROW_MAJOR,W-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",W-shard→DRAM | ROW_MAJOR | pad W by 128,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_both_small],ROW_MAJOR,W-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",W-shard→DRAM | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_both_large],ROW_MAJOR,W-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",W-shard→DRAM | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_width_sharded_input[ROW_MAJOR-pad_c_only],ROW_MAJOR,W-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",W-shard→DRAM | ROW_MAJOR | pad channel by 1,PASS
+test_pad_block_sharded_input[TILE-pad_h_small],TILE,B-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",B-shard→DRAM | TILE | pad H by 32,PASS
+test_pad_block_sharded_input[TILE-pad_h_large],TILE,B-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",B-shard→DRAM | TILE | pad H by 64,PASS
+test_pad_block_sharded_input[TILE-pad_w_small],TILE,B-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",B-shard→DRAM | TILE | pad W by 64,PASS
+test_pad_block_sharded_input[TILE-pad_w_large],TILE,B-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",B-shard→DRAM | TILE | pad W by 128,PASS
+test_pad_block_sharded_input[TILE-pad_both_small],TILE,B-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",B-shard→DRAM | TILE | pad H+32 W+64,PASS
+test_pad_block_sharded_input[TILE-pad_both_large],TILE,B-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",B-shard→DRAM | TILE | pad H+64 W+128,PASS
+test_pad_block_sharded_input[TILE-pad_c_only],TILE,B-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",B-shard→DRAM | TILE | pad channel by 1,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_h_small],ROW_MAJOR,B-shard,DRAM,pad_h_small,"[1,1,64,128]→[1,1,96,128]",B-shard→DRAM | ROW_MAJOR | pad H by 32,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_h_large],ROW_MAJOR,B-shard,DRAM,pad_h_large,"[1,1,64,128]→[1,1,128,128]",B-shard→DRAM | ROW_MAJOR | pad H by 64,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_w_small],ROW_MAJOR,B-shard,DRAM,pad_w_small,"[1,1,64,128]→[1,1,64,192]",B-shard→DRAM | ROW_MAJOR | pad W by 64,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_w_large],ROW_MAJOR,B-shard,DRAM,pad_w_large,"[1,1,64,128]→[1,1,64,256]",B-shard→DRAM | ROW_MAJOR | pad W by 128,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_both_small],ROW_MAJOR,B-shard,DRAM,pad_both_small,"[1,1,64,128]→[1,1,96,192]",B-shard→DRAM | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_both_large],ROW_MAJOR,B-shard,DRAM,pad_both_large,"[1,1,64,128]→[1,1,128,256]",B-shard→DRAM | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_block_sharded_input[ROW_MAJOR-pad_c_only],ROW_MAJOR,B-shard,DRAM,pad_c_only,"[1,1,64,128]→[1,2,64,128]",B-shard→DRAM | ROW_MAJOR | pad channel by 1,PASS
+test_pad_sharded_output[TILE-height-pad_h_small],TILE,DRAM,H-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→H-shard | TILE | pad H by 32,PASS
+test_pad_sharded_output[TILE-height-pad_h_large],TILE,DRAM,H-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→H-shard | TILE | pad H by 64,PASS
+test_pad_sharded_output[TILE-height-pad_w_small],TILE,DRAM,H-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→H-shard | TILE | pad W by 64,PASS
+test_pad_sharded_output[TILE-height-pad_w_large],TILE,DRAM,H-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→H-shard | TILE | pad W by 128,PASS
+test_pad_sharded_output[TILE-height-pad_both_small],TILE,DRAM,H-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→H-shard | TILE | pad H+32 W+64,PASS
+test_pad_sharded_output[TILE-height-pad_both_large],TILE,DRAM,H-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→H-shard | TILE | pad H+64 W+128,PASS
+test_pad_sharded_output[TILE-height-pad_c_only],TILE,DRAM,H-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→H-shard | TILE | pad channel by 1,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_h_small],ROW_MAJOR,DRAM,H-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→H-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_h_large],ROW_MAJOR,DRAM,H-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→H-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_w_small],ROW_MAJOR,DRAM,H-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→H-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_w_large],ROW_MAJOR,DRAM,H-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→H-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_both_small],ROW_MAJOR,DRAM,H-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→H-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_both_large],ROW_MAJOR,DRAM,H-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→H-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_sharded_output[ROW_MAJOR-height-pad_c_only],ROW_MAJOR,DRAM,H-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→H-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_sharded_output[TILE-width-pad_h_small],TILE,DRAM,W-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→W-shard | TILE | pad H by 32,PASS
+test_pad_sharded_output[TILE-width-pad_h_large],TILE,DRAM,W-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→W-shard | TILE | pad H by 64,PASS
+test_pad_sharded_output[TILE-width-pad_w_small],TILE,DRAM,W-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→W-shard | TILE | pad W by 64,PASS
+test_pad_sharded_output[TILE-width-pad_w_large],TILE,DRAM,W-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→W-shard | TILE | pad W by 128,PASS
+test_pad_sharded_output[TILE-width-pad_both_small],TILE,DRAM,W-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→W-shard | TILE | pad H+32 W+64,PASS
+test_pad_sharded_output[TILE-width-pad_both_large],TILE,DRAM,W-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→W-shard | TILE | pad H+64 W+128,PASS
+test_pad_sharded_output[TILE-width-pad_c_only],TILE,DRAM,W-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→W-shard | TILE | pad channel by 1,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_h_small],ROW_MAJOR,DRAM,W-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→W-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_h_large],ROW_MAJOR,DRAM,W-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→W-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_w_small],ROW_MAJOR,DRAM,W-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→W-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_w_large],ROW_MAJOR,DRAM,W-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→W-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_both_small],ROW_MAJOR,DRAM,W-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→W-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_both_large],ROW_MAJOR,DRAM,W-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→W-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_sharded_output[ROW_MAJOR-width-pad_c_only],ROW_MAJOR,DRAM,W-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→W-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_sharded_output[TILE-block-pad_h_small],TILE,DRAM,B-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→B-shard | TILE | pad H by 32,PASS
+test_pad_sharded_output[TILE-block-pad_h_large],TILE,DRAM,B-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→B-shard | TILE | pad H by 64,PASS
+test_pad_sharded_output[TILE-block-pad_w_small],TILE,DRAM,B-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→B-shard | TILE | pad W by 64,PASS
+test_pad_sharded_output[TILE-block-pad_w_large],TILE,DRAM,B-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→B-shard | TILE | pad W by 128,PASS
+test_pad_sharded_output[TILE-block-pad_both_small],TILE,DRAM,B-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→B-shard | TILE | pad H+32 W+64,PASS
+test_pad_sharded_output[TILE-block-pad_both_large],TILE,DRAM,B-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→B-shard | TILE | pad H+64 W+128,PASS
+test_pad_sharded_output[TILE-block-pad_c_only],TILE,DRAM,B-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→B-shard | TILE | pad channel by 1,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_h_small],ROW_MAJOR,DRAM,B-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",DRAM→B-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_h_large],ROW_MAJOR,DRAM,B-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",DRAM→B-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_w_small],ROW_MAJOR,DRAM,B-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",DRAM→B-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_w_large],ROW_MAJOR,DRAM,B-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",DRAM→B-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_both_small],ROW_MAJOR,DRAM,B-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",DRAM→B-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_both_large],ROW_MAJOR,DRAM,B-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",DRAM→B-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_sharded_output[ROW_MAJOR-block-pad_c_only],ROW_MAJOR,DRAM,B-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",DRAM→B-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_h_small],TILE,H-shard,H-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",H-shard→H-shard | TILE | pad H by 32,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_h_large],TILE,H-shard,H-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",H-shard→H-shard | TILE | pad H by 64,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_w_small],TILE,H-shard,H-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",H-shard→H-shard | TILE | pad W by 64,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_w_large],TILE,H-shard,H-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",H-shard→H-shard | TILE | pad W by 128,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_both_small],TILE,H-shard,H-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",H-shard→H-shard | TILE | pad H+32 W+64,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_both_large],TILE,H-shard,H-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",H-shard→H-shard | TILE | pad H+64 W+128,PASS
+test_pad_height_sharded_to_sharded[TILE-pad_c_only],TILE,H-shard,H-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",H-shard→H-shard | TILE | pad channel by 1,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_h_small],ROW_MAJOR,H-shard,H-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",H-shard→H-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_h_large],ROW_MAJOR,H-shard,H-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",H-shard→H-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_w_small],ROW_MAJOR,H-shard,H-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",H-shard→H-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_w_large],ROW_MAJOR,H-shard,H-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",H-shard→H-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_both_small],ROW_MAJOR,H-shard,H-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",H-shard→H-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_both_large],ROW_MAJOR,H-shard,H-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",H-shard→H-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_height_sharded_to_sharded[ROW_MAJOR-pad_c_only],ROW_MAJOR,H-shard,H-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",H-shard→H-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_h_small],TILE,W-shard,W-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",W-shard→W-shard | TILE | pad H by 32,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_h_large],TILE,W-shard,W-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",W-shard→W-shard | TILE | pad H by 64,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_w_small],TILE,W-shard,W-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",W-shard→W-shard | TILE | pad W by 64,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_w_large],TILE,W-shard,W-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",W-shard→W-shard | TILE | pad W by 128,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_both_small],TILE,W-shard,W-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",W-shard→W-shard | TILE | pad H+32 W+64,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_both_large],TILE,W-shard,W-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",W-shard→W-shard | TILE | pad H+64 W+128,PASS
+test_pad_width_sharded_to_sharded[TILE-pad_c_only],TILE,W-shard,W-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",W-shard→W-shard | TILE | pad channel by 1,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_h_small],ROW_MAJOR,W-shard,W-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",W-shard→W-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_h_large],ROW_MAJOR,W-shard,W-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",W-shard→W-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_w_small],ROW_MAJOR,W-shard,W-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",W-shard→W-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_w_large],ROW_MAJOR,W-shard,W-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",W-shard→W-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_both_small],ROW_MAJOR,W-shard,W-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",W-shard→W-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_both_large],ROW_MAJOR,W-shard,W-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",W-shard→W-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_width_sharded_to_sharded[ROW_MAJOR-pad_c_only],ROW_MAJOR,W-shard,W-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",W-shard→W-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_h_small],TILE,B-shard,B-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",B-shard→B-shard | TILE | pad H by 32,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_h_large],TILE,B-shard,B-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",B-shard→B-shard | TILE | pad H by 64,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_w_small],TILE,B-shard,B-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",B-shard→B-shard | TILE | pad W by 64,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_w_large],TILE,B-shard,B-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",B-shard→B-shard | TILE | pad W by 128,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_both_small],TILE,B-shard,B-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",B-shard→B-shard | TILE | pad H+32 W+64,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_both_large],TILE,B-shard,B-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",B-shard→B-shard | TILE | pad H+64 W+128,PASS
+test_pad_block_sharded_to_sharded[TILE-pad_c_only],TILE,B-shard,B-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",B-shard→B-shard | TILE | pad channel by 1,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_h_small],ROW_MAJOR,B-shard,B-shard,pad_h_small,"[1,1,64,128]→[1,1,96,128]",B-shard→B-shard | ROW_MAJOR | pad H by 32,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_h_large],ROW_MAJOR,B-shard,B-shard,pad_h_large,"[1,1,64,128]→[1,1,128,128]",B-shard→B-shard | ROW_MAJOR | pad H by 64,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_w_small],ROW_MAJOR,B-shard,B-shard,pad_w_small,"[1,1,64,128]→[1,1,64,192]",B-shard→B-shard | ROW_MAJOR | pad W by 64,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_w_large],ROW_MAJOR,B-shard,B-shard,pad_w_large,"[1,1,64,128]→[1,1,64,256]",B-shard→B-shard | ROW_MAJOR | pad W by 128,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_both_small],ROW_MAJOR,B-shard,B-shard,pad_both_small,"[1,1,64,128]→[1,1,96,192]",B-shard→B-shard | ROW_MAJOR | pad H+32 W+64,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_both_large],ROW_MAJOR,B-shard,B-shard,pad_both_large,"[1,1,64,128]→[1,1,128,256]",B-shard→B-shard | ROW_MAJOR | pad H+64 W+128,PASS
+test_pad_block_sharded_to_sharded[ROW_MAJOR-pad_c_only],ROW_MAJOR,B-shard,B-shard,pad_c_only,"[1,1,64,128]→[1,2,64,128]",B-shard→B-shard | ROW_MAJOR | pad channel by 1,PASS
+test_pad_non_4d_sharded_input[TILE-height-2d_pad_h],TILE,H-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",H-shard non-4D | TILE | 2D pad H,PASS
+test_pad_non_4d_sharded_input[TILE-height-2d_pad_w],TILE,H-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",H-shard non-4D | TILE | 2D pad W,PASS
+test_pad_non_4d_sharded_input[TILE-height-3d_pad_both],TILE,H-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",H-shard non-4D | TILE | 3D pad H+W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-height-2d_pad_h],ROW_MAJOR,H-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",H-shard non-4D | ROW_MAJOR | 2D pad H,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-height-2d_pad_w],ROW_MAJOR,H-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",H-shard non-4D | ROW_MAJOR | 2D pad W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-height-3d_pad_both],ROW_MAJOR,H-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",H-shard non-4D | ROW_MAJOR | 3D pad H+W,PASS
+test_pad_non_4d_sharded_input[TILE-width-2d_pad_h],TILE,W-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",W-shard non-4D | TILE | 2D pad H,PASS
+test_pad_non_4d_sharded_input[TILE-width-2d_pad_w],TILE,W-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",W-shard non-4D | TILE | 2D pad W,PASS
+test_pad_non_4d_sharded_input[TILE-width-3d_pad_both],TILE,W-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",W-shard non-4D | TILE | 3D pad H+W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-width-2d_pad_h],ROW_MAJOR,W-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",W-shard non-4D | ROW_MAJOR | 2D pad H,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-width-2d_pad_w],ROW_MAJOR,W-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",W-shard non-4D | ROW_MAJOR | 2D pad W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-width-3d_pad_both],ROW_MAJOR,W-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",W-shard non-4D | ROW_MAJOR | 3D pad H+W,PASS
+test_pad_non_4d_sharded_input[TILE-block-2d_pad_h],TILE,B-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",B-shard non-4D | TILE | 2D pad H,PASS
+test_pad_non_4d_sharded_input[TILE-block-2d_pad_w],TILE,B-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",B-shard non-4D | TILE | 2D pad W,PASS
+test_pad_non_4d_sharded_input[TILE-block-3d_pad_both],TILE,B-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",B-shard non-4D | TILE | 3D pad H+W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-block-2d_pad_h],ROW_MAJOR,B-shard non-4D,DRAM,2d_pad_h,"[64,128]→[96,128]",B-shard non-4D | ROW_MAJOR | 2D pad H,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-block-2d_pad_w],ROW_MAJOR,B-shard non-4D,DRAM,2d_pad_w,"[64,128]→[64,192]",B-shard non-4D | ROW_MAJOR | 2D pad W,PASS
+test_pad_non_4d_sharded_input[ROW_MAJOR-block-3d_pad_both],ROW_MAJOR,B-shard non-4D,DRAM,3d_pad_both,"[1,64,128]→[1,96,192]",B-shard non-4D | ROW_MAJOR | 3D pad H+W,PASS
