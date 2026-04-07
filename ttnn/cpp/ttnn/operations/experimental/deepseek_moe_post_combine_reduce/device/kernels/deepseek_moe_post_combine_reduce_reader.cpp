@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ void kernel_main() {
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
-        uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
+        constexpr uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
         cb_reserve_back(cb_combine_input, total_expert_tiles);
         uint32_t cb_write_addr = get_write_ptr(cb_combine_input);
 

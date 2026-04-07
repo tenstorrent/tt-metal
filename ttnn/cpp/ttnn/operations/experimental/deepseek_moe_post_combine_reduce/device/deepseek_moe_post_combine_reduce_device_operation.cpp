@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,44 @@
 namespace ttnn::experimental::prim {
 
 void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
-    TT_FATAL(combine_output.storage_type() == StorageType::DEVICE, "Input must be on device");
-    TT_FATAL(combine_output.buffer() != nullptr, "Input must have a buffer");
+    const ttnn::Tensor& weights = tensor_args.weights;
+
+    TT_FATAL(combine_output.storage_type() == StorageType::DEVICE, "combine_output must be on device");
+    TT_FATAL(combine_output.buffer() != nullptr, "combine_output must have a buffer");
+    TT_FATAL(weights.storage_type() == StorageType::DEVICE, "weights must be on device");
+    TT_FATAL(weights.buffer() != nullptr, "weights must have a buffer");
+
+    const auto combine_rank = combine_output.padded_shape().rank();
+    TT_FATAL(
+        combine_rank >= 2,
+        "combine_output rank must be at least 2 (expert + embedding dimensions), got {}",
+        combine_rank);
+    TT_FATAL(
+        operation_attributes.expert_dim < combine_rank,
+        "expert_dim {} must be less than combine_output rank {}",
+        operation_attributes.expert_dim,
+        combine_rank);
+
+    const auto& combine_shape = combine_output.padded_shape();
+    const auto& weights_shape = weights.padded_shape();
+    const auto weights_rank = weights_shape.rank();
+    TT_FATAL(
+        weights_rank == combine_rank,
+        "weights rank must match combine_output rank: got weights rank {} and combine_output rank {}",
+        weights_rank,
+        combine_rank);
+    // All dimensions before the embedding dim must match
+    for (uint32_t dim = 0; dim < combine_rank - 1; ++dim) {
+        TT_FATAL(
+            weights_shape[dim] == combine_shape[dim],
+            "weights padded_shape[{}] ({}) must match combine_output padded_shape[{}] ({})",
+            dim,
+            weights_shape[dim],
+            dim,
+            combine_shape[dim]);
+    }
 }
 
 void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_miss(
@@ -26,10 +60,9 @@ void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_miss
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const ttnn::Tensor& weights = tensor_args.weights;
 
-    // Basic validations
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
     TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
-    TT_FATAL(weights.storage_type() == StorageType::DEVICE, "weights must be on device");
+    TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
 }
 

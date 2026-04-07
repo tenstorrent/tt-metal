@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_moe_post_combine_reduce_program_factory.hpp"
-#include "deepseek_moe_post_combine_reduce_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -92,7 +91,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             .set_page_size(tt::CBIndex::c_1, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
-    uint32_t output_cb_size = 224 * tile_size;
+    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
@@ -138,9 +137,9 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         "deepseek_moe_post_combine_reduce_compute.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = true,
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
             .compile_args = compute_compile_time_args,
         });
 

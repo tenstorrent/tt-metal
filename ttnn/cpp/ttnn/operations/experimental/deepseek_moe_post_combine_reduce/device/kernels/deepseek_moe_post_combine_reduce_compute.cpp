@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,12 @@ constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(1);
 void kernel_main() {
     constexpr uint32_t TOKENS_PER_CORE = 32;
     uint32_t token_start_idx = get_arg_val<uint32_t>(0);
-    uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
+    constexpr uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
+    constexpr uint32_t total_token_tiles = TOKENS_PER_CORE * emb_dim_tiles;
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    cb_reserve_back(cb_rowmajor, TOKENS_PER_CORE * emb_dim_tiles);
+    cb_reserve_back(cb_rowmajor, total_token_tiles);
 
     for (uint32_t i = 0; i < TOKENS_PER_CORE; ++i) {
         cb_wait_front(cb_combine_input, total_expert_tiles);
@@ -34,9 +35,10 @@ void kernel_main() {
 
         bool first_active = true;
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-            // Read weight value — if zero, skip this expert entirely
+            // Read weight value — if zero, skip (but always process at least one
+            // expert so the accumulator gets initialized with valid data)
             uint32_t weight_val = read_tile_value(cb_weights, expert_idx, 0);
-            if (weight_val == 0) {
+            if (weight_val == 0 && !first_active) {
                 continue;
             }
 
@@ -70,8 +72,8 @@ void kernel_main() {
         cb_pop_front(cb_combine_input, total_expert_tiles);
         cb_pop_front(cb_weights, num_experts);
     }
-    cb_push_back(cb_rowmajor, TOKENS_PER_CORE * emb_dim_tiles);
+    cb_push_back(cb_rowmajor, total_token_tiles);
 
     using namespace compute_kernel_lib::tilize_config;
-    compute_kernel_lib::tilize<emb_dim_tiles * 32, cb_rowmajor, cb_output>(1);
+    compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
 }

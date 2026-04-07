@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,17 +72,27 @@ def assert_pcc(result, expected, threshold=PCC_THRESHOLD, label=""):
 def test_structured_data(device):
     """Constant-per-tile activations with sequential weights [1..8].
     This pattern is easy to verify manually and catches tile ordering bugs."""
-    combine = torch.zeros(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
-    tile_value = 0.1
-    for t in range(NUM_TOKENS):
-        for e in range(NUM_EXPERTS):
-            for tile in range(EMB_DIM // 1024):
-                combine[0, t, e, tile * 1024 : (tile + 1) * 1024] = tile_value
-                tile_value += 0.1
+    tile_width = 1024
+    num_tiles = EMB_DIM // tile_width
 
-    weights = torch.zeros(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
-    for e in range(NUM_EXPERTS):
-        weights[0, :, e, 0] = e + 1.0
+    tile_values = 0.1 * torch.arange(
+        1,
+        NUM_TOKENS * NUM_EXPERTS * num_tiles + 1,
+        dtype=torch.float32,
+    )
+    combine = (
+        tile_values.view(1, NUM_TOKENS, NUM_EXPERTS, num_tiles, 1)
+        .expand(1, NUM_TOKENS, NUM_EXPERTS, num_tiles, tile_width)
+        .reshape(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM)
+        .to(torch.bfloat16)
+    )
+
+    weights = (
+        torch.arange(1, NUM_EXPERTS + 1, dtype=torch.float32)
+        .view(1, 1, NUM_EXPERTS, 1)
+        .expand(1, NUM_TOKENS, NUM_EXPERTS, 1)
+        .to(torch.bfloat16)
+    )
 
     ref = pytorch_reference(combine, weights)
     result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device)))
