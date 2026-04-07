@@ -44,7 +44,7 @@ REPORT_FINDINGS_TOOL = {
                             "description": "Clear explanation of the bug and why it matches the pattern",
                         },
                         "suggested_fix": {
-                            "type": "string",
+                            "type": ["string", "null"],
                             "description": "Corrected code snippet, or null if not requested",
                         },
                     },
