@@ -90,6 +90,7 @@ tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorr
 tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
+tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
 tt_metal/impl/metal2_host_api/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
@@ -118,6 +119,7 @@ tt_metal/tools/* @kmabeeTT @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-byp
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
 tt_metal/tools/mem_bench @abhullar-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
+tt_metal/tools/jit_compile_server @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/fabric_event_profiler.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass
