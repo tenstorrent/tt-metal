@@ -160,21 +160,21 @@ How it works
 2. Each RISC writes ``arrived[my_idx] = 1`` — its own byte, no contention with other RISCs.
 3. The **orchestrator** (lowest active RISC, typically BRISC) polls all ``arrived[]`` bytes,
    spinning with ``invalidate_l1_cache()`` until all match ``next_epoch``.
-4. All **other RISCs** spin on ``proceed``, waiting for it to equal ``next_epoch``.
+4. All **other RISCs** spin on ``proceed``, waiting for it to reach ``next_epoch``
+   (uses ``>=`` comparison to handle the case where the orchestrator has already
+   advanced to the next barrier).
 5. Once the orchestrator sees all arrivals, it sets ``proceed = 1``, releasing everyone.
 
 At this point all RISCs are synchronized — no RISC proceeds until every active RISC has arrived.
 
-**Dump.** CB interfaces are shared L1 — all RISCs on a core see the same data. To avoid
-redundant output, only one RISC prints each type of information:
+**Dump.** CB pointers (``rd_ptr``, ``wr_ptr``, ``tiles_acked``, ``tiles_received``) are
+RISC-specific, so each CB-capable RISC prints its own view:
 
-- **BRISC** prints CB metadata (size, read/write pointers, acked/received counts) and
-  optionally hex-dumps L1 data at the read pointer. DPRINT's built-in back-pressure handles
-  the 204-byte buffer limit automatically.
+- **BRISC, NCRISC, TRISC0 (Unpack), TRISC2 (Pack)** each print CB metadata prefixed with
+  their RISC index (e.g., ``RISC0``, ``RISC2``). Each sees different pointer values.
+  Optionally hex-dumps L1 data at the read pointer.
 - **TRISC1 (Math)** prints destination register contents if ``dump_dest=true`` (only Math can
   access dest regs). Otherwise it prints nothing.
-- **NCRISC, TRISC0, TRISC2** print nothing — they still participate in the barriers but skip
-  the dump since BRISC already covers the CB state.
 
 **Exit barrier.** Same mechanism with ``next_epoch = 2``. This ensures no RISC moves past the
 checkpoint until every RISC has finished printing — without it, a fast RISC could modify CBs
@@ -269,7 +269,7 @@ intra-core barriers described above:
       │  └────────────────────────────────────────────────────────┘  │
       ├─ intra-core barrier ──── BRISC releases other RISCs ────────┤
       │                                                              │
-      │  DUMP: BRISC prints CB state (once per core)                  │
+      │  DUMP: each CB-capable RISC prints its CB view                │
       │                                                              │
       ├─ intra-core barrier ──── all 5 RISCs finish dumping ────────┤
       │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
@@ -296,35 +296,43 @@ threads wait via the intra-core barriers that bracket the cross-core phase.
      ``noc_semaphore_inc(coordinator_sem_addr, 1)``. Both target the same physical L1
      address on the coordinator core. ``noc_semaphore_inc`` is a hardware atomic.
    - **Coordinator BRISC:** Its local semaphore IS the one being incremented.
-     Calls ``noc_semaphore_wait_min(local_sem, num_cores)`` — a local spin, no NOC reads.
+     Calls ``noc_semaphore_wait_min(local_sem, expected_count)`` — a local spin, no NOC reads.
    - **Non-coordinator BRISC:** Polls the coordinator's semaphore via
      ``noc_async_read`` into its own local semaphore copy, checking until the value
-     reaches ``num_cores``.
+     reaches ``expected_count``.
+
+   The semaphore accumulates monotonically — no reset between barriers. Each barrier
+   advances ``expected_count`` by ``num_cores``, so barrier N waits for
+   ``N * num_cores``. This avoids the race where a reset could lose increments from
+   a subsequent barrier. ``barrier_coord`` must be the same for all global checkpoints
+   in a program.
 
 3. **Intra-core barrier.** BRISC has returned from the cross-core barrier. The other
    4 RISCs were spinning here. BRISC's arrival advances the epoch, releasing them.
    All 10 RISCs (5 per core × 2 cores) are now synchronized.
 
-4. **Dump.** On each core, BRISC prints the CB state (once per core — CBs are shared L1).
-   If ``dump_dest=true``, TRISC1 also prints dest registers. Other RISCs print nothing.
+4. **Dump.** Each CB-capable RISC prints its own view of CB metadata (pointers are
+   RISC-specific). If ``dump_dest=true``, TRISC1 also prints dest registers.
 
-5. **Intra-core barrier.** Ensures BRISC finishes printing before any RISC proceeds.
+5. **Intra-core barrier.** Ensures all RISCs finish printing before any proceeds.
 
-6. **Cross-core barrier.** Same mechanism as step 2. Ensures core 0 doesn't proceed
-   past the checkpoint while core 1 is still printing.
+6. **Cross-core barrier.** Same mechanism as step 2, with ``expected_count`` advanced
+   to ``2 * num_cores``. Ensures all cores finish before any proceeds.
 
 7. **Final intra-core barrier.** Releases all RISCs after the cross-core exit barrier.
 
 Output Format
 -------------
 
-BRISC prints a header line followed by CB metadata (once per core):
+Each CB-capable RISC prints a header with its index, followed by CB metadata:
 
 .. code-block:: text
 
-    === CKPT 1 CBs ===
+    === CKPT 1 RISC0 CBs ===
     CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
     CB16 sz=128 rd=2048 wr=2048 ack=0 rcv=0
+    === CKPT 1 RISC2 CBs ===
+    CB0 sz=128 rd=1024 wr=1024 ack=0 rcv=1
 
 When ``dump_dest=true``, TRISC1 (Math) also prints destination register contents:
 
@@ -432,13 +440,13 @@ Comparison with dprint_tensix_dest_regs
      - All active RISCs (BRISC, NCRISC, TRISC0/1/2)
    * - What is dumped
      - Destination register contents
-     - CB metadata via BRISC (+ optional dest regs via Math, + optional L1 data)
+     - CB metadata per RISC (+ optional dest regs via Math, + optional L1 data)
    * - Callable from
      - Compute kernels only
      - Any kernel, but all active RISCs must participate
    * - BRISC/NCRISC involvement
      - None
-     - Full participation in barrier; BRISC prints CB state
+     - Full participation; each CB-capable RISC prints its own CB view
 
 Use ``dprint_tensix_dest_regs`` when you only need to inspect compute output in dest registers.
 Use ``DEBUG_CHECKPOINT`` when you need a consistent snapshot of the entire dataflow + compute

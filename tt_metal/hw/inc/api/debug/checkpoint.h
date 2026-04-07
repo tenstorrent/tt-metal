@@ -108,18 +108,22 @@ inline void debug_checkpoint_barrier() {
         // Release all subordinates
         ckpt->proceed = next_epoch;
     } else {
-        // Subordinate: wait for orchestrator to advance epoch
-        while (ckpt->proceed != next_epoch) {
+        // Subordinate: wait for orchestrator to advance epoch.
+        // Check for next_epoch OR next_epoch+1 to handle the rare case where
+        // the orchestrator has already advanced to the next barrier.
+        uint8_t proceed_val;
+        do {
             invalidate_l1_cache();
-        }
+            proceed_val = static_cast<uint8_t>(ckpt->proceed);
+        } while (proceed_val != next_epoch && proceed_val != static_cast<uint8_t>(next_epoch + 1));
     }
 }
 
 // ---------------------------------------------------------------------------
 // CB dump: prints CB state and optionally dest registers.
-// CB interfaces are shared L1 — only BRISC prints CB metadata to avoid
-// redundant output. TRISC1 (Math) prints dest registers if dump_dest=true.
-// All other RISCs skip the dump but still participate in the barriers.
+// CB pointers (rd_ptr, wr_ptr, tiles_acked, tiles_received) are RISC-specific,
+// so BRISC, NCRISC, TRISC0, and TRISC2 each print their own view with a
+// RISC index prefix. TRISC1 (Math) prints dest registers if dump_dest=true.
 // Both DPRINT and DEVICE_PRINT calls are present — the compiler disables
 // whichever backend is not active.
 // ---------------------------------------------------------------------------
@@ -278,9 +282,11 @@ inline void debug_checkpoint_cross_core_barrier(
 //
 // All RISCs on all cores must call this with the same arguments.
 // barrier_coord_x/y identify the coordinator core for the NOC semaphore
-// barrier — they do NOT affect what gets printed. Only BRISC prints CB
-// state (once per core, since CBs are shared L1). Non-BRISC RISCs ignore
-// the barrier args but participate in intra-core barriers.
+// barrier — they do NOT affect what gets printed. Each CB-capable RISC
+// prints its own view of CB state (pointers are RISC-specific).
+// Non-BRISC RISCs ignore the barrier args but participate in intra-core
+// barriers. barrier_coord must be the same across all global checkpoints
+// in a program (the monotonic semaphore count assumes a fixed coordinator).
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_global(
@@ -302,14 +308,14 @@ inline void debug_checkpoint_global(
     // 3. Intra-core: BRISC releases other RISCs after cross-core sync
     debug_checkpoint_barrier();
 
-    // 4. Dump CB state (all RISCs)
+    // 4. Dump (BRISC/NCRISC/TRISC0/TRISC2 print CB state; Math prints dest regs if enabled)
     debug_checkpoint_dump_cbs<num_cbs, words_per_cb, dump_dest>(checkpoint_id);
 
-    // 5. Intra-core: all RISCs finish dumping
+    // 5. Intra-core: all RISCs wait for dump to finish
     debug_checkpoint_barrier();
 
     // 6. Cross-core: all cores finish dumping before any proceeds
-    //    (the barrier resets all local semaphore copies internally)
+    //    (semaphore accumulates monotonically — no reset needed)
 #if defined(KERNEL_BUILD) && defined(COMPILE_FOR_BRISC)
     debug_checkpoint_cross_core_barrier(sem_id, barrier_coord_x, barrier_coord_y, num_cores);
 #endif
