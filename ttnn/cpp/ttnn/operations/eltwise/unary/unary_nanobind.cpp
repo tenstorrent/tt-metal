@@ -1776,7 +1776,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::hardmish,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2, 0), 2)}}{{2}})doc",
-        "[Supported range -inf to inf]",
+        "[Supports finite inputs; for non-finite values, -inf yields NaN due to the formula's -inf * 0 term.]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation_subcoregrids<"gez">(

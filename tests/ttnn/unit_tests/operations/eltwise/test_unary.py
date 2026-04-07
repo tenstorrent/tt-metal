@@ -1804,7 +1804,7 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data1 = create_full_range_tensor(input_shapes, torch_dtype)
 
     # limit the range to avoid overflow in hardmish
-    in_data1 = in_data1[(in_data1 + 2.0).abs() < 3.3e38 / 2]
+    in_data1 = in_data1[(in_data1 + 2.0).abs() < torch.finfo(torch.float32).max / 2]
 
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
