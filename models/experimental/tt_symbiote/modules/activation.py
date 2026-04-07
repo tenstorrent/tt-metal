@@ -138,14 +138,17 @@ class TTNNSnakeBeta(TTNNModule):
         tl = self.torch_layer
         if tl is None:
             return
-        w_alpha = tl.alpha.detach().to(torch.bfloat16).contiguous()
-        w_beta = tl.beta.detach().to(torch.bfloat16).contiguous()
+        # Keep alpha/beta in float32: sin(x * exp(alpha)) is extremely sensitive to
+        # argument precision — bfloat16 can't resolve the correct phase for |arg| > ~10,
+        # producing audio-destroying noise.
+        w_alpha = tl.alpha.detach().float().contiguous()
+        w_beta = tl.beta.detach().float().contiguous()
         mesh_mapper = None
         if self.device is not None and hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         self.alpha = ttnn.from_torch(
             w_alpha,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             mesh_mapper=mesh_mapper,
@@ -153,7 +156,7 @@ class TTNNSnakeBeta(TTNNModule):
         )
         self.beta = ttnn.from_torch(
             w_beta,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             mesh_mapper=mesh_mapper,
@@ -189,6 +192,10 @@ class TTNNSnakeBeta(TTNNModule):
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        out_dtype = input_tensor.dtype
+        if out_dtype != ttnn.float32:
+            input_tensor = ttnn.typecast(input_tensor, ttnn.float32)
+
         alpha_expanded = ttnn.unsqueeze(self.alpha, 0)
         alpha_expanded = ttnn.unsqueeze(alpha_expanded, -1)
         beta_expanded = ttnn.unsqueeze(self.beta, 0)
@@ -203,7 +210,11 @@ class TTNNSnakeBeta(TTNNModule):
         beta_plus_eps = ttnn.add(beta_exp, self.no_div_by_zero)
         reciprocal_beta = ttnn.reciprocal(beta_plus_eps)
         scaled_sin = ttnn.multiply(reciprocal_beta, sin_squared)
-        return ttnn.add(input_tensor, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        result = ttnn.add(input_tensor, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if out_dtype != ttnn.float32:
+            result = ttnn.typecast(result, out_dtype)
+        return result
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
