@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <functional>
@@ -33,7 +34,7 @@ private:
     CompileCallback compile_callback_;
     UploadFirmwareCallback upload_fw_callback_;
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
-    tf::Executor thread_pool_{std::thread::hardware_concurrency()};
+    tf::Executor thread_pool_{std::max(1u, std::thread::hardware_concurrency())};
 };
 
 }  // namespace tt::tt_metal::jit_server

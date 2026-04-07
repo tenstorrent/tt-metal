@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -138,7 +139,7 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj) {
-    std::string cmd = fmt::format("cd {} && {}", out_dir, gpp);
+    std::string cmd = fmt::format("cd {} && {} ", out_dir, gpp);
     cmd += fmt::format("-{} ", target.compiler_opt_level);
     cmd += target.cflags;
     cmd += target.includes;
@@ -163,7 +164,7 @@ void link_one(
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
     const std::string& link_objs_str) {
-    std::string cmd = fmt::format("cd {} && {}", out_dir, gpp);
+    std::string cmd = fmt::format("cd {} && {} ", out_dir, gpp);
     cmd += fmt::format("-{} ", target.linker_opt_level);
 
     std::vector<std::string> link_deps = {target.linker_script};
@@ -202,10 +203,14 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
     if (!file.is_open()) {
         throw std::runtime_error("Cannot read ELF file: " + path);
     }
-    auto size = file.tellg();
+    std::streampos pos = file.tellg();
+    if (pos == std::streampos(-1)) {
+        throw std::runtime_error("Cannot determine size of ELF file: " + path);
+    }
+    auto byte_count = static_cast<std::streamsize>(pos);
     file.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> data(static_cast<size_t>(size));
-    file.read(reinterpret_cast<char*>(data.data()), size);
+    std::vector<std::uint8_t> data(static_cast<size_t>(byte_count));
+    file.read(reinterpret_cast<char*>(data.data()), byte_count);
     return data;
 }
 
