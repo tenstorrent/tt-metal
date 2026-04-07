@@ -75,7 +75,7 @@ For single-host tests, run the test with appropriate environment variables and c
 
 ### Multi-Host Tests
 
-For multi-host tests, use **`tt-run`** with mock cluster mappings. See [README_ttrun.md](../../../../ttnn/ttnn/distributed/README_ttrun.md) for **auto allocation** vs **legacy** mode.
+For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_ttrun.md** in the distributed Python package (alongside `ttrun.py`) for **auto allocation** vs **legacy** mode.
 
 1. **Run the test** (prefer **auto allocation** — `--mesh-graph-descriptor` and `--mock-cluster-rank-binding` are mutually exclusive with `--rank-binding`):
    ```bash
