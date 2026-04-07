@@ -70,7 +70,7 @@ targets:
 
 registry:
   - trace_id: 1
-    status: active
+    status: draft
     models: [whisper]
     hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
     trace_uid: migrated-v5-trace-1-2f0ed61c-b2ae-4c5b-9472-4c924f34e579
@@ -130,3 +130,13 @@ registry:
     config_count: 831
     loaded_at: '2026-03-30'
     notes: 'migrated from ttnn_ops_v5 by reconstructing trace 548 from v5 and loading in v6'
+
+  - trace_id: 5
+    status: active
+    models: [whisper]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 4e05edc7-a489-4cba-bb13-767613e2319f
+    tt_metal_sha: 59e37ab8dcaab3449f95584597c25078deab3c9f
+    config_count: 233
+    loaded_at: '2026-04-07'
+    notes: ''
