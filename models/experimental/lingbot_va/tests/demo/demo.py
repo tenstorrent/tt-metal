@@ -482,9 +482,8 @@ def _prepare_state_for_vae_encode(state: dict, config) -> None:
     state["height"] = config.height
     state["width"] = config.width
     if config.env_type == "robotwin_tshape":
-        # Match fused layout from :func:`_encode_obs_ttnn` (same as ``_reset_infer_state``).
         state["latent_height"] = ((config.height // 16) * 3) // 2
-        state["latent_width"] = config.width // 16
+        state["latent_width"] = ((config.width // 16) * 3) // 2
     else:
         state["latent_height"] = config.height // 16
         state["latent_width"] = config.width // 16

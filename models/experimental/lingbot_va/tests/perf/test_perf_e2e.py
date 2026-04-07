@@ -1,22 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E perf: staged ``TtLingbotVA`` + ``tt_cnn`` pipeline (2 CQs, overlapped H2D).
-
-Each ``forward`` / ``__call__`` runs TT text encoder → VAE encode → Wan transformer (loads and frees
-each stage in order). Random inputs are fixed in ``TtLingbotVA.__init__`` to demo-compatible shapes; the
-pipeline’s host tensor is a dummy shape for ``compile`` / ``enqueue`` only.
-
-**Why not ``use_trace=True`` here:** ``MultiCQTracedModelOverlappedInputExecutor.compile`` runs the model
-once to build the output schema, then calls ``begin_trace_capture`` and runs the model **again** inside
-the capture window. A staged forward that loads whole submodels onto the mesh (text encoder, VAE,
-transformer) issues device writes during that second run, which triggers
-``TT_FATAL: Writes are not supported during trace capture``. Trace is only viable when the traced
-``model()`` body is a fixed compute graph without dynamic load/free of weights. Use
-``MultiCQModelOverlappedInputExecutor`` (``use_trace=False``) for this test.
-
-``num_iterations=1`` → one ``compile`` forward plus one ``enqueue`` forward.
-"""
+"""E2E perf: ``TtLingbotVA`` + ``tt_cnn`` pipeline with 2 command queues and trace enabled."""
 
 from __future__ import annotations
 
@@ -25,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import ttnn
@@ -34,12 +20,14 @@ _tt_metal_root = Path(__file__).resolve().parent.parent.parent.parent.parent.par
 if str(_tt_metal_root) not in sys.path:
     sys.path.insert(0, str(_tt_metal_root))
 
+from models.experimental.lingbot_va.tests.demo.demo import build_infer_message
 from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.experimental.lingbot_va.tests.perf.tt_lingbot_va_perf import TtLingbotVA
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints"
+OBS_H, OBS_W = 256, 320
 
 
 def _mesh_device_param_for_e2e() -> tuple[int, int] | int:
@@ -49,8 +37,19 @@ def _mesh_device_param_for_e2e() -> tuple[int, int] | int:
     return mesh_shape_request_param()
 
 
+def _make_message():
+    rng = np.random.default_rng(42)
+    cam_high, cam_left, cam_right = (rng.integers(0, 256, size=(OBS_H, OBS_W, 3), dtype=np.uint8) for _ in range(3))
+    return build_infer_message(
+        cam_high=cam_high,
+        cam_left_wrist=cam_left,
+        cam_right_wrist=cam_right,
+        prompt="Lift the cup from the table",
+    )
+
+
 def _host_input_tensor_for_pipeline(mesh_device):
-    """Small TILE host tensor; pipeline only needs stable shape/shard (``TtLingbotVA`` ignores its values)."""
+    """Small TILE host tensor; pipeline only needs stable shape/shard (real data is in ``TtLingbotVA``)."""
     torch.manual_seed(0)
     host_torch = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
     host = ttnn.from_torch(host_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -100,13 +99,13 @@ def _host_input_tensor_for_pipeline(mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [4])
 @pytest.mark.parametrize(
     "batch_size, expected_compile_time, expected_throughput_fps",
     [(1, 0.75, 5.68)],
 )
 @pytest.mark.timeout(600)
-def test_perf_lingbot_va_e2e_2cq_staged(
+def test_perf_lingbot_va_e2e_2cq_trace(
     mesh_device,
     num_iterations,
     batch_size,
@@ -117,13 +116,21 @@ def test_perf_lingbot_va_e2e_2cq_staged(
     if not ckpt.is_dir():
         pytest.skip(f"Checkpoint dir not found: {ckpt}")
 
-    # ``frame_chunk_size=2`` matches the previous ``prepare`` default; random tensors are fixed in ``__init__``.
-    tt_model = TtLingbotVA(ckpt, mesh_device, frame_chunk_size=2)
+    message = _make_message()
 
+    tt_model = TtLingbotVA.prepare(
+        checkpoint_path=ckpt,
+        message=message,
+        mesh_device=mesh_device,
+        num_inference_steps=1,
+        action_num_inference_steps=1,
+    )
+
+    # Must match models["mesh_device"] (same mesh when env opens (1,1); else (1,1) submesh inside multi-chip).
     work_mesh = tt_model.models["mesh_device"]
     image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(work_mesh)
 
-    pipe_cfg = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    pipe_cfg = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         pipe_cfg,
         tt_model,
@@ -132,6 +139,7 @@ def test_perf_lingbot_va_e2e_2cq_staged(
         l1_input_memory_config=l1_input_memory_config,
     )
 
+    # Same host tensor each iteration; pipeline treats inputs as read-only for this perf case.
     host_inputs = [image_host] * num_iterations
 
     t0 = time.time()
@@ -151,7 +159,7 @@ def test_perf_lingbot_va_e2e_2cq_staged(
     logger.info("Average model performance={:.2f} fps", num_iterations * batch_size / elapsed)
 
     prep_perf_report(
-        model_name="lingbot_va-2cq-staged",
+        model_name="lingbot_va-2cq-trace",
         batch_size=batch_size,
         inference_and_compile_time=compile_time,
         inference_time=inference_time,
