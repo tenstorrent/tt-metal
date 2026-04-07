@@ -2,6 +2,12 @@ import pytest
 from models.experimental.tt_symbiote.modules.moe import Glm4MoeConfig
 
 
+def pytest_configure(config):
+    """Register custom markers for incremental test levels."""
+    for i in range(1, 7):
+        config.addinivalue_line("markers", f"level{i}: Incremental test level {i}")
+
+
 @pytest.fixture
 def default_glm_config():
     """Default GLM configuration for testing."""

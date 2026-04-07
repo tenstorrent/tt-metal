@@ -262,6 +262,8 @@ class TTNNPagedAttentionKVCache(Cache):
         return key_states, value_states
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
+        if not self._seq_lengths:
+            return 0
         return self._seq_lengths[layer_idx]
 
     def get_max_cache_shape(self) -> Optional[int]:

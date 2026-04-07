@@ -327,7 +327,16 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        )
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
+        )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])

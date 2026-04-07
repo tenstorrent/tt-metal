@@ -88,24 +88,19 @@ class TTNNQwenPagedAttentionKVCache(TTNNPagedAttentionKVCache):
         self.conv_states = {}  # DeltaNet conv states per layer
         self.recurrent_states = {}  # DeltaNet recurrent states per layer
 
-    @property
-    def has_previous_state(self) -> bool:
+    def has_previous_state(self, layer_idx: int = None) -> bool:
         """Check if cache has been used previously.
 
-        This property is required for compatibility with native Qwen linear attention (DeltaNet).
+        This method is required for compatibility with HuggingFace transformers Qwen3.5 models,
+        which call has_previous_state() or has_previous_state(layer_idx).
         Returns True if any linear attention layer's conv_state has been populated.
-        This mimics the PyTorch Qwen cache behavior which checks if conv_states exist.
         """
         # Check if any conv_state has been populated during prefill
         if self.conv_states:
-            # Return True if any layer has a conv_state (meaning prefill has occurred)
+            if layer_idx is not None and layer_idx in self.conv_states:
+                return self.conv_states[layer_idx] is not None
             return any(v is not None for v in self.conv_states.values())
-        return False
-
-    @has_previous_state.setter
-    def has_previous_state(self, value: bool):
-        """Set previous state flag."""
-        self._has_previous_state = value
+        return self._has_previous_state
 
     def _get_cache_idx(self, layer_idx: int) -> int:
         """Convert absolute layer_idx to cache index.
@@ -1413,7 +1408,6 @@ class TTNNQwen3LinearAttention(TTNNModule):
             output = self._fallback_torch_layer(
                 hidden_states_pt,
                 cache_params=cache_params,
-                cache_position=cache_position_pt,
                 attention_mask=attention_mask_pt,
             )
 
@@ -1451,21 +1445,37 @@ class TTNNQwen3LinearAttention(TTNNModule):
         is_linear_attn_cache = (
             cache_params is not None
             and hasattr(cache_params, "has_previous_state")
-            and hasattr(cache_params, "conv_states")
-            and hasattr(cache_params, "recurrent_states")
+            and (
+                (hasattr(cache_params, "conv_states") and hasattr(cache_params, "recurrent_states"))
+                or (hasattr(cache_params, "update_conv_state") and hasattr(cache_params, "update_recurrent_state"))
+            )
         )
 
         use_precomputed_states = (
-            is_linear_attn_cache and cache_params.has_previous_state and seq_len == 1 and cache_position is not None
+            is_linear_attn_cache and cache_params.has_previous_state(self.layer_idx) and seq_len == 1
         )
+
+        # Clear stale DeltaNet cache states on prefill to prevent warmup pollution
+        # When seq_len > 1 (prefill), the DeltaNet kernel will recompute states from scratch
+        # Stale states from previous generate() calls (e.g., warmup) must be cleared
+        if is_linear_attn_cache and not use_precomputed_states:
+            if hasattr(cache_params, "conv_states") and isinstance(cache_params.conv_states, dict):
+                cache_params.conv_states.pop(self.layer_idx, None)
+            if hasattr(cache_params, "recurrent_states") and isinstance(cache_params.recurrent_states, dict):
+                cache_params.recurrent_states.pop(self.layer_idx, None)
 
         # Get cache states if available (only for linear attention-compatible caches)
         # Use .get() to safely access - during first forward pass, these may not exist yet
         conv_state = None
         recurrent_state = None
-        if is_linear_attn_cache:
-            conv_state = cache_params.conv_states.get(self.layer_idx)
-            recurrent_state = cache_params.recurrent_states.get(self.layer_idx)
+        if is_linear_attn_cache and use_precomputed_states:
+            if hasattr(cache_params, "layers") and self.layer_idx < len(cache_params.layers):
+                layer_cache = cache_params.layers[self.layer_idx]
+                conv_state = getattr(layer_cache, "conv_states", None)
+                recurrent_state = getattr(layer_cache, "recurrent_states", None)
+            elif hasattr(cache_params, "conv_states") and isinstance(cache_params.conv_states, dict):
+                conv_state = cache_params.conv_states.get(self.layer_idx)
+                recurrent_state = cache_params.recurrent_states.get(self.layer_idx)
 
         # === TTNN Linear Projections ===
         # Ensure tile layout for TTNN operations
@@ -1488,7 +1498,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # Use explicit replicated conversion since all_gather makes them replicated
         # The _to_pytorch_replicated method properly handles multi-device extraction
         mixed_qkv = self._to_pytorch_replicated(mixed_qkv_ttnn)
-        z = self._to_pytorch_replicated(z_ttnn)
+        z = self._to_pytorch_replicated(z_ttnn).float()
 
         # DEBUG: Compare with PyTorch reference
         import os
@@ -1521,13 +1531,11 @@ class TTNNQwen3LinearAttention(TTNNModule):
             z_diff = (z.float() - z_ref.float()).abs()
             print(f"[DEBUG] z max diff: {z_diff.max().item():.6f}, mean: {z_diff.mean().item():.6f}")
 
-        # Get hidden_states as PyTorch tensor for small projections
-        # in_proj_a and in_proj_b are PyTorch nn.Linear layers (not TTNN) to avoid
-        # distributed weight replication issues - they have tiny output dims (num_v_heads=4)
-        # hidden_states_ttnn was converted via _to_ttnn which replicates, so use replicated conversion
-        hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
-        b = self.in_proj_b(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
-        a = self.in_proj_a(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+        # Use original hidden_states_masked directly for small projections (in_proj_a/b)
+        # This avoids double bf16 quantization: torch -> ttnn bf16 -> torch bf16
+        # hidden_states_masked was computed before _to_ttnn conversion (line ~1435)
+        b = self.in_proj_b(hidden_states_masked).contiguous()
+        a = self.in_proj_a(hidden_states_masked).contiguous()
 
         # DEBUG: Compare a and b projections with PyTorch reference
         if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1":
@@ -1581,7 +1589,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
             # Prefill path: use causal_conv1d_fn or fallback
             if is_linear_attn_cache:
                 conv_state = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
-                cache_params.conv_states[self.layer_idx] = conv_state
+                if hasattr(cache_params, "conv_states") and isinstance(cache_params.conv_states, dict):
+                    cache_params.conv_states[self.layer_idx] = conv_state
 
             if self.causal_conv1d_fn is not None:
                 mixed_qkv = self.causal_conv1d_fn(
@@ -1595,7 +1604,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
         # Transpose back: [batch, seq, key_dim * 2 + value_dim]
-        mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()
+        # Cast to float32 after conv1d for DeltaNet kernel precision
+        mixed_qkv = mixed_qkv.transpose(1, 2).contiguous().float()
 
         # Split into Q, K, V
         query, key, value = torch.split(
@@ -1627,7 +1637,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 g=g,
                 beta=beta,
                 initial_state=None,
-                output_final_state=is_linear_attn_cache,
+                output_final_state=cache_params is not None,
                 use_qk_l2norm_in_kernel=True,
             )
         else:
@@ -1638,13 +1648,14 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 g=g,
                 beta=beta,
                 initial_state=recurrent_state,
-                output_final_state=is_linear_attn_cache,
+                output_final_state=cache_params is not None,
                 use_qk_l2norm_in_kernel=True,
             )
 
         # Update cache (only for linear attention-compatible caches)
         if is_linear_attn_cache:
-            cache_params.recurrent_states[self.layer_idx] = last_recurrent_state
+            if hasattr(cache_params, "recurrent_states") and isinstance(cache_params.recurrent_states, dict):
+                cache_params.recurrent_states[self.layer_idx] = last_recurrent_state
 
         # DEBUG: Print core_attn_out info after DeltaNet kernel
         if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1":
