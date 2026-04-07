@@ -198,6 +198,63 @@ class TtCodecDecoder(LightweightModule):
 
         return y.unsqueeze(1)
 
+    def _istft_from_pred(self, x_pred):
+        """ISTFT signal processing from linear output (CPU only, no TTNN linear).
+
+        This is the second half of istft_head(), split out so that the linear
+        can be included in a metal trace while the FFT runs on host.
+
+        Args:
+            x_pred: [B, 1282, T] float32 torch tensor (output of ISTFT head linear, transposed)
+        Returns:
+            [B, 1, num_samples] torch tensor
+        """
+        n_fft = ISTFT_N_FFT
+        hop_length = ISTFT_HOP_LENGTH
+        win_length = n_fft
+
+        # Split magnitude and phase
+        mag, p = x_pred.chunk(2, dim=1)  # each [B, 641, T]
+
+        # Magnitude activation
+        mag = torch.exp(mag)
+        mag = torch.clamp(mag, max=1e2)
+
+        # Complex spectrogram
+        S = mag * (torch.cos(p) + 1j * torch.sin(p))
+
+        # ISTFT with "same" padding
+        pad = (win_length - hop_length) // 2
+        window = torch.hann_window(win_length, device=S.device)
+
+        B, N, T_frames = S.shape
+
+        # Inverse FFT
+        ifft = torch.fft.irfft(S, n_fft, dim=1, norm="backward")
+        ifft = ifft * window[None, :, None]
+
+        # Overlap and add
+        output_size = (T_frames - 1) * hop_length + win_length
+        y = F.fold(
+            ifft,
+            output_size=(1, output_size),
+            kernel_size=(1, win_length),
+            stride=(1, hop_length),
+        )[:, 0, 0, pad:-pad]
+
+        # Window envelope normalization
+        window_sq = window.square().expand(1, T_frames, -1).transpose(1, 2)
+        window_envelope = F.fold(
+            window_sq,
+            output_size=(1, output_size),
+            kernel_size=(1, win_length),
+            stride=(1, hop_length),
+        ).squeeze()[pad:-pad]
+
+        y = y / window_envelope
+
+        return y.unsqueeze(1)
+
     def forward(self, vq_codes):
         """Full codec decoder forward.
 

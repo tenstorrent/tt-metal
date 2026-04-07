@@ -499,5 +499,131 @@ class TestFullCodecDecoder:
         assert pcc > 0.90, f"Full Decoder PCC {pcc:.6f} < 0.90"
 
 
+def make_semantic_encoder_state_dict(prefix="SemanticEncoder_module.", n_res_blocks=2):
+    """Random state dict for SemanticEncoder (Conv1d(1024,1024,k=3) blocks)."""
+    sd = {}
+    # initial_conv: Conv1d(1024, 1024, k=3) weight shape [out, in, k]
+    sd[prefix + "initial_conv.weight"] = _bf16(torch.randn(1024, 1024, 3) * 0.01)
+    sd[prefix + "initial_conv.bias"] = _bf16(torch.randn(1024) * 0.01)
+    sd[prefix + "final_conv.weight"] = _bf16(torch.randn(1024, 1024, 3) * 0.01)
+    sd[prefix + "final_conv.bias"] = _bf16(torch.randn(1024) * 0.01)
+
+    # Residual blocks: indices 1, 3, 5, 7, ... (two convs per block at idx, idx+2)
+    for i in range(n_res_blocks):
+        idx = 1 + i * 4
+        sd[prefix + f"residual_blocks.{idx}.weight"] = _bf16(torch.randn(1024, 1024, 3) * 0.01)
+        sd[prefix + f"residual_blocks.{idx}.bias"] = _bf16(torch.randn(1024) * 0.01)
+        sd[prefix + f"residual_blocks.{idx + 2}.weight"] = _bf16(torch.randn(1024, 1024, 3) * 0.01)
+        sd[prefix + f"residual_blocks.{idx + 2}.bias"] = _bf16(torch.randn(1024) * 0.01)
+
+    return sd
+
+
+# ---------------------------------------------------------------------------
+# Test Trace: Decoder and Encoder
+# ---------------------------------------------------------------------------
+class TestTrace:
+    def test_decoder_trace(self, device):
+        """Traced decoder should match non-traced (fc_post_a -> backbone -> ISTFT head linear)."""
+        torch.manual_seed(42)
+        from vector_quantize_pytorch import ResidualFSQ
+
+        from models.demos.inworld_tts.tt.generator import CodecDecoderGenerator
+
+        quantizer = ResidualFSQ(levels=[4, 4, 4, 4, 4, 4, 4, 4], dim=2048, num_quantizers=1)
+
+        depth = 2
+        sd = make_backbone_state_dict(prefix="backbone.", depth=depth)
+        sd["fc_post_a.weight"] = _bf16(torch.randn(1024, 2048))
+        sd["fc_post_a.bias"] = _bf16(torch.randn(1024))
+        sd["head.out.weight"] = _bf16(torch.randn(1282, 1024) * 0.01)
+        sd["head.out.bias"] = _bf16(torch.randn(1282) * 0.01)
+
+        seq_len = 64
+        vq_codes = torch.randint(0, 65536, (1, 1, seq_len))
+
+        gen = CodecDecoderGenerator(
+            device=device,
+            state_dict=sd,
+            quantizer=quantizer,
+            backbone_prefix="backbone.",
+            head_prefix="head.",
+            depth=depth,
+        )
+
+        # Non-traced forward
+        non_traced_out = gen.generate(vq_codes)
+
+        # Setup trace and run traced forward
+        gen.setup_trace(seq_len)
+        traced_out = gen.generate_traced(vq_codes)
+
+        pcc = compute_pcc(non_traced_out, traced_out)
+        print(f"Decoder Trace PCC: {pcc:.6f}")
+        assert pcc > 0.99, f"Decoder Trace PCC {pcc:.6f} < 0.99"
+
+        gen.release_trace()
+
+    @pytest.mark.skip(
+        reason="AcousticEncoder uses ttnn.conv1d with depthwise groups and ttnn.zeros "
+        "allocations that are not yet compatible with metal trace capture. "
+        "The conv1d weight caching (return_weights_and_bias) involves host-side "
+        "state updates that cannot be replayed in a trace."
+    )
+    def test_encoder_acoustic_trace(self, device):
+        """Traced acoustic encoder should match non-traced."""
+        torch.manual_seed(42)
+
+        from models.demos.inworld_tts.tt.generator import CodecEncoderGenerator
+
+        sd = make_acoustic_encoder_state_dict()
+        n_samples = 10 * ENCODER_TOTAL_STRIDE  # 3200
+
+        enc = TtAcousticEncoder(sd, device)
+        x = _bf16(torch.randn(1, 1, n_samples))
+
+        # Non-traced forward
+        non_traced_out = enc(x)
+
+        # Setup trace and run traced
+        gen = CodecEncoderGenerator(device=device, acoustic_encoder=enc)
+        gen.setup_acoustic_trace(n_samples)
+        traced_out = gen.run_acoustic_traced(x)
+
+        pcc = compute_pcc(non_traced_out, traced_out)
+        print(f"Acoustic Encoder Trace PCC: {pcc:.6f}")
+        assert pcc > 0.99, f"Acoustic Encoder Trace PCC {pcc:.6f} < 0.99"
+
+        gen.release_traces()
+
+    def test_encoder_semantic_trace(self, device):
+        """Traced semantic encoder should match non-traced."""
+        torch.manual_seed(42)
+
+        from models.demos.inworld_tts.tt.codec_encoder import TtSemanticEncoder
+        from models.demos.inworld_tts.tt.generator import CodecEncoderGenerator
+
+        prefix = "SemanticEncoder_module."
+        sd = make_semantic_encoder_state_dict(prefix=prefix, n_res_blocks=2)
+
+        T = 64
+        enc = TtSemanticEncoder(device=device, state_dict=sd, prefix=prefix)
+        x = _bf16(torch.randn(1, 1024, T))
+
+        # Non-traced forward
+        non_traced_out = enc(x)
+
+        # Setup trace and run traced
+        gen = CodecEncoderGenerator(device=device, acoustic_encoder=None, semantic_encoder=enc)
+        gen.setup_semantic_trace(T)
+        traced_out = gen.run_semantic_traced(x)
+
+        pcc = compute_pcc(non_traced_out, traced_out)
+        print(f"Semantic Encoder Trace PCC: {pcc:.6f}")
+        assert pcc > 0.99, f"Semantic Encoder Trace PCC {pcc:.6f} < 0.99"
+
+        gen.release_traces()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
