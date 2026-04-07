@@ -94,15 +94,6 @@ AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::comput
     return TensorSpec(shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 }
 
-AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
-}
-
 ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(

@@ -103,14 +103,6 @@ NlpKVCacheLoadSliceDeviceOperation::spec_return_value_t NlpKVCacheLoadSliceDevic
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));
 }
 
-NlpKVCacheLoadSliceDeviceOperation::tensor_return_value_t NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

@@ -441,7 +441,23 @@ typename device_operation_t::tensor_return_value_t launch(
         TT_FATAL(is_device_tensor(input_tensors.front().get()), "Device Operations expect tensor with Device storage in inputs");
     }
 
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto tensor_return_value = [&]() -> typename device_operation_t::tensor_return_value_t {
+        if constexpr (HasCreateOutputTensors<device_operation_t>) {
+            return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+        } else {
+            using tensor_args_t = typename device_operation_t::tensor_args_t;
+            if constexpr (HasPreallocatedOutput<tensor_args_t>) {
+                if (tensor_args.preallocated_output.has_value()) {
+                    return tensor_args.preallocated_output.value();
+                }
+            }
+            TT_FATAL(
+                !input_tensors.empty(),
+                "Default create_output_tensors requires at least one input tensor to determine the device");
+            auto specs = device_operation_t::compute_output_specs(operation_attributes, tensor_args);
+            return create_device_tensor(specs, input_tensors.front().get().device());
+        }
+    }();
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 

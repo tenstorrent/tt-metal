@@ -106,14 +106,6 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
         Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), out_memory_config))};
 }
 
-LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-
-    auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-    return tensor;
-}
-
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {

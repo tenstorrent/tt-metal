@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step1 {
@@ -39,12 +38,6 @@ MorehNllLossStep1DeviceOperation::spec_return_value_t MorehNllLossStep1DeviceOpe
         target_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
-}
-
-MorehNllLossStep1DeviceOperation::tensor_return_value_t MorehNllLossStep1DeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step1

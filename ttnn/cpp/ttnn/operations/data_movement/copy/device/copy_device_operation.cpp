@@ -174,16 +174,6 @@ CopyDeviceOperation::create_op_performance_model(
     return result;
 }
 
-CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    const Tensor& input_tensor = tensor_args.input;
-    const spec_return_value_t spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(spec, input_tensor.device());
-}
-
 CopyDeviceOperation::tensor_return_value_t copy(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,

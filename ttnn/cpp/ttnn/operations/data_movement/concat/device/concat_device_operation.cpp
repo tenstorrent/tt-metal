@@ -155,12 +155,6 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
 }
 
-Tensor ConcatDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 ConcatDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,

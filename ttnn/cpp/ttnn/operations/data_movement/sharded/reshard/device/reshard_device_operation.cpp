@@ -188,15 +188,6 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()));
 }
 
-Tensor ReshardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> ReshardDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

@@ -97,14 +97,6 @@ TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     return TensorSpec(output_tensor_shape, tensor_layout);
 }
 
-Tensor PaddedSliceDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "PaddedSliceDeviceOperation::compute_program_hash is called");

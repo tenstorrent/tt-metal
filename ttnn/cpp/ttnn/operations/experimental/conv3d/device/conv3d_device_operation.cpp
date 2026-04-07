@@ -226,11 +226,6 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 
-Tensor Conv3dDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

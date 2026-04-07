@@ -49,11 +49,6 @@ TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
             args.dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.memory_config));
 }
 
-Tensor ConvertToCHWDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
-}
-
 ttsl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -168,12 +167,6 @@ LayerNormPostAllGatherDeviceOperation::spec_return_value_t LayerNormPostAllGathe
     return TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(args.dtype.value_or(input_tensor.dtype()), PageConfig(Layout::TILE), args.memory_config));
-}
-
-LayerNormPostAllGatherDeviceOperation::tensor_return_value_t
-LayerNormPostAllGatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 }  // namespace ttnn::prim

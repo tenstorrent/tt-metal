@@ -49,15 +49,6 @@ TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
         operations::TensorLayout(input.dtype(), operations::PageConfig(Layout::TILE), args.output_mem_config));
 }
 
-Tensor FastReduceNCDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

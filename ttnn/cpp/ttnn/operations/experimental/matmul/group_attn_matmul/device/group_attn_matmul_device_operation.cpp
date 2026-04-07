@@ -195,15 +195,6 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
-GroupAttnMatmulDeviceOperation::tensor_return_value_t GroupAttnMatmulDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
 ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;

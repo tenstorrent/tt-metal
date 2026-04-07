@@ -65,13 +65,6 @@ TensorSpec MoeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 }
 
-Tensor MoeDeviceOperation::create_output_tensors(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
 ttnn::Tensor moe(
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,

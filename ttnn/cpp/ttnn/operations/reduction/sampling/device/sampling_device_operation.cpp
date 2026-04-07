@@ -94,15 +94,6 @@ TensorSpec SamplingDeviceOperation::compute_output_specs(
         TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
 }
 
-Tensor SamplingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_values.device());
-}
-
 ttnn::Tensor sampling(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,

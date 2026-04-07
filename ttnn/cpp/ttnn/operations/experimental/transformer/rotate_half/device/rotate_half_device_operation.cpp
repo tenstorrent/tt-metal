@@ -41,12 +41,6 @@ TensorSpec RotateHalfDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()));
 }
 
-Tensor RotateHalfDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const TensorSpec spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(spec, tensor_args.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

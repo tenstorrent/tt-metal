@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "ring_distributed_sdpa_program_factory.hpp"
@@ -275,11 +274,6 @@ TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     return TensorSpec(
         local_output_shape,
         TensorLayout(input_tensor_q.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
-}
-
-Tensor RingDistributedSdpaDeviceOperation::create_output_tensors(
-    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<RingDistributedSdpaDeviceOperation::tensor_return_value_t>

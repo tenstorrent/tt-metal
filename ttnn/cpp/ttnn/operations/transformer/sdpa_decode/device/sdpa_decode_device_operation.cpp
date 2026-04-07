@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_decode_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
@@ -394,11 +393,6 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     }
     return TensorSpec(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
-}
-
-Tensor SdpaDecodeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
 ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(

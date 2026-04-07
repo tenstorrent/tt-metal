@@ -110,14 +110,6 @@ TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
         output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config));
 }
 
-Tensor NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
-    }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

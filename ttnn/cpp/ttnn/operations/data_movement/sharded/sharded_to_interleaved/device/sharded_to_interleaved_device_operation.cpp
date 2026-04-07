@@ -67,17 +67,6 @@ TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()));
 }
 
-Tensor ShardedToInterleavedDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(spec, input_tensor.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 ShardedToInterleavedDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,

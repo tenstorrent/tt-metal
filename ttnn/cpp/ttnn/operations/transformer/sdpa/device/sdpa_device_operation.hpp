@@ -26,8 +26,6 @@ struct SDPAOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& attrs, const tensor_args_t&);
-
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);

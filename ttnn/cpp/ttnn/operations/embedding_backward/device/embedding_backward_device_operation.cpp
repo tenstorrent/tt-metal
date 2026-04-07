@@ -79,15 +79,6 @@ EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOpe
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
-EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.grad_tensor.device());
-}
-
 ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,

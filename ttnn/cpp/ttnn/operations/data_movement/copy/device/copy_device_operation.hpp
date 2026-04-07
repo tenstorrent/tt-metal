@@ -38,9 +38,6 @@ struct CopyDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
-
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 Tensor copy(

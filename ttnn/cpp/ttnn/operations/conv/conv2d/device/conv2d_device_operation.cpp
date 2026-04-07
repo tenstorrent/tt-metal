@@ -88,11 +88,6 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
             padded_output_shape));
 }
 
-Tensor Conv2dDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
-}
-
 void Conv2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;

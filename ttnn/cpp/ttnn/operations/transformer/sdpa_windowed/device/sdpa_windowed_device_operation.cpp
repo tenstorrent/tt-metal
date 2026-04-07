@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
@@ -133,11 +132,6 @@ TensorSpec WindowedScaledDotProductAttentionDeviceOperation::compute_output_spec
     const auto& input = tensors.q;
     return TensorSpec(
         input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
-}
-
-Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
 ttsl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(

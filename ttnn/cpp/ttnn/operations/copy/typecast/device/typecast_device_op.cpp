@@ -151,13 +151,6 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
-Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
-    }
-    return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;

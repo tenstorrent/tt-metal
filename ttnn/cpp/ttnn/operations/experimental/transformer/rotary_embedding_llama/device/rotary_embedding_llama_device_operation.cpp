@@ -211,18 +211,12 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return {TensorSpec(
+    return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),
             tt::tt_metal::PageConfig(input_tensor.layout()),
-            operation_attributes.output_mem_config))};
-}
-
-RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args)[0], tensor_args.input_tensor.device());
+            operation_attributes.output_mem_config));
 }
 
 ttsl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(

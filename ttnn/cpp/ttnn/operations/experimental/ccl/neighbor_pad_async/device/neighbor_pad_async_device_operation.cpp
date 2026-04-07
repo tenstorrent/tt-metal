@@ -125,15 +125,6 @@ TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");

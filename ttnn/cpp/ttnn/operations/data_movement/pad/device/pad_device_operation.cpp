@@ -220,15 +220,6 @@ ttnn::TensorSpec PadDeviceOperation::compute_output_specs(
             operation_attributes.output_padded_shape));
 }
 
-Tensor PadDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input.device());
-}
-
 PadDeviceOperation::tensor_return_value_t pad(
     const Tensor& input,
     const ttnn::Shape& output_logical_shape,

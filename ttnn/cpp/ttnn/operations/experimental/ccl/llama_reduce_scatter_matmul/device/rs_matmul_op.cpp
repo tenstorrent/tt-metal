@@ -72,9 +72,9 @@ Matmul_RS::spec_return_value_t Matmul_RS::compute_output_specs(
 
 Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Matmul output tensor
-    Tensor rs_output_tensor =
-        LlamaReduceScatterDeviceOperation::create_output_tensors(operation_attributes.rs_op, tensor_args.rs);
+    Tensor rs_output_tensor = create_device_tensor(
+        LlamaReduceScatterDeviceOperation::compute_output_specs(operation_attributes.rs_op, tensor_args.rs),
+        tensor_args.rs.input_tensor.device());
     if (tensor_args.second_weight_tensor.has_value()) {
         return {tensor_args.matmul_output_tensors.at(0), tensor_args.matmul_output_tensors.at(1), rs_output_tensor};
     }

@@ -219,18 +219,6 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-Tensor SliceDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-
-    const auto& input = tensor_args.input;
-    const auto output_spec = compute_output_specs(args, tensor_args);
-
-    return create_device_tensor(output_spec, input.device());
-}
-
 SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -253,6 +241,14 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     }
     // Layout::TILE
     return SliceTileProgramFactory{};
+}
+
+SliceDeviceOperation::tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
+    }
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

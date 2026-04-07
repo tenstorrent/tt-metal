@@ -37,9 +37,6 @@ struct ConcatDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
     static tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,

@@ -26,8 +26,6 @@ struct HaloDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
 Tensor halo(

@@ -39,11 +39,6 @@ TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
-}
-
 ttsl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");

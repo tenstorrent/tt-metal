@@ -204,12 +204,6 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
 }
 
-TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
-    const TilizeDeviceOperation::operation_attributes_t& args,
-    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
 ttnn::Tensor tilize(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
