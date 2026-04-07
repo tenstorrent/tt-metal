@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/embedding/embedding.hpp"
 
+#include <limits>
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
 #include "device/embedding_device_operation.hpp"
@@ -54,10 +55,13 @@ ttnn::Tensor embedding(
     auto sentence_size = input_shape[-1];
 
     auto embedding_input_tensor = input_tensor;
-    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT &&
-        !(original_input_rank == 4 &&
+    // Reshape ND inputs to [B,1,1,S] for kernel compatibility (all layouts)
+    // Skip only if already in correct shape to avoid unnecessary operation
+    if (!(original_input_rank == 4 &&
+          input_shape[0] == batch_size_u32 &&
           input_shape[1] == 1 &&
-          input_shape[2] == 1)) {
+          input_shape[2] == 1 &&
+          input_shape[3] == sentence_size)) {
         embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size_u32, 1, 1, sentence_size}));
     }
 

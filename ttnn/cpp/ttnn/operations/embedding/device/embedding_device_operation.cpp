@@ -87,9 +87,14 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
                 "Embedding only supports height sharded Row Major outputs");
         }
     }
-    if (a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
-    }
+    // Both ROW_MAJOR and TILE_LAYOUT require [B,1,1,S] shape for embedding kernel
+    TT_FATAL(
+        a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1,
+        "Embedding input must have shape [B,1,1,S], got [{},{},{},{}]",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.padded_shape()[2],
+        a.padded_shape()[3]);
     switch (operation_attributes.embeddings_type) {
         case EmbeddingsType::PADDED:
             TT_FATAL(
