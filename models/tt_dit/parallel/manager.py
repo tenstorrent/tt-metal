@@ -333,13 +333,17 @@ class CCLManager:
         h_halo_total = outer_dim_size * 2 * padding * h_sticks
         w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0
         total_sticks = h_halo_total + w_halo_total
+        # Each "stick" = C channels × 2 bytes (BF16). The compact buffer must have shape
+        # [total_sticks, C] so that each 2D row = C elements = one stick page (= C×2 bytes),
+        # matching the input tensor's aligned_page_size used as stick_size in the NP factory.
+        C = input_shape[-1]  # channel dimension
 
         cache_key = ("np_halo", tuple(input_shape), dim, padding, dim2, padding2, dtype)
         if cache_key not in self._ping_pong_buffer_cache:
             bufs = []
             for _ in range(2):
                 buf = ttnn.from_torch(
-                    torch.zeros([total_sticks], dtype=torch.bfloat16),
+                    torch.zeros([total_sticks, C], dtype=torch.bfloat16),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,

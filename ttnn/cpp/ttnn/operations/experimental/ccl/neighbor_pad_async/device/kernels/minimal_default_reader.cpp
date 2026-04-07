@@ -17,6 +17,15 @@ constexpr uint32_t ct_after_src = src_ct_args.next_compile_time_args_offset();
 // L1 intermediate config
 constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
+// NP_H_LINKS: number of H-fabric links. The H-reader waits for NP_H_LINKS*outer_dim_size
+// total h_nbr_sem increments (all links, all outer_dims) before reading L1 data.
+// Without this, one link's sem_inc can unblock another link's reader before its L1 data arrives.
+// Defaults to 1 (original single-link behavior) for non-NP users of this kernel.
+#if defined(NP_H_LINKS)
+constexpr uint32_t np_h_links = NP_H_LINKS;
+#else
+constexpr uint32_t np_h_links = 1;
+#endif
 
 template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_output_id) {
@@ -135,11 +144,9 @@ void kernel_main() {
 
             for (uint32_t od = 0; od < outer_dim_size; od++) {
                 // Wait for this outer_dim's data using cumulative count.
-                // Using cumulative waits (od+1) instead of resetting to 0 each iteration
-                // avoids a race where the writer sends multiple sem incs before the reader
-                // processes them — resetting to 0 would discard pending incs and cause a hang.
+                // h_neighbor_sem is per-core: each H-reader core's semaphore is only incremented
+                // by its corresponding sender link (1 inc per outer_dim). No cross-link contamination.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
-
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                     // Use num_l1_recv_sticks_per_row (corners-only count) instead of
                     // num_sticks_to_read (full row width) for the L1 recv path.

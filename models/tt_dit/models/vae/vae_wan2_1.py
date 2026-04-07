@@ -441,10 +441,10 @@ class WanCausalConv3d(Module):
                 ttnn.reset_global_semaphore_value(progress_sem, 0)
 
             if self.conv_config.use_h_halo_buffer:
-                # Halo-only path: fabric-only NeighborPad (SD0, CQ1) writes compact
-                # halo buffer. Conv3d (SD1, CQ0) reads interior from original tensor
-                # + halos from buffer. NP and conv3d use non-overlapping sub-devices,
-                # allowing concurrent dispatch via 2 CQs.
+                # Halo-only path: fabric-only NeighborPad writes compact halo buffer.
+                # Conv3d reads interior from original tensor + halos from buffer.
+                # Both dispatched on CQ0 (all_gather_matmul pattern): NP on SD0,
+                # conv3d on SD1. T-slice semaphore coordinates T-batch ordering.
                 halo_tensor = self.ccl_manager.neighbor_pad_halo_only(
                     x_BTHWC,
                     dims=dims,
@@ -457,7 +457,6 @@ class WanCausalConv3d(Module):
                     progress_semaphore=progress_sem,
                     progress_t_batch_size=t_batch_size,
                 )
-                # Update halo buffer runtime info in config (not hashed).
                 H_dev = x_BTHWC.shape[2]
                 W_dev = x_BTHWC.shape[3]
                 T_dev = x_BTHWC.shape[1]
@@ -465,21 +464,13 @@ class WanCausalConv3d(Module):
                 pw = pad_left[1] if w_pad_needed and len(pad_left) > 1 else 0
                 self.conv_config.h_halo_buffer_addr = halo_tensor.buffer_address()
                 self.conv_config.h_halo_outer_dim_size = T_dev
-                self.conv_config.h_halo_H = H_dev + 2 * ph  # Extended: includes H-padded rows for corner fix
+                self.conv_config.h_halo_H = H_dev + 2 * ph
                 self.conv_config.h_halo_W = W_dev
                 self.conv_config.h_halo_padding_h = ph
                 self.conv_config.h_halo_padding_w = pw
-                # x_BTHWC stays as unpadded tensor; conv3d reads interior from it
-
                 used_halo_path = True
-
-                # Bind conv3d to SD1 (compute cores) once the halo manager is active.
                 if self.conv_config.sub_device_id is None:
                     self.conv_config.sub_device_id = self.ccl_manager._conv3d_sd_id
-
-                # No dispatch-level event: in-kernel semaphore handles ordering.
-                # NP (CQ1, SD0, num_links=1) signals each reader core per T-batch.
-                # Conv3d (CQ0, SD1) polls local L1 sem — runs concurrently with NP.
                 self.ccl_manager._pending_np_event = None
             else:
                 x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
@@ -515,8 +506,6 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Restore the default full-grid sub-device manager so that subsequent ops
-        # (RMSNorm, residual add, etc.) can run on all cores without conflict.
         if used_halo_path:
             self.ccl_manager.deactivate_halo_sub_devices()
 
