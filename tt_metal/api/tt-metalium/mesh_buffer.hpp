@@ -197,7 +197,10 @@ private:
     MeshBufferState state_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
-        const MeshBufferConfig&, const DeviceLocalBufferConfig&, MeshDevice*, const MeshCoordinate&);
+        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+        tt::tt_metal::distributed::MeshDevice*,
+        const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
 class AnyBuffer {
