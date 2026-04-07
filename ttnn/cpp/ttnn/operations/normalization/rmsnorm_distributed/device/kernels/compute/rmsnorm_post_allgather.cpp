@@ -36,8 +36,6 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
     constexpr uint32_t do_beta = get_compile_time_arg_val(4);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    // Note: get_compile_time_arg_val(6) is FLOAT32_REDUCTION - unused after library migration
-    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t onetile = 1;
@@ -50,14 +48,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    // Note: cb_stats_reduced (c_6) unused after library migration - reduce outputs directly to cb_var
     constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
     constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
     constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
     constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
     constexpr uint32_t cb_norm_x_input = cb_inp;
-    // Note: stats_tile_stride unused after library migration - library handles contiguous access
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;

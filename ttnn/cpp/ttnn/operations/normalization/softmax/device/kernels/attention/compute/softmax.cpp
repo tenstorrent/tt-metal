@@ -25,7 +25,7 @@ void calc_numeric_stable(
     auto cb_max_obj = experimental::CircularBuffer(cb_max);
     auto cb_out_obj = experimental::CircularBuffer(cb_out);
 
-    // calculate max val per row using PERSISTENT mode
+    // calculate max val per row
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
@@ -274,8 +274,7 @@ void kernel_main() {
         }
 #endif
 
-        // SUM reduce with reciprocal operation using PERSISTENT mode
-        // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
+        // SUM reduce with reciprocal post-processing (1/sum)
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 cb_exps,
