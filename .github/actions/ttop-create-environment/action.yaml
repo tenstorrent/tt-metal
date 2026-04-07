@@ -81,13 +81,13 @@ runs:
       shell: bash
       run: |
         echo "Creating environment..."
-        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n${{ inputs.namespace }} apply -f -
+        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for environment
       shell: bash
       run: |
         echo "Waiting for environment to be ready..."
-        kubectl -n${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
+        kubectl -n ${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
 
     - name: Connect to the environment
       shell: bash
