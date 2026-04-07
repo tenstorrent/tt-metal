@@ -12,8 +12,7 @@
 
 #include <tuple>
 
-#include <tt-metalium/core_coord.hpp>
-
+#include "ttnn/device.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
 #include "groupnorm_grid_utils.hpp"
@@ -217,32 +216,39 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         )doc");
     mod.def(
         "determine_expected_group_norm_sharded_config_and_grid_size",
-        [](int32_t device_grid_x,
-           int32_t device_grid_y,
+        [](ttnn::MeshDevice* device,
            uint32_t num_channels,
            int num_groups,
            uint32_t input_nhw,
            bool is_height_sharded,
            bool is_row_major) {
+            TT_FATAL(
+                device != nullptr,
+                "determine_expected_group_norm_sharded_config_and_grid_size: device must not be null.");
+            const auto grid = device->compute_with_storage_grid_size();
             auto result = ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
-                tt::tt_metal::CoreCoord{device_grid_x, device_grid_y},
-                num_channels,
-                num_groups,
-                input_nhw,
-                is_height_sharded,
-                is_row_major);
+                grid, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major);
             return std::make_tuple(result.memory_config, result.core_grid);
         },
-        nb::arg("device_grid_x"),
-        nb::arg("device_grid_y"),
+        nb::kw_only(),
+        nb::arg("device"),
         nb::arg("num_channels"),
         nb::arg("num_groups"),
         nb::arg("input_nhw"),
         nb::arg("is_height_sharded"),
         nb::arg("is_row_major") = false,
         R"doc(
-            C++ implementation matching Python ``determine_expected_group_norm_sharded_config_and_grid_size``:
-            returns ``(MemoryConfig, CoreGrid)`` for L1 height- or block-sharded group norm, given device grid extents.
+    Derive sharded memory config and grid for group norm.
+
+    - num_channels must be divisible by num_groups and 32 (tile width).
+    - input_nhw is N*H*W in logical units; padded to core multiples.
+    - If is_height_sharded: shard along NHW only; channels per core is all C.
+      Otherwise: shard across channels and NHW (BLOCK_SHARDED).
+    - is_row_major toggles shard shape orientation.
+
+    Keyword-only arguments. Uses ``device.compute_with_storage_grid_size()``.
+
+    Returns: ``(MemoryConfig, CoreGrid)`` for L1 height- or block-sharded group norm.
         )doc");
 }
 }  // namespace
