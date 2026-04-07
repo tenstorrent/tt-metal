@@ -605,7 +605,10 @@ class Generator(WarmupForwardMixin):
                 )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
-            # Check if 'pixel_values' exists and index it safely
+            # Per-user multimodal kwargs (Gemma3 uses vision_embeddings via GemmaMultimodalGenerator;
+            # other models typically omit these keys.)
+            if "vision_embeddings" in local_kwargs and local_kwargs["vision_embeddings"] is not None:
+                local_kwargs["vision_embeddings"] = local_kwargs["vision_embeddings"][idx]
             if local_kwargs.get("pixel_values", None) is not None:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
