@@ -1673,8 +1673,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, head_dim=None):
         """Get the memory config for create_qkv_heads output in attention."""
+        hd = head_dim if head_dim is not None else self.head_dim
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.MemoryConfig(
@@ -1682,7 +1683,7 @@ class ModelArgs:
                     ttnn.BufferType.L1,
                     ttnn.ShardSpec(
                         prefetcher.all_worker_cores_range_set,
-                        [32, self.head_dim],
+                        [32, hd],
                         ttnn.ShardOrientation.ROW_MAJOR,
                     ),
                 )
@@ -1690,7 +1691,7 @@ class ModelArgs:
                 # CREATE_QKV_DECODE_SHARD equivalent
                 if is_blackhole():
                     return ttnn.create_sharded_memory_config(
-                        shape=(ttnn.TILE_SIZE, self.head_dim),
+                        shape=(ttnn.TILE_SIZE, hd),
                         core_grid=ttnn.CoreGrid(y=4, x=8),
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1705,14 +1706,15 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
-        self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None
+        self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None, head_dim=None
     ):
         """Get the memory config for SDPA output in attention."""
+        hd = head_dim if head_dim is not None else self.head_dim
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 start_core = ttnn.CoreCoord(1, 0)
                 return ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
+                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, hd),
                     core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                         start_core,
                         batch_size_per_device_group,
@@ -1725,7 +1727,7 @@ class ModelArgs:
                 )
             else:
                 return ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
+                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, hd),
                     core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1850,15 +1852,16 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_output_program_config(self, mode: Mode):
+    def get_attn_output_program_config(self, mode: Mode, head_dim=None):
         """Get the program config for attention output matmul (replaces ATTN_OUTPUT_PROGCFG)."""
+        hd = head_dim if head_dim is not None else self.head_dim
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return None
             else:
                 return self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
-                    k=(self.n_heads * self.head_dim) // self.num_devices,
+                    k=(self.n_heads * hd) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
                 )
@@ -1868,8 +1871,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, head_dim=None):
         """Get the program config for WO (dense output) matmul in attention."""
+        hd = head_dim if head_dim is not None else self.head_dim
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 k_wo = self.dim
@@ -1885,7 +1889,7 @@ class ModelArgs:
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
             else:
-                return self.get_attn_output_program_config(Mode.DECODE)
+                return self.get_attn_output_program_config(Mode.DECODE, head_dim=hd)
         elif mode == Mode.PREFILL:
             dram_sharded_wo = not (self._use_fused_all_gather_matmul or self.is_galaxy)
             # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used

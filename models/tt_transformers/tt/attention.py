@@ -672,7 +672,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
+            memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher, head_dim=self.head_dim),
         )
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
@@ -748,7 +748,7 @@ class Attention(LightweightModule):
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
             memory_config=self.args.get_attn_sdpa_output_mem_config(
-                Mode.DECODE, self.batch_size_per_device_group, self.prefetcher
+                Mode.DECODE, self.batch_size_per_device_group, self.prefetcher, head_dim=self.head_dim
             ),
         )
 
@@ -849,7 +849,7 @@ class Attention(LightweightModule):
                 attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
+                program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher, head_dim=self.head_dim),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
