@@ -60,10 +60,12 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
-            operation_attributes.output_mem_config));
+            operation_attributes.output_mem_config,
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()));
 }
 
 InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(

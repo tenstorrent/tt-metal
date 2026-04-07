@@ -178,7 +178,7 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input;
-    return tt::tt_metal::TensorSpec(
+    return TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
