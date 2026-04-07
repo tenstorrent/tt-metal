@@ -23,6 +23,8 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <sstream>
+#include <tt-metalium/profiler_chip_filter.hpp>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -812,11 +814,6 @@ bool onlyProfileDispatchCores(const ProfilerReadState state) {
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
-bool ShouldProfileChip(uint32_t device_id) {
-    const auto& filter_chips = MetalContext::instance().rtoptions().get_profiler_filter_chips();
-    return !filter_chips.has_value() || filter_chips->contains(device_id);
-}
-
 #if defined(TRACY_ENABLE)
 // Shared implementation for reading device profiler results
 static void ReadDeviceProfilerResultsImpl(
@@ -831,7 +828,7 @@ static void ReadDeviceProfilerResultsImpl(
         return;
     }
 
-    if (!ShouldProfileChip(device->id())) {
+    if (!tt::tt_metal::should_profile_chip(device->id())) {
         return;
     }
 
@@ -976,7 +973,7 @@ void ProcessDeviceProfilerResults(
         return;
     }
 
-    if (!ShouldProfileChip(device->id())) {
+    if (!tt::tt_metal::should_profile_chip(device->id())) {
         return;
     }
 
