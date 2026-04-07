@@ -134,6 +134,10 @@ def standardize_hf_keys_multimodal(state_dict):
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
+        elif "model.vision_tower." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
+        elif "model.multi_modal_projector." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
         elif "model.vision_model." in k:
             new_state_dict[k.replace("model.vision_model.", "vision_model.")] = state_dict[k]
         elif "model.language_model." in k:
@@ -225,12 +229,16 @@ def map_hf_to_meta_keys_vision_only(state_dict):
         ("k_norm", "k_norm"),
         ("fc1", "c_fc"),
         ("fc2", "c_proj"),
+        ("gate_proj", "w1"),
+        ("down_proj", "w2"),
+        ("up_proj", "w3"),
         ("layer_norm1", "ln_1"),
         ("layer_norm2", "ln_2"),
         ("post_layernorm", "ln_post"),
         ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
         ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
         ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+        ("patch_conv", "patch_conv._linear"),
     ]
 
     return replace_keys(state_dict, replacements)
@@ -242,7 +250,7 @@ def map_vision_hf_to_meta_keys_split_to_submodels(state_dict):
     other_state_dict = dict()
 
     for k, v in state_dict.items():
-        if k.startswith("visual") or k.startswith("vision_model"):
+        if k.startswith("visual") or k.startswith("vision_model") or k.startswith("vision_tower"):
             selected_dict = vision_state_dict
         elif k.startswith("model") or k.startswith("lm_head") or k.startswith("language_model"):
             selected_dict = text_state_dict

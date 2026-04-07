@@ -11,7 +11,6 @@ from PIL import Image as PIL_Image
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
-from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
@@ -25,7 +24,11 @@ import torch
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.common import get_base_model_name
+from models.tt_transformers.tt.generator import Generator, create_submeshes
+
+_MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
+_MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -143,12 +146,14 @@ def create_multimodal_model(
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
+    from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_llama_vision(), "This model is multimodal"
+    hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
+    if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
+        max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
-    # limit length or we'll run out of space
-    tt_model_args.max_seq_len = max_seq_len
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    assert tt_model_args.is_multimodal, "This model is multimodal"
     if tt_model_args.is_90b:
         assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
         # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
@@ -157,14 +162,25 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    model = CrossAttentionTransformer(
-        mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        dtype=dtype,
-        configuration=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-    )
+
+    if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
+        model = MistralTransformer(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            dtype=ttnn.bfloat8_b,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
+    else:
+        model = CrossAttentionTransformer(
+            mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            dtype=dtype,
+            configuration=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
     return tt_model_args, model, checkpoint
 
 
@@ -326,11 +342,19 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
     )
 
-    processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
-    tokenizer = processor.tokenizer
+    is_mistral = model_args[0].base_model_name == _MISTRAL_SMALL_31_24B_BASE
+
+    processor = AutoProcessor.from_pretrained(
+        model_args[0].CKPT_DIR if is_mistral else ckpt_dir,
+        local_files_only=not is_mistral and is_ci_env,
+    )
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else model_args[0].tokenizer
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
-    xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
+    xattn_caches = [
+        model.setup_cache(model_args[i].max_batch_size) if not is_mistral else None
+        for i, model in enumerate(generator.model)
+    ]
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -357,14 +381,25 @@ def test_multimodal_demo_text(
                         str(value) for content in msg["content"] for key, value in content.items() if key != "type"
                     )
                     logger.info(f"{msg['role'].capitalize()}: {content}\n")
-            batch_inputs = [
-                processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
-                for messages in batch_dialogs
-            ]
-
-            # Do initial prefill
-            # TBD: rewrite generator since images are processed twice (in processor and generator)
-            vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
+            if is_mistral:
+                batch_inputs = [
+                    processor.apply_chat_template(
+                        messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+                    )
+                    for messages in batch_dialogs
+                ]
+                image_sizes = [
+                    model_input.image_sizes.squeeze().tolist() if model_input.image_sizes is not None else None
+                    for model_input in batch_inputs
+                ]
+                vision_images = [model_input.get("pixel_values", None) for model_input in batch_inputs]
+            else:
+                batch_inputs = [
+                    processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+                    for messages in batch_dialogs
+                ]
+                image_sizes = None
+                vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
             vision_mask = [
                 create_vision_mask(model_input["input_ids"][0], processor.image_token_id) or None
                 for model_input in batch_inputs
@@ -376,7 +411,7 @@ def test_multimodal_demo_text(
             total_lens = prefill_lens + max_gen_len
 
             # Create padded tokens tensor for batch
-            pad_id = tokenizer.pad_token_id
+            pad_id = tokenizer.pad_token_id if is_mistral else (tokenizer.pad_token_id or 0)
             bsz = len(prompt_tokens)
             tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
 
@@ -400,6 +435,7 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         total_lens,
                         prefill_lens,
+                        image_sizes=image_sizes,
                     )
 
             # Get cached prefill time
@@ -417,6 +453,7 @@ def test_multimodal_demo_text(
                     xattn_caches,
                     total_lens,
                     prefill_lens,
+                    image_sizes=image_sizes,
                 )
 
             prefill_end = time.perf_counter()
@@ -436,16 +473,25 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward_llama_vision(
-                        position_id,
-                        next_token_tensor,
-                        prefill_batch_xattn_masks,
-                        prefill_batch_text_masks,
-                        decode_batch_xattn_masks,
-                        decode_batch_text_masks,
-                        xattn_caches,
-                        enable_trace=enable_trace,
-                    )
+                    if is_mistral:
+                        logits = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            page_table=None,
+                            kv_cache=None,
+                            enable_trace=enable_trace,
+                        )
+                    else:
+                        logits = generator.decode_forward_llama_vision(
+                            position_id,
+                            next_token_tensor,
+                            prefill_batch_xattn_masks,
+                            prefill_batch_text_masks,
+                            decode_batch_xattn_masks,
+                            decode_batch_text_masks,
+                            xattn_caches,
+                            enable_trace=enable_trace,
+                        )
 
                     if isinstance(logits, tuple):
                         logits = logits[0]

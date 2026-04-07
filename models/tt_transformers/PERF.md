@@ -52,6 +52,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Mistral-7B        | N150        | 95        | 99        | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 95        | 100       | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Mistral-Small-3.1-24B | T3K      | 95        | 99        |               |           |
 | Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 | Phi-4 | N300 | 97 | 100 | 37.34 | 123.33 |
@@ -96,6 +97,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Mistral-7B        | N150        | 96        | 100       | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 97        | 100       | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 98        | 100       | 67.82         | 53.93     |
+| Mistral-Small-3.1-24B | T3K      | 95        | 99        |               |           |
 | Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 | Phi-4 | N300 | 99 | 100 | 20.48 | 146.32 |
