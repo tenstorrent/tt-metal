@@ -246,3 +246,44 @@ meaningful.
    Remove the sub-device setup / activate/deactivate calls that were needed for concurrent dispatch.
 
 7. **Validate**: run `test_conv3d_fused.py` (or equivalent) to confirm PCC + perf improvement.
+
+---
+
+## 11. Root Cause of Deadlock (SOLVED 2026-04-05)
+
+### Bug
+`neighbor_pad_conv3d_program_factory.cpp` hardcoded `np_dim = 1` with wrong comment
+"H-dim is index 1 in BTHWC layout". H is actually at index **2** in BTHWC [B, T, H, W, C].
+
+### Impact
+With `np_dim=1`:
+- `outer_dim_size = B = 1` (only batch dimension counted, not T)
+- NP writer processed 1 outer_dim item and signaled progress semaphore ONCE
+- Conv3d reader waited for signal #2 for the second T-block → DEADLOCK
+
+With `np_dim=2` (correct):
+- `outer_dim_size = B * T = N * T_latent` (e.g., 21 for 81 video frames)
+- NP writer processes all T-slices, signaling after each `T_out_block` group
+- Conv3d reader proceeds block by block as NP completes each T-batch → no deadlock
+
+### Fix
+`neighbor_pad_conv3d_program_factory.cpp` line 98: `constexpr uint32_t np_dim = 2;`
+
+### Verification
+- `run_vae_decoder_ablation.py` (2x4 BH LoudBox, 480p, 81 video frames):
+  - Timed run: **1.358s** total VAE (upload 28ms + decode 1018ms + readback 312ms)
+  - No deadlock
+- `test_wan_decoder[2x4_h0_w1-bf16-no_cache_full_T-check_output-fake_weights-10f-480p]`:
+  - **PASSED**: PCC = 99.9763% (threshold: 99.9%)
+
+---
+
+## 12. Debugging Lessons
+
+1. **DEVICE_PRINT needs `TT_METAL_DEVICE_PRINT=1`** (not just `TT_METAL_DPRINT_CORES`). Without it, DEVICE_PRINT is a no-op and "no output" doesn't mean the kernel didn't run.
+
+2. **DPRINT on unmonitored cores is safe**: the DPRINT server initializes ALL cores with DISABLED_MAGIC, so unmonitored cores skip DPRINT silently (no buffer overflow deadlock).
+
+3. **Device reset before debugging**: hung processes can leave Metal state in a bad state. Always `tt-smi -r 0,1,2,3,4,5,6,7` before a fresh debugging session if previous runs crashed.
+
+4. **Progress semaphore semantics**: the `t_batches_needed = (t_block - t_out_start) / T_out_block + 1` formula gives t_batches_needed=1 for each core's first T iteration. This works in practice (NP stays ahead of conv3d) but is technically racy for T-parallel cores at non-zero t_out_start. The same behavior exists in the original non-fused path.
