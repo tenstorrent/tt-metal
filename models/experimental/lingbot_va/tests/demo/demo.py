@@ -1776,7 +1776,7 @@ def main() -> None:
         prompt=args.prompt,
     )
 
-    out = run_inference(message, str(checkpoint_path), save_dir=save_dir, log_time=args.log_time)
+    run_inference(message, str(checkpoint_path), save_dir=save_dir, log_time=args.log_time)
 
 
 if __name__ == "__main__":
