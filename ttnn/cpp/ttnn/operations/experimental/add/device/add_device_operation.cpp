@@ -98,13 +98,13 @@ AddDeviceOperation::tensor_return_value_t AddDeviceOperation::create_output_tens
 tt::stl::hash::hash_t AddDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     TT_FATAL(
-        std::holds_alternative<DeviceStorage>(args.a_tensor.storage()),
+        args.a_tensor.storage_type() == StorageType::DEVICE,
         "Unexpected type {} for a_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.a_tensor.storage()));
+        enchantum::to_string(args.a_tensor.storage_type()));
     TT_FATAL(
-        std::holds_alternative<DeviceStorage>(args.b_tensor.storage()),
+        args.b_tensor.storage_type() == StorageType::DEVICE,
         "Unexpected type {} for b_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.b_tensor.storage()));
+        enchantum::to_string(args.b_tensor.storage_type()));
 
     auto program_factory = select_program_factory(attributes, args);
     return operation::hash_operation<AddDeviceOperation>(
