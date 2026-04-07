@@ -136,25 +136,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces, false, false, num_tiles_in_block);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
+    reconfigure_packer_l1_acc(params.L1_ACC);
 #endif
 
     for (int block = 0; block < num_blocks; block++)
     {
         _llk_packer_wait_for_math_done_();
-
-#ifdef ARCH_BLACKHOLE
-        // Pack all tiles at once - MOP handles everything
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]));
-#else
-        // Fallback to traditional packing for non-Blackhole architectures
-        for (int tile = 0; tile < num_tiles_in_block; ++tile)
-        {
-            int res_tile_idx = (block * num_tiles_in_block) + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
-        }
-#endif
 
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

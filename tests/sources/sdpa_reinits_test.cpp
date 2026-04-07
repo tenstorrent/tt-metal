@@ -146,7 +146,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync1, false>();
 
     // Custom addr_mod reinit for reduce_block_max_row (full init done in Operation 0)
+#ifdef ARCH_BLACKHOLE
     reduce_max_row_configure_addrmod_reinit_minimal();
+#else
+    _llk_math_reduce_block_max_row_init_<1, false>();
+#endif
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -184,8 +188,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Operation 3: Matmul FPU - Using experimental custom no-mop API
     // _llk_math_matmul_init_<0, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
 
-    // TEST MATMUL REINIT FOR JUST 2 ADDR_MODS AFTER ELTWISE BINARY
-    // SO THIS ELWSUB BINARY -> MATMUL REINIT STEP§
     matmul_configure_addrmod_reinit();
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
@@ -214,9 +216,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand buffer_Res0(0x1b000, 2048);
     const std::uint32_t pack_src_format0 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
+#ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, false, false>(pack_src_format0, pack_dst_format0, 128);
     _llk_pack_init_<false, false, false>(pack_dst_format0, pack_dst_format0, 16, TILE_C_DIM, 4, false, false);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
+#else
+    _llk_pack_hw_configure_<false, false>(pack_src_format0, pack_dst_format0, 128);
+    _llk_pack_init_<false, false>(pack_dst_format0);
+    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
+#endif
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();
@@ -234,8 +242,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format1, pack_dst_format1, 128);
+#ifdef ARCH_BLACKHOLE
     _llk_pack_init_<false, false, false>(pack_dst_format1, pack_dst_format1, 16, TILE_C_DIM, 4, false, false);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
+#else
+    _llk_pack_init_<false, false>(pack_dst_format1);
+    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
+#endif
     _llk_pack_reduce_mask_config_<false, ckernel::ReduceDim::REDUCE_ROW>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -255,8 +268,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format2, pack_dst_format2, 128);
+#ifdef ARCH_BLACKHOLE
     _llk_pack_init_<false, false, false>(pack_dst_format2, pack_dst_format2, 16, TILE_C_DIM, 4, false, false);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
+#else
+    _llk_pack_init_<false, false>(pack_dst_format2);
+    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
+#endif
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();
@@ -274,8 +292,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format3, pack_dst_format3, 128);
+#ifdef ARCH_BLACKHOLE
     _llk_pack_init_<false, false, false>(pack_dst_format3, pack_dst_format3, 16, TILE_C_DIM, 4, false, false);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
+#else
+    _llk_pack_init_<false, false>(pack_dst_format3);
+    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
+#endif
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();

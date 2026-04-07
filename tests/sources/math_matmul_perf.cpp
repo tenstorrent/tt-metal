@@ -148,7 +148,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        // Use tile dimensions from runtime params for tiny tiles support
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
 

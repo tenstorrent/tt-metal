@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
     // call custom LLK
-    _llk_math_eltwise_binary_bcast_reuse_custom_(CT_DIM);
+    _llk_math_sub_bcast_cols_reuse_custom_(CT_DIM);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

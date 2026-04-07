@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, Tilize
@@ -17,7 +16,9 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     L1_ACC,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TILIZE,
 )
@@ -60,7 +61,6 @@ def get_valid_num_faces_datacopy(tilize):
     return [1, 2, 4]
 
 
-@skip_for_wormhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -76,6 +76,8 @@ def get_valid_num_faces_datacopy(tilize):
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
+    num_blocks=[1, 2],
+    num_tiles_in_block=[4, 8],
     loop_factor=[1, 16, 64],
 )
 def test_perf_pack_dest_bank(
@@ -86,11 +88,17 @@ def test_perf_pack_dest_bank(
     num_faces,
     tilize,
     dest_index,
+    num_blocks,
+    num_tiles_in_block,
     loop_factor,
     workers_tensix_coordinates,
 ):
-    # Test packing 8 tiles
-    tile_cnt = 8
+    if (num_blocks, num_tiles_in_block) not in {(1, 4), (2, 4), (1, 8)}:
+        pytest.skip(
+            "Local perf sweep only uses 1x4, 2x4, and 1x8 blocked-pack patterns"
+        )
+
+    tile_cnt = num_blocks * num_tiles_in_block
 
     src_A = torch.ones(tile_cnt * 1024, dtype=torch.bfloat16)
 
@@ -117,6 +125,8 @@ def test_perf_pack_dest_bank(
         runtimes=[
             DEST_INDEX(dest_index),
             TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_FACES(num_faces),
             L1_ACC(l1_acc),
         ],
