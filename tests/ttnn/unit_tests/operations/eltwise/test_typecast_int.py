@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
 import ttnn
 import pytest
@@ -134,6 +136,137 @@ def test_typecast_subcore_grid(device, shape, sub_core_grid):
     golden_tensor = golden_function(in_data1, in_data2)
 
     assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        # Large tensors: many tiles per core stresses the CB allocation.
+        # Before the fix, TypecastSubgridProgramFactory allocated all per-core tiles
+        # into CBs at once (ntiles_per_block * 2), overflowing L1 for large tensors.
+        (
+            torch.Size([1, 1, 1024, 2048]),  # 2048 tiles, ~1024 tiles/core with 2 cores
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))]),
+        ),
+        (
+            torch.Size([1, 2, 2048, 2048]),  # 8192 tiles across 7 cores
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))]),
+        ),
+        (
+            torch.Size([1, 4, 1024, 2048]),  # 8192 tiles across a multi-range sub_core_grid
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_typecast_subcore_grid_large_tensor(device, shape, sub_core_grid):
+    """Regression test: large tensors with sub_core_grids must not overflow L1."""
+    torch.manual_seed(0)
+
+    in_data = torch.randint(0, 65500, shape, dtype=torch.int32)
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    input_tensor = ttnn.from_torch(
+        in_data,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.typecast(
+        input_tensor,
+        ttnn.uint32,
+        memory_config=input_mem_config,
+        sub_core_grids=sub_core_grid,
+    )
+
+    output_tensor = ttnn.typecast(
+        output_tensor,
+        ttnn.int32,
+        memory_config=input_mem_config,
+        sub_core_grids=sub_core_grid,
+    )
+
+    result = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    assert torch.equal(in_data, result)
+
+
+@pytest.mark.parametrize(
+    "shape, output_dtype, sub_core_grid",
+    [
+        (
+            torch.Size([1, 1, 1024, 2048]),
+            ttnn.bfloat8_b,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))]),
+        ),
+        (
+            torch.Size([1, 1, 1024, 2048]),
+            ttnn.bfloat4_b,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))]),
+        ),
+        (
+            torch.Size([1, 4, 2048, 2048]),
+            ttnn.bfloat8_b,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 4, 2048, 2048]),
+            ttnn.bfloat4_b,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_typecast_bfloat_subcore_grid_large_tensor(device, shape, output_dtype, sub_core_grid):
+    """Regression test: bfloat16 -> bfloat8_b/bfloat4_b typecast with sub_core_grids on large tensors."""
+    torch.manual_seed(0)
+
+    in_data = torch.randn(shape, dtype=torch.bfloat16)
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    input_tensor = ttnn.from_torch(
+        in_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.typecast(
+        input_tensor,
+        output_dtype,
+        memory_config=input_mem_config,
+        sub_core_grids=sub_core_grid,
+    )
+    assert output_tensor.dtype == output_dtype
+    assert list(output_tensor.shape) == list(shape)
+
+    roundtrip = ttnn.typecast(
+        output_tensor,
+        ttnn.bfloat16,
+        memory_config=input_mem_config,
+        sub_core_grids=sub_core_grid,
+    )
+    result = ttnn.to_torch(roundtrip).to(torch.float32)
+    reference = in_data.to(torch.float32)
+
+    pcc = torch.corrcoef(torch.stack([reference.flatten(), result.flatten()]))[0, 1].item()
+    min_pcc = 0.95 if output_dtype == ttnn.bfloat4_b else 0.99
+    assert pcc >= min_pcc, f"PCC {pcc:.4f} below threshold {min_pcc} for {output_dtype}"
 
 
 # for range verification in conversions
