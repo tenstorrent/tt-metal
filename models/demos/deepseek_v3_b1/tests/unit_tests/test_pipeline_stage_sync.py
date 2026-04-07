@@ -168,11 +168,18 @@ def test_pipeline_stage_sync_2d(
         ),
     )
 
+    compute_grid_size = submesh_device.compute_with_storage_grid_size()
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    semaphore = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
+
     # Run pipeline_stage_sync with looping inside the kernel
+    ttnn.synchronize_device(submesh_device)
     PipelineStageSync.op(
         pseudo_input_tensor=pseudo_input_tensor,
         pseudo_output_tensor=pseudo_output_tensor,
         mesh_device=submesh_device,
+        semaphore=semaphore,
         src_device_mesh_coord=src_device_mesh_coord,
         signalling_core=signalling_core,
         run_signalling_kernel_on_ncrisc=run_signalling_kernel_on_ncrisc,

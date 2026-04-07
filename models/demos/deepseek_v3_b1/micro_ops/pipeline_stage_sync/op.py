@@ -68,6 +68,7 @@ class PipelineStageSync:
         pseudo_input_tensor: ttnn.Tensor,
         pseudo_output_tensor: ttnn.Tensor,
         mesh_device: ttnn.MeshDevice,
+        semaphore,
         src_device_mesh_coord: ttnn.MeshCoordinate,
         signalling_core: ttnn.CoreCoord,
         run_signalling_kernel_on_ncrisc: bool,
@@ -126,8 +127,7 @@ class PipelineStageSync:
         stalling_core_noc_y_addr = stalling_core_phys.y
 
         # semaphores
-        global_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores_core_range_set, 0)
-        semaphore_l1_addr = ttnn.get_global_semaphore_address(global_semaphore)
+        semaphore_l1_addr = ttnn.get_global_semaphore_address(semaphore)
 
         # construct path
         signalling_devices, intermediate_signalling_devices, signaller_device_mapping = build_signalling_path(
