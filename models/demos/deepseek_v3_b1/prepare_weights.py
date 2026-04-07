@@ -26,16 +26,17 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
-    GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     GATE_UP_SPEC,
     KV_B12_SPEC,
-    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_NORMS_SPEC,
     Q_AB_KV_A_SPEC,
-    QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     OverlappedTensor,
+    _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
     moe_routed_expert_torch_for_cache,
+    preprocess_gate_up,
+    preprocess_kv_b12,
+    preprocess_q_ab_kv_a,
     shared_down_torch_for_cache,
     shuffle_dram_tiles,
 )
@@ -55,13 +56,6 @@ CURRENT_TRANSFORM_VERSION = 1
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
 MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
-
-
-def _tp_factors(device) -> tuple[int, int]:
-    """Returns (mla_tp, moe_tp) derived from device topology."""
-    if device.get_num_devices() == 1:
-        return 1, 1
-    return 2, 8
 
 
 @dataclass
@@ -654,19 +648,12 @@ def prepare_attention_weights(
     ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
     def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
         q_a = t[q_a_key].T.contiguous()
         q_b = deinterleave_q_b_proj(t[q_b_key])
         kv_a = t[kv_a_key].T.contiguous()
         if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
             q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-
-        q_a_packed = cfg.shuffle_q_a(q_a)
-        q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
-        q_b_shuffled_slices = [cfg.shuffle_q_b(cfg.get_q_b_slice(q_b, tp_idx, mesh_shape)) for tp_idx in range(q_b_tp)]
-        q_b_pre = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
-        kv_reordered = cfg.shuffle_kv_a(kv_a)
-        return {"q_a_proj": q_a_packed, "q_b_proj": q_b_pre, "kv_a_proj": kv_reordered}
+        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
 
     q_ab_fp = cache_config.context.fingerprint(
         source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
@@ -685,21 +672,13 @@ def prepare_attention_weights(
     kv_a_proj = q_ab_views["kv_a_proj"]
 
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
         if mla_tp == 1:
             if kv_b1.shape[0] == _MLA_TP1_KV_B1_HEIGHT * 2:
                 kv_b1 = kv_b1[:_MLA_TP1_KV_B1_HEIGHT, :].contiguous()
             if kv_b2.shape[1] == _MLA_TP1_KV_B2_WIDTH * 2:
                 kv_b2 = kv_b2[:, :_MLA_TP1_KV_B2_WIDTH].contiguous()
-
-        per_device_b2_w = cfg.kv_b2_proj_shape[1]
-        b2_shuffled = []
-        for tp_idx in range(mla_tp):
-            b2_slice = kv_b2[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
-            b2_shuffled.append(cfg.shuffle_kv_b2(b2_slice))
-        kv_b2_pre = torch.cat(b2_shuffled, dim=0) if mla_tp > 1 else b2_shuffled[0]
-        return {"kv_b1_proj": kv_b1, "kv_b2_proj": kv_b2_pre}
+        return preprocess_kv_b12(kv_b1, kv_b2, mla_tp)
 
     kv_fp = cache_config.context.fingerprint(
         source=SourceTensorSelection(names=(kv_b_key,)),
@@ -875,7 +854,6 @@ def prepare_shared_expert_weights(
         down_k = _key(layer_idx, "mlp.shared_experts.down_proj.weight")
 
         def _preprocess_gate_up_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
             sg = t[gate_k].T.contiguous()
             su = t[up_k].T.contiguous()
             if moe_tp == 1:
@@ -884,36 +862,7 @@ def prepare_shared_expert_weights(
                     sg = sg[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
                 if su.shape[1] == full_n:
                     su = su[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
-
-            per_device_n = cfg.gate_proj_shape[1]
-            stacked_h, stacked_w = cfg.stacked_shape
-            gate_stacked_list = []
-            up_stacked_list = []
-            for tp_idx in range(moe_tp):
-                gate_slice = sg[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-                up_slice = su[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-                gate_stacked_list.append(cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set))
-                up_stacked_list.append(cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set))
-
-            if moe_tp == 1:
-                gate_pre = gate_stacked_list[0]
-                up_pre = up_stacked_list[0]
-            else:
-                gate_pre = (
-                    torch.stack(gate_stacked_list)
-                    .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-                    .permute(0, 2, 1, 3)
-                    .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-                    .contiguous()
-                )
-                up_pre = (
-                    torch.stack(up_stacked_list)
-                    .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-                    .permute(0, 2, 1, 3)
-                    .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-                    .contiguous()
-                )
-            return {"shared_gate_proj": gate_pre, "shared_up_proj": up_pre}
+            return preprocess_gate_up(sg, su, moe_tp, mesh_rows, mesh_cols)
 
         gu_fp = cache_config.context.fingerprint(
             source=SourceTensorSelection(names=(gate_k, up_k)),
@@ -956,41 +905,11 @@ def prepare_shared_expert_weights(
         shared_n = D.MOE_INTERMEDIATE_SIZE
 
         def _preprocess_gate_up_dense(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
             gate = t[gate_k].T.contiguous()
             up = t[up_k].T.contiguous()
             gate = gate[:, :shared_n]
             up = up[:, :shared_n]
-
-            per_device_n = cfg.gate_proj_shape[1]
-            stacked_h, stacked_w = cfg.stacked_shape
-            gate_stacked_list = []
-            up_stacked_list = []
-            for tp_idx in range(moe_tp):
-                gate_slice = gate[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-                up_slice = up[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-                gate_stacked_list.append(cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set))
-                up_stacked_list.append(cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set))
-
-            if moe_tp == 1:
-                gate_pre = gate_stacked_list[0]
-                up_pre = up_stacked_list[0]
-            else:
-                gate_pre = (
-                    torch.stack(gate_stacked_list)
-                    .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-                    .permute(0, 2, 1, 3)
-                    .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-                    .contiguous()
-                )
-                up_pre = (
-                    torch.stack(up_stacked_list)
-                    .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
-                    .permute(0, 2, 1, 3)
-                    .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
-                    .contiguous()
-                )
-            return {"shared_gate_proj": gate_pre, "shared_up_proj": up_pre}
+            return preprocess_gate_up(gate, up, moe_tp, mesh_rows, mesh_cols)
 
         gu_fp = cache_config.context.fingerprint(
             source=SourceTensorSelection(names=(gate_k, up_k)),
