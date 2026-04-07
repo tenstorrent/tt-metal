@@ -52,8 +52,8 @@ void kernel_main() {
     ////////// PRINT TILE (FULL TILE) //////////
     // for (uint8_t r = 0; r < 32; ++r) {
     //     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0,
-    //     .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR,
-    //     true, false); });
+    //     .w1 = 32, .ws = 1};
+    //     DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false); });
     // }
 
     cb_push_back(cb_id_in0, 1);
