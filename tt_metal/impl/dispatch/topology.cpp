@@ -31,6 +31,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
+#include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"
 
@@ -418,32 +419,6 @@ DispatchTopology::DispatchTopology(
     get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
-    bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    bool are_fd_kernels_on_same_core = descriptor_.cluster().arch() == tt::ARCH::QUASAR && descriptor_.num_cqs() == 1;
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        are_fd_kernels_on_same_core,
-        descriptor_.rtoptions());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        /*are_fd_kernels_on_same_core=*/false,
-        descriptor_.rtoptions());
-    if (descriptor_.cluster().arch() == tt::ARCH::QUASAR &&
-        descriptor_.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
-            CoreType::DISPATCH,
-            descriptor_.num_cqs(),
-            descriptor_.hal(),
-            is_galaxy_cluster,
-            are_fd_kernels_on_same_core,
-            descriptor_.rtoptions());
-    }
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -795,7 +770,7 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = this->dispatch_core_manager_.get_dispatch_core_type();
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
+    const auto& my_dispatch_constants = descriptor_.metal_context().dispatch_mem_map();
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};

@@ -595,7 +595,7 @@ std::array<tt_metal::Program, 2> create_standard_programs(
 std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
     const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
     uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
-                                         .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
+                                         .dispatch_mem_map()
                                          .ringbuffer_size();
     uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
     uint32_t num_kernels = get_num_kernels(info);
