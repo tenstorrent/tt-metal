@@ -775,9 +775,6 @@ def _enrich_ops_from_device_logs(
                 for t in range(3):
                     assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
 
-                # Thread IPC (not percentage)
-                for t in range(3):
-                    assign_metric(f"Thread {t} IPC", per_op_stats.get(f"Thread {t} IPC", {}), suffix="")
 
                 # Pipeline wait metrics
                 pipeline_wait_names = [
