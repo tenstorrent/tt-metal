@@ -145,7 +145,13 @@ class UnsafeAllocationTracker:
                 for idx, item in enumerate(val):
                     _scan_value(item, loc, f"{path}[{idx}]", depth - 1)
             elif isinstance(val, dict):
-                for k, v in val.items():
+                # Snapshot to avoid RuntimeError if dict mutates concurrently.
+                # Some custom mapping types may still fail during snapshot; skip those.
+                try:
+                    items = list(val.items())
+                except Exception:
+                    return
+                for k, v in items:
                     _scan_value(v, loc, f"{path}[{k!r}]", depth - 1)
             elif hasattr(val, "__dict__") and not isinstance(val, type):
                 stats["objects_traversed"] += 1
@@ -153,12 +159,18 @@ class UnsafeAllocationTracker:
                     obj_dict = val.__dict__
                 except Exception:
                     return
-                for attr_name, attr_val in obj_dict.items():
+                # Snapshot to avoid RuntimeError if object attrs change during scan.
+                try:
+                    attr_items = list(obj_dict.items())
+                except Exception:
+                    return
+                for attr_name, attr_val in attr_items:
                     if attr_name.startswith("__"):
                         continue
                     _scan_value(attr_val, loc, f"{path}.{attr_name}", depth - 1)
 
-        for thread_id, frame in sys._current_frames().items():
+        # Snapshot frame map to avoid surprises while iterating in highly concurrent runtimes.
+        for thread_id, frame in list(sys._current_frames().items()):
             stats["threads"] += 1
             while frame is not None:
                 stats["frames"] += 1
