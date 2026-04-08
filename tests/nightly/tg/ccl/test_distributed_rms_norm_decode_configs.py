@@ -68,7 +68,7 @@ def run_distributed_rms_norm_decode_impl(
 
     # Shard width per core (each core gets a slice of hidden_size dimension)
     shard_width_per_core = ttnn.core.roundup(
-        hidden_size // (num_cores * num_devices),
+        hidden_size // total_cores,
         ttnn.TILE_SIZE,
     )
 
