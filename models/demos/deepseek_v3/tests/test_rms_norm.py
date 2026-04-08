@@ -77,7 +77,6 @@ def run_test_forward_pass_rms_norm(
         real_weights=reference_layernorm_path is not None,
         layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
-<<<<<<< jvega/new_rms
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     if RMSNormClass is DistributedRMSNorm:
         # Create both shared state (semaphore, persistent_tensor) and regular state (mesh_device, ccl)
@@ -87,19 +86,6 @@ def run_test_forward_pass_rms_norm(
     else:
         model_state = RMSNormClass.create_state(hf_config, mesh_device)
         run_config = create_run_config(model_config, weight_config, model_state)
-=======
-    model_config = get_model_config(
-        RMSNormClass,
-        mode,
-        hf_config,
-        mesh_device,
-        batch_size_per_row=batch_size_per_row,
-    )
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
-    )
-    run_config = create_run_config(model_config, weight_config, model_state)
->>>>>>> main
 
     # Convert the input to TTNN tensor
     if RMSNormClass is DistributedRMSNorm:
