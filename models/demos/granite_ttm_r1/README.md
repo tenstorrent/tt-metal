@@ -31,10 +31,11 @@ d_model=192, decoder_d_model=128, forecast_length=96.
 | Mode | Latency | Throughput |
 |------|---------|------------|
 | Eager (batch=1) | ~8.5 ms | ~117 seq/s |
-| Traced (batch=1) | **~1.85 ms** | **~540 seq/s** |
+| Traced (batch=1) | **~1.82 ms** | **~550 seq/s** |
 | Traced (batch=8) | ~2.4 ms | **~3290 seq/s** |
 | Traced (batch=32) | ~3.7 ms | ~8760 seq/s |
-| Traced (batch=64) | ~6.1 ms | **~10500 seq/s** (peak) |
+| Traced (batch=64) | ~6.1 ms | **~10500 seq/s** |
+| Traced (batch=64, bf8 weights) | ~5.7 ms | **~11260 seq/s** (peak) |
 
 See [PERF.md](PERF.md) for the full throughput-vs-batch table and methodology.
 
@@ -184,6 +185,18 @@ Six optimisation experiments were run after Stage 3:
 | E4: 2-CQ double-buffering | ~433 seq/s (xfail) — `synchronize_device` overhead exceeds H2D saving |
 | E5: batch=64 sweep | **~5723 seq/s peak** — saturation at batch=64; batch=128 drops |
 | E6: Streaming circular buffer | Eliminated `torch.roll` allocation; in-place indexed writes |
+
+## Stage 5 Optimisations
+
+Applied after reviewing TTNN model bringup guide and YOLOv4 tech report:
+
+| Optimisation | Result |
+|---|---|
+| Double warmup + D2D input copy | ~1.82 ms / ~550 seq/s at batch=1 (was ~2.3 ms / ~440 seq/s) |
+| Explicit `ttnn.deallocate()` for intermediates | Frees L1 earlier in scaler, time/channel mixers, de-normalisation |
+| `TTNN_WEIGHT_BF8=1` (bfloat8_b weights) | **~11260 seq/s at batch=64** — 7% gain; PCC >= 0.99 holds |
+| LoFi math fidelity | No gain — model dispatch-bound; available via `TTNN_LOFI=1` |
+| Sharding | Not applicable — tensors ~3 KB, too small for multi-core benefit |
 
 ## Architecture Inspection
 

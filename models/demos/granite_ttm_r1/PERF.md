@@ -5,8 +5,8 @@
 | Metric | Target | Achieved | Notes |
 |--------|--------|----------|-------|
 | Latency (batch=1, eager) | < 10 ms | ~8.5 ms ✅ | Stage 2: full TTNN pipeline, no TorchModuleFallback |
-| Latency (batch=1, traced) | < 5 ms | **~1.85 ms ✅** | Stage 5: double warmup + D2D input copy; was ~2.3 ms in Stage 3 |
-| Throughput (batch=1, traced) | ≥ 500 seq/s | **~540 seq/s ✅** | Stage 5: now passes at batch=1 (was ~440 seq/s / xfail in Stage 3) |
+| Latency (batch=1, traced) | < 5 ms | **~1.82 ms ✅** | Stage 5: double warmup + D2D input copy + dealloc; was ~2.3 ms in Stage 3 |
+| Throughput (batch=1, traced) | ≥ 500 seq/s | **~550 seq/s ✅** | Stage 5: now passes at batch=1 (was ~440 seq/s / xfail in Stage 3) |
 | Throughput (batch=2, traced) | ≥ 500 seq/s | **~840 seq/s ✅** | |
 | Throughput (batch=8, traced) | ≥ 2000 seq/s | **~3290 seq/s ✅** | Stage 5: was ~2600 seq/s in Stage 3 |
 | Model parameters | < 1M | 805,280 ✅ | |
@@ -17,14 +17,15 @@
 
 ## Throughput vs batch size (traced, Wormhole N300s)
 
-Stage 5 numbers after double-warmup + D2D input copy optimisation:
+Stage 5 numbers after double-warmup + D2D input copy + dealloc optimisation:
 
 | Batch | Latency | Throughput | Status |
 |-------|---------|------------|--------|
-| 1 | ~1.85 ms | **~540 seq/s** | ✅ exceeds 500 seq/s (was 440 seq/s / xfail) |
+| 1 | ~1.82 ms | **~550 seq/s** | ✅ exceeds 500 seq/s (was 440 seq/s / xfail) |
 | 8 | ~2.43 ms | **~3290 seq/s** | ✅ exceeds 2000 seq/s stretch target |
 | 32 | ~3.65 ms | **~8760 seq/s** | ✅ |
-| 64 | ~6.10 ms | **~10500 seq/s** | ✅ peak throughput |
+| 64 | ~6.10 ms | **~10500 seq/s** | ✅ (bfloat16 default) |
+| 64 (bf8) | ~5.68 ms | **~11260 seq/s** | ✅ peak throughput with `TTNN_WEIGHT_BF8=1` |
 
 ## Stage 3 feature status
 
@@ -35,6 +36,8 @@ Stage 5 numbers after double-warmup + D2D input copy optimisation:
 | Multi-model serving (100 instances) | ✅ Implemented | `TtnnGraniteTTMModel.from_shared_parameters(parameters, config)` — 100 instances in 0.12 s |
 | Streaming inference | ✅ Implemented | `GraniteTTMStreamingForecaster` in `tt/streaming.py` — 2.5 ms/step traced |
 | HiFi2 compute config | ✅ Implemented | All `ttnn.linear` calls use `WormholeComputeKernelConfig(HiFi2, packer_l1_acc=True)` |
+| Explicit tensor deallocation | ✅ Implemented | `ttnn.deallocate()` in scaler, time/channel mixers, model de-normalisation |
+| bfloat8_b weight option | ✅ Implemented | `TTNN_WEIGHT_BF8=1` — ~7% gain at batch=64; PCC ≥ 0.99 |
 
 ## Bottleneck analysis
 
@@ -52,18 +55,21 @@ Measured latency (batch=1): ~2.3 ms  →  4× improvement over Stage 2
 Measured throughput (batch=8): ~2620 seq/s  →  22× improvement over Stage 2
 ```
 
-### Stage 5 result (double warmup + D2D input copy)
+### Stage 5 result (double warmup + D2D input copy + dealloc + bf8 option)
 ```
 Two warmup passes before trace capture → better program cache coverage
 ttnn.copy() for device-tensor inputs → eliminates D2H→H2D round-trip
+ttnn.deallocate() for intermediates → frees L1 memory earlier
+TTNN_WEIGHT_BF8=1 → bfloat8_b weights, ~7% gain at batch=64
 
-Measured latency (batch=1):  ~1.85 ms  →  1.24× improvement over Stage 3
-Measured throughput (batch=1): ~540 seq/s → 500 seq/s target now met at batch=1
+Measured latency (batch=1):  ~1.82 ms  →  1.26× improvement over Stage 3
+Measured throughput (batch=1): ~550 seq/s → 500 seq/s target now met at batch=1
 Measured throughput (batch=8): ~3290 seq/s → 1.26× improvement over Stage 3
 Measured throughput (batch=64): ~10500 seq/s → 1.84× improvement over Stage 4 peak
+Measured throughput (batch=64, bf8): ~11260 seq/s → new peak with bfloat8_b weights
 ```
 
-Throughput saturation now occurs above batch=64 (~10500 seq/s).
+Throughput saturation now occurs above batch=64 (~10500 seq/s bf16, ~11260 seq/s bf8).
 
 ## Running the benchmarks
 
@@ -111,12 +117,13 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 
 | Trade-off | Decision |
 |-----------|----------|
-| HiFi2 vs LoFi math fidelity | HiFi2 chosen; safe for PCC ≥ 0.99. LoFi may give 5–10% faster kernels if numerics permit. |
+| HiFi2 vs LoFi math fidelity | HiFi2 chosen; safe for PCC ≥ 0.99. LoFi shows no measurable gain (model dispatch-bound); toggle via `TTNN_LOFI=1` |
+| bfloat16 vs bfloat8_b weights | bfloat16 default; bfloat8_b gives ~7% gain at batch=64 with PCC ≥ 0.99; toggle via `TTNN_WEIGHT_BF8=1` |
+| Sharding strategy | Not applicable — tensors ~3 KB, too small for multi-core parallelism benefit (overhead exceeds gains) |
 | Trace capture requires static shapes | Fixed context_length=512; streaming always uses eager path for variable-length input |
 | Trace must be recompiled per batch size | One `compile()` call per batch size; cached on model instance |
 | Shared weights across model instances | Read-only weight tensors; no correctness risk; saves ~1.53 MB per additional instance |
-| 500 seq/s target at batch=1 | **Now met**: ~540 seq/s at batch=1 after Stage 5 optimisations |
-| Peak throughput | batch=64 gives ~10500 seq/s (Stage 5); up from ~5723 seq/s in Stage 4 |
-| LoFi math fidelity | Tested (Stage 4 E3): no gain because model is dispatch-bound; toggle via TTNN_LOFI=1 |
+| 500 seq/s target at batch=1 | **Now met**: ~550 seq/s at batch=1 after Stage 5 optimisations |
+| Peak throughput | batch=64 gives ~10500 seq/s (bf16) / ~11260 seq/s (bf8); up from ~5723 seq/s in Stage 4 |
 | Zero-shot accuracy | Stage 4 E1: TTNN MSE 0.4324 vs published 0.444 on ETTh1 test split (all 7 channels, normalized) |
 | 2-CQ double-buffering (E4) | Tried: `synchronize_device(idle)` costs 0.155 ms/frame, more than H2D (0.12 ms) being hidden; net: 433 seq/s — no gain over single-CQ traced path |
