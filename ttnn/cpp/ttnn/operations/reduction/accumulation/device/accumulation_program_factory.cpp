@@ -125,10 +125,17 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
         }
     }
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
+    const auto is_wormhole = device->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity =
+        (is_wormhole && output_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     const ReaderDataMovementConfig reader_config{reader_compile_time_args};
     const ComputeConfig compute_config{
+        .math_fidelity = default_math_fidelity,
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dst,
         .math_approx_mode = false,

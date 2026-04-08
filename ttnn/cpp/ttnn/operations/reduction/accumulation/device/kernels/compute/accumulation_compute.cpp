@@ -29,6 +29,8 @@ void kernel_main() {
     experimental::CircularBuffer cb_out_obj(CB_OUT);
     experimental::CircularBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
 
+    unary_op_init_common(CB_IN, CB_OUT);
+
     BINARY_OP_INIT();
 
     constexpr uint32_t DST_IN = 0;
@@ -42,7 +44,6 @@ void kernel_main() {
         // This is necessary to avoid data-races on cb_acc
         cb_acc_obj.wait_front(ONE_TILE);
         cb_acc_obj.pop_front(ONE_TILE);
-        unary_op_init_common(CB_ACC, CB_ACC);
 
         tile_regs_acquire();
         reconfig_data_format(CB_ACC, CB_ACC);
@@ -59,15 +60,12 @@ void kernel_main() {
         pack_tile(DST_ACC, CB_ACC);
         tile_regs_release();
 
-        binary_op_init_common(CB_IN, CB_ACC, CB_OUT);
-
         cb_acc_obj.reserve_back(ONE_TILE);
         cb_acc_obj.push_back(ONE_TILE);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
             // Synchronize unpacker-packer between iterations
             cb_acc_obj.wait_front(ONE_TILE);
-            cb_acc_obj.pop_front(ONE_TILE);
 
             tile_regs_acquire();
             cb_in_obj.wait_front(ONE_TILE);
@@ -81,6 +79,7 @@ void kernel_main() {
             copy_tile(CB_ACC, 0, DST_ACC);
 
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);
+            cb_acc_obj.pop_front(ONE_TILE);
 
             cb_in_obj.pop_front(ONE_TILE);
 
