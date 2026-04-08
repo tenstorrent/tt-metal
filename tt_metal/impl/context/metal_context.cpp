@@ -237,6 +237,17 @@ void MetalContext::initialize(
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        if (!rtoptions().get_use_device_print()) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT is deprecated and will be removed in a future release. "
+                "Please migrate to DEVICE_PRINT by:\n"
+                "  1. Replace #include \"api/debug/dprint.h\" with #include \"api/debug/device_print.h\" in your "
+                "kernels\n"
+                "  2. Replace DPRINT << ... << ENDL() with DEVICE_PRINT(\"...\\n\", args)\n"
+                "  3. Set TT_METAL_DEVICE_PRINT=1 to enable the new DEVICE_PRINT system\n"
+                "For more information, see the DEVICE_PRINT documentation.");
+        }
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);

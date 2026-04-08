@@ -46,7 +46,7 @@ void kernel_main() {
         // casting the address to a pointer. This is not helpful in most cases as the CPU
         // is quite slow compared to the tensor/simd engines. But useful for debugging.
         // uint16_t* ptr = (uint16_t*)cb_in0_addr;
-        // DPRINT << "cb_in0_addr: " << ptr << " " << *ptr;
+        // DEVICE_PRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
         cb_push_back(cb_in0, 1);
