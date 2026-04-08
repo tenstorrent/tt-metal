@@ -48,6 +48,7 @@ from ttml.models.llama import (
 from ttml.models.deepseek import (
     DeepSeek,
     DeepSeekConfig,
+    calculate_flops_per_token as deepseek_flops_per_token,
 )
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
@@ -59,6 +60,22 @@ Model = Union[NanoGPT, Llama, DeepSeek]
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
+
+def get_device_peak_tflops_bf16() -> float:
+    """Get theoretical peak BF16 TFLOPS for the current TT device.
+
+    Wormhole: 1.0 TFLOPS/core, Blackhole: 1.35 TFLOPS/core.
+    Returns total peak TFLOPS across all compute cores.
+    """
+    from ttnn.device import is_blackhole, is_wormhole_b0
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = grid_size.x * grid_size.y
+
+    tflops_per_core = 1.35 if is_blackhole(device) else 1.0
+    return num_cores * tflops_per_core
 
 
 class TrainingConfig(BaseTrainingConfig):
@@ -1311,6 +1328,16 @@ def main():
             )
             print(f"   - Total parameters: {total_params:,}")
 
+        # Compute FLOPs per token for throughput reporting
+        flops_per_token = 0
+        if model_config.model_type == "deepseek":
+            from ttml.models.deepseek import DeepSeekConfig, calculate_flops_per_token
+
+            ds_cfg = model.config if hasattr(model, "config") and isinstance(model.config, DeepSeekConfig) else None
+            if ds_cfg is not None:
+                flops_per_token = calculate_flops_per_token(ds_cfg, model_config.max_sequence_length)
+                print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
+
         # Memory snapshot after model creation
         if args.track_memory:
             MemoryUsageTracker.snapshot("MODEL_CREATION")
@@ -1376,12 +1403,22 @@ def main():
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
+        # Compute peak device TFLOPS for MFU calculation
+        peak_tflops = 0.0
+        if flops_per_token > 0:
+            try:
+                peak_tflops = get_device_peak_tflops_bf16()
+                print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
+            except Exception:
+                pass
+
         # Training loop
         start_time = time.time()
         # Cache values used in hot path
         batch_size = training_config.batch_size
         max_steps = training_config.max_steps
         dataset_len = len(dataset)
+        tokens_per_step = batch_size * seq_len
 
         # Flag to track if first iteration is complete (for memory tracking)
         is_everything_compiled = False
@@ -1428,7 +1465,21 @@ def main():
                     global_step += 1
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
+
+                    # Throughput metrics
+                    tps = tokens_per_step / (step_time / 1000.0)  # tokens per second
+                    if flops_per_token > 0 and step_time > 0:
+                        achieved_tflops = tps * flops_per_token / 1e12
+                        mfu_str = ""
+                        if peak_tflops > 0:
+                            mfu = achieved_tflops / peak_tflops * 100.0
+                            mfu_str = f", MFU: {mfu:.1f}%"
+                        print(
+                            f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, "
+                            f"TPS: {tps:.0f}, TFLOPS: {achieved_tflops:.2f}{mfu_str}"
+                        )
+                    else:
+                        print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
 
                     if args.model_save_path and global_step % training_config.model_save_interval == 0:
                         save_checkpoint(

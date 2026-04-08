@@ -111,7 +111,10 @@ class DeepSeek(AbstractModuleBase):
         return [b.ffn for b in self.blocks if isinstance(b.ffn, MoE)]
 
 
+from .flops import calculate_flops_per_token
+
 __all__ = [
     "DeepSeek",
     "DeepSeekConfig",
+    "calculate_flops_per_token",
 ]
