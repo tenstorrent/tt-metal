@@ -149,6 +149,34 @@ class AbstractModuleBase(CppModuleBase):
         """Return state dictionary."""
         return {**dict(self.named_parameters()), **dict(self.named_buffers())}
 
+    def materialize(self, mesh_device=None, layout_map=None, on_device_init: bool = False) -> None:
+        """Materialize all TensorMetadata Parameters in this module tree.
+
+        Args:
+            mesh_device: Mesh device for distributed tensors (None for single device).
+            layout_map: Optional dict mapping full param paths (regex or exact)
+                to DistributedLayout. Matched via ``_match_policy``. None = default layout.
+            on_device_init: Generate tensors directly on device (skip numpy).
+        """
+        for prefix, module in self.named_modules():
+            if not isinstance(module, AbstractModuleBase):
+                continue
+            for name in list(vars(module)):
+                attr = getattr(module, name, None)
+                if isinstance(attr, Parameter) and isinstance(attr.tensor, TensorMetadata):
+                    full_path = f"{prefix}.{name}" if prefix else name
+                    layout = _match_policy(full_path, layout_map)
+                    metadata = attr.tensor
+                    tensor = metadata.init_fn(
+                        metadata.shape,
+                        layout=layout,
+                        mesh_device=mesh_device,
+                        on_device_init=on_device_init,
+                    )
+                    tensor.set_requires_grad(metadata.requires_grad)
+                    attr.tensor = tensor
+                    module._bind_parameter(tensor, name)
+
     def parallelize(self, mesh_device, tp_axis: int, cp_axis: Optional[int] = None) -> None:
         """Hook for modules to adjust themselves for tensor/context parallelism.
 
@@ -250,38 +278,15 @@ class TransformerBase(AbstractModuleBase):
     # ------------------------------------------------------------------
 
     def _materialize_tree(self) -> None:
-        """Walk the full module tree and materialize all TensorMetadata Parameters."""
+        """Materialize the full module tree with layouts from the parallelization plan."""
         resolved = (
             self._parallelization_plan.resolve(self._mesh_device) if self._parallelization_plan is not None else None
         )
-        for prefix, module in self.named_modules():
-            if isinstance(module, AbstractModuleBase):
-                self._materialize_module_params(module, prefix, resolved)
-
-    def _materialize_module_params(self, module: AbstractModuleBase, prefix: str, resolved) -> None:
-        """Materialize a single module's own TensorMetadata Parameters."""
-        for name in list(vars(module)):
-            attr = getattr(module, name, None)
-            if isinstance(attr, Parameter) and isinstance(attr.tensor, TensorMetadata):
-                full_path = f"{prefix}.{name}" if prefix else name
-                self._materialize_param(module, name, attr, full_path, resolved)
-
-    def _materialize_param(
-        self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str, resolved
-    ) -> None:
-        """Convert a single TensorMetadata Parameter into a device tensor."""
-        metadata = param.tensor
-        layout = _match_policy(full_path, resolved)
-
-        tensor = metadata.init_fn(
-            metadata.shape,
-            layout=layout,
+        self.materialize(
             mesh_device=self._mesh_device,
+            layout_map=resolved,
             on_device_init=self._on_device_init,
         )
-        tensor.set_requires_grad(metadata.requires_grad)
-        param.tensor = tensor
-        module._bind_parameter(tensor, name)
 
     # ------------------------------------------------------------------
     # Parallelization

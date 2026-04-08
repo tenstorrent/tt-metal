@@ -11,6 +11,7 @@ import numpy as np
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
+from ttml.modules.parameter import TensorMetadata
 
 
 def sin_pos_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
@@ -111,7 +112,7 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
         self.dropout_prob = dropout_prob
 
         weight_shape = (1, 1, sequence_length, embedding_dim)
-        self.weight = Parameter(ttml.init.normal(0.0, 0.02)(weight_shape))
+        self.weight = Parameter(TensorMetadata(shape=weight_shape, init_fn=ttml.init.normal(0.0, 0.02)))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass: add positional embeddings and apply dropout.
