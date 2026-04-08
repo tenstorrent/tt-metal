@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -273,7 +273,7 @@ def _build_ff1_3_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config, batch_size_per_row=USERS_PER_ROW)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -288,12 +288,25 @@ def _build_ff1_3_inputs(
     else:
         torch_input = torch.randn(num_layers, batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
+    if mode == "decode":
+        input_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 

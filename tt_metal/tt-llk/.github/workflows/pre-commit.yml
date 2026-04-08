@@ -1,0 +1,67 @@
+name: 🔍 Static checks
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: "Python version to use for pre-commit"
+        required: false
+        type: string
+        default: "3.10"
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Run pre-commit and fix issues
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: "--from-ref origin/main --to-ref HEAD"
+
+  pr-comment:
+    name: Post comment on PR
+    runs-on: ubuntu-latest
+    # This job will only run if the PR is not from a fork (can't post comments to forks)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Check if comment already exists
+        id: check-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes("Thank you for your contribution!")
+            );
+
+            return existingComment ? true : false;
+          result-encoding: string
+
+      - name: Post comment on PR
+        if: steps.check-comment.outputs.result == 'false'
+        uses: mshick/add-pr-comment@v2
+        with:
+          message: >
+            Thank you for your contribution! 🚀
+
+            If you want to run metal post-commit tests, you can add the `metal-post-commit-tests`
+            label to this pull request.
+
+            📖 For more information, please refer to our
+            [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide.

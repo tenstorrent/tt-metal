@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Any
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -63,27 +62,17 @@ class RMSNorm(RMSNormBase):
         )
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        batch_size_per_row: int | None = None,
+    ) -> ModelDecodeConfig:
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
         )
-
-    @staticmethod
-    def _fwd_rms_norm(x: ttnn.Tensor, cfg: dict, program_config: Any) -> ttnn.Tensor:
-        """Wrapper for RMS norm (non-distributed).
-        Matches: _rmsnorm_forward line 79
-
-        Args:
-            x: Input tensor
-            cfg: Config for rms_norm operation
-            program_config: Program config (computed externally via _get_pc)
-
-        Returns:
-            Normalized output tensor
-        """
-        return ttnn.rms_norm(x, program_config=program_config, **cfg)
 
     @classmethod
     def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:

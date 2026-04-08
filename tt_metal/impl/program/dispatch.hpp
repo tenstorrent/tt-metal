@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -97,6 +97,13 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size);
 
+// On WH/BH, DFBs are initialised via setup_local_cb_read_write_interfaces and require
+// local_cb_mask to be a proper slot bitmask (one bit per DFB id).  Call this after
+// finalize_dfbs so the mask is set correctly for every kernel group.
+void finalize_dfb_masks(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,
@@ -110,7 +117,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
+void initialize_worker_config_buf_mgr(
+    const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start);
 
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
@@ -159,6 +167,7 @@ void write_program_command_sequence(
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
+    const Hal& hal,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,

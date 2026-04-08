@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 #include "simple_tls_check_defines.h"
+#include "api/kernel_thread_globals.h"
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;

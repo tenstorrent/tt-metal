@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+
+#include <tt-logger/tt-logger.hpp>
 
 #include <unistd.h>
 #include <climits>
@@ -43,9 +45,21 @@ TrayID get_tray_id_for_chip(
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
     };
 
-    if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
+    if (using_mock_cluster_desc) {
+        return TrayID{0};
+    }
+    if (!mobo_to_bus_ids.contains(mobo_name)) {
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        log_warning(
+            tt::LogAlways,
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+            mobo_name,
+            chip_id,
+            bus_id);
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -404,6 +418,16 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
+bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
+    auto* cluster_desc = cluster.get_cluster_description();
+    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+        return false;
+    }
+    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    return revision_bits >= 3;
+}
+
 }  // namespace
 
 namespace discovery_impl {
@@ -415,6 +439,9 @@ PhysicalSystemDescriptor run_local_discovery(
     bool run_live_discovery,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
+    if (is_bh_galaxy_rev_c(cluster)) {
+        psd.set_is_bh_galaxy_rev_c(true);
+    }
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
     if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
@@ -452,7 +479,12 @@ PhysicalSystemDescriptor run_local_discovery(
             psd.get_pcie_devices_per_tray()[hostname_key],
             psd.get_pcie_id_to_asic_location()[hostname_key]);
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
-            TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname_key};
+            TrayID{tray_id},
+            asic_location,
+            cluster_desc->get_board_type(src_chip_id),
+            src_unique_id,
+            src_chip_id,
+            hostname_key};
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {

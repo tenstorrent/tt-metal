@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.4.3"
+        default: "v1.5.1"
       job-timeout:
         required: false
         type: number
@@ -38,7 +38,7 @@ on:
 jobs:
   ttsim-integration:
     if: ${{ inputs.run-ttsim-integration-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -99,12 +99,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -178,7 +175,7 @@ jobs:
           with open(path) as f:
               tests = yaml.safe_load(f)
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
-          TTSIM_TIMEOUT_MINUTES = 20
+          TTSIM_TIMEOUT_MINUTES = 30
           entries = []
           for t in tests:
               if not t.get("ttsim") or not t.get("cmd"):
@@ -254,12 +251,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -297,7 +291,7 @@ jobs:
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
@@ -311,7 +305,7 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -344,12 +338,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -399,7 +390,7 @@ jobs:
             cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -433,12 +424,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |

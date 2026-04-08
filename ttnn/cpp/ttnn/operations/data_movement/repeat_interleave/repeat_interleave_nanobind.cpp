@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "repeat_interleave.hpp"
 
@@ -31,16 +31,15 @@ void bind_repeat_interleave(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"repeat_interleave">(
         mod,
-        ttnn::repeat_interleave,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("repeats"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        &ttnn::repeat_interleave,
+        nb::arg("input_tensor"),
+        nb::arg("repeats"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

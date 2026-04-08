@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -104,6 +104,6 @@ Tensor all_gather(const Tensor& tensor) {
     }
 
     return Tensor(
-        tt::tt_metal::HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), tensor.tensor_topology());
+        tt::tt_metal::HostTensor(std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
 }
 }  // namespace ttnn::distributed::host_ccl

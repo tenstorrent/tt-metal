@@ -1,4 +1,4 @@
-#  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 #  SPDX-License-Identifier: Apache-2.0
 
@@ -64,7 +64,6 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
     ([1, 1, 32, 32], ttnn.bfloat16, ttnn.BufferType.L1, SHARD_SPEC_0),
     ([1, 1, 32, 192], ttnn.bfloat16, ttnn.BufferType.DRAM, None),
     ([1, 1, 32, 576], ttnn.bfloat16, ttnn.BufferType.DRAM, None),
-    ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM, None),
     ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM, None),
     ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.L1, SHARD_SPEC_1),
 ]

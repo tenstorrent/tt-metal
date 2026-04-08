@@ -16,6 +16,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add_int.cpp
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
+    test_gelu_bw_ulp.cpp
     test_generic_op.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
@@ -28,6 +29,9 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp
+    test_gelu_fw_ulp.cpp
+    test_tanh_bw_ulp.cpp
+    test_tanh_fw_ulp.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
@@ -60,6 +64,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_create_tensor.cpp
     tensor/test_create_tensor_multi_device.cpp
     tensor/test_create_tensor_with_layout.cpp
+    tensor/test_device_storage_ownership.cpp
     tensor/test_distributed_tensor.cpp
     tensor/test_tensor_topology.cpp
     tensor/test_mesh_tensor.cpp

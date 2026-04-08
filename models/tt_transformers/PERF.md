@@ -42,18 +42,21 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
+| Qwen2.5-32B       | T3K         | 98        | 99        | 22.4          | 190       |
 | Qwen2.5-Coder-32B | T3K         | 96        | 99        | 22.4          | 190       |
 | Qwen3-32B         | T3K         | 89        | 97        | 22.9          | 123       |
+| QwQ-32B           | T3K         | 96        | 100       | 20.7          | 105       |
 | Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
 | Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
 | Phi3.5-mini       | T3K         |           |           | 48.8          | 51        |
 | Mistral-7B        | N150        | 95        | 99        | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 95        | 100       | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Mistral-Small-3.1-24B | T3K      | 95        | 99        |               |           |
 | Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 | Phi-4 | N300 | 97 | 100 | 37.34 | 123.33 |
-| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Mixtral-8x7B-v0.1 | T3K         | 98        | 100       | 67.82         | 53.93     |
 | Ministral-8B      | N300        | 93        | 98        | 22.15         | 79.3      |
 
 ## Accuracy
@@ -84,14 +87,17 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5600      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
+| Qwen2.5-32B       | T3K         | 95        | 99        | 19.7          | 183       |
 | Qwen2.5-Coder-32B | T3K         | 95        | 99        | 19.7          | 183       |
 | Qwen3-32B         | T3K         | 95        | 100       | 19.6          | 119       |
+| QwQ-32B           | T3K         | 99        | 100       | 18.3          | 120       |
 | Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
 | Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
 | Phi3.5-mini       | T3K         |           |           | 48.6          | 53        |
 | Mistral-7B        | N150        | 96        | 100       | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 97        | 100       | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 98        | 100       | 67.82         | 53.93     |
+| Mistral-Small-3.1-24B | T3K      | 95        | 99        |               |           |
 | Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 | Phi-4 | N300 | 99 | 100 | 20.48 | 146.32 |

@@ -1,8 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import errno
 import hashlib
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -14,10 +15,14 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
+from models.demos.deepseek_v3.tests.pytest_utils import (
+    DEFAULT_PREFILL_SEQ_LEN,
+    build_expanded_test_ids,
+    expand_test_cases_with_position_ids_ranges,
+)
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -39,6 +44,33 @@ REFERENCE_ENTRY_VERSION = 1
 
 def _default_reference_cache_dir(cache_path: Path) -> Path:
     return cache_path / "tests_cache"
+
+
+def _build_model_test_cases_and_ids(users_per_row: int, prefill_seq_len: int):
+    """
+    Keep model-level prefill coverage conservative.
+
+    RowBatchedModel prefill is still only exercised reliably with batch_size_per_row=1,
+    while the lower-level module tests cover the row-batched prefill paths.
+    """
+    base_cases = [("decode", 1, users_per_row, None)]
+
+    max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+    if max_seq_len_env is None:
+        base_cases.append(("prefill", prefill_seq_len, 1, None))
+    else:
+        max_seq_len = int(max_seq_len_env)
+        base_cases.extend(
+            [
+                ("decode", 1, users_per_row, 0),
+                ("decode", 1, users_per_row, max_seq_len - 1),
+                ("prefill", max_seq_len, 1, None),
+            ]
+        )
+
+    expanded_cases = expand_test_cases_with_position_ids_ranges(base_cases)
+    expanded_ids = build_expanded_test_ids(expanded_cases)
+    return expanded_cases, expanded_ids
 
 
 def _legacy_reference_cache_path(cache_path: Path) -> Path:
@@ -209,7 +241,7 @@ def _generate_reference_case_entry(
     reference_model.load_state_dict(state_dict)
     reference_model = reference_model.to(torch.bfloat16)
 
-    decode_input_caches = None
+    decode_kv_caches = None
     if mode == "decode":
         prefill_len = int(position_ids.max().item()) if position_ids is not None else 0
         cache_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
@@ -226,9 +258,9 @@ def _generate_reference_case_entry(
                 False,
                 collect_output=False,
             )
-            decode_input_caches = torch_cache_from_transformers(prefill_cache)
+            decode_kv_caches = torch_cache_from_transformers(prefill_cache)
         else:
-            decode_input_caches = tuple(
+            decode_kv_caches = tuple(
                 torch.empty((batch_size, 1, 0, cache_dim), dtype=torch.bfloat16)
                 for _ in range(hf_config.num_hidden_layers)
             )
@@ -248,7 +280,7 @@ def _generate_reference_case_entry(
                 position_ids=position_ids_2d,
                 output_attentions=False,
                 use_cache=True,
-                past_key_values=transformers_cache_from_torch(decode_input_caches),
+                past_key_values=transformers_cache_from_torch(decode_kv_caches),
             )
         reference_output = model_output.logits.transpose(1, 0).float().cpu()
     else:
@@ -264,7 +296,7 @@ def _generate_reference_case_entry(
         "entry_version": REFERENCE_ENTRY_VERSION,
         "source": "reference",
         "reference_output": reference_output,
-        "decode_input_caches": list(decode_input_caches) if mode == "decode" else None,
+        "decode_kv_caches": list(decode_kv_caches) if mode == "decode" else None,
     }
 
 
@@ -305,7 +337,7 @@ def run_test_forward_pass_dpmodel(
     decode_position_ids: int | None = None,
 ):
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
+        assert batch_size_per_row == 1, "Model-level prefill only supports a batch size of 1"
         batch_size = batch_size_per_row
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
@@ -364,7 +396,7 @@ def run_test_forward_pass_dpmodel(
         or cached_case.get("source") != "reference"
         or not isinstance(cached_reference_output, torch.Tensor)
         or cached_shape != expected_reference_output_shape
-        or (mode == "decode" and cached_case.get("decode_input_caches") is None)
+        or (mode == "decode" and cached_case.get("decode_kv_caches") is None)
     )
     if needs_regen:
         logger.warning(f"Reference cache miss for case '{case_key}'. Generating reference output.")
@@ -388,11 +420,11 @@ def run_test_forward_pass_dpmodel(
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
 
     if mode == "decode":
-        decode_input_caches = cached_case.get("decode_input_caches")
-        if decode_input_caches is None:
-            pytest.fail(f"Missing decode_input_caches in reference baseline for case '{case_key}'")
-        if not isinstance(decode_input_caches, tuple):
-            decode_input_caches = tuple(decode_input_caches)
+        decode_kv_caches = cached_case.get("decode_kv_caches")
+        if decode_kv_caches is None:
+            pytest.fail(f"Missing decode_kv_caches in reference baseline for case '{case_key}'")
+        if not isinstance(decode_kv_caches, tuple):
+            decode_kv_caches = tuple(decode_kv_caches)
 
         denom = mesh_rows * dp_factor
         assert batch_size % denom == 0, f"batch_size={batch_size} not divisible by mesh_rows*dp_factor={denom}"
@@ -408,7 +440,7 @@ def run_test_forward_pass_dpmodel(
         )
         mappings = tuple(mapping for _ in range(hf_config_short.num_hidden_layers))
         paged_input_caches, torch_page_tables = paged_caches_from_torch(
-            decode_input_caches, tuple(mesh_device.shape), paged_config, user_id=None, mappings=mappings
+            decode_kv_caches, tuple(mesh_device.shape), paged_config, user_id=None, mappings=mappings
         )
         tt_page_tables = tuple(
             MLA2D.create_page_table(page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device)
@@ -447,7 +479,16 @@ def run_test_forward_pass_dpmodel(
         test_name="test_model",
         real_weights=True,
     )
-    model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
+    # The generator still drives prefill one prompt at a time, but the underlying
+    # row-batched prefill kernels/cache layout are configured for a full row.
+    configured_row_width = batch_size_per_row if mode == "decode" else USERS_PER_ROW
+    model_config = get_model_config(
+        RowBatchedModel,
+        mode,
+        hf_config_short,
+        mesh_device,
+        configured_row_width,
+    )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
@@ -517,7 +558,7 @@ def run_test_forward_pass_dpmodel(
     ttnn.deallocate(tt_output)
 
 
-TEST_CASES, TEST_IDS = build_test_cases_and_ids(
+TEST_CASES, TEST_IDS = _build_model_test_cases_and_ids(
     USERS_PER_ROW,
     DEFAULT_PREFILL_SEQ_LEN,
 )
@@ -566,6 +607,39 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    hf_config_short.num_hidden_layers = 5
+
+    run_test_forward_pass_dpmodel(
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
     )
 
 

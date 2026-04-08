@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
-    USERS_PER_ROW,
     dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
@@ -113,7 +112,7 @@ class MLP(AbstractModule):
         """
         torch_metaweight_tensor = torch_metaweight_tensor.transpose(
             2, 1
-        )  # In torch the weights are in (out_features, in_features) format
+        ).contiguous()  # In torch the weights are in (out_features, in_features) format
 
         # Calculate the expected weight dimensions
         num_shards, per_device_in_features, per_device_out_features = torch_metaweight_tensor.shape
@@ -166,9 +165,10 @@ class MLP(AbstractModule):
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
+        grid_size = mesh_device.compute_with_storage_grid_size()
         matmul_core_grid_size = ttnn.CoreCoord(
-            mesh_device.core_grid.x,
-            mesh_device.core_grid.y,
+            grid_size.x,
+            grid_size.y,
         )  # NOTE: we might modify this later during optimization stage
 
         # Calculate device metrics
@@ -218,6 +218,7 @@ class MLP(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -239,7 +240,8 @@ class MLP(AbstractModule):
 
         # Calculate device metrics
         _, mesh_width = mesh_device.shape
-        max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        max_num_cores = grid_size.x * grid_size.y
         input_num_cores = input_num_cores or max(
             get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores)
         )
@@ -262,9 +264,17 @@ class MLP(AbstractModule):
 
         # Calculate input and output memory configurations
 
-        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
+        input_memory_config = cls._get_decode_activation_memory_config(
+            dim,
+            input_num_cores,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
         output_memory_config = cls._get_decode_activation_memory_config(
-            even_int_div(dim, mesh_width), output_num_cores, mesh_device
+            even_int_div(dim, mesh_width),
+            output_num_cores,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
         )
 
         # Construct the config
@@ -279,7 +289,11 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    batch_size_per_row,
+                    dim,
+                    even_int_div(hidden_dim, mesh_width),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
@@ -287,7 +301,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW,
+                    batch_size_per_row,
                     even_int_div(hidden_dim, mesh_width),
                     dim,
                     inner_num_cores,
@@ -299,7 +313,11 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    batch_size_per_row,
+                    dim,
+                    even_int_div(hidden_dim, mesh_width),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
@@ -333,17 +351,21 @@ class MLP(AbstractModule):
     @final
     @classmethod
     def _get_decode_activation_memory_config(
-        cls, per_device_width: int, activation_sharding_num_cores: int, mesh_device: ttnn.Device
+        cls,
+        per_device_width: int,
+        activation_sharding_num_cores: int,
+        mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ttnn.MemoryConfig:
         """Get the memory config for an activation tensor in decode mode."""
         return ttnn.create_sharded_memory_config_(
             shape=(
-                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                 ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
                 activation_sharding_num_cores,
-                ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y),
+                mesh_device.compute_with_storage_grid_size(),
                 row_wise=True,
             ),
             strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -401,9 +423,7 @@ class MLP(AbstractModule):
 
     @staticmethod
     def _fwd_all_gather_preff1_3(x: ttnn.Tensor, cfg: dict, ccl) -> ttnn.Tensor:
-        """Wrapper for all-gather before FF1/3 projections.
-        Matches: forward_prefill line 439, forward_decode line 491
-        """
+        """Wrapper for all-gather before FF1/3 projections."""
         return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
     @staticmethod
@@ -411,7 +431,6 @@ class MLP(AbstractModule):
         x: ttnn.Tensor, w1_cfg: dict, w3_cfg: dict, program_config: Any = None
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Wrapper for FF1 (gate) and FF3 (up) projections.
-        Matches: forward_prefill lines 447-452, forward_decode lines 494-495
 
         Args:
             x: Input tensor
@@ -430,10 +449,9 @@ class MLP(AbstractModule):
     @staticmethod
     def _fwd_mul(w1_out: ttnn.Tensor, w3_out: ttnn.Tensor, mul_cfg: dict) -> ttnn.Tensor:
         """Wrapper for element-wise multiply.
-        Matches: forward_prefill line 460, forward_decode line 502
 
         Args:
-            w1_out: First input (for decode: SILU should be applied BEFORE calling this)
+            w1_out: First input
             w3_out: Second input
             mul_cfg: Config for mul operation (cfg["mul"])
 
@@ -444,7 +462,6 @@ class MLP(AbstractModule):
     @staticmethod
     def _fwd_ff2(x: ttnn.Tensor, w2_cfg: dict, program_config: Any = None) -> ttnn.Tensor:
         """Wrapper for FF2 (down) projection.
-        Matches: forward_prefill lines 465-469, forward_decode line 507
 
         Args:
             x: Input tensor
@@ -485,8 +502,8 @@ class MLP(AbstractModule):
 
             # De-chunk the output if needed (for SharedExpert usage)
             num_layers = x.shape[0]
-            _, num_chunks, _, output_dim = output.shape
-            if num_chunks > 1:
+            _, _, _, output_dim = output.shape
+            if original_seq_len > cfg["max_rows"]:
                 output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
                 if pad_rows > 0:
                     output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
@@ -523,24 +540,23 @@ class MLP(AbstractModule):
             seq_len = cfg["max_rows"]
 
         # Gate and up projections with dynamic program configs
-        w1_out = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w1"]
+        w1_out, w3_out = cls._fwd_ff1_3(
+            x,
+            cfg["w1"],
+            cfg["w3"],
+            program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]),
         )
-        w3_out = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w3"]
-        )
-        ttnn.deallocate(x)
 
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection with dynamic program configs
-        output = ttnn.linear(
+        output = cls._fwd_ff2(
             activated,
+            cfg["w2"],
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
-            **cfg["w2"],
         )
         ttnn.deallocate(activated)
 
@@ -551,16 +567,15 @@ class MLP(AbstractModule):
     def _forward_decode_compute_only(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """Decode computation without CCL operations."""
         # Gate and up projections
-        w1_out = ttnn.linear(x, **cfg["w1"])
-        w3_out = ttnn.linear(x, **cfg["w3"])
+        w1_out, w3_out = cls._fwd_ff1_3(x, cfg["w1"], cfg["w3"])
 
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection
-        output = ttnn.linear(activated, **cfg["w2"])
+        output = cls._fwd_ff2(activated, cfg["w2"])
         ttnn.deallocate(activated)
 
         return output
@@ -573,19 +588,17 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = cls._fwd_all_gather_preff1_3(x, cfg, ccl)
 
         # Perform the core computation
         output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        output = cls._fwd_reduce_scatter_post_ff2(output, cfg, ccl)
 
         # De-chunk the output if the input was chunked
-        _, num_chunks, _, output_dim = output.shape
-        if num_chunks > 1:
+        _, _, _, output_dim = output.shape
+        if original_seq_len > cfg["max_rows"]:
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
@@ -599,15 +612,13 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = cls._fwd_all_gather_preff1_3(x, cfg, ccl)
 
         # Perform the core computation
         w2_out = cls._forward_decode_compute_only(x, cfg)
 
         # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        output = cls._fwd_reduce_scatter_post_ff2(w2_out, cfg, ccl)
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]

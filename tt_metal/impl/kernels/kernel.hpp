@@ -1,14 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
-#include <fstream>
-#include <sstream>
 #include <string>
-#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -20,6 +17,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
@@ -64,49 +62,6 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
-
-struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
-
-    std::string source_;
-    SourceType source_type_;
-    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
-    std::filesystem::path path_;
-
-    KernelSource(const std::string& source, const SourceType& source_type);
-
-    std::string name() const {
-        std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
-            const std::size_t pos_of_dot = this->source_.rfind('.');
-            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
-        } else {
-            name = "Kernel_Source_Code";
-        }
-        return name;
-    }
-
-    // Returns the actual source code (file content or source string)
-    std::string get_content() const {
-        switch (source_type_) {
-            case SourceType::FILE_PATH: {
-                std::ifstream file(path_);
-                if (!file.is_open()) {
-                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
-                }
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                if (file.fail() && !file.eof()) {
-                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
-                }
-                return buffer.str();
-            }
-            case SourceType::SOURCE_CODE: return source_;
-        }
-        ttsl::unreachable();
-    }
-};
 
 class Kernel : public JitBuildSettings {
 public:
@@ -498,6 +453,8 @@ public:
     std::string_view get_linker_opt_level() const override;
 
     void set_build_options(JitBuildOptions& build_options) const override;
+
+    const std::vector<QuasarComputeProcessor>& get_compute_processors() const { return this->compute_processors_; }
 
 private:
     const QuasarComputeConfig config_;

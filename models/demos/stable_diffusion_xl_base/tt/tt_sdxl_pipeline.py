@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_wormhole_b0, profiler
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
@@ -94,12 +94,15 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        os.environ["TT_MM_THROTTLE_PERF"] = "5"
+        if is_wormhole_b0():
+            os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
-            logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
+            grid_override = os.environ.get("TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE")
+            logger.info(f"Checking TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for Galaxy, current value: {grid_override}")
+            expected = "7,7" if is_wormhole_b0() else "10,9"
             assert (
-                os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
-            ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
+                grid_override == expected
+            ), f"TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to {expected}, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config, tt_scheduler)

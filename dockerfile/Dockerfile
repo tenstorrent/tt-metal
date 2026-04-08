@@ -170,17 +170,8 @@ RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
-
-COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
-COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-RUN umask 000 && \
-    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
-    echo "Debugger installation completed" && \
-    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
-    fi
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
+    uv pip check
 
 #############################################################
 

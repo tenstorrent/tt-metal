@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,6 @@
 #include "llk_math_reduce_api.h"
 #endif
 #define MATH(x) x
-#define MAIN math_main()
 #else
 #define MATH(x)
 #endif
@@ -36,7 +35,6 @@
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #define PACK(x) x
-#define MAIN pack_main()
 #else
 #define PACK(x)
 #endif
@@ -53,7 +51,6 @@
 #endif
 #include "llk_io_unpack.h"
 #define UNPACK(x) x
-#define MAIN unpack_main()
 #else
 #define UNPACK(x)
 #endif
@@ -202,6 +199,11 @@ ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init<A
  */
 // clang-format on
 ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst))); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void signbit_tile_int32_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_int32_init<APPROX>())); }
 
 // clang-format off
 /**

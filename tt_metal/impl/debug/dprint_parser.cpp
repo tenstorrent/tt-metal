@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <string>
 #include <string_view>
@@ -21,9 +22,13 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "tt_backend_api_types.hpp"
 
+#include "dwarf.h"
+#include "libdwarf.h"
+
 using std::setw;
 using std::string;
 using std::to_string;
+using namespace std::literals;
 
 namespace tt::tt_metal {
 
@@ -183,19 +188,27 @@ void DPrintParser::PrintTileSlice(const uint8_t* ptr) {
 // Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
 // Assumes the following order of bits in the input data:
 //   [sign bit][mantissa bits][exponent bits]
-float DPrintParser::make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+inline float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
     int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
     const int exp_mask = (1 << (exp_bit_count)) - 1;
     int exp_bias = (1 << (exp_bit_count - 1)) - 1;
     int exp_val = (data & exp_mask) - exp_bias;
     const int mantissa_mask = ((1 << mantissa_bit_count) - 1) << exp_bit_count;
     int mantissa_val = (data & mantissa_mask) >> exp_bit_count;
+    // Zero exponent and zero mantissa means zero (IEEE 754 convention)
+    if ((data & exp_mask) == 0 && mantissa_val == 0) {
+        return sign ? -0.0f : 0.0f;
+    }
     float result = 1.0 + ((float)mantissa_val / (float)(1 << mantissa_bit_count));
     result = result * pow(2, exp_val);
     if (sign) {
         result = -result;
     }
     return result;
+}
+
+float DPrintParser::make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+    return ::tt::tt_metal::make_float(exp_bit_count, mantissa_bit_count, data);
 }
 
 // Prints a given datum in the array, given the data_format
@@ -233,6 +246,18 @@ void DPrintParser::PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Int32):
             intermediate_stream_ << setw(setwidth) << static_cast<int32_t>(datum) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Int8):
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>(datum & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 8) & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 16) & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 24) & 0xff)) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::UInt8):
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>(datum & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 8) & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 16) & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 24) & 0xff) << " ";
             break;
         default: intermediate_stream_ << "Unknown data format " << data_format << " "; break;
     }
@@ -516,14 +541,23 @@ DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t
                 format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
             parsed_info.format_string = format_string;
             std::tie(parsed_info.plain_text_parts, parsed_info.placeholders) = parse_format_string(format_string);
-            uint32_t max_arg_id = 0;
-            for (const auto& placeholder : parsed_info.placeholders) {
-                max_arg_id = std::max(max_arg_id, placeholder.arg_id);
-            }
-            parsed_info.argument_types.resize(max_arg_id + 1);
-            for (const auto& placeholder : parsed_info.placeholders) {
-                parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
-                parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
+            if (!parsed_info.placeholders.empty()) {
+                uint32_t max_arg_id = 0;
+                for (const auto& placeholder : parsed_info.placeholders) {
+                    max_arg_id = std::max(max_arg_id, placeholder.arg_id);
+                }
+                parsed_info.argument_types.resize(max_arg_id + 1);
+                for (auto& placeholder : parsed_info.placeholders) {
+                    // For long types (type_id == '/'), the serialization uses the base type
+                    char serialization_type = placeholder.type_id;
+                    if (placeholder.type_id == '/' && placeholder.enum_base_type_id != 0) {
+                        // '/e' enum type: serialize as the underlying integer type
+                        serialization_type = placeholder.enum_base_type_id;
+                        placeholder.enum_info = get_enum_info(placeholder.enum_type_name);
+                    }
+                    parsed_info.argument_types[placeholder.arg_id] = serialization_type;
+                    parsed_info.arguments_size += get_argument_size_from_type_id(serialization_type);
+                }
             }
         }
         if (info.file >= format_strings_address && info.file < format_strings_address + format_strings_bytes.size()) {
@@ -589,7 +623,6 @@ DevicePrintParser::parse_format_string(std::string_view format_str) {
             if (!placeholder) {
                 TT_THROW("Invalid format string: failed to parse placeholder at position {}", i);
             }
-            placeholder->fmt_format = "{0" + std::string(placeholder->format_spec) + "}";
             placeholders.push_back(*placeholder);
             plain_text_parts.push_back(std::string(current_text.data(), current_text.size()));
             current_text.clear();
@@ -614,11 +647,16 @@ std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse
     pos++;  // Skip '{'
 
     // We are trying to mimic fmtlib format specifiers here, but device already changed it a bit:
-    // replacement_field ::= "{" arg_id "," type_id [":" (format_spec | chrono_format_spec)] "}"
-    // type_id           ::= "a"..."z" | "A"..."Z"
+    // replacement_field ::= "{" arg_id "," type_id [":" format_spec] "}"
     // arg_id            ::= integer
     // integer           ::= digit+
     // digit             ::= "0"..."9"
+    // type_id           ::= short_type | long_type
+    // short_type        ::= "a"..."z" | "A"..."Z"         (single character, e.g. 'I' for uint32_t)
+    // long_type         ::= "/" sub_type "_" extra_info   ('/' signals a multi-character type descriptor)
+    // sub_type          ::= "e"                           (regular enum)
+    //                     | "E"                           (flag/bitmask enum with operator|)
+    // extra_info        ::= short_type "_" enum_name      (e.g. "I_test::deep::Enum1")
     // But we don't support using identifiers to reduce kernel size, only integers for arg_id.
 
     // Regarding format_spec:
@@ -652,12 +690,78 @@ std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse
     pos++;  // Skip ','
     char type_id = format_str[pos++];
 
+    // Check for long type marker: '/' followed by sub-type character.
+    // Supported: /e_<base_type>_<enum_name> (regular enum), /E_<base_type>_<enum_name> (flag enum)
+    if (type_id == '/' && pos + 3 < format_str.size() && (format_str[pos] == 'e' || format_str[pos] == 'E') &&
+        format_str[pos + 1] == '_') {
+        bool is_flag_enum = (format_str[pos] == 'E');
+        pos += 2;  // Skip 'e_' or 'E_'
+        char base_type = format_str[pos++];
+        if (pos < format_str.size() && format_str[pos] == '_') {
+            pos++;  // Skip second '_'
+        }
+        // Read enum type name until format spec separator or '}'.
+        // A single ':' not followed by ':' marks the start of a format spec.
+        // '::' is a C++ namespace separator and is part of the enum type name.
+        std::size_t name_start = pos;
+        while (pos < format_str.size() && format_str[pos] != '}') {
+            if (format_str[pos] == ':' && (pos + 1 >= format_str.size() || format_str[pos + 1] != ':')) {
+                break;  // Single ':' = format spec separator
+            }
+            if (format_str[pos] == ':' && pos + 1 < format_str.size() && format_str[pos + 1] == ':') {
+                pos += 2;  // Skip '::' as part of the name
+                continue;
+            }
+            pos++;
+        }
+        std::string_view enum_type_name = format_str.substr(name_start, pos - name_start);
+
+        // Parse optional format spec (may contain '#' for full name)
+        bool use_full_name = false;
+        std::size_t format_spec_start = pos;
+        while (pos < format_str.size() && format_str[pos] != '}') {
+            if (format_str[pos] == '#') {
+                use_full_name = true;
+            }
+            pos++;
+        }
+        auto format_spec = format_str.substr(format_spec_start, pos - format_spec_start);
+        pos++;  // Skip '}'
+
+        // Build fmt_format for the enum string, stripping '#' which is consumed as enum_use_full_name.
+        std::string fmt_format = "{0";
+        for (char c : format_spec) {
+            if (c != '#') {
+                fmt_format += c;
+            }
+        }
+        fmt_format += '}';
+
+        FormatPlaceholderInfo info;
+        info.arg_id = arg_id;
+        info.type_id = '/';  // Mark as long type (enum)
+        info.format_spec = format_spec;
+        info.fmt_format = std::move(fmt_format);
+        info.enum_type_name = enum_type_name;
+        info.enum_base_type_id = base_type;
+        info.enum_is_flag = is_flag_enum;
+        info.enum_use_full_name = use_full_name;
+        return info;
+    }
+
     uint32_t format_spec_start = pos;
     while (pos < format_str.size() && format_str[pos] != '}') {
         pos++;
     }
     pos++;  // Skip '}'
-    return {{arg_id, type_id, format_str.substr(format_spec_start, pos - format_spec_start - 1)}};
+    auto format_spec = format_str.substr(format_spec_start, pos - format_spec_start - 1);
+
+    FormatPlaceholderInfo info;
+    info.arg_id = arg_id;
+    info.type_id = type_id;
+    info.format_spec = format_spec;
+    info.fmt_format = "{0" + std::string(format_spec) + "}";
+    return info;
 }
 
 std::string_view DevicePrintParser::format_message(
@@ -757,6 +861,335 @@ std::string_view DevicePrintParser::format_message(
                     format,
                     std::get<bool>(buffer.argument_values[placeholder.arg_id]));
                 break;
+            case 't':  // TileSliceDynamic
+            {
+                const auto& tile_slice = std::get<TileSliceDynamic>(buffer.argument_values[placeholder.arg_id]);
+
+                // Read any error codes and handle accordingly
+                tt::CBIndex cb = static_cast<tt::CBIndex>(tile_slice.header.cb_id);
+                switch (tile_slice.header.return_code) {
+                    case DPrintOK: break;  // Continue to print the tile slice
+                    case DPrintErrorBadPointer: {
+                        uint32_t cb_ptr_val = tile_slice.header.cb_ptr;
+                        uint8_t count = tile_slice.header.data_count;
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n",
+                            enchantum::scoped::to_string(cb),
+                            cb_ptr_val,
+                            count);
+                        continue;
+                    }
+                    case DPrintErrorUnsupportedFormat: {
+                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Tried printing {}: Unsupported data format ({})\n",
+                            enchantum::scoped::to_string(cb),
+                            data_format);
+                        continue;
+                    }
+                    case DPrintErrorMath:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: MATH core does not support TileSlice printing, omitting print...\n");
+                        continue;
+                    case DPrintErrorEthernet:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: Ethernet core does not support TileSlice printing, omitting print...\n");
+                        continue;
+                    default:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n",
+                            tile_slice.header.return_code);
+                        continue;
+                }
+
+                // No error codes, print the TileSlice
+                const uint8_t* data = tile_slice.data.data();
+                uint32_t i = 0;
+                bool count_exceeded = false;
+                for (int h = tile_slice.header.slice_range.h0; h < tile_slice.header.slice_range.h1;
+                     h += tile_slice.header.slice_range.hs) {
+                    for (int w = tile_slice.header.slice_range.w0; w < tile_slice.header.slice_range.w1;
+                         w += tile_slice.header.slice_range.ws) {
+                        // If the number of data specified by the SliceRange exceeds the number that was
+                        // saved in the print buffer (set by the MAX_COUNT template parameter in the
+                        // TileSlice), then break early.
+                        if (i >= tile_slice.header.data_count) {
+                            count_exceeded = true;
+                            break;
+                        }
+                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        switch (data_format) {
+                            case tt::DataFormat::Float16_b: {
+                                const uint16_t* float16_b_ptr = reinterpret_cast<const uint16_t*>(data);
+                                fmt::format_to(
+                                    std::back_inserter(buffer.buffer), format, bfloat16_to_float(float16_b_ptr[i]));
+                                break;
+                            }
+                            case tt::DataFormat::Float32: {
+                                const float* float32_ptr = reinterpret_cast<const float*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, float32_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::Bfp4_b:
+                            case tt::DataFormat::Bfp8_b: {
+                                // Saved the exponent and data together
+                                const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
+                                uint8_t val = (data_ptr[i] >> 8) & 0xFF;
+                                uint8_t exponent = data_ptr[i] & 0xFF;
+                                uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
+                                fmt::format_to(
+                                    std::back_inserter(buffer.buffer), format, *reinterpret_cast<float*>(&bit_val));
+                                break;
+                            }
+                            case tt::DataFormat::Int8: {
+                                const int8_t* data_ptr = reinterpret_cast<const int8_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt8: {
+                                const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt16: {
+                                const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::Int32: {
+                                const int32_t* data_ptr = reinterpret_cast<const int32_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt32: {
+                                const uint32_t* data_ptr = reinterpret_cast<const uint32_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            default: break;
+                        }
+                        if (w + tile_slice.header.slice_range.ws < tile_slice.header.slice_range.w1) {
+                            buffer.buffer.append(" "sv);
+                        }
+                        i++;
+                    }
+
+                    // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
+                    // know that the slice has been truncated.
+                    if (count_exceeded) {
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "<TileSlice data truncated due to exceeding max count ({})>\n",
+                            tile_slice.header.data_count);
+                        break;
+                    }
+
+                    if (tile_slice.header.endl_rows) {
+                        buffer.buffer.append("\n"sv);
+                    }
+                }
+
+                break;
+            }
+            case 'A':  // dp_typed_array_t
+            {
+                const auto& arr = std::get<TypedArray>(buffer.argument_values[placeholder.arg_id]);
+                std::string elements_format = "{" + std::string(placeholder.format_spec) + "} ";
+                switch (arr.type) {
+                    case tt::DataFormat::Float16:
+                    case tt::DataFormat::Bfp8:
+                    case tt::DataFormat::Bfp4:
+                    case tt::DataFormat::Bfp2:
+                    case tt::DataFormat::Lf8:
+                    case tt::DataFormat::Bfp8_b:
+                    case tt::DataFormat::Bfp4_b:
+                    case tt::DataFormat::Bfp2_b:
+                    case tt::DataFormat::Float16_b:
+                    case tt::DataFormat::UInt16: elements_format = elements_format + elements_format; break;
+                    case tt::DataFormat::Int8:
+                    case tt::DataFormat::UInt8:
+                        elements_format = elements_format + elements_format + elements_format + elements_format;
+                        break;
+                    default:
+                    case tt::DataFormat::Tf32:
+                    case tt::DataFormat::Float32:
+                    case tt::DataFormat::UInt32:
+                    case tt::DataFormat::Int32:
+                        // Do nothing, single element format is sufficient
+                        break;
+                }
+                format = fmt::runtime(elements_format);
+                for (uint32_t datum : arr.data) {
+                    switch (arr.type) {
+                        case tt::DataFormat::Float16:
+                        case tt::DataFormat::Bfp8:
+                        case tt::DataFormat::Bfp4:
+                        case tt::DataFormat::Bfp2:
+                        case tt::DataFormat::Lf8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                make_float(5, 10, datum & 0xffff),
+                                make_float(5, 10, (datum >> 16) & 0xffff));
+                            break;
+                        case tt::DataFormat::Bfp8_b:
+                        case tt::DataFormat::Bfp4_b:
+                        case tt::DataFormat::Bfp2_b:
+                        case tt::DataFormat::Float16_b:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                make_float(8, 7, datum & 0xffff),
+                                make_float(8, 7, (datum >> 16) & 0xffff));
+                            break;
+                        case tt::DataFormat::Tf32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, make_float(8, 10, datum));
+                            break;
+                        case tt::DataFormat::Float32: {
+                            float value;
+                            memcpy(&value, &datum, sizeof(float));
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, value);
+                        } break;
+                        case tt::DataFormat::UInt32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, datum);
+                            break;
+                        case tt::DataFormat::UInt16:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, datum & 0xffff, datum >> 16);
+                            break;
+                        case tt::DataFormat::Int32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, static_cast<int32_t>(datum));
+                            break;
+                        case tt::DataFormat::Int8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                static_cast<int>(static_cast<int8_t>(datum & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 8) & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 16) & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 24) & 0xff)));
+                            break;
+                        case tt::DataFormat::UInt8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                static_cast<unsigned int>(datum & 0xff),
+                                static_cast<unsigned int>((datum >> 8) & 0xff),
+                                static_cast<unsigned int>((datum >> 16) & 0xff),
+                                static_cast<unsigned int>((datum >> 24) & 0xff));
+                            break;
+                        default:
+                            fmt::format_to(std::back_inserter(buffer.buffer), "Unknown data format {} ", arr.type);
+                            break;
+                    }
+                }
+                break;
+            }
+            case '/':  // Long type: '/' followed by sub-type character
+            {
+                TT_ASSERT(placeholder.enum_base_type_id != 0, "Unsupported long type in format placeholder");
+                // Currently only '/e' (enum) and /E (flag enum) are supported
+                // Get the integer value from the argument (using the base type)
+                auto& arg = buffer.argument_values[placeholder.arg_id];
+                std::visit(
+                    [&placeholder, &buffer](auto&& v) {
+                        using int_type = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_integral_v<int_type>) {
+                            int_type int_val = static_cast<int_type>(v);
+
+                            // Build the enum string representation, then format it with the user's format spec.
+                            fmt::memory_buffer enum_str;
+                            const auto* ei = placeholder.enum_info;
+
+                            // Append "TypeName::" prefix when full name is requested
+                            auto append_type_prefix = [&]() {
+                                if (placeholder.enum_use_full_name) {
+                                    enum_str.append(placeholder.enum_type_name);
+                                    enum_str.append("::"sv);
+                                }
+                            };
+
+                            // Format an unrecognized value as (TypeName)integer
+                            auto append_raw_value = [&](int_type val) {
+                                fmt::format_to(std::back_inserter(enum_str), "({}){}", placeholder.enum_type_name, val);
+                            };
+
+                            if (!ei || ei->enumerators.empty()) {
+                                // No DWARF info available
+                                append_raw_value(int_val);
+                            } else if (placeholder.enum_is_flag && int_val != 0) {
+                                // Print bitfield: Flag1 | Flag3 or BitEnum::Flag1 | BitEnum::Flag3
+                                bool first = true;
+                                int_type remaining = int_val;
+                                for (const auto& [eval, ename] : ei->enumerators) {
+                                    if (eval != 0 && (remaining & eval) == eval) {
+                                        if (!first) {
+                                            enum_str.append(" | "sv);
+                                        }
+                                        append_type_prefix();
+                                        enum_str.append(std::string_view(ename));
+                                        remaining &= ~eval;
+                                        first = false;
+                                    }
+                                }
+                                if (remaining != 0) {
+                                    if (!first) {
+                                        enum_str.append(" | "sv);
+                                    }
+                                    append_raw_value(remaining);
+                                }
+                            } else {
+                                // Non-bitfield: find exact match
+                                const std::string* found_name = nullptr;
+                                for (const auto& [eval, ename] : ei->enumerators) {
+                                    if (eval == int_val) {
+                                        found_name = &ename;
+                                        break;  // Use first match
+                                    }
+                                }
+                                if (found_name) {
+                                    append_type_prefix();
+                                    enum_str.append(std::string_view(*found_name));
+                                } else {
+                                    append_raw_value(int_val);
+                                }
+                            }
+
+                            // Apply user's format spec (alignment, width, fill, etc.)
+                            auto enum_sv = std::string_view(enum_str.data(), enum_str.size());
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer), fmt::runtime(placeholder.fmt_format), enum_sv);
+                        }
+                    },
+                    arg);
+                break;
+            }
+            case 's':  // string pointer — resolve from .device_print_strings if possible, else hex
+            {
+                uint32_t str_addr = std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]);
+                if (str_addr >= format_strings_address &&
+                    str_addr < format_strings_address + format_strings_bytes.size()) {
+                    const char* str_ptr = reinterpret_cast<const char*>(
+                        format_strings_bytes.data() + (str_addr - format_strings_address));
+                    fmt::format_to(
+                        std::back_inserter(buffer.buffer),
+                        fmt::runtime(placeholder.fmt_format),
+                        std::string_view(str_ptr));
+                } else {
+                    fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", str_addr);
+                }
+                break;
+            }
+            case 'p':  // generic pointer — print as hex address
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    "0x{:x}",
+                    std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -808,12 +1241,208 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
         }
         case 'w':  // bf16_t, but stored as float
         {
-            auto value = bfloat16_to_float(read_value_from_payload<uint16_t>(payload_bytes, offset));
-            std::cout << "Read bf16 value converted to float=" << value << std::endl;
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            auto value = bfloat16_to_float(data);
             return value;
         }
+        case 't':  // TileSlice, but `pad` field carried info about MAX_BYTES
+        {
+            TileSliceDynamic tile_slice;
+            tile_slice.header = read_value_from_payload<TileSliceHostDev<0>>(payload_bytes, offset);
+            tile_slice.data.resize(tile_slice.header.pad);
+            for (size_t i = 0; i < tile_slice.header.pad; ++i) {
+                tile_slice.data[i] = read_value_from_payload<uint8_t>(payload_bytes, offset);
+            }
+            return tile_slice;
+        }
+        case 'A':  // dp_typed_array_t: [len, type, data[0..len-1]]
+        {
+            TypedArray arr;
+            uint32_t packed_len_type = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            uint16_t len = static_cast<uint16_t>(packed_len_type >> 16);
+            arr.type = static_cast<tt::DataFormat>(packed_len_type & 0xffff);
+            arr.data.resize(len);
+            for (uint32_t i = 0; i < len; ++i) {
+                arr.data[i] = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            }
+            return arr;
+        }
+        case 's':  // string pointer (resolved from ELF section if possible, else hex)
+        case 'p':  // generic pointer
+            return read_value_from_payload<uint32_t>(payload_bytes, offset);
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }
+}
+
+const DevicePrintParser::EnumInfo* DevicePrintParser::get_enum_info(std::string_view type_name) {
+    if (!enum_info_loaded_) {
+        load_enum_info_from_dwarf();
+        enum_info_loaded_ = true;
+    }
+    auto it = enum_info_cache_.find(type_name);
+    if (it != enum_info_cache_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+void DevicePrintParser::load_enum_info_from_dwarf() {
+    Dwarf_Debug dbg = nullptr;
+    Dwarf_Error err = nullptr;
+
+    // libdwarf can open ELF files directly by path
+    int res = dwarf_init_path(
+        elf_path.c_str(),
+        nullptr,  // true_pathbuf
+        0,        // true_pathlen
+        DW_GROUPNUMBER_ANY,
+        nullptr,  // errhand
+        nullptr,  // errarg
+        &dbg,
+        &err);
+
+    if (res != DW_DLV_OK) {
+        // No DWARF info available
+        return;
+    }
+
+    // Traverse all compilation units
+    Dwarf_Unsigned cu_header_length = 0;
+    Dwarf_Half version_stamp = 0;
+    Dwarf_Off abbrev_offset = 0;
+    Dwarf_Half address_size = 0;
+    Dwarf_Half offset_size = 0;
+    Dwarf_Half extension_size = 0;
+    Dwarf_Sig8 type_signature;
+    Dwarf_Unsigned typeoffset = 0;
+    Dwarf_Unsigned next_cu_header = 0;
+    Dwarf_Half header_cu_type = 0;
+    Dwarf_Bool is_info = true;
+
+    while (dwarf_next_cu_header_d(
+               dbg,
+               is_info,
+               &cu_header_length,
+               &version_stamp,
+               &abbrev_offset,
+               &address_size,
+               &offset_size,
+               &extension_size,
+               &type_signature,
+               &typeoffset,
+               &next_cu_header,
+               &header_cu_type,
+               &err) == DW_DLV_OK) {
+        Dwarf_Die cu_die = nullptr;
+        if (dwarf_siblingof_b(dbg, nullptr, is_info, &cu_die, &err) != DW_DLV_OK) {
+            continue;
+        }
+
+        // Recursive lambda to walk the DIE tree and collect enum types with qualified names
+        std::function<void(Dwarf_Die, const std::string&)> walk_die;
+        walk_die = [&](Dwarf_Die die, const std::string& parent_scope) {
+            Dwarf_Half tag = 0;
+            if (dwarf_tag(die, &tag, &err) != DW_DLV_OK) {
+                return;
+            }
+
+            // Build the current scope name
+            std::string current_scope = parent_scope;
+            char* die_name = nullptr;
+            bool has_name = (dwarf_diename(die, &die_name, &err) == DW_DLV_OK && die_name);
+
+            if (tag == DW_TAG_namespace || tag == DW_TAG_class_type || tag == DW_TAG_structure_type) {
+                if (has_name) {
+                    if (!current_scope.empty()) {
+                        current_scope += "::";
+                    }
+                    current_scope += die_name;
+                }
+            }
+
+            if (tag == DW_TAG_enumeration_type && has_name) {
+                std::string enum_qualified_name = current_scope;
+                if (!enum_qualified_name.empty()) {
+                    enum_qualified_name += "::";
+                }
+                enum_qualified_name += die_name;
+
+                // Extract enumerator children
+                EnumInfo info;
+                info.type_name = enum_qualified_name;
+
+                Dwarf_Die child = nullptr;
+                if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
+                    while (child) {
+                        Dwarf_Half child_tag = 0;
+                        if (dwarf_tag(child, &child_tag, &err) == DW_DLV_OK && child_tag == DW_TAG_enumerator) {
+                            char* enumerator_name = nullptr;
+                            Dwarf_Signed sval = 0;
+                            Dwarf_Unsigned uval = 0;
+                            bool got_value = false;
+                            int64_t enum_val = 0;
+
+                            if (dwarf_diename(child, &enumerator_name, &err) == DW_DLV_OK && enumerator_name) {
+                                // Try to get const_value as signed first, then unsigned
+                                Dwarf_Attribute attr = nullptr;
+                                if (dwarf_attr(child, DW_AT_const_value, &attr, &err) == DW_DLV_OK) {
+                                    Dwarf_Half form = 0;
+                                    dwarf_whatform(attr, &form, &err);
+                                    if (dwarf_formsdata(attr, &sval, &err) == DW_DLV_OK) {
+                                        enum_val = sval;
+                                        got_value = true;
+                                    } else if (dwarf_formudata(attr, &uval, &err) == DW_DLV_OK) {
+                                        enum_val = static_cast<int64_t>(uval);
+                                        got_value = true;
+                                    }
+                                    dwarf_dealloc_attribute(attr);
+                                }
+
+                                if (got_value) {
+                                    info.enumerators.emplace_back(enum_val, std::string(enumerator_name));
+                                }
+
+                                dwarf_dealloc(dbg, enumerator_name, DW_DLA_STRING);
+                            }
+                        }
+
+                        Dwarf_Die sibling = nullptr;
+                        if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
+                            dwarf_dealloc_die(child);
+                            break;
+                        }
+                        dwarf_dealloc_die(child);
+                        child = sibling;
+                    }
+                }
+
+                if (!info.enumerators.empty()) {
+                    enum_info_cache_[enum_qualified_name] = std::move(info);
+                }
+            }
+            dwarf_dealloc(dbg, die_name, DW_DLA_STRING);
+
+            // Recurse into children
+            Dwarf_Die child = nullptr;
+            if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
+                while (child) {
+                    walk_die(child, (tag == DW_TAG_enumeration_type) ? parent_scope : current_scope);
+                    Dwarf_Die sibling = nullptr;
+                    if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
+                        dwarf_dealloc_die(child);
+                        break;
+                    }
+                    dwarf_dealloc_die(child);
+                    child = sibling;
+                }
+            }
+        };
+
+        walk_die(cu_die, "");
+        dwarf_dealloc_die(cu_die);
+    }
+
+    dwarf_finish(dbg);
 }
 
 }  // namespace tt::tt_metal

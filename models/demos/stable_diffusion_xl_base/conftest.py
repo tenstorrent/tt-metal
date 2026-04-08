@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -6,8 +6,211 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from conftest import is_galaxy
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_L1_SMALL_SIZE_BH
+
+# =============================================================================
+# SDXL Model Location Fixtures (Session-scoped for CIv2 download efficiency)
+# =============================================================================
+# These fixtures download models once per pytest session and cache the location.
+# This prevents redundant downloads when running multiple SDXL tests.
+# =============================================================================
+
+# --- Base Model Locations ---
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_unet_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base UNet model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL base pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_vae_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base VAE model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/vae",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_text_encoder_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base text_encoder (CLIP) model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/text_encoder",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_text_encoder_2_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base text_encoder_2 (CLIP with projection) model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/text_encoder_2",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_tokenizer_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base tokenizer.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/tokenizer",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_tokenizer_2_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base tokenizer_2.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/tokenizer_2",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+# --- Inpainting Model Locations ---
+
+
+@pytest.fixture(scope="session")
+def sdxl_inpainting_unet_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL inpainting UNet model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-1.0-inpainting-0.1/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
+
+
+@pytest.fixture(scope="session")
+def sdxl_inpainting_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL inpainting pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-1.0-inpainting-0.1",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
+
+
+# --- Refiner Model Locations ---
+
+
+@pytest.fixture(scope="session")
+def sdxl_refiner_unet_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL refiner UNet model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-refiner-1.0/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-refiner-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_refiner_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL refiner pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-refiner-1.0",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-refiner-1.0"
 
 
 def pytest_configure(config):
@@ -104,20 +307,35 @@ def reset_config(request):
     return reset_bool, reset_period
 
 
+def is_galaxy():
+    import ttnn
+
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+    )
+
+
 def get_device_name():
     import ttnn
 
-    num_devices = ttnn.GetNumAvailableDevices()
-    if is_galaxy():
-        return "galaxy"
-    elif num_devices == 0:
-        return "cpu"
-    elif num_devices == 1:
-        return "n150"
-    elif num_devices == 2:
-        return "n300"
-    elif num_devices == 8:
-        return "t3k"
+    cluster_type = ttnn.cluster.get_cluster_type()
+    cluster_type_to_name = {
+        ttnn.cluster.ClusterType.N150: "n150",
+        ttnn.cluster.ClusterType.N300: "n300",
+        ttnn.cluster.ClusterType.N300_2x2: "n300_2x2",
+        ttnn.cluster.ClusterType.T3K: "t3k",
+        ttnn.cluster.ClusterType.GALAXY: "galaxy",
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: "bh_galaxy",
+        ttnn.cluster.ClusterType.P100: "p100",
+        ttnn.cluster.ClusterType.P150: "p150",
+        ttnn.cluster.ClusterType.P150_X2: "p150x2",
+        ttnn.cluster.ClusterType.P150_X4: "p150x4",
+        ttnn.cluster.ClusterType.P150_X8: "p150x8",
+        ttnn.cluster.ClusterType.P300: "p300",
+        ttnn.cluster.ClusterType.P300_X2: "p300x2",
+    }
+    return cluster_type_to_name.get(cluster_type, "unknown")
 
 
 @pytest.fixture
@@ -157,6 +375,37 @@ def validate_fabric_compatibility(request):
             requested_devices = total_devices
 
         assert requested_devices == total_devices, "Requested devices must be equal to total devices"
+
+
+@pytest.fixture
+def sdxl_l1_small_size():
+    """
+    Returns the appropriate L1_SMALL_SIZE value based on device architecture.
+    """
+    return SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH
+
+
+@pytest.fixture(scope="function")
+def device_params(request, sdxl_l1_small_size):
+    """
+    Override the global device_params fixture to automatically inject SDXL L1_SMALL_SIZE.
+
+    If the parametrized device_params dict doesn't contain 'l1_small_size',
+    it will be automatically added based on the device architecture (Wormhole vs Blackhole).
+
+    NOTE: `device_params` fixture exists in conftest.py in root but this one will take precedence.
+    Fixture in conftest.py closest to the test in hierarchy will take precedence.
+    We can still set L1_SMALL_SIZE inside tests for some specific cases if needed.
+    Otherwise, when we do not specify it inside parentheses in test params, it will get set
+    inside this device_params fixture.
+    """
+    params = getattr(request, "param", {})
+
+    # Auto-inject l1_small_size if not already specified
+    if "l1_small_size" not in params:
+        params = {**params, "l1_small_size": sdxl_l1_small_size}
+
+    return params
 
 
 def _resolve_local_lora_file_path(path_input):

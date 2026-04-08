@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,6 +58,11 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
         if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
             (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
             (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+            continue;
+        }
+
+        // Special case where Fp8_e4m3 can be used with any format
+        if (format == DataFormat::Fp8_e4m3) {
             continue;
         }
 
@@ -213,9 +218,11 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Invalid) {
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
-        pack_src_format = DataFormat::Float16;
+        pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        if (is_bfp_format(data_format)) {
+        if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
+            pack_src_format = DataFormat::Float32;
+        } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
             } else {

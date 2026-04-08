@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -45,6 +46,11 @@ class HWCommandQueue;
 class EnqueueProgramCommand;
 
 class Kernel;
+
+// Metal 2.0 type aliases
+using KernelSpecName = std::string;
+using DFBSpecName = std::string;
+using SemaphoreSpecName = std::string;
 
 namespace distributed {
 class MeshWorkload;
@@ -207,6 +213,7 @@ public:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(
@@ -219,6 +226,7 @@ public:
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     bool is_finalized() const;
+    bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
@@ -256,7 +264,9 @@ public:
     // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
     // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
     // it.
+    // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
+        ContextId context_id,
         IDevice* device,
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
@@ -306,6 +316,37 @@ public:
 
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
+
+    // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
+    void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
+    void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+
+    // Metal 2.0: Get handle from name (TT_FATAL if not found)
+    KernelHandle get_kernel_handle(const KernelSpecName& name) const;
+    uint32_t get_dfb_handle(const DFBSpecName& name) const;
+    uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+
+    // Metal 2.0: Get kernel by name (TT_FATAL if not found)
+    std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
+        return get_kernel(get_kernel_handle(name));
+    }
+
+    // Metal 2.0: Runtime argument schema for validation
+    struct KernelRTASchema {
+        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
+        size_t num_common_runtime_args = 0;
+    };
+
+    // Metal 2.0: Runtime argument schema registration and lookup
+    void register_kernel_rta_schema(
+        const KernelSpecName& name,
+        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+        size_t num_common_runtime_args);
+    const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
+
+    // Metal 2.0: Get all registered kernel names (for completeness validation)
+    std::vector<KernelSpecName> get_registered_kernel_names() const;
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -378,6 +419,17 @@ private:
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
 
+    // Initial Metal 2.0 implementation uses a name registry to map names to handles.
+    // This indirection is simple and non-invasive, but less efficient than a direct mapping.
+    struct Metal2NameRegistry {
+        std::unordered_map<KernelSpecName, KernelHandle> kernel_handles;
+        std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
+        std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
+        std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+    };
+    std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // Semaphores
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;

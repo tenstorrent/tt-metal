@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-
-constexpr uint32_t onetile = 1U;
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:

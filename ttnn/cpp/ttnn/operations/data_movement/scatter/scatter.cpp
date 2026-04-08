@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -260,12 +260,16 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
 // Writes all values from the tensor src into self at the indices specified in the index tensor.
 // For each value in src, its output index is specified by its index in src for dimension != dim and by the
 // corresponding value in index for dimension = dim. self, index and src (if it is a Tensor) should all have the same
 // number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
-Tensor ScatterOperation::invoke(
+Tensor scatter(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -276,10 +280,18 @@ Tensor ScatterOperation::invoke(
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    using namespace CMAKE_UNIQUE_NAMESPACE;
+    using namespace operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
 
-    check_support(input_tensor, index_tensor, source_tensor, dim);
-    validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_reduction_string);
+    // Normalize negative dimension before any helper indexes shapes with dim
+    const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
+    TT_FATAL(
+        normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
+        "scatter: dim {} is out of range for tensor rank {}",
+        dim,
+        input_tensor_rank);
+
+    check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
+    validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
@@ -288,7 +300,7 @@ Tensor ScatterOperation::invoke(
     const auto original_layout = input_tensor.layout();
 
     // index and source tensors should have same rank as input tensor
-    const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     // tensors sent to the device operation must be:
@@ -297,13 +309,17 @@ Tensor ScatterOperation::invoke(
     // - (un)squeezed to 4D
     Shape after_transpose_shape;
     Tensor transformed_input_tensor = pre_scatter_transform_tensor(
-        input_tensor, after_transpose_shape, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+        input_tensor, after_transpose_shape, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor transformed_index_tensor =
-        pre_scatter_transform_tensor(index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    Tensor transformed_index_tensor = pre_scatter_transform_tensor(
+        index_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     Tensor transformed_source_tensor = pre_scatter_transform_tensor(
-        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, index_tensor.logical_shape());
+        source_tensor,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        input_tensor_is_rank_le_4d,
+        index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
@@ -312,31 +328,31 @@ Tensor ScatterOperation::invoke(
 
     Tensor output = ttnn::prim::scatter(
         transformed_input_tensor,
-        dim,
+        normalized_dim,
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
         reduction,
         sub_core_grid);
-    output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
+    output = post_scatter_transform_tensor(
         output,
         after_transpose_shape,
-        dim,
+        normalized_dim,
         input_tensor_is_dim_last_idx,
         original_input_tensor_lshape,
         original_layout);
     return output;
 }
 
-Tensor ScatterAddOperation::invoke(
+Tensor scatter_add(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return ScatterOperation::invoke(
+    return scatter(
         input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum
+from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
@@ -88,11 +88,24 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def should_pad_sampling_logits_to_power_of_2(
+    base_model_name: str, padded_vocab_size: int, sampling_splits: int
+) -> bool:
+    # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
+    if sampling_splits < 1:
+        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
+        return False
+
+    per_device_vocab = padded_vocab_size // sampling_splits
+    return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
+    HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
     HIFI4 = "hifi4"
     HIFI4_FP32 = "hifi4fp32"
 
@@ -405,6 +418,11 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
         raise ValueError(f"Error loading JSON configuration: {e}")
 
 
+class CheckpointType(Enum):
+    Meta = auto()
+    HuggingFace = auto()
+
+
 class ModelArgs:
     OP_KEYS = (
         # Embedding
@@ -518,6 +536,7 @@ class ModelArgs:
         HF_MODEL = os.getenv("HF_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
         if HF_MODEL:
+            self.checkpoint_type = CheckpointType.HuggingFace
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
 
@@ -741,6 +760,12 @@ class ModelArgs:
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            self.compute_kernel_config_hifi2_nol1acc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
@@ -1093,6 +1118,8 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
+        if self.base_model_name == "Mistral-Small-3.1-24B":
+            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
     # =========================================================================
@@ -1257,15 +1284,24 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            return self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=self.dim,
-                grid_size=self.mlp2_grid(seq_len),
-                per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if not self.is_galaxy
-                else None,
-            )
+            if seq_len > 128:
+                grid = self.mlp2_grid(seq_len)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
+            else:
+                return self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                    n=self.dim,
+                    grid_size=self.mlp2_grid(seq_len),
+                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                    if not self.is_galaxy
+                    else None,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1547,26 +1583,36 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                    )
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                ),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
-            )
+            if seq_len > 128:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+                )
+            else:
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=7
+                    if self.device_name == "P100"
+                    else (
+                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                            1,
+                            8
+                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
+                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
+                        )
+                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=math.ceil(
+                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
+                    ),  # N / TILE_WIDTH / grid width
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2286,13 +2332,7 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Mistral-Small-3.1-24B": {
-                    "N150": 32,
-                    "N300": 64,
-                    "T3K": 128,
-                    "TG": 128,
-                    "P150x4": 128,
-                },  # Conservative: Allow on all devices
+                "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2595,6 +2635,17 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
+        if self.num_devices > 0:
+            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
+            # Only enable this optimization on the non-multi-step sampling path.
+            # The [1, 1] mesh path splits logits before TopK today and would need
+            # matching input padding in `TTSampling.sample()` to safely use it.
+            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
+                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+            )
+        else:
+            self.pad_logits_to_power_of_2 = False
+
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
         if self.num_devices:
@@ -2652,6 +2703,22 @@ class ModelArgs:
 
         self._set_vision_params(config)
         self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.vision_chunk_size = config.get("vision_chunk_size", 896)
+        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+
+        self.vision_dim = 1280
+        self.vision_mlp_ratio = 4
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_act_layer = ttnn.UnaryOpType.GELU
+        self.vision_dropout = 0.0
+        self.vision_attn_n_heads = 16
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        self.vision_n_layers = 32
+        self.vision_n_global_layers = 8
+        self.vision_max_num_tiles = 4
+        self.vision_patch_size = 14
+        self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
@@ -2762,12 +2829,13 @@ class ModelArgs:
             merged_text_config = merge_text_config(config)
             self._set_params_from_dict(merged_text_config)
 
-            if "vision_config" in config:
-                # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
-                merged_vision_config = merge_vision_config(config)
-                self._set_vision_params({"vision_config": merged_vision_config})
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                self._set_vision_params(config["vision_config"])
+            else:
+                if "vision_config" in config:
+                    merged_vision_config = merge_vision_config(config)
+                    self._set_vision_params({"vision_config": merged_vision_config})
 
-            # Set is_multimodal using original config that has vision_config
             self.is_multimodal = "vision_config" in config or self.is_vision()
         else:
             self._set_params_from_dict(config)
@@ -3578,13 +3646,15 @@ class ModelArgs:
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector.mm_soft_emb_norm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_rms_norm(self):
@@ -3630,11 +3700,17 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
-                model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+                )
                 self.cached_hf_model = model
             else:
                 model = self.cached_hf_model
-            model.model.layers = model.model.layers[: self.n_layers]
+            inner = model.model
+            if hasattr(inner, "layers"):
+                inner.layers = inner.layers[: self.n_layers]
+            elif hasattr(inner, "language_model") and hasattr(inner.language_model, "layers"):
+                inner.language_model.layers = inner.language_model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
             return wrapper
@@ -3661,10 +3737,11 @@ class ModelArgs:
 
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
-            layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+            layer = vision_tower.vision_model.encoder.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3704,10 +3781,11 @@ class ModelArgs:
 
     def reference_vision_attention(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.transformer.layers[layer_idx].attention
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer.layers[layer_idx].attention
         else:
-            layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+            layer = vision_tower.vision_model.encoder.layers[0].self_attn
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3719,14 +3797,55 @@ class ModelArgs:
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
+    def _get_vision_tower(self, model):
+        """Handle different HF model architectures: Mistral3 nests vision_tower
+        under model.model, while Mllama has it directly on model."""
+        if hasattr(model, "vision_tower"):
+            return model.vision_tower
+        return model.model.vision_tower
+
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            # For Mistral: vision_tower is the PixtralVisionModel directly
-            layer = model.vision_tower.transformer
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer
         else:
-            # For other models: vision_tower.vision_model.encoder
-            layer = model.vision_tower.vision_model.encoder
+            layer = vision_tower.vision_model.encoder
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_pixtral_image_block(self, layer_num=0):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.transformer.layers[layer_num]
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.transformer.layers[0].ffn_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_conv2d_patch(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rot_emb(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.patch_positional_embedding
+        else:
+            raise NotImplementedError(f"reference_vision_rot_emb not implemented for {self.model_name}")
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -4208,6 +4327,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
+            MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }

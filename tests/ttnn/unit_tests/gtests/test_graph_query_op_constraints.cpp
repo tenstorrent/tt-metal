@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "impl/context/metal_context.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
@@ -208,7 +207,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::relu(args...); },
+            [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             output_spec.tensor_layout().get_memory_config());
@@ -236,7 +235,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::sqrt(args...); },
+            [](auto&&... args) { return ttnn::sqrt(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             /*fast_and_approximate_mode=*/false,
@@ -267,11 +266,11 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         // Add default parameters
         int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::sigmoid(args...); },
+            [](auto&&... args) { return ttnn::sigmoid(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             vectorMode,
-            unary::Sigmoid::SigmoidMode::ACCURATE,
+            ::ttnn::operations::unary::SigmoidMode::ACCURATE,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -301,7 +300,7 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
         float maxVal = 5.0f;
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::clamp(args...); },
+            [](auto&&... args) { return ttnn::clamp(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             minVal,
@@ -331,7 +330,7 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::reciprocal(args...); },
+            [](auto&&... args) { return ttnn::reciprocal(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             output_spec.tensor_layout().get_memory_config());
@@ -359,7 +358,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::sin(args...); },
+            [](auto&&... args) { return ttnn::sin(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             output_spec.tensor_layout().get_memory_config());
@@ -387,7 +386,7 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::cos(args...); },
+            [](auto&&... args) { return ttnn::cos(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             output_spec.tensor_layout().get_memory_config());
@@ -510,7 +509,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::add(args...); },
+            [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -545,7 +544,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::subtract(args...); },
+            [](auto&&... args) { return ttnn::subtract(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -580,7 +579,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::multiply(args...); },
+            [](auto&&... args) { return ttnn::multiply(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -615,7 +614,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::maximum(args...); },
+            [](auto&&... args) { return ttnn::maximum(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -650,7 +649,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::minimum(args...); },
+            [](auto&&... args) { return ttnn::minimum(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,

@@ -24,6 +24,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multi_core_kernel.cpp
     test_multi_dm_add_two_ints.cpp
     test_multiple_programs.cpp
+    test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
     test_quasar_semaphores.cpp
     test_sdpa_reduce_c.cpp

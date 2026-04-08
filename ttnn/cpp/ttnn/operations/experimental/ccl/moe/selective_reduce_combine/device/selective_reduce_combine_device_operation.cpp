@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,7 +90,7 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t seq_size,
     uint32_t select_experts_k,
     uint32_t experts,
-    const std::optional<uint32_t>& axis,
+    const std::optional<uint32_t>& cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,
@@ -110,7 +110,7 @@ ttnn::Tensor selective_reduce_combine(
             .select_experts_k = select_experts_k,
             .experts = experts,
             .num_links = num_links,
-            .axis = axis,
+            .axis = cluster_axis,
             .topology = topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,8 @@ public:
     [[nodiscard]] bool is_enabled() const;
     void enable();
     void disable();
+
+    [[nodiscard]] bool get_naive_profiling() const;
 
 private:
     bool m_enabled = false;
