@@ -91,6 +91,11 @@ void kernel_main() {
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+#else
+    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
 #endif
 
     // ===== Runtime Args =====
@@ -167,29 +172,29 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
-    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
-    // overwrites the same region at offsets [0, batch_count) without push/pop.
-    // DRAM reads are batched to saturate DRAM bandwidth, while the scratch-to-writer-CB
-    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
-    // and measured faster in practice.
-    cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
+    // Set up scratch buffers for batched reads
+    constexpr uint32_t read_batch_size = 32;
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
+    uint32_t untilize_base = get_write_ptr(cb_untilize_id);
 
     const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
     const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
+    constexpr auto expert_stride_tile = (max_dispatched_tokens_per_expert / 32) * (hidden_size / 32);
 
     // Process each expert in assigned range
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
+        uint32_t tile_batch_counter = 0;
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         if (expert_tokens > max_dispatched_tokens_per_expert) {
             expert_tokens = max_dispatched_tokens_per_expert;
         }
         uint32_t end_page = start_page + expert_tokens;
+        uint32_t start_page_tiled = local_expert * expert_stride_tile;
 
         DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
 
@@ -199,13 +204,29 @@ void kernel_main() {
         if (first_batch_count > 0) {
             for (uint32_t t = 0; t < first_batch_count; t++) {
                 noc_async_read_page(
-                    start_page + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
-                noc_async_read_page(
                     start_page + t,
                     dispatched_metadata_addr_gen,
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
+            cb_reserve_back(cb_dispatched_buffer_id, hidden_size / 32);
+            for (uint32_t t = 0; t < hidden_size / 32; t++) {
+                noc_async_read_page(
+                    start_page_tiled + t,
+                    dispatched_buffer_addr_gen,
+                    buffer_base + t * aligned_dispatched_buffer_page_size);
+            }
+
             noc_async_read_barrier();
+
+            // Push tiles to c_0 so compute's cb_wait_front(cb_in_id) can proceed
+            cb_push_back(cb_dispatched_buffer_id, hidden_size / 32);
+
+            cb_reserve_back(cb_signal_id, 1);
+            volatile tt_l1_ptr uint32_t* signal_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
+            signal_ptr[0] = 0x00000000;
+            cb_push_back(cb_signal_id, 1);
+            tile_batch_counter++;
         }
 
         for (uint32_t batch_start = start_page; batch_start < end_page; batch_start += read_batch_size) {
@@ -213,8 +234,9 @@ void kernel_main() {
             uint32_t batch_count = batch_end - batch_start;
             bool batch_did_local_write = false;
 
+            cb_wait_front(cb_untilize_id, read_batch_size);
             for (uint32_t t = 0; t < batch_count; t++) {
-                uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
+                uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
                 uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
                 volatile tt_l1_ptr uint32_t* metadata =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
@@ -247,16 +269,17 @@ void kernel_main() {
                         // Push output payload to writer
                         cb_reserve_back(cb_output_for_writer_id, 1);
                         uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
-                        noc_async_read(
-                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+                        noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
                         noc_async_read_barrier();
                         cb_push_back(cb_output_for_writer_id, 1);
                     }
                 }
             }
+            cb_pop_front(cb_untilize_id, read_batch_size);
 
             // Issue next batch reads BEFORE write barrier
             uint32_t next_batch_start = batch_start + read_batch_size;
+            uint32_t next_batch_start_tiled = start_page_tiled + tile_batch_counter * hidden_size / 32;
             bool has_next_batch = (next_batch_start < end_page);
             if (has_next_batch) {
                 uint32_t next_batch_end =
@@ -265,13 +288,18 @@ void kernel_main() {
                 for (uint32_t t = 0; t < next_batch_count; t++) {
                     noc_async_read_page(
                         next_batch_start + t,
-                        dispatched_buffer_addr_gen,
-                        buffer_base + t * aligned_dispatched_buffer_page_size);
-                    noc_async_read_page(
-                        next_batch_start + t,
                         dispatched_metadata_addr_gen,
                         metadata_base + t * aligned_dispatched_metadata_page_size);
                 }
+                // Reserve c_0 for next batch (compute popped previous tiles)
+                cb_reserve_back(cb_dispatched_buffer_id, hidden_size / 32);
+                for (uint32_t t = 0; t < hidden_size / 32; t++) {
+                    noc_async_read_page(
+                        next_batch_start_tiled + t,
+                        dispatched_buffer_addr_gen,
+                        buffer_base + t * aligned_dispatched_buffer_page_size);
+                }
+                tile_batch_counter++;
             }
 
             if (batch_did_local_write) {
@@ -280,9 +308,19 @@ void kernel_main() {
 
             if (has_next_batch) {
                 noc_async_read_barrier();
+                // Push tiles to c_0 so compute's cb_wait_front(cb_in_id) can proceed
+                cb_push_back(cb_dispatched_buffer_id, hidden_size / 32);
+                cb_reserve_back(cb_signal_id, 1);
+                cb_push_back(cb_signal_id, 1);
             }
         }
     }
+
+    cb_reserve_back(cb_signal_id, 1);
+    volatile tt_l1_ptr uint32_t* signal_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
+    signal_ptr[0] = ROUTE_INFO_SENTINEL;  // Signal writer that first batch is ready
+    cb_push_back(cb_signal_id, 1);
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);
