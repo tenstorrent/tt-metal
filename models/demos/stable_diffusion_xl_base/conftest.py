@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from conftest import is_galaxy
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_L1_SMALL_SIZE_BH
@@ -308,20 +307,35 @@ def reset_config(request):
     return reset_bool, reset_period
 
 
+def is_galaxy():
+    import ttnn
+
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+    )
+
+
 def get_device_name():
     import ttnn
 
-    num_devices = ttnn.GetNumAvailableDevices()
-    if is_galaxy():
-        return "galaxy"
-    elif num_devices == 0:
-        return "cpu"
-    elif num_devices == 1:
-        return "n150"
-    elif num_devices == 2:
-        return "n300"
-    elif num_devices == 8:
-        return "t3k"
+    cluster_type = ttnn.cluster.get_cluster_type()
+    cluster_type_to_name = {
+        ttnn.cluster.ClusterType.N150: "n150",
+        ttnn.cluster.ClusterType.N300: "n300",
+        ttnn.cluster.ClusterType.N300_2x2: "n300_2x2",
+        ttnn.cluster.ClusterType.T3K: "t3k",
+        ttnn.cluster.ClusterType.GALAXY: "galaxy",
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: "bh_galaxy",
+        ttnn.cluster.ClusterType.P100: "p100",
+        ttnn.cluster.ClusterType.P150: "p150",
+        ttnn.cluster.ClusterType.P150_X2: "p150x2",
+        ttnn.cluster.ClusterType.P150_X4: "p150x4",
+        ttnn.cluster.ClusterType.P150_X8: "p150x8",
+        ttnn.cluster.ClusterType.P300: "p300",
+        ttnn.cluster.ClusterType.P300_X2: "p300x2",
+    }
+    return cluster_type_to_name.get(cluster_type, "unknown")
 
 
 @pytest.fixture

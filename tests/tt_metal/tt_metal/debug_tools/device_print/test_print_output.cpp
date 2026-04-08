@@ -253,3 +253,14 @@ TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
 }
+
+TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
+    std::vector<std::string> messages = {
+        // Runtime const char* prints as hex address (we just check the prefix)
+        "Sample string: 0x",
+        // Compile-time CTSTR resolves to the actual string content from the ELF
+        "Compile time string: Hello world!",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
+}
