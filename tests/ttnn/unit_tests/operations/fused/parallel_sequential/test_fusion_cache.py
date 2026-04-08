@@ -286,13 +286,11 @@ class TestCacheHitCorrectness:
         assert len(_BUILD_CACHE) == 1
 
     def test_cache_hit_produces_fresh_fused_op(self, device):
-        """Cache hit builds a fresh FusedOp (no pinned tensors in cache)."""
+        """Cache hit via build() returns a fresh FusedOp sharing the cached descriptor."""
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        p1 = Parallel(q1, kv1)
-        p1.run()
-        fo1 = p1._run_fused
+        fo1 = Parallel(q1, kv1).build()
 
         q2, kv2, _ = _make_branches(device, seed=200)
         fo2 = Parallel(q2, kv2).build()
