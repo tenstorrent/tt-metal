@@ -53,7 +53,6 @@ from tracy import signpost
 def _metadata_ref_with_shared_experts(
     metadata_orig, shared_expert_ids_to_devices, batch, seq_len, total_experts_per_token, devices
 ):
-    total_tokens = batch * seq_len
     selected_experts_k = metadata_orig.shape[-1]  # Get selected_experts_k from original metadata shape
 
     # Create expanded metadata tensor that includes shared experts
