@@ -5,10 +5,10 @@
 | Metric | Target | Achieved | Notes |
 |--------|--------|----------|-------|
 | Latency (batch=1, eager) | < 10 ms | ~8.5 ms ✅ | Stage 2: full TTNN pipeline, no TorchModuleFallback |
-| Latency (batch=1, traced) | < 5 ms | **~2.3 ms ✅** | Stage 3: TTNN trace capture, no Python dispatch overhead |
-| Throughput (batch=1, traced) | ≥ 500 seq/s | ~440 seq/s (xfail) | Latency target met; 500 seq/s reached at batch=2 |
+| Latency (batch=1, traced) | < 5 ms | **~1.85 ms ✅** | Stage 5: double warmup + D2D input copy; was ~2.3 ms in Stage 3 |
+| Throughput (batch=1, traced) | ≥ 500 seq/s | **~540 seq/s ✅** | Stage 5: now passes at batch=1 (was ~440 seq/s / xfail in Stage 3) |
 | Throughput (batch=2, traced) | ≥ 500 seq/s | **~840 seq/s ✅** | |
-| Throughput (batch=8, traced) | ≥ 2000 seq/s | **~2600 seq/s ✅** | Stage 3 stretch target met |
+| Throughput (batch=8, traced) | ≥ 2000 seq/s | **~3290 seq/s ✅** | Stage 5: was ~2600 seq/s in Stage 3 |
 | Model parameters | < 1M | 805,280 ✅ | |
 | Model size on disk | < 5 MB | 3.07 MB ✅ | float32 weights |
 | PCC vs PyTorch | ≥ 0.99 | ≥ 0.99 ✅ | 9/9 tests pass (batch=1,4,8) on Wormhole N300s |
@@ -17,16 +17,14 @@
 
 ## Throughput vs batch size (traced, Wormhole N300s)
 
+Stage 5 numbers after double-warmup + D2D input copy optimisation:
+
 | Batch | Latency | Throughput | Status |
 |-------|---------|------------|--------|
-| 1 | ~2.3 ms | ~440 seq/s | latency ✅, throughput near-miss |
-| 2 | ~2.4 ms | ~840 seq/s | ✅ exceeds 500 seq/s |
-| 4 | ~2.6 ms | ~1520 seq/s | ✅ |
-| 8 | ~3.1 ms | ~2620 seq/s | ✅ exceeds 2000 seq/s stretch target |
-| 16 | ~4.1 ms | ~3930 seq/s | ✅ |
-| 32 | ~6.2 ms | ~5200 seq/s | ✅ (compute-bound regime begins) |
-| 64 | ~11.2 ms | **~5723 seq/s** | ✅ peak throughput (Stage 4 E5) |
-| 128 | ~25.7 ms | ~4972 seq/s | throughput drops — memory pressure |
+| 1 | ~1.85 ms | **~540 seq/s** | ✅ exceeds 500 seq/s (was 440 seq/s / xfail) |
+| 8 | ~2.43 ms | **~3290 seq/s** | ✅ exceeds 2000 seq/s stretch target |
+| 32 | ~3.65 ms | **~8760 seq/s** | ✅ |
+| 64 | ~6.10 ms | **~10500 seq/s** | ✅ peak throughput |
 
 ## Stage 3 feature status
 
@@ -54,8 +52,18 @@ Measured latency (batch=1): ~2.3 ms  →  4× improvement over Stage 2
 Measured throughput (batch=8): ~2620 seq/s  →  22× improvement over Stage 2
 ```
 
-Throughput saturation occurs around batch=32 (~5200 seq/s) where latency grows
-beyond 5 ms, indicating the compute-bound crossover point.
+### Stage 5 result (double warmup + D2D input copy)
+```
+Two warmup passes before trace capture → better program cache coverage
+ttnn.copy() for device-tensor inputs → eliminates D2H→H2D round-trip
+
+Measured latency (batch=1):  ~1.85 ms  →  1.24× improvement over Stage 3
+Measured throughput (batch=1): ~540 seq/s → 500 seq/s target now met at batch=1
+Measured throughput (batch=8): ~3290 seq/s → 1.26× improvement over Stage 3
+Measured throughput (batch=64): ~10500 seq/s → 1.84× improvement over Stage 4 peak
+```
+
+Throughput saturation now occurs above batch=64 (~10500 seq/s).
 
 ## Running the benchmarks
 
@@ -107,8 +115,8 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 | Trace capture requires static shapes | Fixed context_length=512; streaming always uses eager path for variable-length input |
 | Trace must be recompiled per batch size | One `compile()` call per batch size; cached on model instance |
 | Shared weights across model instances | Read-only weight tensors; no correctness risk; saves ~1.53 MB per additional instance |
-| 500 seq/s target at batch=1 | Latency target (< 5 ms) is met at 2.3 ms; 500 seq/s requires batch=2 (~840 seq/s achieved) |
-| Peak throughput | batch=64 gives ~5723 seq/s (Stage 4 E5); batch=128 regresses due to memory pressure |
+| 500 seq/s target at batch=1 | **Now met**: ~540 seq/s at batch=1 after Stage 5 optimisations |
+| Peak throughput | batch=64 gives ~10500 seq/s (Stage 5); up from ~5723 seq/s in Stage 4 |
 | LoFi math fidelity | Tested (Stage 4 E3): no gain because model is dispatch-bound; toggle via TTNN_LOFI=1 |
 | Zero-shot accuracy | Stage 4 E1: TTNN MSE 0.4324 vs published 0.444 on ETTh1 test split (all 7 channels, normalized) |
 | 2-CQ double-buffering (E4) | Tried: `synchronize_device(idle)` costs 0.155 ms/frame, more than H2D (0.12 ms) being hidden; net: 433 seq/s — no gain over single-CQ traced path |

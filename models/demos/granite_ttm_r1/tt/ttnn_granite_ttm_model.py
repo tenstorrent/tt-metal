@@ -262,9 +262,6 @@ class TtnnGraniteTTMModel:
         except RuntimeError:
             self._host_pinned = dummy.clone()
 
-        # --- Warm-up: populate the TTNN program cache (kernel JIT compilation) ---
-        _ = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
-
         # --- Staging buffer for the double-buffering pipeline ---
         # _staging_input receives the next frame's H2D copy on cq_id=1 while
         # _trace_input is being consumed by the trace on cq_id=0.
@@ -278,15 +275,53 @@ class TtnnGraniteTTMModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # --- Warm-up: populate the TTNN program cache (kernel JIT compilation) ---
+        # Two passes ensure all kernel variants are compiled and the program
+        # cache is fully populated before trace capture begins.  A single pass
+        # can miss late-compiling variants for certain op shapes.
+        _ = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
+        _ = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
+        ttnn.synchronize_device(device)
+
         # --- Capture trace ---
+        # The try/except guarantees that end_trace_capture + release_trace are
+        # always called on failure, preventing a device hang from an open trace.
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._trace_output = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        try:
+            self._trace_output = self._forward_ttnn(
+                self._trace_input, device=device, _scaler_consts=self._scaler_consts
+            )
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        except RuntimeError:
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            ttnn.release_trace(device, trace_id)
+            raise
 
         self._trace_id = trace_id
         self._trace_device = device
         self._trace_batch_size = batch_size
         self._is_compiled = True
+
+    def _copy_trace_input(self, history: "torch.Tensor | ttnn.Tensor") -> None:
+        """Copy ``history`` into the pre-allocated trace input buffer.
+
+        If ``history`` is already a device tensor, uses a fast device-to-device
+        copy (``ttnn.copy``), avoiding the costly D2H→H2D round-trip.
+        If it is a host tensor, converts and DMA-transfers to the device buffer.
+        """
+        import ttnn
+
+        if isinstance(history, ttnn.Tensor):
+            # Fast path: device-to-device copy — avoids D2H + H2D overhead.
+            ttnn.copy(history, self._trace_input)
+        else:
+            self._host_pinned.copy_(history.float())
+            host_tensor = ttnn.from_torch(
+                self._host_pinned,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_tensor, self._trace_input)
 
     def execute_compiled(
         self,
@@ -312,21 +347,7 @@ class TtnnGraniteTTMModel:
         if not self._is_compiled:
             raise RuntimeError("Model not compiled. Call compile(device) first.")
 
-        # Copy new data into the pre-allocated pinned host buffer and then
-        # DMA it into the device buffer whose address is recorded in the trace.
-        # Reusing self._host_pinned avoids Python object allocation each call.
-        if isinstance(history, ttnn.Tensor):
-            src = ttnn.to_torch(history).to(torch.float32)
-        else:
-            src = history.float()
-        self._host_pinned.copy_(src)
-        host_tensor = ttnn.from_torch(
-            self._host_pinned,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        ttnn.copy_host_to_device_tensor(host_tensor, self._trace_input)
-
+        self._copy_trace_input(history)
         ttnn.execute_trace(self._trace_device, self._trace_id, cq_id=0, blocking=True)
         return self._trace_output
 
@@ -366,7 +387,7 @@ class TtnnGraniteTTMModel:
         device = self._trace_device
 
         def _h2d_to_staging(history):
-            """Copy a host tensor into the staging buffer on cq_id=1."""
+            """Copy a tensor into the staging buffer on cq_id=1 (H2D queue)."""
             if isinstance(history, ttnn.Tensor):
                 src = ttnn.to_torch(history).to(torch.float32)
             else:

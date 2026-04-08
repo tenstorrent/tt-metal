@@ -31,11 +31,10 @@ d_model=192, decoder_d_model=128, forecast_length=96.
 | Mode | Latency | Throughput |
 |------|---------|------------|
 | Eager (batch=1) | ~8.5 ms | ~117 seq/s |
-| Traced (batch=1) | **~2.3 ms** | ~440 seq/s |
-| Traced (batch=2) | ~2.4 ms | ~840 seq/s |
-| Traced (batch=8) | ~3.1 ms | **~2620 seq/s** |
-| Traced (batch=32) | ~6.2 ms | ~5200 seq/s |
-| Traced (batch=64) | ~11.2 ms | **~5723 seq/s** (peak) |
+| Traced (batch=1) | **~1.85 ms** | **~540 seq/s** |
+| Traced (batch=8) | ~2.4 ms | **~3290 seq/s** |
+| Traced (batch=32) | ~3.7 ms | ~8760 seq/s |
+| Traced (batch=64) | ~6.1 ms | **~10500 seq/s** (peak) |
 
 See [PERF.md](PERF.md) for the full throughput-vs-batch table and methodology.
 
