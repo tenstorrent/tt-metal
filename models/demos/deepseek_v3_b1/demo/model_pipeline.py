@@ -205,7 +205,8 @@ class ModelPipeline:
         iteration = 0
         start_time = time.time()
         num_emits = 0
-        while len(generated_tokens) < max_new_tokens:
+        signal_to_exit = False
+        while len(generated_tokens) < max_new_tokens or signal_to_exit:
             iteration += 1
             print("\n\n")
             print(
@@ -236,6 +237,7 @@ class ModelPipeline:
                         base_accept += 1
                         print("Base Accept")
                         num_emits += 1
+                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                         continue
                     # On rejection, we discard the last unverified spec token and populate the new spec token
                     else:
@@ -245,18 +247,26 @@ class ModelPipeline:
                         base_reject += 1
                         print("Base Reject")
                         num_emits += 1
+                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+
                 if result.token_0_type == TokenType.SPEC:
                     # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
                     if verified_spec_tokens:
                         verified_spec_tokens.pop()
                         unverified_spec_tokens.append(result.token_1)
+
+                        if signal_to_exit:
+                            break
+
                         emit(result.token_0)
                         spec_accept += 1
                         num_emits += 1
                         print("Spec Accept")
                     else:
-                        spec_reject += 1
                         print("Spec Reject")
+                        if signal_to_exit:
+                            break
+                        spec_reject += 1
                         continue
 
             if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
