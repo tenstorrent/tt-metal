@@ -121,7 +121,7 @@ def test_neighbor_pad_async_1d(
     ],
     ids=[
         "wh_4x8_4link",
-        "4x8_1link",
+        "general_4x8_1link",
         "bh_4x8_2link",
     ],
     indirect=["mesh_device"],

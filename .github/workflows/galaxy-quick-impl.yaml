@@ -77,7 +77,7 @@ jobs:
           pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
 
           pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "Wan_shape_17 and check" --timeout=300;
-          pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "medium_5d_h0w1 and 4x8_1link" --timeout=300;
+          pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "medium_5d_h0w1 and general_4x8_1link" --timeout=300;
 
           # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
