@@ -12,7 +12,7 @@ from ..utils.matmul import get_matmul_config
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.bfloat16: ttnn.MathFidelity.LoFi,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
