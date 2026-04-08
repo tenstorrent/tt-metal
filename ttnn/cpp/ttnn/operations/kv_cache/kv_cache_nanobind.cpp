@@ -123,6 +123,25 @@ void bind_fill_cache(nb::module_& mod) {
         mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
 }
 
+void bind_zero_cache_range(nb::module_& mod) {
+    const auto* doc = R"doc(
+        Zeroes a range of tokens in the cache tensor in-place. Token positions are rounded
+        to tile boundaries (multiples of 32): start_token rounds down, end_token rounds up.
+
+        Args:
+            cache (ttnn.Tensor): the cache tensor to be modified.
+            start_token (int): first token position to zero (inclusive, rounds down to tile boundary).
+            end_token (int): last token position to zero (exclusive, rounds up to tile boundary).
+
+        Returns:
+            ttnn.Tensor: the cache tensor (modified in-place).
+
+        )doc";
+
+    ttnn::bind_function<"zero_cache_range", "ttnn.kv_cache.">(
+        mod, doc, &ttnn::zero_cache_range, nb::arg("cache"), nb::arg("start_token"), nb::arg("end_token"));
+}
+
 }  // namespace
 
 void bind_kv_cache(nb::module_& mod) {
@@ -130,6 +149,7 @@ void bind_kv_cache(nb::module_& mod) {
     bind_update_cache_for_token_(mod);
     bind_update_cache(mod);
     bind_fill_cache(mod);
+    bind_zero_cache_range(mod);
 }
 
 }  // namespace ttnn::operations::kv_cache
