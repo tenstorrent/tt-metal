@@ -129,7 +129,7 @@ jobs:
         timeout-minutes: 10
         run: |
           mpirun --tag-output --pernode \
-            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
+            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
 
       - name: Delete environment
         if: always()
