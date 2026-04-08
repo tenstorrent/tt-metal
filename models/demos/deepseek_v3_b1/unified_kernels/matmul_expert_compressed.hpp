@@ -251,7 +251,11 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_active_experts_,
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
-        uint32_t index_l1_addr_>
+        uint32_t index_l1_addr_,
+        uint32_t cb_fmt_,
+        uint32_t fmt_dram_addr_,
+        uint32_t fmt_per_expert_bytes_,
+        uint32_t fmt_per_core_bytes_>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -275,6 +279,10 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr uint32_t cb_fmt = cb_fmt_;
+        static constexpr uint32_t fmt_dram_addr = fmt_dram_addr_;
+        static constexpr uint32_t fmt_per_expert_bytes = fmt_per_expert_bytes_;
+        static constexpr uint32_t fmt_per_core_bytes = fmt_per_core_bytes_;
     };
 
     template <
@@ -291,6 +299,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
+        uint32_t cb_fmt_,
         uint32_t zeros_addr_shifted_ = 812>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
@@ -306,6 +315,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr uint32_t cb_fmt = cb_fmt_;
         static constexpr uint32_t zeros_addr_shifted = zeros_addr_shifted_;
     };
 
@@ -378,12 +388,26 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(CTArgs::bank_id, expert_in1_addr);
-                // Sequential slot: get_write_ptr follows the CB ring buffer in order.
-                // Fmt metadata uses relative offsets; TRISC reads slot_base from CB at runtime.
                 uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
                 uint32_t num_free_blocks_in_buffer = num_buffers;
                 uint32_t curr_block_trid = 1;
                 uint32_t block_trid_to_wait = 1;
+
+                // Read this expert's fmt metadata from DRAM into cb_fmt.
+                // Shares trid 1 with the first weight block — completed together.
+                cb_reserve_back(CTArgs::cb_fmt, 1);
+                {
+                    uint32_t fmt_write_addr = get_write_ptr(CTArgs::cb_fmt);
+                    uint32_t fmt_dram_offset = CTArgs::fmt_dram_addr +
+                                               CTArgs::core_in_bank_idx * CTArgs::fmt_per_core_bytes +
+                                               expert_idx * CTArgs::fmt_per_expert_bytes;
+                    uint64_t fmt_noc_addr = get_noc_addr_from_bank_id<true>(CTArgs::bank_id, fmt_dram_offset);
+                    noc_async_read_set_trid(curr_block_trid);
+                    noc_async_read_one_packet_set_state<true>(fmt_noc_addr, CTArgs::fmt_per_expert_bytes, CTArgs::vc);
+                    noc_async_read_one_packet_with_state_with_trid(fmt_noc_addr, 0, fmt_write_addr, curr_block_trid);
+                }
+                // cb_fmt pushed below when trid 1 is waited on.
+                bool fmt_pushed = false;
 
                 // Triple-buffer streaming loop.
                 uint32_t iter = 0;
@@ -431,6 +455,11 @@ struct MatmulExpertCompressedDRAM {
                         if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
                             noc_async_read_barrier_with_trid(block_trid_to_wait);
                             cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
+                            // Trid 1 wait also completes the fmt DRAM read issued earlier.
+                            if (!fmt_pushed) {
+                                cb_push_back(CTArgs::cb_fmt, 1);
+                                fmt_pushed = true;
+                            }
                             block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
                             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
                         } else {
@@ -510,10 +539,10 @@ struct MatmulExpertCompressedDRAM {
             }
 
             for (uint32_t i = 0; i < num_dram_experts; i++) {
-                // Index fmt table directly by global expert ID (no table_idx indirection).
-                uint32_t fmt_l1_addr = CTArgs::fmt_l1_addr + dram_expert_eids[i] * tiles_per_expert * sizeof(uint32_t);
-                const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
+                uint32_t fmt_l1_addr = 0;
+                const volatile uint32_t* fmt_base_ptr = nullptr;
                 uint32_t fmt_tile_offset = 0;
+                bool fmt_waited = false;
 
                 for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
                     cb_reserve_back(CTArgs::cb_out, 1);
@@ -523,6 +552,16 @@ struct MatmulExpertCompressedDRAM {
 
                     for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
+
+                        if (!fmt_waited) {
+                            cb_wait_front(CTArgs::cb_fmt, 1);
+                            UNPACK(({
+                                uint32_t fmt_op_id = get_operand_id(CTArgs::cb_fmt);
+                                fmt_l1_addr = get_local_cb_interface(fmt_op_id).fifo_rd_ptr << 4;
+                            }));
+                            fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
+                            fmt_waited = true;
+                        }
 
                         // Read CB slot base after wait — this is where NCRISC wrote the data.
                         uint32_t slot_base = 0;
@@ -550,6 +589,9 @@ struct MatmulExpertCompressedDRAM {
                     tile_regs_release();
                     cb_push_back(CTArgs::cb_out, 1);
                 }
+
+                // Release fmt data for this expert.
+                cb_pop_front(CTArgs::cb_fmt, 1);
             }
 
             custom_mm_block_uninit<dense_packing>();
