@@ -173,31 +173,17 @@ class Yolov11Conv2D:
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
-    for i in range(len(input_tensors)):
-        if input_tensors[i].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            input_tensors[i] = ttnn.to_layout(input_tensors[i], ttnn.ROW_MAJOR_LAYOUT)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-    shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    out_shard_width = 0
-    for i in range(len(input_tensors)):
-        w = input_tensors[i].shape[-1]
-        out_shard_width += w
-        per_tensor_sharded_memory_config = ttnn.create_sharded_memory_config(
-            (shard_height, w),
-            core_grid=shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], per_tensor_sharded_memory_config)
-    output_sharded_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, out_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
-    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+    interleaved_inputs = []
+    for tensor in input_tensors:
+        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        if tensor.is_sharded():
+            interleaved_inputs.append(ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        else:
+            interleaved_inputs.append(ttnn.to_memory_config(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    output = ttnn.concat(tuple(interleaved_inputs), dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if to_interleaved:
-        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return output
 

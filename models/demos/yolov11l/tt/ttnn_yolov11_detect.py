@@ -88,6 +88,8 @@ class TtnnDetect:
         ya = ttnn.reallocate(ya)
         yb = ttnn.reallocate(yb)
         ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
+        # Avoid large L1 allocation in softmax for 1280x1280 detect head.
+        ya = ttnn.to_memory_config(ya, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ya = ttnn.softmax(ya, dim=-1)
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)
@@ -95,8 +97,11 @@ class TtnnDetect:
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
         c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
         c = ttnn.permute(c, (0, 3, 1, 2))
-        c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
-        c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
+        # Keep reshape fully on-device while avoiding RM reshape-view L1 CB clashes.
+        c = ttnn.to_layout(c, layout=ttnn.TILE_LAYOUT)
+        c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c = ttnn.reshape(c, (c.shape[0], 4, c.shape[3]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
         anchor, strides = self.anchors, self.strides
         anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)

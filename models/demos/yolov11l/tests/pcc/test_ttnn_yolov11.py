@@ -15,6 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "resolution",
     [
+        ([1, 3, 1280, 1280]),
         ([1, 3, 640, 640]),
     ],
 )
