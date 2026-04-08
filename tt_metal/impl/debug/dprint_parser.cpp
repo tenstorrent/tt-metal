@@ -1168,6 +1168,28 @@ std::string_view DevicePrintParser::format_message(
                     arg);
                 break;
             }
+            case 's':  // string pointer — resolve from .device_print_strings if possible, else hex
+            {
+                uint32_t str_addr = std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]);
+                if (str_addr >= format_strings_address &&
+                    str_addr < format_strings_address + format_strings_bytes.size()) {
+                    const char* str_ptr = reinterpret_cast<const char*>(
+                        format_strings_bytes.data() + (str_addr - format_strings_address));
+                    fmt::format_to(
+                        std::back_inserter(buffer.buffer),
+                        fmt::runtime(placeholder.fmt_format),
+                        std::string_view(str_ptr));
+                } else {
+                    fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", str_addr);
+                }
+                break;
+            }
+            case 'p':  // generic pointer — print as hex address
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    "0x{:x}",
+                    std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -1245,6 +1267,9 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
             }
             return arr;
         }
+        case 's':  // string pointer (resolved from ELF section if possible, else hex)
+        case 'p':  // generic pointer
+            return read_value_from_payload<uint32_t>(payload_bytes, offset);
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }
 }

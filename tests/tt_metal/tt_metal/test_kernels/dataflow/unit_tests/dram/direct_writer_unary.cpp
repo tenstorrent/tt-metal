@@ -57,7 +57,9 @@ void kernel_main() {
             noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
         }
 #endif
-    } else {
+    }
+#ifndef ARCH_QUASAR
+    else {
         experimental::CircularBuffer cb(cb_id);
         uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
@@ -69,4 +71,5 @@ void kernel_main() {
             dst_addr += ublock_size_bytes;
         }
     }
+#endif
 }

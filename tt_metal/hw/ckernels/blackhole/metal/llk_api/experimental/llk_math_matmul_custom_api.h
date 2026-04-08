@@ -43,9 +43,3 @@ inline void llk_math_matmul_reinit_no_mop(
     matmul_configure_addrmod_reinit<math_fidelity, THROTTLE_LEVEL>(transpose);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
-
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
-inline void llk_math_matmul_reinit_no_mop_after_sub() {
-    matmul_configure_addrmod_reinit_after_sub<math_fidelity, THROTTLE_LEVEL>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}

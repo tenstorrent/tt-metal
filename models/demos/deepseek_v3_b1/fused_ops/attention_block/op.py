@@ -456,7 +456,6 @@ class AttentionBlock:
             }
         )
 
-        kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
 
@@ -559,7 +558,7 @@ class AttentionBlock:
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
@@ -1363,6 +1362,7 @@ class AttentionBlock:
         # KV Cache Branch: RMSNorm
         # RMSNorm compute compile-time args (named args for TRISC)
         kv_rmsnorm_num_tiles = kv_numel // (16 * 32)  # 512 / 512 = 1 tile (16x32)
+        kv_rmsnorm_page_size = TILE_16x32.get_tile_size(data_format)
         kv_rmsnorm_brisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
@@ -1387,7 +1387,7 @@ class AttentionBlock:
         # ========================================================================
         dkv_gather_receiver_core = dkv_rmsnorm_gamma_tensor.core_range_set.ranges()[0].start
         dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_grid)
-
+        kv_cache_update_grid = dkv_matmul_weights_core_grid
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
 
@@ -1470,6 +1470,15 @@ class AttentionBlock:
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
         # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
         # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
+        knope_grid_range = dkv_gather_sender_grid.ranges()[0]
+        nope_mcast_dest_start_core = device.worker_core_from_logical_core(knope_grid_range.start)
+        nope_mcast_dest_end_core = device.worker_core_from_logical_core(knope_grid_range.end)
+        nope_mcast_num_cores = knope_grid_range.grid_size().x * knope_grid_range.grid_size().y
+        nope_mcast_num_dests = nope_mcast_num_cores - 1
+        nope_mcast_data_size_bytes = kv_rmsnorm_num_tiles * kv_rmsnorm_page_size
+        # Reuse existing global semaphores for nope mcast sender/receiver
+        nope_mcast_sender_semaphore_addr = mcast_data_sender_semaphore_addr
+        nope_mcast_receiver_semaphore_addr = mcast_data_receiver_semaphore_addr
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
@@ -1478,6 +1487,15 @@ class AttentionBlock:
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+            ("nope_mcast_dest_noc_start_x", nope_mcast_dest_start_core.x),
+            ("nope_mcast_dest_noc_start_y", nope_mcast_dest_start_core.y),
+            ("nope_mcast_dest_noc_end_x", nope_mcast_dest_end_core.x),
+            ("nope_mcast_dest_noc_end_y", nope_mcast_dest_end_core.y),
+            ("nope_mcast_sender_semaphore_addr", nope_mcast_sender_semaphore_addr),
+            ("nope_mcast_receiver_semaphore_addr", nope_mcast_receiver_semaphore_addr),
+            ("nope_mcast_data_size_bytes", nope_mcast_data_size_bytes),
+            ("nope_mcast_num_dests", nope_mcast_num_dests),
+            ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
         kv_cache_brisc_named_compile_time_args = [
             ("kv_cache_input_cb", kv_cache_input_cb),
@@ -2375,7 +2393,7 @@ class AttentionBlock:
             ref_attention_block_output_tensor,
             address_offset=attn_block_output_kv_cache_update_nope_running_offset,
             total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
-            core_ranges=dkv_gather_receiver_core_grid,  # Only the nope core (BRISC) reads kv_rmsnorm_output_cb
+            core_ranges=dkv_rmsnorm_grid.merge(dkv_gather_sender_grid),
         )
         kv_rmsnorm_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2432,7 +2450,7 @@ class AttentionBlock:
 
         TILE_32x32 = ttnn.Tile((32, 32))
         kv_cache_page_size = TILE_32x32.get_tile_size(k_df)
-        kv_cache_num_tiles = 16
+        kv_cache_num_tiles = 1
         kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_input_cb,
             data_format=k_df,
@@ -3246,7 +3264,20 @@ class AttentionBlock:
             ),
         ]
 
+        knope_grid_width = knope_grid_range.grid_size().x
         per_core_compile_time_descriptors = [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="knope_core_index",
+                core_values=[
+                    (
+                        ttnn.CoreCoord(x, y),
+                        (y - knope_grid_range.start.y) * knope_grid_width + (x - knope_grid_range.start.x),
+                    )
+                    for y in range(knope_grid_range.start.y, knope_grid_range.end.y + 1)
+                    for x in range(knope_grid_range.start.x, knope_grid_range.end.x + 1)
+                ],
+                other_value=0,
+            ),
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="qrope_start_tile_offset",
                 core_values=qrope_start_tile_offset_core_values,

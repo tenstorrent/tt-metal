@@ -80,6 +80,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     fp32_acc=True,
     rs_core_grid_offset=None,
     allowed_pcc=0.99,
+    addcmul_scalar=None,
+    broadcast_gate=True,
 ):
     torch.manual_seed(0)
 
@@ -124,6 +126,35 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     shard_dims = [None, None]
     shard_dims[cluster_axis] = 0
 
+    # Addcmul tensors for fused ternary (applied at RS final write step)
+    torch_addcmul_a = None
+    torch_addcmul_b = None
+    tt_addcmul_a = None
+    tt_addcmul_b = None
+    if addcmul_scalar is not None:
+        rs_N = N // num_devices
+        torch_addcmul_a = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
+        if broadcast_gate:
+            torch_addcmul_b = torch.randn([1, 1, 1, rs_N], dtype=torch.float32)
+        else:
+            torch_addcmul_b = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
+        tt_addcmul_a = ttnn.from_torch(
+            torch_addcmul_a,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_addcmul_b = ttnn.from_torch(
+            torch_addcmul_b,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     for i in range(num_iters):
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
@@ -139,6 +170,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         # Golden: RS reduce (sum across devices) then scatter
         torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
         torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
+        if addcmul_scalar is not None:
+            torch_rs_scattered = tuple(
+                torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
+                for chunk in torch_rs_scattered
+            )
         torch_rs_output_list.append(torch_rs_scattered)
 
         # Create device tensors
@@ -219,6 +255,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+                fused_ternary_scalar=addcmul_scalar,
+                addcmul_input_tensor1=tt_addcmul_a,
+                addcmul_input_tensor2=tt_addcmul_b,
             )
             return tt_mm_out, tt_rs_out
         else:
@@ -611,6 +650,47 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         rs_mode=rs_mode,
         cluster_axis=cluster_axis,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["1x8"])
+@pytest.mark.parametrize("broadcast_gate", [True, False], ids=["broadcast_gate", "full_gate"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@skip_for_blackhole("t3000 tests are wormhole_b0 only")
+def test_minimal_matmul_strided_reduce_scatter_addcmul(mesh_device, broadcast_gate, topology):
+    """Test fused addcmul in minimal_matmul_strided_reduce_scatter with broadcast and full gate."""
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=128,
+        K=256,
+        N=512,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=64,
+        mm_block_k=64,
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=1,
+        addcmul_scalar=1.0,
+        broadcast_gate=broadcast_gate,
     )
 
 

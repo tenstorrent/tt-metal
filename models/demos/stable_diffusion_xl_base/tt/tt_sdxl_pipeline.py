@@ -97,10 +97,12 @@ class TtSDXLPipeline(LightweightModule):
         if is_wormhole_b0():
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
-            logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
+            grid_override = os.environ.get("TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE")
+            logger.info(f"Checking TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for Galaxy, current value: {grid_override}")
+            expected = "7,7" if is_wormhole_b0() else "10,9"
             assert (
-                os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
-            ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
+                grid_override == expected
+            ), f"TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to {expected}, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config, tt_scheduler)
