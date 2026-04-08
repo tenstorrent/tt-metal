@@ -82,7 +82,8 @@ struct MatmulExpertCompressedSRAM {
         uint32_t num_active_experts_,
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
-        uint32_t index_l1_addr_>
+        uint32_t index_l1_addr_,
+        uint32_t accum_experts_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -95,6 +96,7 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr bool accum_experts = accum_experts_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -161,31 +163,40 @@ struct MatmulExpertCompressedSRAM {
                     in0_face_r_dim = get_operand_face_r_dim(in0_id);
                 }));
 
-                for (uint32_t i = 0; i < num_sram_experts; i++) {
-                    uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_eids[i]]);
-                    uint32_t fmt_l1_addr = 0;
-                    uint32_t addr_in1 = 0;
-
-                    UNPACK(({
-                        auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
-                        fmt_l1_addr = reinterpret_cast<uint32_t>(fmt_table[table_idx]);
-
-                        union TileInfo {
-                            uint32_t packed;
-                            struct {
-                                uint8_t fmt;
-                                uint32_t addr : 24;
-                            };
-                        };
-                        const volatile TileInfo* first_tile = reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
-                        addr_in1 = first_tile->addr;
-                    }));
-
+                if constexpr (CTArgs::accum_experts) {
+                    // Accumulate all SRAM experts into the same dest registers.
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
-                    compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
-                        fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                    for (uint32_t i = 0; i < num_sram_experts; i++) {
+                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_eids[i]]);
+                        uint32_t fmt_l1_addr = 0;
+                        uint32_t addr_in1 = 0;
+
+                        UNPACK(({
+                            auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
+                            fmt_l1_addr = reinterpret_cast<uint32_t>(fmt_table[table_idx]);
+
+                            union TileInfo {
+                                uint32_t packed;
+                                struct {
+                                    uint8_t fmt;
+                                    uint32_t addr : 24;
+                                };
+                            };
+                            const volatile TileInfo* first_tile =
+                                reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
+                            addr_in1 = first_tile->addr;
+                        }));
+
+                        if (i < num_sram_experts - 1) {
+                            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w, false>(
+                                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                        } else {
+                            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w, true>(
+                                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                        }
+                    }
 
                     tile_regs_commit();
                     tile_regs_wait();
@@ -194,6 +205,42 @@ struct MatmulExpertCompressedSRAM {
                     }
                     tile_regs_release();
                     cb_push_back(cb_out, out_w);
+                } else {
+                    for (uint32_t i = 0; i < num_sram_experts; i++) {
+                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_eids[i]]);
+                        uint32_t fmt_l1_addr = 0;
+                        uint32_t addr_in1 = 0;
+
+                        UNPACK(({
+                            auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
+                            fmt_l1_addr = reinterpret_cast<uint32_t>(fmt_table[table_idx]);
+
+                            union TileInfo {
+                                uint32_t packed;
+                                struct {
+                                    uint8_t fmt;
+                                    uint32_t addr : 24;
+                                };
+                            };
+                            const volatile TileInfo* first_tile =
+                                reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
+                            addr_in1 = first_tile->addr;
+                        }));
+
+                        cb_reserve_back(cb_out, out_w);
+                        tile_regs_acquire();
+
+                        compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
+                            fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t w = 0; w < out_w; w++) {
+                            pack_tile(w, cb_out, w);
+                        }
+                        tile_regs_release();
+                        cb_push_back(cb_out, out_w);
+                    }
                 }
 
                 custom_mm_block_uninit<true>();
@@ -257,7 +304,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t cb_fmt_,
         uint32_t fmt_dram_addr_,
         uint32_t fmt_per_expert_bytes_,
-        uint32_t fmt_per_core_bytes_>
+        uint32_t fmt_per_core_bytes_,
+        uint32_t accum_experts_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -285,6 +333,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t fmt_dram_addr = fmt_dram_addr_;
         static constexpr uint32_t fmt_per_expert_bytes = fmt_per_expert_bytes_;
         static constexpr uint32_t fmt_per_core_bytes = fmt_per_core_bytes_;
+        static constexpr bool accum_experts = accum_experts_ != 0;
     };
 
     template <
@@ -302,7 +351,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
-        uint32_t zeros_addr_shifted_ = 812>
+        uint32_t accum_experts_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -318,7 +367,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
-        static constexpr uint32_t zeros_addr_shifted = zeros_addr_shifted_;
+        static constexpr bool accum_experts = accum_experts_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -541,58 +590,132 @@ struct MatmulExpertCompressedDRAM {
                     in1_operand_id = get_operand_id(CTArgs::cb_in1);
                 }));
 
-                for (uint32_t i = 0; i < num_dram_experts; i++) {
-                    uint32_t fmt_l1_addr = 0;
-                    const volatile uint32_t* fmt_base_ptr = nullptr;
-                    uint32_t fmt_tile_offset = 0;
-                    bool fmt_waited = false;
+                if constexpr (CTArgs::accum_experts) {
+                    // Packer L1 accumulation: each expert packs per_core_n tiles sequentially.
+                    // Expert 0 overwrites (L1_ACC=0), subsequent experts accumulate (L1_ACC=1).
+                    // Between experts: push+pop+reserve resets the write pointer so L1_ACC
+                    // accumulates at the same addresses.
+                    for (uint32_t i = 0; i < num_dram_experts; i++) {
+                        cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
-                    for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
-                        cb_reserve_back(CTArgs::cb_out, 1);
-                        tile_regs_acquire();
-
-                        uint32_t addr_in0_subblock = addr_in0;
-
-                        for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                            cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-
-                            if (!fmt_waited) {
-                                cb_wait_front(CTArgs::cb_fmt, 1);
-                                UNPACK(({
-                                    uint32_t fmt_op_id = get_operand_id(CTArgs::cb_fmt);
-                                    fmt_l1_addr = get_local_cb_interface(fmt_op_id).fifo_rd_ptr << 4;
-                                }));
-                                fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
-                                fmt_waited = true;
-                            }
-
-                            uint32_t slot_base = 0;
-                            UNPACK(({ slot_base = get_local_cb_interface(in1_operand_id).fifo_rd_ptr - 1; }));
-
-                            const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
-                            uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
-                            constexpr uint32_t zeros_addr = CTArgs::zeros_addr_shifted;
-                            if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
-                                    fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
-                            } else {
-                                compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
-                                    fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
-                            }
-
-                            addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
-                            fmt_tile_offset += CTArgs::subblock_k;
-                            cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                        if (i == 0) {
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                        } else if (i == 1) {
+                            PACK((llk_pack_reconfig_l1_acc(1)));
                         }
 
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, CTArgs::cb_out, 0);
-                        tile_regs_release();
-                        cb_push_back(CTArgs::cb_out, 1);
+                        uint32_t fmt_l1_addr = 0;
+                        const volatile uint32_t* fmt_base_ptr = nullptr;
+                        uint32_t fmt_tile_offset = 0;
+                        bool fmt_waited = false;
+
+                        for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
+                            tile_regs_acquire();
+                            uint32_t addr_in0_subblock = addr_in0;
+
+                            for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
+                                cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
+
+                                if (!fmt_waited) {
+                                    cb_wait_front(CTArgs::cb_fmt, 1);
+                                    UNPACK(({
+                                        uint32_t fmt_op_id = get_operand_id(CTArgs::cb_fmt);
+                                        fmt_l1_addr = get_local_cb_interface(fmt_op_id).fifo_rd_ptr << 4;
+                                    }));
+                                    fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
+                                    fmt_waited = true;
+                                }
+
+                                uint32_t slot_base = 0;
+                                UNPACK(({ slot_base = get_local_cb_interface(in1_operand_id).fifo_rd_ptr - 1; }));
+
+                                const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
+                                uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
+                                constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
+                                if (sb_k < CTArgs::num_subblocks_k - 1) {
+                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
+                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                } else {
+                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
+                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                }
+
+                                addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
+                                fmt_tile_offset += CTArgs::subblock_k;
+                                cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                            }
+
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(0, CTArgs::cb_out);
+                            tile_regs_release();
+                        }
+
+                        cb_pop_front(CTArgs::cb_fmt, 1);
+                        cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
+
+                        // Reset write pointer for next expert's L1_ACC accumulation.
+                        if (i < num_dram_experts - 1) {
+                            cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
+                            cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
+                        }
                     }
 
-                    cb_pop_front(CTArgs::cb_fmt, 1);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                } else {
+                    for (uint32_t i = 0; i < num_dram_experts; i++) {
+                        uint32_t fmt_l1_addr = 0;
+                        const volatile uint32_t* fmt_base_ptr = nullptr;
+                        uint32_t fmt_tile_offset = 0;
+                        bool fmt_waited = false;
+
+                        for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
+                            cb_reserve_back(CTArgs::cb_out, 1);
+                            tile_regs_acquire();
+
+                            uint32_t addr_in0_subblock = addr_in0;
+
+                            for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
+                                cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
+
+                                if (!fmt_waited) {
+                                    cb_wait_front(CTArgs::cb_fmt, 1);
+                                    UNPACK(({
+                                        uint32_t fmt_op_id = get_operand_id(CTArgs::cb_fmt);
+                                        fmt_l1_addr = get_local_cb_interface(fmt_op_id).fifo_rd_ptr << 4;
+                                    }));
+                                    fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
+                                    fmt_waited = true;
+                                }
+
+                                uint32_t slot_base = 0;
+                                UNPACK(({ slot_base = get_local_cb_interface(in1_operand_id).fifo_rd_ptr - 1; }));
+
+                                const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
+                                uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
+                                constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
+                                if (sb_k < CTArgs::num_subblocks_k - 1) {
+                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
+                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                } else {
+                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
+                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                }
+
+                                addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
+                                fmt_tile_offset += CTArgs::subblock_k;
+                                cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                            }
+
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(0, CTArgs::cb_out, 0);
+                            tile_regs_release();
+                            cb_push_back(CTArgs::cb_out, 1);
+                        }
+
+                        cb_pop_front(CTArgs::cb_fmt, 1);
+                    }
                 }
 
                 custom_mm_block_uninit<false>();

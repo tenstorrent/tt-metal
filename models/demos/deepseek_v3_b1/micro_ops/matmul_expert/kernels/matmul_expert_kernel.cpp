@@ -69,7 +69,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_fmt"),
         get_named_compile_time_arg_val("fmt_dram_addr"),
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
-        get_named_compile_time_arg_val("fmt_per_core_bytes")>;
+        get_named_compile_time_arg_val("fmt_per_core_bytes"),
+        get_named_compile_time_arg_val("accum_experts")>;
 
 #elif defined(COMPILE_FOR_BRISC)
     using SRAMArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
@@ -89,7 +90,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
-        get_named_compile_time_arg_val("index_l1_addr")>;
+        get_named_compile_time_arg_val("index_l1_addr"),
+        get_named_compile_time_arg_val("accum_experts")>;
 
     using DRAMArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
         get_named_compile_time_arg_val("cb_in0"),
@@ -105,7 +107,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
-        get_named_compile_time_arg_val("cb_fmt")>;
+        get_named_compile_time_arg_val("cb_fmt"),
+        get_named_compile_time_arg_val("accum_experts")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

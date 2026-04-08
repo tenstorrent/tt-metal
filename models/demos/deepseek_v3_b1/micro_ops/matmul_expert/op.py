@@ -207,21 +207,32 @@ def _build_program_for_device(
     # Routing (required).
     is_dram_l1_addr_core_values: list = None,
     table_idx_l1_addr_core_values: list = None,
+    accum_experts: bool = False,
+    sram_per_core_n: int = 0,
+    dram_per_core_n: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
     Pass SRAM ingredients (sram_cts, sram_fmt_l1_addr_core_values) for SRAM path.
     Pass DRAM ingredients (in1_backing_tensor, dram_*) for DRAM path.
     Pass both for hybrid. The builder derives all CT args from the provided ingredients.
+
+    sram_per_core_n / dram_per_core_n: output tiles per core for each path.
+    When 0, derived from the output tensor shard spec.
     """
 
     core_grid = a_device.memory_config().shard_spec.grid
     K = a_device.memory_config().shard_spec.shape[1]
     Kt = K // 32
-    out_w = out_device.memory_config().shard_spec.shape[1] // 32 // num_active_experts
 
-    assert (Kt * out_w) % 2 == 0, f"total tiles K*N={Kt * out_w} must be even"
-    assert out_w == 1 or out_w % 2 == 0, f"out_w must be 1 or even, got {out_w}"
+    # Derive fallback from output shard if not explicitly provided.
+    if sram_per_core_n == 0 and dram_per_core_n == 0:
+        if accum_experts:
+            out_w = out_device.memory_config().shard_spec.shape[1] // 32
+        else:
+            out_w = out_device.memory_config().shard_spec.shape[1] // 32 // num_active_experts
+        sram_per_core_n = out_w
+        dram_per_core_n = out_w
 
     # CB indices: always separate — SRAM B data = 1, DRAM streaming = 4, fmt metadata = 5.
     cb_in0, cb_in1, cb_out, cb_index = 0, 1, 2, 3
@@ -284,11 +295,11 @@ def _build_program_for_device(
         ("cb_index", cb_index),
         ("num_tiles_k", Kt),
         ("num_active_experts", num_active_experts),
-        ("out_w", out_w),
+        ("out_w", sram_per_core_n),
         ("cb_in0_num_pages", Kt),
         ("subblock_k", subblock_k),
         ("num_subblocks_k", num_subblocks_k),
-        ("per_core_n", out_w),
+        ("per_core_n", dram_per_core_n),
         ("cb_in1_dram_size_bytes", cb_in1_dram_total_bytes),
         ("noc_max_page_size", noc_max_page_size),
         ("pipeline_sem_id", pipeline_sem_id),
@@ -298,6 +309,7 @@ def _build_program_for_device(
         ("fmt_dram_addr", dram_fmt_dram_info["fmt_dram_addr"] if dram_fmt_dram_info else 0),
         ("fmt_per_expert_bytes", dram_fmt_dram_info["fmt_per_expert_bytes"] if dram_fmt_dram_info else 0),
         ("fmt_per_core_bytes", dram_fmt_dram_info["fmt_per_core_bytes"] if dram_fmt_dram_info else 0),
+        ("accum_experts", 1 if accum_experts else 0),
     ]
 
     # Per-core descriptors.
@@ -806,6 +818,9 @@ class ExpertKernel:
         dram_core_grid=None,  # CoreRangeSet for DRAM cores, or None if no DRAM.
         dram_device_data: dict = None,
         cores_per_bank: int = 1,
+        accum_experts: bool = False,
+        sram_per_core_n: int = 0,
+        dram_per_core_n: int = 0,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -840,8 +855,17 @@ class ExpertKernel:
 
         K = a_per_device[0].memory_config().shard_spec.shape[1]
         Kt = K // 32
-        per_core_N_tiles = out_per_device[0].memory_config().shard_spec.shape[1] // 32 // num_active_experts
-        num_tiles = Kt * per_core_N_tiles
+        # SRAM fmt tensors use sram_per_core_n; fallback to output shard for backward compat.
+        sram_n = (
+            sram_per_core_n
+            if sram_per_core_n > 0
+            else (
+                out_per_device[0].memory_config().shard_spec.shape[1]
+                // 32
+                // (1 if accum_experts else num_active_experts)
+            )
+        )
+        num_tiles = Kt * sram_n
 
         # --- SRAM setup (multi-device aware via create_expert_fmt_tensors) ---
         sram_fmt_per_device = {}
@@ -936,6 +960,9 @@ class ExpertKernel:
                     num_in1_buffers=num_in1_buffers,
                     is_dram_l1_addr_core_values=is_dram_l1,
                     table_idx_l1_addr_core_values=table_idx_l1,
+                    accum_experts=accum_experts,
+                    sram_per_core_n=sram_per_core_n,
+                    dram_per_core_n=dram_per_core_n,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
