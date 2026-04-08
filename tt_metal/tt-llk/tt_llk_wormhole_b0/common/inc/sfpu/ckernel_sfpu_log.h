@@ -59,7 +59,7 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
 
     if constexpr (HAS_BASE_SCALING)
     {
-        result *= sfpi::s2vFloat16a(log_base_scale_factor);
+        result *= sfpi::sFloat16a(log_base_scale_factor);
     }
 
     ////////////////////////////
