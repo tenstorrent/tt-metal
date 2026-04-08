@@ -1537,6 +1537,11 @@ void pytensor_module(nb::module_& mod) {
                 host_storage.buffer().shape()[1]);
             auto host_buffer = host_storage.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
             TT_FATAL(host_buffer.has_value(), "Host tensor has no data");
+            TT_FATAL(
+                host_buffer->view_bytes().size() == tensor_spec.compute_packed_buffer_size_bytes(),
+                "Host data size ({}) does not match expected packed buffer size ({})",
+                host_buffer->view_bytes().size(),
+                tensor_spec.compute_packed_buffer_size_bytes());
 
             tt::tt_metal::distributed::ShardDataTransfer transfer{coord};
             transfer.host_data(host_buffer->view_bytes().data());
