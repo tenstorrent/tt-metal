@@ -13,7 +13,6 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import os
 
 TEST_PADDING_VALUE = -42
-
 pytestmark = pytest.mark.use_module_device
 
 
