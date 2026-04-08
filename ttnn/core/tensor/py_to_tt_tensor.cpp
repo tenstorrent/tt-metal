@@ -42,8 +42,7 @@ bool can_construct_on_device(
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
     bool preserve_nan_values) {
-    bool res = device != nullptr && !device->is_remote_only() &&
-               (device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id()) &&
+    bool res = device != nullptr && !device->is_remote_only() && (device->num_sub_devices() == 0) &&
                tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
                enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
