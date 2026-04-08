@@ -163,7 +163,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
     // For core types where the binary goes to a fixed L1 address (not stored in the config buffer),
     // track the last trace index that used each core type so we can sync before overwriting.
     std::vector<std::optional<uint32_t>> last_fixed_addr_sync_idx(programmable_core_count);
-    std::optional<int> last_stall_idx;
+    bool first_program_dispatched = false;
+    std::optional<uint32_t> last_stall_idx;
     std::deque<size_t> subdevice_launch_window;
 
     for (size_t i = 0; i < trace_nodes.size(); i++) {
@@ -261,22 +262,22 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             binary_sync_idx = merge_syncs(binary_sync_idx, static_cast<uint32_t>(subdevice_launch_window.front()));
         }
 
-        if (!last_stall_idx.has_value()) {
+        if (!first_program_dispatched) {
             // The first program to be dispatched should stall on 0, since there may be undetermined commands in the
             // ringbuffer before this we want to wait for. In particular in the mesh device case we can add go messages
             // for unused nodes before replaying the trace.
             node.dispatch_metadata.sync_count = 0;
             node.dispatch_metadata.stall_first = true;
-            last_stall_idx = -1;
+            first_program_dispatched = true;
         }
 
         // Only one sync count can currently be specified, so pick the latest one.
         // nonbinary sync requires stall_first (before writing config data); binary-only sync uses
         // stall_before_program (after config, before binary/launch).
         bool needs_nonbinary_sync =
-            nonbinary_sync_idx.has_value() && static_cast<int>(*nonbinary_sync_idx) > last_stall_idx.value_or(-1);
+            nonbinary_sync_idx.has_value() && (!last_stall_idx.has_value() || *nonbinary_sync_idx > *last_stall_idx);
         bool needs_binary_sync =
-            binary_sync_idx.has_value() && static_cast<int>(*binary_sync_idx) > last_stall_idx.value_or(-1);
+            binary_sync_idx.has_value() && (!last_stall_idx.has_value() || *binary_sync_idx > *last_stall_idx);
         if (needs_nonbinary_sync || needs_binary_sync) {
             uint32_t combined_sync_idx = *merge_syncs(nonbinary_sync_idx, binary_sync_idx);
             node.dispatch_metadata.sync_count = extra_data_[combined_sync_idx].finished_sync_count;
@@ -285,7 +286,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             } else {
                 node.dispatch_metadata.stall_before_program = true;
             }
-            last_stall_idx = static_cast<int>(combined_sync_idx);
+            last_stall_idx = combined_sync_idx;
         }
         expected_workers_completed += node.num_workers;
         subdevice_launch_window.push_back(i);
