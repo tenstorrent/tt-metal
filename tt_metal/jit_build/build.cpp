@@ -810,6 +810,9 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     JitBuildCache::inst().build_once(hash, build_fn);
 }
 
-void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
+void jit_build_cache_clear() {
+    JitBuildCache::inst().clear();
+    jit_build::clear_file_hash_cache();
+}
 
 }  // namespace tt::tt_metal

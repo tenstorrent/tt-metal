@@ -31,6 +31,7 @@ utils.o: \
 class JitBuildDependencyTests : public ::testing::Test {
 protected:
     void SetUp() override {
+        tt::jit_build::clear_file_hash_cache();
         // Create temporary directory
         auto temp_template = (std::filesystem::temp_directory_path() / "jit_build_test_XXXXXX").string();
         auto* temp_dir = mkdtemp(temp_template.data());
@@ -41,6 +42,7 @@ protected:
     void TearDown() override {
         // Remove temporary directory
         std::filesystem::remove_all(out_dir_);
+        tt::jit_build::clear_file_hash_cache();
     }
 
     void create_dependency_files(
@@ -115,6 +117,7 @@ TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {
 }
 
 TEST(JitBuildTests, InvalidHashFile) {
+    tt::jit_build::clear_file_hash_cache();
     // Corrupt the hash file
     std::istringstream corrupted_hash_file("corrupted content");
 
@@ -125,6 +128,7 @@ TEST(JitBuildTests, InvalidHashFile) {
 }
 
 TEST(JitBuildTests, EmptyHashFile) {
+    tt::jit_build::clear_file_hash_cache();
     // Create an empty hash file
     std::istringstream empty_hash_file("");
 
