@@ -165,6 +165,17 @@ def run(
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif is_mesh_device:
+            # No placement info on a mesh device (e.g. model_traced_sample suite).
+            # Replicate the tensor to all devices to avoid undefined behaviour.
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         else:
             input_tensor = ttnn.from_torch(
                 torch_input,
