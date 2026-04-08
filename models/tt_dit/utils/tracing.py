@@ -390,6 +390,9 @@ def traced_function(
         _tracers: weakref.WeakKeyDictionary[Any, Tracer] = weakref.WeakKeyDictionary()
         _tracer_shared: Tracer | None = None
 
+        def _needs_new_tracer(tracer: Tracer | None) -> bool:
+            return tracer is None or (not tracer.trace_captured and tracer._function is None)
+
         @functools.wraps(fn)
         def wrapper(*args: Any, traced: bool = False, **kwargs: Any) -> Any:
             nonlocal _tracer_shared
@@ -403,7 +406,7 @@ def traced_function(
             # bindable context (e.g. self) — bind it away and track a Tracer per instance.
             if args and not isinstance(args[0], _TRACER_VALID_INPUT_TYPES):
                 context, rest = args[0], args[1:]
-                if context not in _tracers:
+                if _needs_new_tracer(_tracers.get(context)):
                     _tracers[context] = Tracer(
                         functools.partial(fn, context),
                         device=_resolve_device(context),
@@ -413,7 +416,7 @@ def traced_function(
                 return _tracers[context](*rest, **kwargs)
 
             # Plain function — single shared Tracer.
-            if _tracer_shared is None:
+            if _needs_new_tracer(_tracer_shared):
                 _tracer_shared = Tracer(
                     fn,
                     device=_resolve_device(None),

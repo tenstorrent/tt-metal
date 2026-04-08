@@ -876,7 +876,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.config.boundary_ratio is not None:
             boundary_timestep = self.config.boundary_ratio * self.scheduler.config.num_train_timesteps
         else:
-            boundary_timestep = -1
+            boundary_timestep = -1  # Always use transformer (no transformer_2)
 
         if profiler:
             profiler.start("denoising", profiler_iteration)
@@ -889,7 +889,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_t2 = i == 1 and len(timesteps) == 2
+                warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
 
                 # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
                 transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
