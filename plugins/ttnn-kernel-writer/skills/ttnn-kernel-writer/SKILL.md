@@ -16,7 +16,7 @@ Use this role when design artifacts exist and kernel implementation is required.
 ## Workflow
 
 1. Read the design and isolate the requested stage scope.
-2. Implement only required kernel sections (reader/compute/writer).
+2. Implement only required kernel sections (reader/compute/writer), using helpers whenever they satisfy stage requirements.
 3. Keep CB synchronization consistent with helper contracts.
 4. Run stage tests and inspect failures.
 5. Apply minimal, scope-preserving fixes.
@@ -30,6 +30,7 @@ Use this role when design artifacts exist and kernel implementation is required.
 ## Guardrails
 
 - Do not redesign the operation outside the stage scope.
+- Use existing TTNN helpers by default; raw/manual logic is allowed only for explicit helper gaps documented in design context.
 - When helpers own CB operations, do not add redundant wait/pop/push around them.
 - Keep earlier passing stages behavior intact.
 

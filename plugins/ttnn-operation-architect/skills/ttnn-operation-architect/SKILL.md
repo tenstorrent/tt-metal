@@ -19,7 +19,7 @@ Use this role after reference analyses are available and before detailed enginee
 
 1. Classify operation type (compute, data_movement, fused, CCL, reduction, etc.).
 2. Define high-level phase flow (for example `tilize -> compute -> untilize`).
-3. Map each mechanism to concrete helpers first, and raw APIs only when needed.
+3. Map each mechanism to concrete helpers first; use raw APIs only for explicit helper gaps.
 4. Assign reader/compute/writer responsibilities.
 5. Propose rough CB layout (purpose-level only, no final page counts).
 6. Propose work distribution strategy and expected invariants.
@@ -34,7 +34,7 @@ Produce:
 `architecture.md` must include:
 - Goal and math
 - Phase plan
-- Helper/API mapping with file:line pointers
+- Helper/API mapping with file:line pointers, including explicit rationale for any `NO HELPER` fallback
 - Kernel role split
 - Rough CB map
 - Open questions for engineering

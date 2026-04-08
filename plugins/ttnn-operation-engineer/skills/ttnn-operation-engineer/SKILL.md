@@ -20,7 +20,7 @@ Use this role after `architecture.md` and `design_journal.jsonl` are complete.
 2. Resolve conflicts and record corrections.
 3. Produce exact CB sizing (page size and count) with helper constraints.
 4. Define compile-time/runtime arg ordering and TensorAccessor args.
-5. Draft near-complete reader/compute/writer kernel logic.
+5. Draft near-complete reader/compute/writer kernel logic with explicit `USE HELPER` / `NO HELPER` decisions.
 6. Define TDD stages with stage intent and test scope.
 7. Register stages in `.tdd_state.json` using `tdd_orchestrator.py add-stage`.
 
@@ -34,12 +34,13 @@ Produce:
 `op_design.md` must include:
 - Exact CB contract
 - Argument maps (CT/RT)
-- Kernel pseudocode or near-complete code
+- Kernel pseudocode or near-complete code with helper-first guidance and `NO HELPER` rationales where applicable
 - TDD stage plan with explicit stage boundaries
 
 ## Guardrails
 
 - Do not rely on undocumented helper behavior.
+- Prefer helpers by default; do not hand-roll helper-equivalent logic unless a helper gap is explicitly documented.
 - Keep optional tensor argument slots stable even when optional tensors are absent.
 - Make stage boundaries small enough for isolated failure diagnosis.
 

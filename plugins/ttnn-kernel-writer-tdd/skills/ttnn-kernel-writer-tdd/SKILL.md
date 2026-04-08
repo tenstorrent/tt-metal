@@ -18,7 +18,7 @@ Use this role to own Phase 4 end-to-end: implement, test, fix, and advance acros
 
 For each stage in order:
 1. Inspect stage status with `tdd_orchestrator.py status`.
-2. Implement only current-stage requirements.
+2. Implement only current-stage requirements, preferring existing helpers over raw/manual kernel logic.
 3. Run `tdd_orchestrator.py test --op-path <path>`.
 4. If pass: `advance`, commit, continue.
 5. If fail: run `parse-failure`, apply focused fix, retry within budget.
@@ -35,6 +35,7 @@ If retry budget is exhausted, run rollback and produce `tdd_failure_report.md`.
 
 - Never skip stages.
 - Never implement future stages early.
+- Keep helper-first behavior across retries; only bypass helpers for explicit, documented helper gaps.
 - Keep fixes minimal and traceable to the current failure.
 
 ## Legacy Mapping
