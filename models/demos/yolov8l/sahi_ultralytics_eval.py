@@ -26,6 +26,7 @@ from sahi.slicing import slice_image
 from sahi.utils.cv import read_image_as_pil
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov8l.common import yolov8l_trace_region_size_e2e_for_res
 from models.demos.yolov8l.sahi_slice_chunking import parallel_slice_chunk_bounds
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -38,10 +39,34 @@ def load_image_bgr_sahi(image_path) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
+def _resolve_tt_trace_region_size(args) -> int:
+    if args.tt_trace_region_size is not None:
+        return int(args.tt_trace_region_size)
+
+    tt_input = int(getattr(args, "tt_input_size", 640))
+    if getattr(args, "tt_model", "yolov8l") == "yolov8l":
+        base_trace = yolov8l_trace_region_size_e2e_for_res(tt_input, tt_input)
+    else:
+        base_trace = 6434816
+
+    if args.tt_slice_dp_batch is not None:
+        device_count_hint = int(args.tt_slice_dp_batch)
+    elif args.tt_slice_parallel_devices is not None:
+        device_count_hint = int(args.tt_slice_parallel_devices)
+    elif args.tt_mesh_shape is not None:
+        device_count_hint = int(args.tt_mesh_shape[0]) * int(args.tt_mesh_shape[1])
+    else:
+        device_count_hint = 1
+
+    if device_count_hint > 1:
+        return max(base_trace, 35000000)
+    return base_trace
+
+
 def _tt_device_open_kwargs(args):
     return {
         "l1_small_size": args.tt_l1_small_size,
-        "trace_region_size": args.tt_trace_region_size,
+        "trace_region_size": _resolve_tt_trace_region_size(args),
         "num_command_queues": 2,
     }
 
@@ -154,8 +179,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tt-trace-region-size",
         type=int,
-        default=6434816,
-        help="TT device trace_region_size (YOLOv8l demo uses 6434816; override if required).",
+        default=None,
+        help="TT device trace_region_size. Default: auto from --tt-input-size and mesh mode; override if required.",
     )
     parser.add_argument(
         "--tt-mesh-shape",
@@ -194,6 +219,13 @@ def parse_args() -> argparse.Namespace:
         "1280×1280 (after --pre-resize-to) with the same SAHI tiling—run tile index 0..K-1 as K separate batched "
         "forwards (each forward is batch=N, one tile per device). Requires len(--input) divisible by N after collection. "
         "Incompatible with --tt-slice-parallel-devices.",
+    )
+    parser.add_argument(
+        "--tt-input-size",
+        type=int,
+        choices=[640, 1280],
+        default=640,
+        help="TT YOLOv8l input resolution (square). Default: 640.",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -332,6 +364,7 @@ class TTYoloBackend:
         from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 
         self.ttnn = ttnn
+        self._TT_INPUT_RES = (int(args.tt_input_size), int(args.tt_input_size))
 
         self.slice_dp_batch = getattr(args, "tt_slice_dp_batch", None)
         n_par = getattr(args, "tt_slice_parallel_devices", None)
@@ -366,6 +399,8 @@ class TTYoloBackend:
             self.runner = YOLOv8lPerformantRunner(
                 self.device,
                 device_batch_size=batch_size,
+                inp_h=self._TT_INPUT_RES[1],
+                inp_w=self._TT_INPUT_RES[0],
                 mesh_mapper=inputs_mesh_mapper,
                 mesh_composer=output_mesh_composer,
                 weights_mesh_mapper=weights_mesh_mapper,
@@ -954,6 +989,8 @@ def main():
             "model": args.model if args.backend == "ultralytics" else args.tt_model,
             "backend": args.backend,
             "tt_model": args.tt_model if args.backend == "tt" else None,
+            "tt_input_size": args.tt_input_size if args.backend == "tt" else None,
+            "tt_trace_region_size": _resolve_tt_trace_region_size(args) if args.backend == "tt" else None,
             "tt_slice_parallel_devices": args.tt_slice_parallel_devices if args.backend == "tt" else None,
             "tt_slice_dp_batch": args.tt_slice_dp_batch if args.backend == "tt" else None,
             "tt_slice_dp_batch_times_amortized_per_image": bool(
