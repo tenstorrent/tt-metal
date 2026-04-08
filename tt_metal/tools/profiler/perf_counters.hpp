@@ -240,8 +240,10 @@ enum PerfCounterType : uint16_t {
     L1_3_NOC_RING3_PORT_5_GRANT,
     L1_3_NOC_RING3_PORT_6_GRANT,
     L1_3_NOC_RING3_PORT_7_GRANT,
-    // Ethernet L1 counters (different port mapping from Tensix)
-    // WH Ethernet: no mux, 8 ports. BH Ethernet: 3-bit mux, 4 positions.
+    // Ethernet L1 counters — DEAD CODE.
+    // ERISC perf counter MMIO readback is hardwired to 64'h0 in both WH and BH RTL.
+    // These enum values are kept only for numbering stability (enum values after them must not shift).
+    // No ERISC counter arrays exist; COMPILE_FOR_ERISC paths have been removed from hw_counters.h.
     // Mux 0 (WH ports 0-3 / BH ports 0-3)
     ETH_L1_0_NOC_RING1_OUTGOING_0,  // WH port 0 / BH: NOC Ring 0 port 0
     ETH_L1_0_NOC_RING1_OUTGOING_1,  // WH port 1 / BH: NOC Ring 0 port 1
@@ -464,7 +466,7 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
         case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
         case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
-#if defined(ARCH_BLACKHOLE) || defined(COMPILE_FOR_ERISC)
+#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_2: num_counters = NUM_L1_2_COUNTERS; break;
         case PerfCounterGroup::L1_3: num_counters = NUM_L1_3_COUNTERS; break;
 #endif
@@ -488,7 +490,7 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
         case PerfCounterGroup::L1_0: return l1_0_counters.data();
         case PerfCounterGroup::L1_1: return l1_1_counters.data();
         case PerfCounterGroup::INSTRN: return instrn_counters.data();
-#if defined(ARCH_BLACKHOLE) || defined(COMPILE_FOR_ERISC)
+#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_2: return l1_2_counters.data();
         case PerfCounterGroup::L1_3: return l1_3_counters.data();
 #endif

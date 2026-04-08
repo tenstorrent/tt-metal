@@ -60,27 +60,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
      {PerfCounterType::PACK_BANK7_GRANT, 274}}};
 constexpr size_t NUM_PACK_COUNTERS = 16;
 
-// L1 bank 0 counters — port mapping differs between Tensix and Ethernet cores
-#if defined(COMPILE_FOR_ERISC)
-// Ethernet L1 bank 0: WH has no mux (ports 0-7 = Ring1 Out/In + Ring0 Out/In)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
-    {{PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_0, 0},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_1, 1},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_0, 2},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_1, 3},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_0, 4},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_1, 5},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_0, 6},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_1, 7},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_0_GRANT, 256},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_1_GRANT, 257},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_0_GRANT, 258},
-     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_1_GRANT, 259},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_0_GRANT, 260},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
-     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
-#else
+// L1 bank 0 counters (Tensix only — ERISC disabled: MMIO readback hardwired to 0 in RTL)
 // Tensix L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1: WH has unpacker#1/ECC/pack1
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
@@ -101,7 +81,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
-#endif
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
 // Tensix L1 bank 1 (MUX_CTRL[4] = 1): packer/risc, ext unpacker, ring1 NOC
