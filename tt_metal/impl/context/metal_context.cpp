@@ -13,7 +13,6 @@
 #include <vector>
 #include <unordered_set>
 
-#include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
@@ -229,10 +228,9 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
+        get_core_type_from_config(dispatch_core_config_), num_hw_cqs, hal(), is_galaxy_cluster,
+        rtoptions().get_dram_backed_cq());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
@@ -463,11 +461,7 @@ void MetalContext::register_handlers_locked() {
 }
 
 void MetalContext::teardown_dispatch_state() {
-    for (auto& mem_map : dispatch_mem_map_) {
-        if (mem_map) {
-            mem_map.reset();
-        }
-    }
+    dispatch_mem_map_.reset();
     device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
@@ -533,9 +527,8 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(get_core_type_from_config(dispatch_core_config_))];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map before initializing it.");
-    return *mem_map;
+    TT_FATAL(dispatch_mem_map_, "Tried to get dispatch_mem_map before initializing it.");
+    return *dispatch_mem_map_;
 }
 
 // ─── Fabric / control plane / system mesh — delegated to MetalEnv ─────────────
