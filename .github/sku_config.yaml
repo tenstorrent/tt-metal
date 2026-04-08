@@ -203,3 +203,8 @@ skus:
       - BH-QB-GE
       - pipeline-perf
       - in-service
+
+  bh_sp1:
+    runs_on:
+      group: exabox
+      labels: exabox-multihost-with-nfs
