@@ -394,6 +394,7 @@ void kernel_main() {
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (should_receive_k) {
+                    DeviceZoneScopedN("K receive");
                     // Receive forwarded K chunk from K chain (batch-level chain for MLA)
                     noc_semaphore_set(k_receiver_semaphore_addr_ptr, INVALID);
                     if constexpr (k_mcast_enabled) {
@@ -441,6 +442,7 @@ void kernel_main() {
                 if (should_forward_k) {
                     if constexpr (k_mcast_enabled) {
                         if (k_use_mcast) {
+                            DeviceZoneScopedN("K fwd");
                             // K multicast: wait for ALL receivers, then broadcast
                             noc_semaphore_wait(k_sender_semaphore_addr_ptr, k_sender_wait_count);
                             noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);

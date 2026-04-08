@@ -299,6 +299,7 @@ void kernel_main() {
                 cb_lse_in,
                 cb_lse_out,
                 cb_prev_out,
+
                 cb_out,
                 lw_mask,
                 causality,

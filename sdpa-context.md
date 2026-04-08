@@ -2,6 +2,30 @@
 
 Essential context for developing and extending the SDPA kernel.
 
+
+## Current perf metrics
+
+| config                  | math util | delta (%) |
+| ----------------------- | --------- | --------- |
+| baseline (KV chaining)  | 46.9%     | /         |
+| + K-fwd chain           | 54.9%     | +8.0%     |
+| + no K DRAM             | 55.1%     | +0.2%     |
+| + no K unicast overhead | 56.8%     | +1.7%     |
+| + no V DRAM             | 57.1%     | +0.3%     |
+| + no V unicast overhead | 59.1%     | +2.0%     |
+| + no Q DRAM             | 59.3%     | +0.2%     |
+
+
+| config                 | Math Util (%) |
+| ---------------------- | ------------- |
+| baseline (KV chaining) | 46.9          |
+| + K fwd chain          | 54.9          |
+| w/ mcast               | 52.1          |
+| w/ mcast, no write     | 53.3          |
+
+Observation: multicast should be faster than unicast. Investigate why.
+
+
 ## Key Files
 
 | File | Purpose |
@@ -269,9 +293,11 @@ pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py::test_ring_joint_atte
 ```
 Output includes a table with **Math Util** column — the primary performance metric.
 
-**Tracy profiling (critical for validating changes):**
+**Note:** The `perf_table` test internally spawns a subprocess that runs Tracy profiling. Do NOT wrap it with `python -m tracy` — just run with pytest directly. Device profiler logs are generated at `generated/profiler/ttnn_ring_joint_sdpa_performance/reports/<timestamp>/`.
 
-Run on Blackhole loud box before and after changes:
+**Tracy profiling (for standalone tests):**
+
+Use `python -m tracy` only for tests that don't handle profiling internally:
 ```bash
 # Test 1: 131072 sequence length
 python -m tracy -p -r -v -m pytest \
@@ -280,6 +306,29 @@ python -m tracy -p -r -v -m pytest \
 # Test 2: 102400 sequence length
 python -m tracy -p -r -v -m pytest \
   models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py::test_mla_sdpa[blackhole-balanced-rpxup-4x2-line-1link-no_trace-single_run-1-128-1-576-128-102400-320-64-q_bf16_kv_bf8]
+```
+
+**Analyzing device profiler logs with `parse_tracy.py`:**
+```bash
+python parse_tracy.py <tracy_report_dir>
+# Example:
+python parse_tracy.py generated/profiler/ttnn_ring_joint_sdpa_performance/reports/2026_04_08_14_48_39/
+```
+
+Reads `profile_log_device.csv` and `ops_perf_results_*.csv`, outputs `analysis.md` with per-device kernel duration stats.
+
+**Device profiler log structure (`profile_log_device.csv`):**
+- Line 1: Metadata (`ARCH: blackhole, CHIP_FREQ[MHz]: 1350, ...`)
+- Line 2: CSV header
+- Columns: `PCIe slot` (device), `core_x`, `core_y`, `RISC processor type`, `zone name`, `type` (ZONE_START/ZONE_END), `time[cycles since reset]`
+
+**Important:** Device profiler buffer is limited. Only early iterations are captured — zone counts are not meaningful, but **relative durations** are.
+
+**Filtering by device (post-process):**
+```bash
+# Keep header + device 0 only
+head -2 profile_log_device.csv > profile_log_device_slot0.csv
+grep "^0," profile_log_device.csv >> profile_log_device_slot0.csv
 ```
 
 **After each run:** Create `command_info.txt` in the report folder (`generated/profiler/reports/<timestamp>/`) with:

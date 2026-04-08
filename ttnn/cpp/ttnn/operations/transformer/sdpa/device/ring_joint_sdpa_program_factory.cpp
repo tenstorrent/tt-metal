@@ -1491,7 +1491,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = KernelBuildOptLevel::O2});
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {

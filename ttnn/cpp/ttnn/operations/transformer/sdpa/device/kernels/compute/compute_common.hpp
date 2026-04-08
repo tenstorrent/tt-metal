@@ -24,6 +24,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1212,7 +1213,10 @@ ALWI void matmul_blocks(
     uint32_t in0_wait_tiles = in0_subblock_num_tiles;
 
     reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
+    {
+        DeviceZoneScopedN("WAIT_IN1");
+        cb_wait_front(in1_cb, K * N);
+    }
     cb_reserve_back(out_cb, output_num_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
@@ -1727,8 +1731,14 @@ void sdpa_inner_loop(
             KV_chunks_processed_in_iter++;
 
             if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
-                cb_wait_front(cb_k_in, k_chunk_tiles);
-                cb_wait_front(cb_v_in, v_chunk_tiles);
+                {
+                    DeviceZoneScopedN("WAIT_K");
+                    cb_wait_front(cb_k_in, k_chunk_tiles);
+                }
+                {
+                    DeviceZoneScopedN("WAIT_V");
+                    cb_wait_front(cb_v_in, v_chunk_tiles);
+                }
                 cb_pop_front(cb_k_in, k_chunk_tiles);
                 cb_pop_front(cb_v_in, v_chunk_tiles);
 
@@ -1737,25 +1747,26 @@ void sdpa_inner_loop(
 
             /**
              * QK = Q_CHUNK @ K_CHUNK
-             *
-             * matmul_blocks internally waits on both inputs
              */
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
-                cb_q_in,
-                cb_k_in,
-                cb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_in0_block_w,
-                qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
+            {
+                DeviceZoneScopedN("MM_QK");
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_in0_block_w,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1840,26 +1851,30 @@ void sdpa_inner_loop(
             pack_reconfig_data_format(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
-                cb_qk_im,
-                cb_v_in,
-                alias_mm2_cur_out,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t,
-                out_num_blocks,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
+            {
+                DeviceZoneScopedN("MM_QKV");
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    alias_mm2_cur_out,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t,
+                    out_num_blocks,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/);
+            }
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
+                DeviceZoneScopedN("OUT_ACC");
                 /**
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
@@ -1947,6 +1962,7 @@ void sdpa_inner_loop(
         }
 
         if constexpr (sdpa_type == RING) {
+            DeviceZoneScopedN("RING_POSTPROCESS");
             log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
 
             // Scale prev_max by scale_fp32
@@ -2027,6 +2043,7 @@ void sdpa_inner_loop(
     }
 
     if constexpr (sdpa_type == RING) {
+        DeviceZoneScopedN("RING_SYNC");
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
             cb_wait_front(cb_v_in, v_chunk_tiles);
