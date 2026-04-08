@@ -139,6 +139,25 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     detail::WriteToDeviceDRAMChannel(device, test_config.dram_bank_id, input_dram_address, in1_input);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
+    vector<uint32_t> dram_verification_buffer;
+    detail::ReadFromDeviceDRAMChannel(
+        device, test_config.dram_bank_id, input_dram_address, in1_pages_bytes, dram_verification_buffer);
+    log_info(
+        tt::LogTest,
+        "Verifying DRAM write by reading back the content. Read {} bytes from DRAM, content (in uint32_t): {}, {}, "
+        "{},...",
+        in1_pages_bytes,
+        dram_verification_buffer[0],
+        dram_verification_buffer[1],
+        dram_verification_buffer[2]);
+
+    if (dram_verification_buffer != in1_input) {
+        log_error(tt::LogTest, "DRAM verification failed! The content read back from DRAM does not match the input.");
+        return false;
+    } else {
+        log_info(tt::LogTest, "DRAM verification succeeded! The content read back from DRAM matches the input.");
+    }
+
     // in1_per_core_read_size_bytes is how much each core should read from the DRAM bank
     uint32_t in1_per_core_read_size_bytes = in1_pages_bytes / test_config.num_subblocks_c_dim;
     // in1_per_core_read_addr stores the memory address where each core should read from DRAM bank
