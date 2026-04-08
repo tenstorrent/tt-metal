@@ -530,7 +530,7 @@ class PipelineBlock:
         assert not self.parallel_devices, "Use get_upstream_sockets() for parallel mode"
         if self.exit_socket_interface is not None:
             return self.exit_socket_interface.get_upstream_socket()
-        elif self.host_io is not None:
+        elif hasattr(self, "host_io"):
             return self.host_io.get_upstream_socket()
 
     def get_downstream_socket(self):

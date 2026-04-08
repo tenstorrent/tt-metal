@@ -131,32 +131,14 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
 
     if constexpr (use_fabric_on_sender) {
-        size_t fc1_arg_start = rt_args_idx;
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        size_t fc2_arg_start = rt_args_idx;
         downstream_fabric_connection_2 =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        DPRINT << "d2d_xchg: fc1 eth_ch=" << get_arg_val<uint32_t>(fc1_arg_start) << " edm=("
-               << (uint32_t)downstream_fabric_connection.edm_noc_x << ","
-               << (uint32_t)downstream_fabric_connection.edm_noc_y
-               << ") buf=" << (uint32_t)downstream_fabric_connection.edm_buffer_base_addr
-               << " nbufs=" << (uint32_t)downstream_fabric_connection.num_buffers_per_channel << ENDL();
-        DPRINT << "d2d_xchg: fc2 eth_ch=" << get_arg_val<uint32_t>(fc2_arg_start) << " edm=("
-               << (uint32_t)downstream_fabric_connection_2.edm_noc_x << ","
-               << (uint32_t)downstream_fabric_connection_2.edm_noc_y
-               << ") buf=" << (uint32_t)downstream_fabric_connection_2.edm_buffer_base_addr
-               << " nbufs=" << (uint32_t)downstream_fabric_connection_2.num_buffers_per_channel << ENDL();
     }
     if constexpr (use_fabric_on_receiver) {
-        size_t fc_up_arg_start = rt_args_idx;
         upstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        DPRINT << "d2d_xchg: fc_up eth_ch=" << get_arg_val<uint32_t>(fc_up_arg_start) << " edm=("
-               << (uint32_t)upstream_fabric_connection.edm_noc_x << ","
-               << (uint32_t)upstream_fabric_connection.edm_noc_y
-               << ") buf=" << (uint32_t)upstream_fabric_connection.edm_buffer_base_addr
-               << " nbufs=" << (uint32_t)upstream_fabric_connection.num_buffers_per_channel << ENDL();
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
@@ -209,18 +191,10 @@ void kernel_main() {
 
     uint32_t d2d_iter = 0;
     while (true) {
-        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
-               << " reserve_downstream" << ENDL();
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
-               << " wait_upstream" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
-            DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
-                   << ") terminated at iter=" << d2d_iter << ENDL();
             break;
         }
-        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
-               << " forwarding" << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
@@ -244,9 +218,6 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
-        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
-               << " done" << ENDL();
-        d2d_iter++;
     }
 
     update_socket_config(sender_socket);

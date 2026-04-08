@@ -403,12 +403,6 @@ class HostInterface:
                         h2d_program,
                         self.h2d_mesh_core_coord.core_coord,
                     )
-                    print(
-                        f"  HostInterface: h2d setup_fabric_connection idx={idx} "
-                        f"src_node={h2d_fabric_node_id} dst_node={my_downstream_fabric_node_id} "
-                        f"core={self.h2d_mesh_core_coord.core_coord} "
-                        f"returned eth_ch={fwd_fabric_args[0]} args={list(fwd_fabric_args)}"
-                    )
                     h2d_rt_args_ref.extend(fwd_fabric_args)
 
         if self.d2h_socket and d2h_program is not None:
@@ -428,12 +422,6 @@ class HostInterface:
                         idx,
                         d2h_program,
                         self.d2h_mesh_core_coord.core_coord,
-                    )
-                    print(
-                        f"  HostInterface: d2h setup_fabric_connection idx={idx} "
-                        f"src_node={d2h_fabric_node_id} dst_node={my_upstream_fabric_node_id} "
-                        f"core={self.d2h_mesh_core_coord.core_coord} "
-                        f"returned eth_ch={bwd_fabric_args[0]} args={list(bwd_fabric_args)}"
                     )
                     d2h_rt_args_ref.extend(bwd_fabric_args)
 

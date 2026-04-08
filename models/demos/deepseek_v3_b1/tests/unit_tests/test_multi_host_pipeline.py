@@ -274,16 +274,16 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     "vocab_size, embedding_dim",
     [
         (256, 14336),
-        # (512, 7168),
-        # (1024, 3584),
+        (512, 7168),
+        (1024, 3584),
         (2048, 1792),
     ],
 )
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
-        # (128, 2),
-        # (256, 4),
+        (128, 2),
+        (256, 4),
         (512, 8),
     ],
 )

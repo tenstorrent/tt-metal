@@ -130,22 +130,10 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
     if constexpr (use_fabric) {
-        size_t fc1_arg_start = rt_args_idx;
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        size_t fc2_arg_start = rt_args_idx;
         downstream_fabric_connection_2 =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        DPRINT << "h2d_recv: fc1 eth_ch=" << get_arg_val<uint32_t>(fc1_arg_start) << " edm=("
-               << (uint32_t)downstream_fabric_connection.edm_noc_x << ","
-               << (uint32_t)downstream_fabric_connection.edm_noc_y
-               << ") buf=" << (uint32_t)downstream_fabric_connection.edm_buffer_base_addr
-               << " nbufs=" << (uint32_t)downstream_fabric_connection.num_buffers_per_channel << ENDL();
-        DPRINT << "h2d_recv: fc2 eth_ch=" << get_arg_val<uint32_t>(fc2_arg_start) << " edm=("
-               << (uint32_t)downstream_fabric_connection_2.edm_noc_x << ","
-               << (uint32_t)downstream_fabric_connection_2.edm_noc_y
-               << ") buf=" << (uint32_t)downstream_fabric_connection_2.edm_buffer_base_addr
-               << " nbufs=" << (uint32_t)downstream_fabric_connection_2.num_buffers_per_channel << ENDL();
     }
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
@@ -204,15 +192,9 @@ void kernel_main() {
 
     uint32_t h2d_iter = 0;
     while (true) {
-        DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << h2d_iter
-               << " waiting_for_pages" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
-            DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
-                   << ") terminated at iter=" << h2d_iter << ENDL();
             break;
         }
-        DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << h2d_iter
-               << " got_page" << ENDL();
         if constexpr (pull_from_host) {
             noc_async_wide_read_any_len_with_state(
                 NOC_INDEX,
@@ -234,11 +216,7 @@ void kernel_main() {
             auto l1_read_addr = receiver_socket.read_ptr;
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-            DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << h2d_iter
-                   << " reserve_downstream" << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << h2d_iter
-                   << " sending_downstream" << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -251,9 +229,6 @@ void kernel_main() {
         }
         socket_pop_pages(receiver_socket, 1);
         socket_notify_sender(receiver_socket);
-        DPRINT << "h2d_recv: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << h2d_iter
-               << " done" << ENDL();
-        h2d_iter++;
         invalidate_l1_cache();
     }
 
