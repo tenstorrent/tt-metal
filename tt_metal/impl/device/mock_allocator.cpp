@@ -8,16 +8,31 @@
 
 #include "impl/allocator/l1_banking_allocator.hpp"
 
+#include <unordered_set>
+
 namespace tt::tt_metal::experimental {
+
+// AllocatorImpl has no virtual methods, so dynamic_cast is not available.
+// Track MockAllocator instances via a static registry to enable safe downcasting.
+static std::unordered_set<void*> s_mock_allocator_registry;
 
 class MockAllocator : public L1BankingAllocator {
 public:
     using L1BankingAllocator::L1BankingAllocator;
 };
 
+std::unique_ptr<AllocatorImpl> make_mock_allocator(const AllocatorConfig& config) {
+    auto alloc = std::make_unique<MockAllocator>(config);
+    s_mock_allocator_registry.insert(alloc.get());
+    return alloc;
+}
+
 MockAllocator* get_mock_allocator(distributed::MeshDevice* device) {
     auto* impl = device->allocator_impl().get();
-    return dynamic_cast<MockAllocator*>(impl);
+    if (s_mock_allocator_registry.count(impl)) {
+        return static_cast<MockAllocator*>(impl);
+    }
+    return nullptr;
 }
 
 AllocatorState extract_mock_allocator_state(distributed::MeshDevice* device) {

@@ -50,6 +50,7 @@
 #include <env_lib.hpp>
 
 #include "allocator/l1_banking_allocator.hpp"
+#include <tt-metalium/experimental/mock_allocator.hpp>
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -1324,9 +1325,13 @@ bool MeshDeviceImpl::initialize_impl(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator_impl();
+    const auto& alloc_config = allocator->get_config();
+    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto mesh_allocator =
+        is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        pimpl_wrapper, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    sub_device_manager_tracker_ =
+        std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =

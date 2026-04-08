@@ -16,10 +16,15 @@
  * Use get_mock_allocator() to access it, then call extract/override state.
  */
 
+#include <memory>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/allocator_state.hpp>
 
 namespace tt::tt_metal {
+
+struct AllocatorConfig;
+
 namespace distributed {
 class MeshDevice;
 }
@@ -28,6 +33,10 @@ class MeshDevice;
 namespace tt::tt_metal::experimental {
 
 class MockAllocator;
+
+// Factory: creates a MockAllocator wrapped as unique_ptr<AllocatorImpl>.
+// Used internally by Device::initialize_allocator() for mock devices.
+std::unique_ptr<AllocatorImpl> make_mock_allocator(const AllocatorConfig& config);
 
 // Returns MockAllocator* if device is in mock mode, nullptr otherwise.
 MockAllocator* get_mock_allocator(distributed::MeshDevice* device);

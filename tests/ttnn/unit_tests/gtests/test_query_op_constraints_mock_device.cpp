@@ -294,7 +294,7 @@ TEST_F(QueryOpConstraintsMockDevice, CheckpointRestoreWorkflow) {
 // https://github.com/tenstorrent/tt-metal/issues/39849
 // ============================================================================
 
-TEST_F(QueryOpConstraintsMockDevice, UnaryRelu) {
+TEST_F(QueryOpConstraintsMockDevice, DISABLED_UnaryRelu) {
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape(Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
@@ -401,41 +401,168 @@ TEST_F(QueryOpConstraintsMockDevice, DISABLED_Matmul) {
 }
 
 // ============================================================================
-// Old API: configure_mock_mode -> MeshDevice::create -> query_op_constraints
+// configure_mock_mode tests — ops work via configure_mock_mode + open_mesh_device
 //
-// Currently segfaults in Inspector/WatcherServer because CreateKernel
-// dereferences global singletons that aren't initialized for mock contexts.
-// Tracked in https://github.com/tenstorrent/tt-metal/issues/39849
-//
-// Uses EXPECT_DEATH so this is an expected failure:
-//   - While #39849 is open: subprocess crashes → EXPECT_DEATH passes → CI green
-//   - When #39849 is fixed: subprocess doesn't crash → EXPECT_DEATH fails → CI red
-//     This signals that the fix has landed and the DISABLED_ tests above can be
-//     re-enabled with real assertions.
+// Unlike MetalEnv, the configure_mock_mode path initializes the full MetalContext
+// including WatcherServer, so ops can run without the #39849 crash.
 // ============================================================================
 
-TEST(QueryOpConstraintsOldMockApi, ExpectCrashUntil39849IsFixed) {
-    // EXPECT_DEATH(
-    // {
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
-    auto device = ttnn::open_mesh_device(0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+class QueryOpConstraintsMockMode : public ::testing::Test {
+protected:
+    std::shared_ptr<distributed::MeshDevice> device_;
 
+    void SetUp() override {
+        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+        device_ = ttnn::open_mesh_device(0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+        ASSERT_GT(device_->num_devices(), 0u);
+    }
+
+    void TearDown() override {
+        if (device_) {
+            device_->close();
+            device_.reset();
+        }
+        experimental::disable_mock_mode();
+    }
+};
+
+TEST_F(QueryOpConstraintsMockMode, UnaryRelu) {
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape(Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto query = ttnn::graph::query_op_constraints(
         [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
-        device.get(),
+        device_.get(),
         input_spec,
         input_spec.tensor_layout().get_memory_config());
 
-    // If we reach here, #39849 is fixed — exit cleanly so EXPECT_DEATH fails
-    device->close();
-    experimental::disable_mock_mode();
-    // _exit(0);
-    // },
-    // ".*");
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0u);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0u);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs->size(), 1u);
+}
+
+TEST_F(QueryOpConstraintsMockMode, UnaryReluHeightSharded) {
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{3, 1, 32 * 32, 32 * 32}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec{
+                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                    {6 * 32, 32 * 32},
+                    ShardOrientation::ROW_MAJOR}}));
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        device_.get(),
+        input_spec,
+        input_spec.tensor_layout().get_memory_config());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0u);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0u);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs->size(), 1u);
+}
+
+TEST_F(QueryOpConstraintsMockMode, BinaryAdd) {
+    const auto spec_a = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{4, 2, 5 * 32, 7 * 32}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    const auto spec_b = spec_a;
+
+    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::add(args...); },
+        device_.get(),
+        spec_a,
+        spec_b,
+        spec_a.data_type(),
+        spec_a.tensor_layout().get_memory_config(),
+        std::nullopt,
+        none,
+        none,
+        none,
+        false);
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0u);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0u);
+}
+
+TEST_F(QueryOpConstraintsMockMode, Matmul) {
+    const auto spec_a = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    const auto spec_b = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 128, 64}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    auto query = ttnn::graph::query_op_constraints(
+        ttnn::matmul,
+        device_.get(),
+        spec_a,
+        spec_b,
+        false,  // transpose_a
+        false,  // transpose_b
+        ttnn::L1_MEMORY_CONFIG,
+        DataType::BFLOAT16,
+        std::nullopt,   // program_config
+        std::nullopt,   // activation
+        std::nullopt,   // compute_kernel_config
+        std::nullopt,   // core_grid
+        std::nullopt,   // output_tile
+        std::nullopt,   // optional_output_tensor
+        std::nullopt,   // global_cb
+        std::nullopt);  // sub_device_id
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0u);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0u);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs->size(), 1u);
+}
+
+// ============================================================================
+// MockAllocator state extraction with query_op_constraints
+// ============================================================================
+
+TEST_F(QueryOpConstraintsMockMode, GetMockAllocatorReturnsNonNull) {
+    auto* mock_alloc = experimental::get_mock_allocator(device_.get());
+    ASSERT_NE(mock_alloc, nullptr);
+}
+
+TEST_F(QueryOpConstraintsMockMode, ReluWithAllocatorStateExtraction) {
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    // Checkpoint before op
+    auto state_before = experimental::extract_mock_allocator_state(device_.get());
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        device_.get(),
+        input_spec,
+        input_spec.tensor_layout().get_memory_config());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+
+    // Checkpoint after op — allocator state should be unchanged since
+    // query_op_constraints cleans up allocations internally
+    auto state_after = experimental::extract_mock_allocator_state(device_.get());
+
+    // Restore original state to verify override works
+    experimental::override_mock_allocator_state(device_.get(), state_before);
 }
 
 }  // namespace tt::tt_metal

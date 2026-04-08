@@ -164,7 +164,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return std::make_unique<experimental::MockAllocator>(config);
+        return experimental::make_mock_allocator(config);
     }
     return std::make_unique<L1BankingAllocator>(config);
 }
