@@ -376,6 +376,7 @@ def initialize_test_inputs(
     validate: bool = True,
     num_dispatch_groups: int = 1,
     skip_x_initialization: bool = False,
+    seed: int = None,
 ):
     """
     Initialize test inputs (x, weights, indices) with random data.
@@ -395,6 +396,9 @@ def initialize_test_inputs(
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
+
+    if seed is not None:
+        torch.manual_seed(seed)
 
     input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None

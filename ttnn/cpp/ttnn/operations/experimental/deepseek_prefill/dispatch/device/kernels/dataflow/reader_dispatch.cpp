@@ -191,10 +191,6 @@ void kernel_main() {
         uint32_t batch_count = batch_end - batch_start;
         bool batch_did_local_write = false;
 
-        uint32_t remote_count = 0;
-        constexpr uint32_t max_remotes_per_batch = read_batch_size * num_experts_per_tok;
-        uint32_t remote_payload_src[max_remotes_per_batch];
-
         for (uint32_t t = 0; t < batch_count; t++) {
             uint32_t token_idx = batch_start + t;
             uint32_t input_scratch_addr = input_base + t * aligned_input_page_size;
@@ -242,6 +238,7 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
 
+                        // Push route_info
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
@@ -251,6 +248,14 @@ void kernel_main() {
                         route_info[3] = 0;
                         cb_push_back(cb_route_info_id, 1);
 
+                        // Copy payload from input scratch (L1) into payload CB for writer
+                        cb_reserve_back(cb_payload_for_writer_id, 1);
+                        uint32_t payload_dst = get_write_ptr(cb_payload_for_writer_id);
+                        noc_async_read(get_noc_addr(input_scratch_addr), payload_dst, aligned_input_page_size);
+                        noc_async_read_barrier();
+                        cb_push_back(cb_payload_for_writer_id, 1);
+
+                        // Push metadata
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
                         volatile tt_l1_ptr int32_t* meta_dst =
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));
@@ -260,37 +265,10 @@ void kernel_main() {
                         meta_dst[3] = routed_expert;
                         meta_dst[4] = static_cast<int16_t>(weights[k]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
-
-                        remote_payload_src[remote_count] = input_scratch_addr;
-                        remote_count++;
                     }
                 }
 
                 offset++;
-            }
-        }
-
-        if (remote_count > 0) {
-            uint32_t sent = 0;
-            while (sent < remote_count) {
-                uint32_t fifo_lim = get_local_cb_interface(cb_payload_for_writer_id).fifo_limit;
-                uint32_t wr = get_write_ptr(cb_payload_for_writer_id);
-                uint32_t pages_to_end = (fifo_lim - wr) / aligned_input_page_size;
-                uint32_t chunk = remote_count - sent;
-                if (chunk > pages_to_end) {
-                    chunk = pages_to_end;
-                }
-                cb_reserve_back(cb_payload_for_writer_id, chunk);
-                uint32_t base = get_write_ptr(cb_payload_for_writer_id);
-                for (uint32_t i = 0; i < chunk; i++) {
-                    noc_async_read(
-                        get_noc_addr(remote_payload_src[sent + i]),
-                        base + i * aligned_input_page_size,
-                        aligned_input_page_size);
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_payload_for_writer_id, chunk);
-                sent += chunk;
             }
         }
 

@@ -216,41 +216,32 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         /*cb_id=*/tt::CBIndex::c_3,
         "offsets_tensor");
 
-    // c_4: route_info (reader->writer, 4 x uint32_t per entry)
-    // Must hold at least read_batch_size * num_experts_per_tok entries to avoid deadlock:
-    // the reader pushes all route_info entries for a batch before starting the L1 payload copy,
-    // so the CB must not fill up before the writer can consume (which requires payload data).
+    // c_4, c_5, c_6: reader→writer CBs for (route_info, payload, metadata) per remote entry.
+    // The reader pushes all three per entry in lockstep, so small buffering (2) suffices
+    // for the writer to drain concurrently. No large buffering needed.
     {
+        constexpr uint32_t rw_buffering = 2;
+
         uint32_t route_info_page_size = l1_alignment;
-        uint32_t route_info_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                route_info_buffering * route_info_page_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
+                rw_buffering * route_info_page_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
                 .set_page_size(tt::CBIndex::c_4, route_info_page_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
-    }
 
-    // c_5: payload_for_writer (reader->writer, input pages for fabric sends)
-    // Same buffering rationale as route_info (see c_4 comment for deadlock analysis).
-    {
-        uint32_t payload_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         detail::create_tensor_cb(
             program,
             sender_core_grid,
             input_tensor,
-            /*buffering_factor=*/payload_buffering,
+            /*buffering_factor=*/rw_buffering,
             /*cb_id=*/tt::CBIndex::c_5,
             "payload_for_writer");
-    }
-    // c_6: metadata_for_writer (reader->writer, metadata pages for fabric sends)
-    // Same buffering rationale as route_info (see c_4 comment for deadlock analysis).
-    {
-        uint32_t metadata_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
+
         detail::create_tensor_cb(
             program,
             sender_core_grid,
             metadata_tensor,
-            /*buffering_factor=*/metadata_buffering,
+            /*buffering_factor=*/rw_buffering,
             /*cb_id=*/tt::CBIndex::c_6,
             "metadata_for_writer");
     }

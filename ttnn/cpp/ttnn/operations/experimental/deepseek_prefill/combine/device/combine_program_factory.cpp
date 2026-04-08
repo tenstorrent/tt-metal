@@ -204,29 +204,23 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*cb_id=*/tt::CBIndex::c_2,
         "expert_token_counts");
 
-    // c_3: route_info (reader->writer, 4 x uint32_t per entry)
-    // Must hold at least read_batch_size entries to avoid deadlock:
-    // the reader pushes all route_info entries for a batch before starting the L1 payload copy,
-    // so the CB must not fill up before the writer can consume (which requires payload data).
+    // c_3, c_4: reader→writer CBs for (route_info, output) per remote entry.
+    // The reader pushes both per entry in lockstep, so small buffering (2) suffices.
     {
+        constexpr uint32_t rw_buffering = 2;
+
         uint32_t route_info_page_size = l1_alignment;
-        uint32_t route_info_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                route_info_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
+                rw_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
                 .set_page_size(tt::CBIndex::c_3, route_info_page_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
-    }
 
-    // c_4: output_for_writer (reader->writer, output pages for fabric sends)
-    // Same buffering rationale as route_info (see c_3 comment for deadlock analysis).
-    {
-        uint32_t output_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         detail::create_tensor_cb(
             program,
             sender_core_grid,
             dispatched_buffer,
-            /*buffering_factor=*/output_buffering,
+            /*buffering_factor=*/rw_buffering,
             /*cb_id=*/tt::CBIndex::c_4,
             "output_for_writer");
     }

@@ -205,9 +205,6 @@ void kernel_main() {
             uint32_t batch_count = batch_end - batch_start;
             bool batch_did_local_write = false;
 
-            uint32_t remote_count = 0;
-            uint32_t remote_src_addrs[read_batch_size];
-
             for (uint32_t t = 0; t < batch_count; t++) {
                 uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
                 uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
@@ -229,6 +226,7 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
+                        // Push route_info
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
@@ -238,33 +236,14 @@ void kernel_main() {
                         route_info[3] = 0;
                         cb_push_back(cb_route_info_id, 1);
 
-                        remote_src_addrs[remote_count] = buffer_scratch_addr;
-                        remote_count++;
-                    }
-                }
-            }
-
-            if (remote_count > 0) {
-                uint32_t sent = 0;
-                while (sent < remote_count) {
-                    uint32_t fifo_lim = get_local_cb_interface(cb_output_for_writer_id).fifo_limit;
-                    uint32_t wr = get_write_ptr(cb_output_for_writer_id);
-                    uint32_t pages_to_end = (fifo_lim - wr) / aligned_dispatched_buffer_page_size;
-                    uint32_t chunk = remote_count - sent;
-                    if (chunk > pages_to_end) {
-                        chunk = pages_to_end;
-                    }
-                    cb_reserve_back(cb_output_for_writer_id, chunk);
-                    uint32_t base = get_write_ptr(cb_output_for_writer_id);
-                    for (uint32_t i = 0; i < chunk; i++) {
+                        // Copy output payload from scratch (L1) into output CB for writer
+                        cb_reserve_back(cb_output_for_writer_id, 1);
+                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
                         noc_async_read(
-                            get_noc_addr(remote_src_addrs[sent + i]),
-                            base + i * aligned_dispatched_buffer_page_size,
-                            aligned_dispatched_buffer_page_size);
+                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+                        noc_async_read_barrier();
+                        cb_push_back(cb_output_for_writer_id, 1);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_for_writer_id, chunk);
-                    sent += chunk;
                 }
             }
 
