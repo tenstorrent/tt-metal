@@ -25,6 +25,8 @@ python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise
 
 **Note:** The `--dump-file` flag is deprecated and no longer needed. Vectors are always dumped to disk by default.
 
+Generation also writes `tests/sweep_framework/vectors_export/generation_manifest.json`. This manifest is required by `--vector-source vectors_export` — do not delete it between generate and run steps.
+
 #### 2. Run Tests
 
 - **Vector sources**: `file` or `vectors_export`
@@ -80,7 +82,9 @@ python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.r
 - `--summary`: Print an execution (or dry-run) summary
 ```
 
-For information on writing sweep tests, see [`tests/sweep_framework/README.md`](sweep_framework/README.md).
+For information on writing sweep tests, CI routing, and the generation manifest contract, see [`tests/sweep_framework/README.md`](sweep_framework/README.md).
+
+> **Note:** `tests/ttnn/python_api_testing/sweep_tests/` is an older, separate sweep framework. It is not the same as `tests/sweep_framework/` and its docs do not apply to `sweeps_runner.py`.
 
 ## Unit Test Framework
 

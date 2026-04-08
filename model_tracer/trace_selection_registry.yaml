@@ -1,13 +1,13 @@
-# Sweep Manifest
+# Trace Selection Registry
 #
 # This file controls which op configurations get reconstructed from the database
 #
 # There are two sections:
 #
-#   targets   — what to reconstruct (edited by you)
-#   registry  — log of every trace loaded into the DB (auto-appended on load)
+#   targets   - what to reconstruct (edited by you)
+#   registry  - log of every trace loaded into the DB (auto-appended on load)
 #
-# ── TARGETS ──────────────────────────────────────────────────────────────────
+# -- TARGETS ------------------------------------------------------------------
 #
 # Two scope groups (driven by CI): lead_models and model_traced.
 #
@@ -23,15 +23,15 @@
 #
 # Reconstruct from the command line:
 #   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/trace_selection_registry.yaml \
 #       model_tracer/traced_operations/ttnn_operations_lead_models.json \
 #       lead_models
 #   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/trace_selection_registry.yaml \
 #       model_tracer/traced_operations/ttnn_operations_model_traced.json \
 #       model_traced
 #
-# ── REGISTRY ─────────────────────────────────────────────────────────────────
+# -- REGISTRY -----------------------------------------------------------------
 #
 # One entry per trace loaded into the DB. Auto-appended with status: draft on load.
 # Manually promote to status: active when the trace is ready for CI.
