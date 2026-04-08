@@ -186,7 +186,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         for (uint32_t index = 0; index < programmable_core_count; index++) {
             auto core_type = hal.get_programmable_core_type(index);
-            if (!hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
+            if (!hal.has_programmable_core_type(core_type)) {
                 continue;
             }
             ProgramConfig& program_config = node.program->get_program_config(index);
