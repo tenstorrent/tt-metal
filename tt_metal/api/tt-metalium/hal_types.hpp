@@ -26,7 +26,7 @@ enum class HalL1MemAddrType : uint8_t {
     DPRINT_BUFFERS,
     PROFILER,
     KERNEL_CONFIG,  // End is start of unreserved memory
-    UNRESERVED,     // Only for ethernet cores
+    UNRESERVED,     // For ethernet and DRAM cores
     DEFAULT_UNRESERVED,
     CORE_INFO,
     GO_MSG,

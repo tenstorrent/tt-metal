@@ -138,7 +138,7 @@ int main() {
         }
         DeviceZoneScopedMainN(PROFILER_NAME);
 
-        flush_erisc_icache();
+        manually_flush_icache();
 
         uint32_t kernel_config_base =
             firmware_config_init(mailboxes, k_ProgrammableCoreType, internal_::get_hw_thread_idx());
