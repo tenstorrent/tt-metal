@@ -38,7 +38,7 @@ struct ct_string {
 // Stores a string literal in the .device_print_strings ELF section and returns a ct_string
 // that DEVICE_PRINT can serialize. The host parser resolves the address to read the string.
 #define CTSTR(literal)                                                                                              \
-    ([&]() -> ct_string {                                                                                           \
+    ([]() -> ct_string {                                                                                            \
         static const char allocated_ct_string[] __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
             literal;                                                                                                \
         return ct_string{allocated_ct_string};                                                                      \
