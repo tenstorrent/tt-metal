@@ -4,7 +4,7 @@
 Wormhole (n150, n300, multi-device / T3K).
 
 ## Introduction
-YOLOv8l is the large Ultralytics YOLOv8 detection variant run on TT-NN at **640×640** per inference (letterboxed).
+YOLOv8l is the large Ultralytics YOLOv8 detection variant run on TT-NN with trace + 2 CQ. Demo/perf flows support **640x640** and **1280x1280**.
 
 Resource: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py).
 
@@ -28,13 +28,13 @@ pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_y
 ```
 
 ### 2) Trace + 2 CQ performance smoke
-Single device:
+Single device (640/1280):
 
 ```bash
 pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_inference
 ```
 
-Multi-device / mesh (data-parallel):
+Multi-device / mesh (data-parallel, 1x8; effective batch 8):
 
 ```bash
 pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_dp_inference
@@ -60,10 +60,14 @@ pytest models/demos/yolov8l/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_
 Place test images in `models/demos/yolov8l/demo/images/`.
 
 ### 4) Large images (e.g. 1280x1280 on T3K)
-TT still runs **640×640** tiles; use SAHI slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
+SAHI supports TT input selection via `--tt-input-size {640,1280}`; use slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
 
 ```bash
- python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch --pre-resize-to 1280 1280 --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 --confidence-threshold 0.55 --input models/demos/yolov8l/demo/images/ --tt-trace-region-size 35000000
+python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch \
+  --tt-input-size 640 --pre-resize-to 1280 1280 \
+  --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 \
+  --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 \
+  --confidence-threshold 0.55 --input models/demos/yolov8l/demo/images/
 ```
 
 `--tt-model` defaults to **yolov8l**; omit it for this demo. Other values (`yolov8s`, `yolov8x`) select those TT runners for comparison only.
@@ -78,7 +82,7 @@ pytest models/demos/yolov8l/tests/test_sahi_parallel_chunks.py
 ## Details
 - **Entry point:** `models/demos/yolov8l/tt/ttnn_yolov8l.py`
 - **Batch size:** 1 per device (effective batch scales with mesh in DP).
-- **Resolution:** **(640, 640)** per TT forward; larger scenes via `sahi_ultralytics_eval.py` above.
+- **Resolution:** **(640, 640)** and **(1280, 1280)** in PCC/demo/perf; SAHI uses `--tt-input-size`.
 - **Post-processing:** PyTorch (`models/demos/utils/common_demo_utils.py`).
 
 ## Inputs / outputs
