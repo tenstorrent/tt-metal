@@ -376,7 +376,7 @@ class QwenImagePipeline:
                 "vae_tp": (2, 1),
                 "num_links": 2,
                 "is_fsdp": False,
-                "dynamic_load_encoder": True,
+                "dynamic_load_encoder": False,
                 "dynamic_load_vae": False,
             },
             (2, 4): {
