@@ -996,13 +996,17 @@ static std::vector<Tensor> pool2d(
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
 
-    // Use reduction path for global average pooling (kernel covers entire input with no padding)
-    // This is more efficient than the sliding window path for this special case
+    // Use reduction path for global average pooling (kernel covers entire input with no padding).
+    // This is more efficient than the sliding window path for this special case.
+    // Only enabled when count_include_pad=true (avg_pool2d default) to avoid changing the
+    // computation for adaptive_avg_pool2d which passes count_include_pad=false and routes
+    // through avg_pool2d — the reduction kernel has different FP accumulation order than the
+    // sliding window kernel, so switching paths can cause PCC drift in model pipelines.
     std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     bool is_global_pool =
-        (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
+        count_include_pad && (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
         (dilation_h == 1 && dilation_w == 1);
 
