@@ -77,13 +77,28 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Restore output memory_config for the op if present in traced kwargs
+    traced_memory_config = kwargs.get("memory_config")
+    if traced_memory_config is not None and traced_memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    elif output_memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = output_memory_config
+
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    # Use approximate mode for golden if fast_and_approximate_mode is set in traced config
+    fast_mode = op_kwargs.get("fast_and_approximate_mode", False)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a)
+    approx = "tanh" if fast_mode else "none"
+    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a, approximate=approx)
 
     is_host = storage_type and "HOST" in str(storage_type)
 

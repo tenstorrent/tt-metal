@@ -150,33 +150,77 @@ def run(
             }
             parsed_dtype = dtype_map.get(dtype, ttnn.bfloat16)
 
-    # Build Conv2dConfig from traced kwargs if any config parameters are present
+    # Build Conv2dConfig from traced kwargs.
+    # In V2 format, conv_config may be a serialized dict {"type": "Conv2dConfig", "value": "Conv2dConfig(...)"}
+    # or individual flat kwargs (shard_layout, act_block_h_override, etc.).
     conv_config = None
-    conv_config_attrs = {
-        "shard_layout": kwargs.get("shard_layout"),
-        "act_block_h_override": kwargs.get("act_block_h_override"),
-        "act_block_w_div": kwargs.get("act_block_w_div"),
-        "transpose_shards": kwargs.get("transpose_shards"),
-        "enable_act_double_buffer": kwargs.get("enable_act_double_buffer"),
-        "enable_weights_double_buffer": kwargs.get("enable_weights_double_buffer"),
-        "deallocate_activation": kwargs.get("deallocate_activation"),
-        "reshard_if_not_optimal": kwargs.get("reshard_if_not_optimal"),
-        "override_sharding_config": kwargs.get("override_sharding_config"),
-        "output_layout": kwargs.get("output_layout"),
-        "enable_kernel_stride_folding": kwargs.get("enable_kernel_stride_folding"),
-        "enable_activation_reuse": kwargs.get("enable_activation_reuse"),
-        "full_inner_dim": kwargs.get("full_inner_dim"),
-    }
-    # Filter out None/absent values
-    conv_config_attrs = {k: v for k, v in conv_config_attrs.items() if v is not None and v != "__ABSENT__"}
+    traced_conv_config = kwargs.get("conv_config")
+    if traced_conv_config and isinstance(traced_conv_config, dict) and traced_conv_config.get("type") == "Conv2dConfig":
+        # Parse Conv2dConfig from string representation
+        import re
 
-    if conv_config_attrs:
+        value_str = traced_conv_config.get("value", "")
         conv_config = ttnn.Conv2dConfig()
-        for attr, value in conv_config_attrs.items():
-            # Convert integer values where needed
-            if attr in ("act_block_h_override", "act_block_w_div"):
-                value = int(value)
-            setattr(conv_config, attr, value)
+        # Extract key=value pairs from the string repr
+        bool_attrs = {
+            "deallocate_activation",
+            "reallocate_halo_output",
+            "reshard_if_not_optimal",
+            "override_sharding_config",
+            "transpose_shards",
+            "enable_act_double_buffer",
+            "enable_weights_double_buffer",
+            "enable_kernel_stride_folding",
+            "enable_activation_reuse",
+            "full_inner_dim",
+        }
+        int_attrs = {"act_block_h_override", "act_block_w_div"}
+        # Extract shard_layout
+        sl_m = re.search(r"shard_layout=TensorMemoryLayout::(\w+)", value_str)
+        if sl_m:
+            sl_map = {
+                "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                "BLOCK_SHARDED": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                "WIDTH_SHARDED": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            }
+            sl_val = sl_map.get(sl_m.group(1))
+            if sl_val:
+                conv_config.shard_layout = sl_val
+        # Extract boolean and integer attributes
+        for attr in bool_attrs:
+            m = re.search(rf"{attr}=(\w+)", value_str)
+            if m:
+                setattr(conv_config, attr, m.group(1).lower() in ("true", "1"))
+        for attr in int_attrs:
+            m = re.search(rf"{attr}=(\d+)", value_str)
+            if m:
+                setattr(conv_config, attr, int(m.group(1)))
+    else:
+        # Fallback: build from individual flat kwargs
+        conv_config_attrs = {
+            "shard_layout": kwargs.get("shard_layout"),
+            "act_block_h_override": kwargs.get("act_block_h_override"),
+            "act_block_w_div": kwargs.get("act_block_w_div"),
+            "transpose_shards": kwargs.get("transpose_shards"),
+            "enable_act_double_buffer": kwargs.get("enable_act_double_buffer"),
+            "enable_weights_double_buffer": kwargs.get("enable_weights_double_buffer"),
+            "deallocate_activation": kwargs.get("deallocate_activation"),
+            "reshard_if_not_optimal": kwargs.get("reshard_if_not_optimal"),
+            "override_sharding_config": kwargs.get("override_sharding_config"),
+            "output_layout": kwargs.get("output_layout"),
+            "enable_kernel_stride_folding": kwargs.get("enable_kernel_stride_folding"),
+            "enable_activation_reuse": kwargs.get("enable_activation_reuse"),
+            "full_inner_dim": kwargs.get("full_inner_dim"),
+        }
+        # Filter out None/absent values
+        conv_config_attrs = {k: v for k, v in conv_config_attrs.items() if v is not None and v != "__ABSENT__"}
+
+        if conv_config_attrs:
+            conv_config = ttnn.Conv2dConfig()
+            for attr, value in conv_config_attrs.items():
+                if attr in ("act_block_h_override", "act_block_w_div"):
+                    value = int(value)
+                setattr(conv_config, attr, value)
 
     # Call the short sweep function with parsed ttnn objects
     if is_conv1d:

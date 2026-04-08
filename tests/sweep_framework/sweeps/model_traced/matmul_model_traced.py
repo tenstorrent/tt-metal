@@ -106,14 +106,12 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs)
 
-    # matmul needs memory_config paired with program_config for the kernel to
-    # compute correct block dimensions (out_block_w / per_core_N).
-    # build_op_kwargs filters memory_config by default, so restore the traced
-    # memory_config when a program_config is present, falling back to
-    # output_memory_config.
+    # matmul needs memory_config for output placement. build_op_kwargs filters
+    # memory_config by default, so restore the traced memory_config when present,
+    # falling back to output_memory_config.
     if "memory_config" not in op_kwargs:
         traced_memory_config = kwargs.get("memory_config")
-        if "program_config" in op_kwargs and traced_memory_config is not None:
+        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
             op_kwargs["memory_config"] = parse_dict_value("memory_config", traced_memory_config)
@@ -192,17 +190,19 @@ def run(
         else:
             input_tensor_a = input_tensor_a_interleaved
 
-    # Create input_b tensor - matmul requires input_b to be INTERLEAVED
-    # If traced config has input_b as sharded, convert to INTERLEAVED to match operation requirements
+    # Create input_b tensor.
+    # When a program_config is present (e.g. MatmulMultiCoreReuseProgramConfig), the
+    # kernel may expect input_b in its traced memory layout (including sharded).
+    # Only force input_b to interleaved when there is NO program_config.
     input_b_is_sharded = (
         hasattr(input_b_memory_config, "shard_spec")
         and input_b_memory_config.shard_spec is not None
         and input_b_memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     )
+    has_program_config = "program_config" in op_kwargs
 
-    if input_b_is_sharded:
-        # matmul requires input_b to be INTERLEAVED, so convert sharded to interleaved
-        # Create as interleaved first
+    if input_b_is_sharded and not has_program_config:
+        # No program_config: matmul's default path requires input_b to be INTERLEAVED
         input_tensor_b_interleaved = ttnn.from_torch(
             torch_input_tensor_b,
             dtype=input_b_dtype,
