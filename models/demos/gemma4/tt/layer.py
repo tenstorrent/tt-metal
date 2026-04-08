@@ -187,6 +187,7 @@ class Gemma4DecoderLayer:
         shared_kv=None,
         keep_kv=False,
         is_kv_shared=False,
+        position_idx_cache=None,
     ):
         """
         Decoder layer forward pass.
@@ -219,6 +220,7 @@ class Gemma4DecoderLayer:
             shared_kv=shared_kv,
             keep_kv=keep_kv,
             is_kv_shared=is_kv_shared,
+            position_idx_cache=position_idx_cache,
         )
 
         if isinstance(attn_output, torch.Tensor):

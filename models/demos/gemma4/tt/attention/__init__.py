@@ -105,6 +105,7 @@ class Gemma4Attention:
         shared_kv=None,
         keep_kv=False,
         is_kv_shared=False,
+        position_idx_cache=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -139,6 +140,7 @@ class Gemma4Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 is_kv_shared=is_kv_shared,
+                position_idx_cache=position_idx_cache,
             )
         else:
             tt_out, kept_kv = prefill_forward(

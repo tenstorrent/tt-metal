@@ -29,8 +29,9 @@ from models.demos.gemma4.utils.substate import substate
 def create_rope_caches(mesh_device, hf_config, max_seq_len):
     """Create HF-format cos/sin caches for both sliding and global layer types.
 
-    Returns dict mapping layer_type -> (cos_tt, sin_tt) on device.
-    Uses HF Gemma4TextRotaryEmbedding for exact frequency computation.
+    Returns:
+        caches_4d: dict mapping layer_type -> (cos_tt, sin_tt) [1,1,max_seq_len,head_dim] for prefill
+        caches_2d: dict mapping layer_type -> (cos_tt, sin_tt) [max_seq_len,head_dim] for decode embedding lookup
     """
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
@@ -41,26 +42,47 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
-    caches = {}
+    caches_4d = {}
+    caches_2d = {}
     for layer_type in set(hf_config.layer_types):
         cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
-        # [1, max_seq_len, head_dim] -> [1, 1, max_seq_len, head_dim]
-        cos_tt = ttnn.from_torch(
+        # cos, sin: [1, max_seq_len, head_dim]
+
+        # 4D for prefill: [1, 1, max_seq_len, head_dim]
+        cos_4d = ttnn.from_torch(
             cos.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
-        sin_tt = ttnn.from_torch(
+        sin_4d = ttnn.from_torch(
             sin.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
-        caches[layer_type] = (cos_tt, sin_tt)
-    return caches
+        caches_4d[layer_type] = (cos_4d, sin_4d)
+
+        # 2D for decode embedding lookup: [max_seq_len, head_dim]
+        cos_2d = ttnn.from_torch(
+            cos.squeeze(0),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=replicate,
+        )
+        sin_2d = ttnn.from_torch(
+            sin.squeeze(0),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=replicate,
+        )
+        caches_2d[layer_type] = (cos_2d, sin_2d)
+
+    return caches_4d, caches_2d
 
 
 class Gemma4Model:
@@ -114,10 +136,11 @@ class Gemma4Model:
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
-            self.rope_caches = create_rope_caches(mesh_device, hf_text_config, max_seq_len)
+            self.rope_caches, self.rope_caches_2d = create_rope_caches(mesh_device, hf_text_config, max_seq_len)
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
             self.rope_caches = {}
+            self.rope_caches_2d = {}
 
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
@@ -283,9 +306,16 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
-    def _get_rope_mats(self, layer_idx, seq_len=None):
-        """Get (cos, sin) for a given layer, optionally sliced to seq_len."""
+    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False):
+        """Get (cos, sin) for a given layer.
+
+        Args:
+            seq_len: If set, slice 4D cache to this length (prefill).
+            for_decode: If True, return 2D caches [max_seq_len, head_dim] for embedding lookup.
+        """
         layer_type = self.hf_config.layer_types[layer_idx]
+        if for_decode:
+            return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
             cos = cos[:, :, :seq_len, :]
@@ -311,51 +341,6 @@ class Gemma4Model:
             host_tensors.append(host_t)
         return host_tensors
 
-    def get_rope_slices_host(self, position):
-        """Create host-side cos/sin slices for decode at the given position.
-
-        Returns a dict mapping layer_type -> (cos_host, sin_host) as ttnn host tensors,
-        each shape [1, 1, 32, head_dim] (tile-padded). Used for trace-mode decode where
-        the cos/sin device buffers are updated each iteration via copy_host_to_device.
-        """
-        from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
-        hf_text_config = getattr(self.hf_config, "_hf_text_config", None)
-        if hf_text_config is None:
-            raise RuntimeError("Cannot create host rope slices without _hf_text_config")
-
-        if not hasattr(self, "_rope_host"):
-            # Cache the HF rope module and full cos/sin on first call
-            self._rope_host = Gemma4TextRotaryEmbedding(hf_text_config)
-            self._rope_host_max_seq = self.max_seq_len
-            x_dummy = torch.randn(1, self._rope_host_max_seq, hf_text_config.hidden_size)
-            pos_ids = torch.arange(self._rope_host_max_seq).unsqueeze(0)
-            self._rope_host_caches = {}
-            for layer_type in set(hf_text_config.layer_types):
-                cos, sin = self._rope_host(x_dummy, pos_ids, layer_type=layer_type)
-                self._rope_host_caches[layer_type] = (cos, sin)  # [1, max_seq, head_dim]
-
-        is_mesh = hasattr(self.mesh_device, "shape")
-        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
-
-        slices = {}
-        for layer_type, (cos_full, sin_full) in self._rope_host_caches.items():
-            # Slice at position, pad to 32 (tile height)
-            cos_slice = cos_full[:, position : position + 1, :]  # [1, 1, head_dim]
-            sin_slice = sin_full[:, position : position + 1, :]
-            # Pad seq dim to 32 for tile alignment
-            cos_padded = torch.nn.functional.pad(cos_slice, (0, 0, 0, 31))  # [1, 32, head_dim]
-            sin_padded = torch.nn.functional.pad(sin_slice, (0, 0, 0, 31))
-            # To 4D: [1, 1, 32, head_dim]
-            cos_4d = cos_padded.unsqueeze(0)
-            sin_4d = sin_padded.unsqueeze(0)
-            # Create host tensors (not on device yet)
-            cos_host = ttnn.from_torch(cos_4d, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
-            sin_host = ttnn.from_torch(sin_4d, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
-            slices[layer_type] = (cos_host, sin_host)
-
-        return slices
-
     def __call__(
         self,
         hidden_states,
@@ -368,6 +353,7 @@ class Gemma4Model:
         input_ids_torch=None,
         embeds_torch=None,
         pli_device_tensors=None,
+        position_idx_cache=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -375,14 +361,15 @@ class Gemma4Model:
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
             rope_mats: (cos, sin) override, or dict {layer_type: (cos, sin)} for pre-sliced decode
-            position_idx: decode position tensor
+            position_idx: decode position tensor ([1,32] uint32 for embedding RoPE, or [1] int32 legacy)
             page_table: paged attention table
             kv_caches: list of [k, v] per layer, or None (uses self.tt_kv_cache)
             is_decode: True for decode, False for prefill
-            token_index: int for decode RoPE slicing
+            token_index: int for decode RoPE slicing (None when using embedding-based RoPE)
             input_ids_torch: CPU tensor of input_ids for per-layer input computation (E2B)
             embeds_torch: CPU tensor of embeddings for per-layer input projection (E2B)
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
+            position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
         """
         seq_len = hidden_states.shape[2]
         caches = kv_caches or self.tt_kv_cache
@@ -399,14 +386,18 @@ class Gemma4Model:
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
-            if isinstance(rope_mats, dict):
-                # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
-                layer_type = self.hf_config.layer_types[i]
-                layer_rope = rope_mats[layer_type]
-            elif rope_mats is not None:
-                layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
+            if rope_mats is not None:
+                if isinstance(rope_mats, dict):
+                    # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
+                    layer_type = self.hf_config.layer_types[i]
+                    layer_rope = rope_mats[layer_type]
+                else:
+                    layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
+            elif is_decode:
+                # Decode: return 2D caches for on-device embedding lookup
+                layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
-                layer_rope = self._get_rope_mats(i, seq_len=seq_len if not is_decode else None)
+                layer_rope = self._get_rope_mats(i, seq_len=seq_len)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -447,6 +438,7 @@ class Gemma4Model:
                 shared_kv=shared_kv,
                 keep_kv=keep_kv,
                 is_kv_shared=is_kv_shared,
+                position_idx_cache=position_idx_cache,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -533,6 +525,7 @@ class Gemma4Model:
         embeds_torch=None,
         rope_mats=None,
         pli_device_tensors=None,
+        position_idx_cache=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -541,6 +534,7 @@ class Gemma4Model:
                        When provided (trace mode), token_index=0 is used. When None, token_index is
                        extracted from current_pos and full RoPE caches are used.
             pli_device_tensors: Optional list of pre-computed PLI device tensors for trace mode.
+            position_idx_cache: Optional [batch] int32 tensor for KV cache/SDPA (when current_pos is uint32).
         """
         input_embeds = self.embed_tokens(tokens)
         input_embeds = ttnn.reshape(input_embeds, (1, 1, tokens.shape[-1], self.hidden_size))
@@ -554,10 +548,13 @@ class Gemma4Model:
                     * self.embed_scale
                 )
 
-        # Get position as int for token_index
+        # Get position as int for token_index (only needed for legacy 4D RoPE path)
+        # When using 2D rope caches (default decode path), position is handled via
+        # on-device embedding lookup and token_index is unused.
         if rope_mats is not None:
-            # Trace mode: pre-sliced rope already contains the right position data
-            token_index = 0
+            token_index = 0  # Pre-sliced rope from caller
+        elif self.rope_caches_2d:
+            token_index = None  # On-device embedding lookup handles position
         elif isinstance(current_pos, ttnn.Tensor):
             is_mesh = hasattr(self.mesh_device, "shape")
             pos_cpu = ttnn.get_device_tensors(current_pos)[0] if is_mesh else current_pos
@@ -576,6 +573,7 @@ class Gemma4Model:
             token_index=token_index,
             rope_mats=rope_mats,
             pli_device_tensors=pli_device_tensors,
+            position_idx_cache=position_idx_cache,
         )
 
         return logits, None
