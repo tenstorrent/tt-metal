@@ -66,7 +66,17 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
+def build_prefill_matmul_program_config(
+    seq_len,
+    k,
+    n,
+    batch=1,
+    tile_h=32,
+    tile_w=32,
+    *,
+    mesh_device: ttnn.Device,
+    override_compute_grid: ttnn.CoreGrid = None,
+):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -89,7 +99,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     N_tiles = even_int_div(n, tile_w)
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
-
+    if override_compute_grid is not None:
+        compute_grid = override_compute_grid
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
     for x in range(min(compute_grid.x, N_tiles), 0, -1):
@@ -2207,7 +2218,11 @@ class MLA1D(AbstractModule):
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
         wq_kv_a_program_config = build_prefill_matmul_program_config(
-            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            seq_len,
+            k=dim,
+            n=qkv_a_n,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            override_compute_grid=ttnn.CoreGrid(x=6, y=6),
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
