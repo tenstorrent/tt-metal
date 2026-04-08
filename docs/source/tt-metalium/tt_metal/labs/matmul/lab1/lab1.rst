@@ -745,6 +745,10 @@ numerical issues or hangs.
 The DEVICE_PRINT API is controlled through environment variables on the host side.
 The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores' DEVICE_PRINT information will be forwarded to the host terminal.
 If this environment variable is not set, calls to DEVICE_PRINT APIs produce no output and behave as no-ops at runtime.
+During the DPRINT deprecation period, you must also enable DEVICE_PRINT explicitly with
+``TT_METAL_DEVICE_PRINT=1``; otherwise the build may use the legacy DPRINT path and
+``DEVICE_PRINT`` calls may be compiled out. In that transition period, a typical setup is
+``export TT_METAL_DEVICE_PRINT=1`` and ``export TT_METAL_DPRINT_CORES=all``.
 When debugging, it is common to set this variable to ``all`` to print from all cores (i.e. ``export TT_METAL_DPRINT_CORES=all``).
 When not debugging, you should unset this variable to disable printing (i.e. ``unset TT_METAL_DPRINT_CORES``).
 Unsetting this variable is particularly important to do when evaluating performance.
@@ -752,7 +756,7 @@ Unsetting this variable is particularly important to do when evaluating performa
 An alternative to printing to the host terminal is to print to a log file, which can be done by setting
 the ``TT_METAL_DPRINT_FILE`` environment variable (e.g. ``export TT_METAL_DPRINT_FILE=log.txt``).
 
-To use DEVICE_PRINT in a kernel, you include the debug header and use a ftmlib format-like syntax:
+To use DEVICE_PRINT in a kernel, you include the debug header and use a fmtlib format-like syntax:
 DEVICE_PRINT supports printing integers, floats, ``bool`` type and enums.
 The following example shows a simple print of local kernel variables, including a Boolean flag:
 
