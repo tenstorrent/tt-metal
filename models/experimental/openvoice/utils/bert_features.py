@@ -17,12 +17,7 @@ BERT models used by MeloTTS:
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-try:
-    import torch
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+import torch
 
 # Optional BERT dependencies
 try:

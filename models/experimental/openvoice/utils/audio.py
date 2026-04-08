@@ -73,7 +73,6 @@ def save_audio(
         sr: Sample rate
     """
     try:
-        import numpy as np
         import soundfile as sf
 
         # Ensure audio is numpy array and handle dimensionality

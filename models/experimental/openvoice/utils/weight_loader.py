@@ -30,9 +30,6 @@ def fuse_weight_norm(weight: torch.Tensor, weight_g: torch.Tensor, weight_v: tor
         Fused weight tensor W = g * (v / ||v||)
     """
     # Compute norm of v along output channel dimension
-    # Use reshape + vector_norm to handle PyTorch 2.9+ API changes
-    dims = tuple(range(1, weight_v.dim()))
-
     # Flatten all dims except first, compute norm, then reshape back
     v_flat = weight_v.reshape(weight_v.shape[0], -1)
     norm_v = torch.linalg.vector_norm(v_flat, dim=1, keepdim=True)
