@@ -104,7 +104,6 @@ inline bool is_watcher_assert_enabled() {
 }
 
 struct CommandConstants {
-    CoreType dispatch_core_type;
     NOC noc_index;
     uint32_t max_prefetch_command_size;
     uint32_t packed_write_max_unicast_sub_cmds;
@@ -2147,7 +2146,6 @@ public:
     void assemble_commands(
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
-        [[maybe_unused]] const CommandConstants& constants,
         distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         const ProgramTransferInfo& program_transfer_info,
@@ -2225,8 +2223,6 @@ void assemble_device_commands(
         use_prefetcher_cache ? "enabled" : "disabled");
 
     CommandConstants constants{};
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     constants.noc_index = k_dispatch_downstream_noc;
     constants.max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
@@ -2323,7 +2319,6 @@ void assemble_device_commands(
     go_signal_generator.assemble_commands(
         program_command_sequence,
         program_command_sequence.go_msg_command_sequence,
-        constants,
         mesh_device,
         sub_device_id,
         program_transfer_info,
@@ -2470,7 +2465,6 @@ void update_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    [[maybe_unused]] CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -2679,7 +2673,6 @@ void update_traced_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    [[maybe_unused]] CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
@@ -2883,7 +2876,6 @@ void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
-    [[maybe_unused]] CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
