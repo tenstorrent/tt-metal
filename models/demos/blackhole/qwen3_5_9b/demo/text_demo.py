@@ -159,8 +159,8 @@ def _warmup_prefill(model, device, token_ids):
     [
         (128, 2048, 50, True, False),
         (128, 2048, 50, False, True),
-        (4096, 8192, 100, True, False),
-        (8192, 16384, 50, True, False),
+        (4096, 8192, 100, False, False),
+        (8192, 16384, 50, False, False),
         (65536, 131072, 100, True, False),
         (65536, 131072, 100, False, True),
         (131072, 262144, 100, True, False),
@@ -275,7 +275,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     Before each replay, inputs are updated via fast host-to-device DMA.
     """
     T = token_ids.shape[1]
-    model.enable_trace(batch_size=1, use_paged_cache=False)
+    model.enable_trace(batch_size=1)
 
     t0 = time.time()
     logits = model._prefill_for_trace(token_ids)

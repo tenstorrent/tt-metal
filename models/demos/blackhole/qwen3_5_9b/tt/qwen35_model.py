@@ -75,7 +75,6 @@ class Qwen35Model:
         )
 
         self.vocab_size = args.vocab_size
-        self._use_paged_cache = False
         self._paged_kv_caches = None
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
 
@@ -110,7 +109,7 @@ class Qwen35Model:
 
         return cls(args, state_dict, device, weight_cache_path=cache_path)
 
-    def prefill(self, token_ids, segment_size=1024):
+    def prefill(self, token_ids):
         B, T = token_ids.shape
 
         if T > 1024:
@@ -131,55 +130,6 @@ class Qwen35Model:
         x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
 
         x_last = x[:, -1:, :]
-        logits = ttnn.linear(x_last, self.lm_head_weight)
-
-        return logits
-
-    def prefill_segmented(self, token_ids, segment_size=1024):
-        """Prefill long sequences by processing in segments.
-
-        Each segment runs through all 32 layers. DeltaNet recurrent state and
-        conv state carry over between segments automatically (stored as instance
-        attributes). Attention KV cache accumulates via concat.
-
-        Args:
-            token_ids: [B, T] token IDs, T can be >> segment_size
-            segment_size: number of tokens per segment (default 1024, must be <= 1024
-                         to avoid L1 OOM on DeltaNet projections)
-        """
-        B, T = token_ids.shape
-        self.reset_state(batch_size=B)
-
-        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x_all = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
-        # For 65K tokens, x_all is [1, 65536, 4096] = ~512MB — keep in DRAM
-        x_all = ttnn.to_memory_config(x_all, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(token_ids_ttnn)
-
-        for seg_start in range(0, T, segment_size):
-            seg_end = min(seg_start + segment_size, T)
-
-            # Slice embeddings for this segment
-            x_seg = x_all[:, seg_start:seg_end, :]
-            x_seg = ttnn.to_layout(x_seg, ttnn.TILE_LAYOUT)
-
-            # RoPE with absolute positions
-            position_ids = torch.arange(seg_start, seg_end).unsqueeze(0).expand(B, -1)
-            cos, sin = self.rope.get_rot_mats(position_ids)
-
-            # Process through all layers — use "prefill_segmented" mode so DeltaNet
-            # layers use recurrent (not chunked) to avoid compound error across segments.
-            for layer in self.layers:
-                x_seg = layer.forward(x_seg, cos=cos, sin=sin, mode="prefill_segmented")
-
-            logger.info(f"Prefill segment [{seg_start}:{seg_end}] done")
-
-        # Free the full embedding tensor
-        ttnn.deallocate(x_all)
-
-        # Final norm + LM head on last token only
-        x_last = x_seg[:, -1:, :]
-        x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x_last, self.lm_head_weight)
 
         return logits
@@ -317,23 +267,13 @@ class Qwen35Model:
         ttnn.deallocate(x)
         return logits
 
-    def enable_trace(self, batch_size=1, use_paged_cache=False):
-        """Prepare all layers for trace-compatible decode.
-
-        Args:
-            use_paged_cache: If True, use paged_update_cache for in-trace KV writes (Phase 2).
-                             If False, use staging approach with post-trace cache update (Phase 1).
-        """
-        logger.info(f"Enabling trace mode (use_paged_cache={use_paged_cache})...")
-        self._use_paged_cache = use_paged_cache
+    def enable_trace(self, batch_size=1):
+        """Prepare all layers for trace-compatible decode."""
+        logger.info("Enabling trace mode...")
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.enable_preallocated_cache(batch_size)
-                if use_paged_cache:
-                    layer.attention.use_paged_cache_trace = True
-                    layer.attention.use_trace_mode = True
-                else:
-                    layer.attention.enable_trace_mode()
+                layer.attention.enable_trace_mode()
             else:
                 layer.attention.enable_inplace_state()
 
@@ -457,7 +397,6 @@ class Qwen35Model:
                     dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
                     dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
 
-        self._prefill_len = T
         return logits
 
     def capture_decode_trace(self, device):
@@ -486,23 +425,6 @@ class Qwen35Model:
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
-
-        # Position tensor for paged_update_cache + sdpa_decode (trace-compatible dynamic index).
-        # paged_update_cache needs one index per "batch" element where batch = B * num_kv_heads
-        # (cache is reshaped to [B*H_kv, 1, max_seq, D] for the write).
-        # All heads share the same position, so we replicate the value.
-        # Initialize position to max_seq_len-1 (staging area) so the warmup/capture
-        # runs don't corrupt real prefill data at position 0.  The actual decode loop
-        # overwrites this via copy_host_to_device_tensor before each trace replay.
-        n_kv = self.args.n_kv_heads
-        safe_pos = self.args.max_seq_len - 1
-        self._trace_position = ttnn.from_torch(
-            torch.full((n_kv,), safe_pos, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        self._trace_position_n_kv = n_kv
 
         # 2. Save DeltaNet states (warmup + capture corrupt them)
         saved_dn_states = self._save_deltanet_states()
