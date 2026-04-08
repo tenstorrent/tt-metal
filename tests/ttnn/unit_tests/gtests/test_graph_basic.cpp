@@ -785,7 +785,7 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
                     EXPECT_TRUE(params.at(ttnn::graph::kAddress).is_number());
 
                     ASSERT_TRUE(params.contains(ttnn::graph::kBufferType));
-                    EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_string());
+                    EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number());
 
                     ASSERT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
                     EXPECT_TRUE(params.at(ttnn::graph::kMemoryConfig).is_string());

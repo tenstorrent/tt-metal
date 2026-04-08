@@ -641,7 +641,7 @@ Memory allocation/deallocation events.
 
 **buffer_allocate params:**
 - `size`, `address`, `type`, `layout`, `device_id`
-- `buffer_type`: Integer BufferType enum (0=DRAM, 1=L1, 2=SYSTEM_MEMORY, 3=L1_SMALL)
+- `buffer_type`: Integer BufferType enum (0=DRAM, 1=L1, 2=SYSTEM_MEMORY, 3=L1_SMALL, 4=TRACE)
 - `max_size_per_bank`: Pre-computed per-bank buffer size (from C++ allocator)
 
 ### circular_buffer_allocate / circular_buffer_deallocate_all
