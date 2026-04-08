@@ -253,19 +253,21 @@ def test_run_tilize_large_row_input(device, input_shape):
     assert_equal(input, output)
 
 
-@skip_for_blackhole("Test not supported on Blackhole")
 @pytest.mark.parametrize("shape", [(1, 7168, 2304)])
-@pytest.mark.parametrize("shard_shape", [(7168, 192)])
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
 @pytest.mark.parametrize("torch_dtype", [torch.float32])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
-    device, shape, shard_shape, ttnn_dtype, torch_dtype, layout
+    device, shape, ttnn_dtype, torch_dtype, layout
 ):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(shape, dtype=torch_dtype)
 
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+    dram_cores = device.dram_grid_size().x
+    # Calculate shard_shape by dividing last dimension by number of DRAM cores
+    shard_shape = (shape[1], shape[2] // dram_cores)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))])
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
