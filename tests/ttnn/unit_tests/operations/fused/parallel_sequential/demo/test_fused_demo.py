@@ -361,7 +361,6 @@ class TestPerfDemos:
             fused = Sequential(r1, m, r2)
             fused.run()
             ttnn.synchronize_device(device)
-            print(f"\n  Linear Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             s = Sequential(r1, m, r2)
             cold = _time_cold(s.run, device)
@@ -383,7 +382,6 @@ class TestPerfDemos:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
-            print(f"\n  Linear Chain Fused (H={H}): cold={cold:.2f}ms")
             assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
         elif perf_mode == "e2e":
             s = Sequential(r1, m, r2)
@@ -406,7 +404,6 @@ class TestPerfDemos:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
-            print(f"\n  Linear Chain Fused (H={H}): e2e={e2e:.3f}ms")
             assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
 
     @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
@@ -428,13 +425,10 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print(f"\n  Linear Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Linear Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Linear Chain Unfused (H={H}): e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
     # Sharded Chain — RMS -> LN (block-sharded, 4x4 grid)
@@ -516,7 +510,6 @@ class TestPerfDemos:
             fused = Sequential(r, ln)
             fused.run()
             ttnn.synchronize_device(device)
-            print(f"\n  Sharded Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             s = Sequential(r, ln)
             cold = _time_cold(s.run, device)
@@ -544,7 +537,6 @@ class TestPerfDemos:
                 )
             )
 
-            print(f"\n  Sharded Chain Fused (H={H}): cold={cold:.2f}ms")
             assert_numeric_metrics(
                 ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
             )
@@ -575,7 +567,6 @@ class TestPerfDemos:
                 )
             )
 
-            print(f"\n  Sharded Chain Fused (H={H}): e2e={e2e:.3f}ms")
             assert_numeric_metrics(
                 ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
             )
@@ -606,13 +597,10 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print(f"\n  Sharded Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Sharded Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Sharded Chain Unfused (H={H}): e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
     # Parallel Chains — LN->MM + RMS->MM on disjoint 1x8 columns
@@ -754,7 +742,6 @@ class TestPerfDemos:
             fused = Parallel(Sequential(la, ma), Sequential(rb, mb))
             fused.run()
             ttnn.synchronize_device(device)
-            print("\n  Parallel Chains Fused: device_fw run")
         elif perf_mode == "cold_start":
             p = Parallel(Sequential(la, ma), Sequential(rb, mb))
             cold = _time_cold(p.run, device)
@@ -771,7 +758,6 @@ class TestPerfDemos:
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
-            print(f"\n  Parallel Chains Fused: cold={cold:.2f}ms")
             assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
             assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
         elif perf_mode == "e2e":
@@ -790,7 +776,6 @@ class TestPerfDemos:
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
-            print(f"\n  Parallel Chains Fused: e2e={e2e:.3f}ms")
             assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
             assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
 
@@ -894,13 +879,10 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Parallel Chains Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Parallel Chains Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Parallel Chains Unfused: e2e={e2e:.3f}ms")
 
     # =================================================================
     # Sharded Tree — LN -> Slice -> Matmul -> Slice -> LN
@@ -1183,7 +1165,6 @@ class TestPerfDemos:
             tree = self._sharded_tree_container(ops)
             tree.run()
             ttnn.synchronize_device(device)
-            print("\n  Sharded Tree Fused: device_fw run")
         elif perf_mode == "cold_start":
             tree = self._sharded_tree_container(ops)
             cold = _time_cold(tree.run, device)
@@ -1258,7 +1239,6 @@ class TestPerfDemos:
             )
             ttnn.deallocate(u_tr)
 
-            print(f"\n  Sharded Tree Fused: cold={cold:.2f}ms")
             assert_numeric_metrics(
                 ref_ll, result_ll, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
             )
@@ -1339,7 +1319,6 @@ class TestPerfDemos:
             )
             ttnn.deallocate(u_tr)
 
-            print(f"\n  Sharded Tree Fused: e2e={e2e:.3f}ms")
             assert_numeric_metrics(
                 ref_ll, result_ll, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
             )
@@ -1475,13 +1454,10 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Sharded Tree Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Sharded Tree Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Sharded Tree Unfused: e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
     # Asymmetric Branches — LN stem -> Parallel(Slice->RMS->RMS, Slice->LN)
@@ -1674,15 +1650,12 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             container.run()
             ttnn.synchronize_device(device)
-            print("\n  Asymmetric Branches Fused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(container.run, device)
             pcc_l, pcc_r = _pcc_check()
-            print(f"\n  Asymmetric Branches Fused: cold={cold:.2f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
         elif perf_mode == "e2e":
             e2e = _time_e2e(container.run, device)
             pcc_l, pcc_r = _pcc_check()
-            print(f"\n  Asymmetric Branches Fused: e2e={e2e:.3f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
 
     @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
     def test_asymmetric_branches_ln_slice_rms_ln_unfused(self, device, perf_mode):
@@ -1777,13 +1750,10 @@ class TestPerfDemos:
         if perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Asymmetric Branches Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Asymmetric Branches Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Asymmetric Branches Unfused: e2e={e2e:.3f}ms")
 
 
 # =============================================================================
@@ -1982,7 +1952,6 @@ void kernel_main() {
     result_recv = ttnn.to_torch(result_recv_t)
     result_b = ttnn.to_torch(result_b_t)
 
-    print(f"\n  GlobalCB Fused: cold={cold:.2f}ms")
     assert_numeric_metrics(
         torch_input_a, result_recv, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
     )
@@ -2084,7 +2053,6 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
     if perf_mode == "device_fw":
         seq.run()
         ttnn.synchronize_device(device)
-        print("\n  Non-Contiguous Grid Fused: device_fw run")
     elif perf_mode == "cold_start":
         cold = _time_cold(seq.run, device)
 
@@ -2163,12 +2131,10 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
     if perf_mode == "device_fw":
         seq.run()
         ttnn.synchronize_device(device)
-        print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores (device_fw run)")
         return
 
     if perf_mode == "cold_start":
         cold = _time_cold_fused(lambda: Sequential(*ops), device)
-        print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores cold={cold:.2f}ms")
         return
 
     # perf_mode == "e2e"
@@ -2197,9 +2163,3 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
     unfused_us = unfused_e2e * 1000
     baseline_us = baseline_e2e * 1000
     per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
-
-    print(
-        f"\n  Barrier Overhead ({num_cores} cores, {num_phases} phases): "
-        f"fused={fused_us:.1f}us  unfused={unfused_us:.1f}us  "
-        f"baseline(1-phase)={baseline_us:.1f}us  per_barrier={per_barrier_us:.1f}us"
-    )

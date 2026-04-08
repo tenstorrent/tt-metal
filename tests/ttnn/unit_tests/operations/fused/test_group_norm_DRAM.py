@@ -106,16 +106,17 @@ def run_group_norm_DRAM(
     if not perf_test_mode:
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
+
+        pcc_threshold = 0.999
+        rtol = 0.060
+
         if use_welford:
-            pcc_threshold = 0.999
-            rtol = 0.060
             atol = 0.043
             frobenius_threshold = 0.010
         else:
-            pcc_threshold = 0.999
-            rtol = 0.060
             atol = 0.069
             frobenius_threshold = 0.025
+
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,

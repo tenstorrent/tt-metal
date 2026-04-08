@@ -138,8 +138,6 @@ def run_softmax_stable_with_program_cache(
             rtol=0.030,
             atol=0.020,
             frobenius_threshold=0.030,
-            # check_ulp=True,
-            # ulp_threshold=14,
         )
     else:
         assert_numeric_metrics(
