@@ -13,6 +13,9 @@
 */
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/common.h"
+#if defined(ARCH_QUASAR)
+#include "internal/hw_thread.h"
+#endif
 #endif
 
 void kernel_main() {
@@ -29,9 +32,12 @@ void kernel_main() {
         return;
 #endif
     // Conditionally enable using defines for each trisc
+    // On Quasar, TRISCx defines are passed via QuasarComputeConfig and combined with UCK types:
+    // TRISC0 (UNPACK), TRISC1 (MATH), TRISC2 (PACK), TRISC3 (ISOLATE_SFPU, Quasar-only)
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
+    (defined(UCK_CHLKC_ISOLATE_SFPU) and defined(TRISC3)) or \
     (defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM))
     WATCHER_RING_BUFFER_PUSH(a);
     WATCHER_RING_BUFFER_PUSH(b);
@@ -57,9 +63,16 @@ void kernel_main() {
     }
 #else
 #if defined(COMPILE_FOR_TRISC)
-    volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
-        ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
-    *trisc_run = RUN_SYNC_MSG_DONE;
+    // Signal completion before assert hangs the kernel
+    // Must use subordinate_sync (not go_message) because DM waits for subordinate_sync from TRISCs
+    // Signal via subordinate_sync - index differs by arch
+#if defined(ARCH_QUASAR)
+    uint32_t sync_idx = internal_::get_hw_thread_idx();
+#else
+    uint32_t sync_idx = COMPILE_FOR_TRISC + 1;  // BH/WH: first entry is for NCRISC
+#endif
+    volatile tt_l1_ptr subordinate_sync_msg_t* const sub_sync = GET_MAILBOX_ADDRESS_DEV(subordinate_sync);
+    sub_sync->map[sync_idx] = RUN_SYNC_MSG_DONE;
 #endif
 #endif
     if (assert_type == DebugAssertHwFault && a==b) {

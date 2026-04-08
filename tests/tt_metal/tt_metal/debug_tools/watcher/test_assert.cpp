@@ -99,16 +99,24 @@ static void RunTest(
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
-                    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up is complete
                     if (is_quasar) {
-                        GTEST_SKIP() << "Compute kernel watcher tests skipped on Quasar until TRISC runtime bring-up "
-                                        "is complete";
+                        // On Quasar, use num_threads_per_cluster = 1 to run on 1 NEO cluster.
+                        // The TRISCx define gates which TRISC runs based on UCK type:
+                        // TRISC0 (UNPACK), TRISC1 (MATH), TRISC2 (PACK), TRISC3 (ISOLATE_SFPU)
+                        assert_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                            program_,
+                            kernel,
+                            logical_core,
+                            tt::tt_metal::experimental::quasar::QuasarComputeConfig{
+                                .num_threads_per_cluster = 1,
+                                .defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                    } else {
+                        assert_kernel = CreateKernel(
+                            program_,
+                            kernel,
+                            logical_core,
+                            ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     }
-                    assert_kernel = CreateKernel(
-                        program_,
-                        kernel,
-                        logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     break;
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
