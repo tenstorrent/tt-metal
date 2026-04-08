@@ -18,8 +18,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ttnn
-
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
@@ -29,7 +27,6 @@ def create_test_audio(duration: float = 2.0, freq: float = 440.0, sample_rate: i
     t = np.linspace(0, duration, int(sample_rate * duration))
     audio = (np.sin(2 * np.pi * freq * t) * 0.3).astype(np.float32)
     return audio
-
 
 
 @pytest.fixture(scope="module")

@@ -18,9 +18,6 @@ import numpy as np
 import pytest
 import torch
 
-import ttnn
-
-
 
 @pytest.fixture(scope="module")
 def converter(device):

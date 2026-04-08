@@ -20,8 +20,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ttnn
-
 try:
     from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
@@ -36,7 +34,6 @@ EXPECTED_PERF = {
     "clone_latency_ms": 2000,  # Target: < 2000ms
     "extraction_latency_ms": 100,  # Target: < 100ms for embedding extraction
 }
-
 
 
 @pytest.fixture(scope="module")

@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 
 import ttnn
-
 from models.experimental.openvoice.functional.operations import to_torch_tensor
 
 
@@ -194,7 +193,7 @@ def ttnn_gru(
         outputs.append(h)
 
     # Stack outputs
-        # Stack along time dimension
+    # Stack along time dimension
     output = ttnn.stack(outputs, dim=1)  # [B, T, hidden_size]
     if not batch_first:
         output = ttnn.permute(output, (1, 0, 2))

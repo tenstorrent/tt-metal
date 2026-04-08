@@ -14,7 +14,6 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-
 from models.experimental.openvoice.functional.operations import to_torch_tensor
 from models.experimental.openvoice.tt.modules.gru import GRULayer
 

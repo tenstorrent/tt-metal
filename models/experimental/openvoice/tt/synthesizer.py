@@ -12,7 +12,6 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 import ttnn
-
 from models.experimental.openvoice.tt.generator import TTNNGenerator
 from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
 from models.experimental.openvoice.tt.reference_encoder import TTNNReferenceEncoder

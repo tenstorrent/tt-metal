@@ -18,13 +18,10 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-
+from models.experimental.openvoice.functional.operations import LayerNorm1d, ensure_conv1d_weight
+from models.experimental.openvoice.tt.duration_predictor import TTNNDurationPredictor, TTNNStochasticDurationPredictor
 from models.experimental.openvoice.tt.generator import TTNNGenerator
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
-
-from models.experimental.openvoice.functional.operations import LayerNorm1d, ensure_conv1d_weight
-
-from models.experimental.openvoice.tt.duration_predictor import TTNNDurationPredictor, TTNNStochasticDurationPredictor
 from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
 from models.experimental.openvoice.tt.reference_encoder import TTNNReferenceEncoder
 from models.experimental.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock

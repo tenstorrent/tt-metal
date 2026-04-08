@@ -217,7 +217,6 @@ class VoiceEmbeddingCache:
 
 
 import ttnn
-
 from models.experimental.openvoice.tt.synthesizer import TTNNSynthesizerTrn
 from models.experimental.openvoice.utils.audio import AudioProcessor, save_audio
 from models.experimental.openvoice.utils.weight_loader import load_openvoice_checkpoint
