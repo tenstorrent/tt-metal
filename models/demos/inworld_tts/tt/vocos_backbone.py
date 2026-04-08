@@ -159,8 +159,8 @@ class TtVocosBackbone(LightweightModule):
         self._embed_device_weight = weights_device
         self._embed_device_bias = bias_device
 
-        # Output is [1, 1, out_length, C] sharded -> interleaved
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        # Output is [1, 1, out_length, C] sharded -> interleaved L1
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         return output_tensor  # [1, 1, T, C]
 
     def forward(self, x):

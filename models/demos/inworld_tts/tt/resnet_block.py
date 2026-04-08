@@ -175,8 +175,8 @@ class TtResnetBlock(LightweightModule):
             compute_kernel_config=self.compute_config,
         )
 
-        # Move back to interleaved DRAM TILE_LAYOUT for downstream ops
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        # Move back to interleaved L1 TILE_LAYOUT for downstream ops
+        out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
         out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         return out
 
@@ -214,8 +214,8 @@ class TtResnetBlock(LightweightModule):
         setattr(self, dw_attr, wd)
         setattr(self, db_attr, bd)
 
-        # Output is [1, 1, out_length, C] sharded -> interleaved TILE
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        # Output is [1, 1, out_length, C] sharded -> interleaved L1
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         return output_tensor  # [1, 1, T, C]
 
     def forward(self, x):

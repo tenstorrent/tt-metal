@@ -366,7 +366,7 @@ class TtW2vConvModule(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        h = ttnn.sharded_to_interleaved(h, DRAM)
+        h = ttnn.sharded_to_interleaved(h, L1)
         h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
 
         # LayerNorm + SiLU on device
