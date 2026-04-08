@@ -41,11 +41,12 @@ To enable mock mode using these descriptors:
 
 - Set the environment variable `TT_METAL_MOCK_CLUSTER_DESC_PATH` to the path of your mock cluster YAML file. This switches the runtime to mock mode using the specified descriptor.
 
-For distributed/multi-host mocking in Python (e.g., via ttrun.py):
+For distributed/multi-host mocking with the **`tt-run`** CLI (`ttrun.py` in the distributed Python package):
 
-- Use the `--mock-cluster-rank-binding` option with a mapping YAML file as shown above.
+- **Auto allocation:** `tt-run --mesh-graph-descriptor <mgd.textproto> --mock-cluster-rank-binding <mapping.yaml> <program> …` — no `--hosts`; Phase 1 generates rank bindings (see **README_ttrun.md** next to `ttrun.py`).
+- **Legacy:** `tt-run --rank-binding <rank_bindings.yaml> --mock-cluster-rank-binding <mapping.yaml> …` when you already have a rank-binding file.
 
-Refer to unit tests like `test_multi_host.cpp` for usage examples in tests.
+Refer to unit tests like `test_multi_host.cpp` and CI workflows using `tt-run` for concrete examples.
 
 These mocks are useful for testing fabric routing, control plane, and distributed features without hardware.
 
