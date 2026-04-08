@@ -84,21 +84,34 @@ jobs:
           echo "Filtered tests for ${{ inputs.sp-config }}:"
           echo "$FILTERED" | jq .
 
-  create-allocation:
-    name: Create Allocation for ${{ inputs.sp-config }} (BH Quad)
+  multihost-tests:
+    name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
-    timeout-minutes: 30
-    outputs:
-      ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
-      mgd: ${{ steps.mgd.outputs.mgd }}
+    strategy:
+      max-parallel: 1  # Run tests sequentially to avoid resource contention
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on:
       group: exabox
-      labels: exabox-multihost
+      labels: exabox-multihost-with-nfs
+    timeout-minutes: 90  # Overall timeout for the entire job
+    outputs:
+      test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: MGD
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ inputs.docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create MGD configuration
         id: mgd
         run: |
           MGD_CONFIG='
@@ -115,11 +128,12 @@ jobs:
           echo "$MGD_CONFIG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create allocation
+      - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
+        timeout-minutes: 30
         with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
           spec: |
             allocationType: MGD
@@ -134,123 +148,78 @@ jobs:
         uses: ./.github/actions/ttop-get-allocation-data
         id: get-allocation-data
         with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
-  reset-cards:
-    name: Reset Cards for ${{ inputs.sp-config }}
-    needs: create-allocation
-    timeout-minutes: 15
-    runs-on:
-      group: exabox
-      labels: exabox-multihost
-    env:
-      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ inputs.docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Create environment
+      - name: Create reset environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}
+          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
 
-      # We use setup-tt-run just to setup MPI, MGD can be dummy
-      - name: Setup tt-run
+      - name: Setup tt-run for reset
         uses: ./.github/actions/ttop-configure-tt-run
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
           mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+          ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
       - name: Print hostnames
         working-directory: /tmp
+        env:
+          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
         run: |
-          mpirun --tag-output --pernode \
-            hostname
+          mpirun --tag-output --pernode hostname
 
-      - name: Reset cards
+      - name: Reset cards for ${{ matrix.test-group.name }}
         working-directory: /tmp
         timeout-minutes: 10
+        env:
+          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
         run: |
           mpirun --tag-output --pernode \
             bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
 
-      - name: Delete environment
+      - name: Delete reset environment
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}
+          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
-  multihost-tests:
-    name: Run Tests for ${{ inputs.sp-config }}
-    needs: [load-test-matrix, create-allocation, reset-cards]
-    runs-on:
-      group: exabox
-      labels: exabox-multihost-with-nfs
-    env:
-      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
-      GITHUB_RUN_ID: ${{ github.run_id }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ inputs.docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Create environment
+      - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
           sharedVolumeEnabled: 'true'
 
-      - name: Setup tt-run
+      - name: Setup tt-run for test
         uses: ./.github/actions/ttop-configure-tt-run
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgd: ${{ needs.create-allocation.outputs.mgd }}
+          mgd: ${{ steps.mgd.outputs.mgd }}
           copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+          ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
@@ -274,44 +243,57 @@ jobs:
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
           mpirun --pernode pip install $(find /ci/artifacts | grep whl)
+        env:
+          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
 
-      - name: Run All Tests
+      - name: ${{ matrix.test-group.name }}
+        id: run-test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: /ci/tt-metal
+        env:
+          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+          LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+          TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+          TT_METAL_CACHE: /home/user/.cache
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
-          # Get the test matrix from the previous job
-          TESTS='${{ needs.load-test-matrix.outputs.matrix }}'
+          # Store command safely using heredoc
+          CMD=$(cat << 'EOF'
+          ${{ matrix.test-group.cmd }}
+          EOF
+          )
 
-          echo "Running tests for ${{ inputs.sp-config }}:"
-          echo "$TESTS" | jq -r '.[] | .name'
+          echo "Running: ${{ matrix.test-group.name }}"
+          echo "$CMD"
+          eval "$CMD"
 
-          # Parse and run each test
-          echo "$TESTS" | jq -c '.[]' | while IFS= read -r test; do
-            TEST_NAME=$(echo "$test" | jq -r '.name')
-            TEST_CMD=$(echo "$test" | jq -r '.cmd')
-            TEST_TIMEOUT=$(echo "$test" | jq -r '.timeout')
-            TEST_OWNER=$(echo "$test" | jq -r '.owner_id')
+      - name: Delete test environment
+        if: always()
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          namespace: ttop-ci
 
-            echo ""
-            echo "================================================================"
-            echo "Running Test: $TEST_NAME"
-            echo "Timeout: ${TEST_TIMEOUT} minutes"
-            echo "Owner: $TEST_OWNER"
-            echo "================================================================"
-            echo ""
+      - name: Delete allocation
+        if: always()
+        uses: ./.github/actions/ttop-delete-allocation
+        with:
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          namespace: ttop-ci
 
-            # Run the test with timeout
-            if timeout "${TEST_TIMEOUT}m" bash -c "$TEST_CMD"; then
-              echo "✓ Test '$TEST_NAME' PASSED"
-            else
-              EXIT_CODE=$?
-              if [ $EXIT_CODE -eq 124 ]; then
-                echo "✗ Test '$TEST_NAME' TIMED OUT after ${TEST_TIMEOUT} minutes"
-              else
-                echo "✗ Test '$TEST_NAME' FAILED with exit code $EXIT_CODE"
-              fi
-              # Continue to next test even if this one fails
-            fi
-          done
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -321,33 +303,3 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  cleanup:
-    name: Cleanup ${{ inputs.sp-config }} Resources
-    needs: [multihost-tests, reset-cards, create-allocation]
-    if: always()
-    runs-on:
-      group: exabox
-      labels: exabox-multihost
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Delete environment
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}
-          namespace: ttop-ci
-
-      # Redundantly try to drop reset env - reset job might have failed
-      - name: Delete reset environment
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}
-          namespace: ttop-ci
-
-      - name: Delete allocation
-        uses: ./.github/actions/ttop-delete-allocation
-        with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}
-          namespace: ttop-ci

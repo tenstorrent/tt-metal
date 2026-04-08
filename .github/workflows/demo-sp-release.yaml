@@ -111,8 +111,8 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  pipeline-sp1-tests:
-    name: "BH SP1 Pipeline Tests"
+  deepseek-sp1-tests:
+    name: "SP1 DeepSeek Tests"
     needs: build-artifact
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
