@@ -6,7 +6,6 @@
 
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "welford_reduce_device_operation_types.hpp"

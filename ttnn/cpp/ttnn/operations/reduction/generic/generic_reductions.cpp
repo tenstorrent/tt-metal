@@ -291,12 +291,12 @@ static Tensor std_var_impl(
         float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
         // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
-        auto output_tensor = operations::creation::full_impl(
+        auto output_tensor = ttnn::full(
             input_tensor_arg.logical_shape(),
             fill_value,
             input_tensor_arg.dtype(),
             input_tensor_arg.layout(),
-            input_tensor_arg.device(),
+            std::ref(*input_tensor_arg.device()),
             memory_config);
 
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
@@ -488,7 +488,8 @@ Tensor reduce(
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
 
-    if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Std || reduce_type == reduction_common::ReduceType::Var) {
         return std_var_impl<reduce_type>(
             input_tensor_arg,
             dim,
@@ -535,19 +536,6 @@ Tensor reduce(
             }
             dim = height_width_dims;
         }
-    }
-    if constexpr (
-        reduce_type == reduction_common::ReduceType::Std || reduce_type == reduction_common::ReduceType::Var) {
-        return std_var_impl<reduce_type>(
-            input_tensor,
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            correction,
-            sub_core_grids);
     }
     return reduce_impl<reduce_type>(
         input_tensor,

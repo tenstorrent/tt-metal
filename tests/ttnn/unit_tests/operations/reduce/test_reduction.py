@@ -32,14 +32,24 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
     # test for equivalance
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.99,
-        rtol=0.012,
-        atol=0.012,
-        frobenius_threshold=0.005,
-    )
+    outputs_all_finite = torch.isfinite(torch_output_tensor).all() and torch.isfinite(output_tensor).all()
+    if outputs_all_finite and torch_output_tensor.numel() > 0:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.98,
+            rtol=0.01,
+            atol=0.01,
+            frobenius_threshold=0.005,
+        )
+
+    atol = rtol = 0.01
+    # All values are close to 1, and we're using bfloat16, so even a rounding error
+    # of 1 ULP has a significant impact on PCC.
+    # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
+    pcc = 0.98
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -68,8 +78,8 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99999,
-        rtol=0.023,
-        atol=0.016,
+        rtol=0.01,
+        atol=0.01,
         frobenius_threshold=0.007,
     )
 
@@ -122,8 +132,8 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.089,
-        atol=0.255,
+        rtol=0.01,
+        atol=0.25,
         frobenius_threshold=0.071,
     )
 
@@ -155,8 +165,8 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=1.650,
-        atol=0.128,
+        rtol=0.01,
+        atol=0.03,
         frobenius_threshold=0.003,
     )
 
@@ -188,8 +198,8 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.030,
-        atol=0.032,
+        rtol=0.01,
+        atol=0.03,
         frobenius_threshold=0.003,
     )
 
@@ -220,8 +230,8 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.033,
-        atol=0.128,
+        rtol=0.01,
+        atol=0.01,
         frobenius_threshold=0.007,
     )
 
@@ -251,8 +261,8 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.805,
-        atol=0.255,
+        rtol=0.01,
+        atol=0.2,
         frobenius_threshold=0.003,
     )
 
@@ -281,8 +291,8 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=8.479,
-        atol=4.080,
+        rtol=0.05,
+        atol=0.7,
         frobenius_threshold=0.004,
     )
 
@@ -576,8 +586,8 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.026,
-        atol=0.255,
+        rtol=0.01,
+        atol=0.01,
         frobenius_threshold=0.005,
     )
 
@@ -605,7 +615,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
         output_tensor,
         pcc_threshold=0.999,
         rtol=0.008,
-        atol=0.128,
+        atol=0.01,
         frobenius_threshold=0.005,
     )
 
@@ -634,8 +644,8 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=6.599,
-        atol=0.016,
+        rtol=0.01,
+        atol=0.01,
         frobenius_threshold=0.007,
     )
 
@@ -663,7 +673,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.061,
+        rtol=0.01,
         atol=0.001,
         frobenius_threshold=0.007,
     )
@@ -830,7 +840,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
             ttnn_result,
             pcc_threshold=0.999,
             rtol=0.004,
-            atol=0.038,
+            atol=0.01,
             frobenius_threshold=0.004,
         )
 
@@ -845,5 +855,3 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"torch: {torch_result}, ttnn: {ttnn_result}"
-
-
