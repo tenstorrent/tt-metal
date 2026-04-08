@@ -219,10 +219,10 @@ void kernel_main() {
     // processes half tensor slice, in 2nd-last iter we send sem increments to both forward and backward workers.
     // For example, if we send 2 even chunks and 2 odd chunks, we need to send 2 sem incrs to forward worker
     // and 2 sem incrs to backward worker.
-    uint64_t even_core_sem_noc_addr = direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)
-                                                : safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
-    uint64_t odd_core_sem_noc_addr = !direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)
-                                                : safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
+    uint64_t this_core_sem_noc_addr = safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
+    uint64_t opposite_core_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
+    uint64_t even_core_sem_noc_addr = direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
+    uint64_t odd_core_sem_noc_addr = !direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
@@ -405,14 +405,11 @@ void kernel_main() {
                             } else {
                                 if (chunk_count == chunks_per_sync) {
                                     chunk_count = 0;
-                                    uint64_t out_ready_sem_noc_addr_in_pkt =
-                                        safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
                                         UnicastAtomicIncUpdateMask::DstAddr>(
                                         fabric_direction_connection,
                                         pkt_hdr_seminc,
-                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                            out_ready_sem_noc_addr_in_pkt, 0});
+                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
                                     noc_async_writes_flushed();
                                 }
                             }
@@ -465,12 +462,10 @@ void kernel_main() {
                     }
                 } else {
                     if (chunk_count != 0) {
-                        uint64_t out_ready_sem_noc_addr_in_pkt =
-                            safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             fabric_direction_connection,
                             pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
                         noc_async_writes_flushed();
                     }
                 }
