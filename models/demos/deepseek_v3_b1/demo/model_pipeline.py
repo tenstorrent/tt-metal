@@ -23,6 +23,27 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
 from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
 
 
+def create_weight_provider(
+    weights_mode: Literal["synthetic", "real", "state_dict"],
+    *,
+    cache_path: Path | None = None,
+    model_path: Path | None = None,
+) -> WeightProvider:
+    if weights_mode == "real":
+        if cache_path is None:
+            raise ValueError("weights_mode='real' requires cache_path")
+        if model_path is None:
+            raise ValueError("weights_mode='real' requires model_path")
+        return CacheWeightProvider(cache_path, model_path)
+    if weights_mode == "state_dict":
+        if model_path is None:
+            raise ValueError("weights_mode='state_dict' requires model_path")
+        return StateDictWeightProvider(model_path)
+    if weights_mode == "synthetic":
+        return SyntheticWeightProvider()
+    raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
+
+
 class ModelPipeline:
     def __init__(
         self,
@@ -54,23 +75,11 @@ class ModelPipeline:
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
 
         # Each host loads/creates only the weights for its stage via the provider.
-        if weights_mode == "real":
-            if cache_path is None:
-                raise ValueError("weights_mode='real' requires cache_path")
-            if model_path is None:
-                raise ValueError("weights_mode='real' requires model_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
-        elif weights_mode == "state_dict":
-            if model_path is None:
-                raise ValueError("weights_mode='state_dict' requires model_path")
-            provider = StateDictWeightProvider(model_path)
-        elif weights_mode == "synthetic":
-            provider = SyntheticWeightProvider()
-        else:
-            raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
+        self.weight_provider = create_weight_provider(weights_mode, cache_path=cache_path, model_path=model_path)
+
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
-            provider,
+            self.weight_provider,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
@@ -168,7 +177,6 @@ class ModelPipeline:
                 on_token(next_token_id)
             if return_generated_tokens:
                 generated_tokens.append(next_token_id)
-            logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
 
         logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
         if return_generated_tokens:

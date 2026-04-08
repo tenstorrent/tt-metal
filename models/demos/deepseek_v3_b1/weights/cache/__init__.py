@@ -40,18 +40,21 @@ class CacheConfig:
 
     cache: TensorCacheProtocol
     context: CacheContext
+    host_only: bool = False
 
     @classmethod
-    def ephemeral(cls, *, move_to_device: bool = True) -> CacheConfig:
+    def ephemeral(cls, *, move_to_device: bool = True, host_only: bool = False) -> CacheConfig:
         """Config with in-memory cache only (no disk); used when callers omit ``cache_config``."""
+        effective_move = move_to_device and not host_only
         return cls(
-            cache=EphemeralTensorCache(move_to_device=move_to_device),
+            cache=EphemeralTensorCache(move_to_device=effective_move),
             context=CacheContext(
                 schema_version=0,
                 hf_model_id="ephemeral",
                 hf_revision="ephemeral",
                 mesh_shape=(1, 1),
             ),
+            host_only=host_only,
         )
 
 
