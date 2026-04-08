@@ -10,8 +10,8 @@ import torch
 from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
 
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
+from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_FABRIC_CONFIG,
     determinate_min_batch_size,
