@@ -19,7 +19,11 @@ from models.demos.utils.common_demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, YOLOV8L_TRACE_REGION_SIZE_E2E, load_torch_model
+from models.demos.yolov8l.common import (
+    load_torch_model,
+    yolov8l_l1_small_size_for_res,
+    yolov8l_trace_region_size_e2e_for_res,
+)
 from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
 
@@ -93,6 +97,8 @@ def run_yolov8l(
         performant_runner = YOLOv8lPerformantRunner(
             device,
             device_batch_size=batch_size,
+            inp_h=res[1],
+            inp_w=res[0],
             mesh_mapper=inputs_mesh_mapper,
             mesh_composer=output_mesh_composer,
             model_location_generator=model_location_generator,
@@ -167,8 +173,8 @@ def test_demo_host_torch_only(
     "device_params",
     [
         {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
+            "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
+            "trace_region_size": yolov8l_trace_region_size_e2e_for_res(1280, 1280),
             "num_command_queues": 2,
         }
     ],
@@ -194,7 +200,7 @@ def test_demo_host_torch_only(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(1280, 1280)])
+@pytest.mark.parametrize("res", [(640, 640), (1280, 1280)], ids=["640", "1280"])
 def test_demo(
     device, batch_size_per_device, input_loc, model_type, use_weights_from_ultralytics, res, model_location_generator
 ):
@@ -211,14 +217,14 @@ def test_demo(
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [pytest.param((1, 8), id="t3k_2x2")],  # Explicit 2x2 mesh for T3K
+    [pytest.param((1, 8), id="t3k_1x8")],  # Explicit 1x8 mesh for T3K
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
+            "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
             "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
@@ -245,7 +251,7 @@ def test_demo(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(1280, 1280)])
+@pytest.mark.parametrize("res", [(640, 640), (1280, 1280)], ids=["640", "1280"])
 def test_demo_dp(
     mesh_device,
     batch_size_per_device,

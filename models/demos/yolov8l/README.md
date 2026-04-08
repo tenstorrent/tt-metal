@@ -15,10 +15,16 @@ Resource: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics/blob/mai
 ## How to verify
 
 ### 1) Correctness (PCC vs Torch)
-Runs TT against Ultralytics reference on random **640×640** input (needs device):
+Runs TT against Ultralytics reference on random **640x640** input (needs device):
 
 ```bash
 pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_640
+```
+
+Also available for **1280x1280**:
+
+```bash
+pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_1280
 ```
 
 ### 2) Trace + 2 CQ performance smoke
@@ -37,6 +43,8 @@ pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py
 ### 3) End-to-end demo (images on disk)
 Outputs under `models/demos/yolov8l/demo/runs/<model_type>/`.
 
+`test_demo` and `test_demo_dp` are parameterized for both **640x640** and **1280x1280** (`res=640` / `res=1280` ids).
+
 Single device:
 
 ```bash
@@ -51,12 +59,13 @@ pytest models/demos/yolov8l/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_
 
 Place test images in `models/demos/yolov8l/demo/images/`.
 
-### 4) Large images (e.g. 1280×1280 on T3K)
+### 4) Large images (e.g. 1280x1280 on T3K)
 TT still runs **640×640** tiles; use SAHI slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
 
 ```bash
 python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch \
   --tt-slice-parallel-devices 4 --pre-resize-to 1280 1280 \
+  --tt-input-size 640 \
   --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 \
   --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 \
   --confidence-threshold 0.55 --input /path/to/image.jpg
