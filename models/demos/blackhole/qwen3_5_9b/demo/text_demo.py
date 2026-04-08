@@ -157,9 +157,9 @@ def _warmup_prefill(model, device, token_ids):
 @pytest.mark.parametrize(
     "seqlen, max_seq_len, max_generated_tokens, use_trace, use_paged",
     [
-        (128, 2048, 50, False, False),
+        (128, 2048, 50, True, False),
         (128, 2048, 50, False, True),
-        (4096, 8192, 100, False, False),
+        (4096, 8192, 100, True, False),
         (8192, 16384, 50, True, False),
         (65536, 131072, 100, True, False),
         (65536, 131072, 100, False, True),
@@ -286,7 +286,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
 
-    # Warmup decode — uses old forward_decode to produce warmup token + populate cache at pos T
+    # Warmup decode using staging path (forward_decode without position_tensor)
     warmup_input = torch.tensor([[next_token]], dtype=torch.long)
     token_ids_ttnn = ttnn.from_torch(warmup_input, dtype=ttnn.uint32, device=device)
     x = ttnn.embedding(token_ids_ttnn, model.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -298,9 +298,15 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     for layer in model.layers:
         if layer.is_full_attention:
             layer.attention.update_cache_after_trace(T)
+            layer.attention.update_mask_for_pos(T + 1)
 
-    # Capture trace (embedding inside trace, internal warmup compiles new path)
+    # Capture trace (staging path — no position_tensor)
     model.capture_decode_trace(device)
+
+    # Restore mask after capture (warmup/capture may have modified it)
+    for layer in model.layers:
+        if layer.is_full_attention:
+            layer.attention.update_mask_for_pos(T + 1)
 
     generated = [next_token, warmup_token]
     decode_times = []
@@ -313,6 +319,13 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         t_step = time.time()
         logits = model.decode_traced(next_input, current_pos=current_pos)
         ttnn.synchronize_device(device)
+
+        # Staging approach: copy staging K/V to correct position and update mask
+        for layer in model.layers:
+            if layer.is_full_attention:
+                layer.attention.update_cache_after_trace(current_pos)
+                layer.attention.update_mask_for_pos(current_pos + 1)
+
         decode_times.append(time.time() - t_step)
 
         logits_torch = ttnn.to_torch(logits).squeeze()
