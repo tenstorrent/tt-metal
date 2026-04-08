@@ -118,9 +118,9 @@ def run(
 
     # Check if this is a scalar multiply operation (shape_b is None or scalar is provided)
     if shape_b is None or scalar is not None:
-        # Tensor-scalar multiply: use the scalar value directly
-        # If scalar is None but shape_b is None, default to scalar=2.0
-        scalar_value = scalar if scalar is not None else 2.0
+        # Tensor-scalar multiply: use the scalar value directly.
+        # The scalar may come from 'scalar' kwarg, 'arg1' param, or default to 2.0.
+        scalar_value = scalar if scalar is not None else (arg1 if arg1 is not None else 2.0)
         torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
         is_scalar_multiply = True
     else:
@@ -147,14 +147,26 @@ def run(
                 input_a_tensor_placement,
             )
         else:
-            # Regular single-device tensor
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=input_a_memory_config,
-            )
+            # Regular single-device tensor.
+            # If direct creation with sharded config fails, try DRAM→sharded conversion.
+            try:
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_tensor_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+            except RuntimeError:
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_tensor_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
     else:
         # Host storage
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
@@ -163,7 +175,6 @@ def run(
 
     if is_scalar_multiply:
         # Tensor-scalar multiply: pass scalar directly
-        scalar_value = scalar if scalar is not None else 2.0
         output_tensor = ttnn.multiply(input_tensor_a, scalar_value, **op_kwargs)
     else:
         # Tensor-tensor multiply: convert second tensor and multiply

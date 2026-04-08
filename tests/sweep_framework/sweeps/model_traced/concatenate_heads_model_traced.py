@@ -94,6 +94,17 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # memory_config is a legitimate op kwarg for concatenate_heads (controls output layout).
+    # build_op_kwargs strips it by default, so re-add from traced kwargs if present.
+    traced_memory_config = kwargs.get("memory_config")
+    if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+
     # V2 format provides input_a_shape
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -145,29 +156,10 @@ def run(
         # Host storage
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # If output_memory_config is sharded but may be incompatible with the op output shape,
-    # fall back to DRAM to avoid "shard width must match physical width" errors.
-    if (
-        output_memory_config is not None
-        and hasattr(output_memory_config, "is_sharded")
-        and output_memory_config.is_sharded()
-    ):
-        op_kwargs.pop("memory_config", None)
-
     start_time = start_measuring_time()
-    # This operation concatenates attention heads back together
+    # This operation concatenates attention heads back together.
+    # memory_config kwarg controls the output layout (the op auto-derives shard spec).
     output_tensor = ttnn.transformer.concatenate_heads(input_tensor_a, **op_kwargs)
-
-    # Try moving to the traced output memory config; stay on current config if it fails
-    if (
-        output_memory_config is not None
-        and hasattr(output_memory_config, "is_sharded")
-        and output_memory_config.is_sharded()
-    ):
-        try:
-            output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
-        except Exception:
-            pass  # keep output in its current (interleaved) memory config
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
