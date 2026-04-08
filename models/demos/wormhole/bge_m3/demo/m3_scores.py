@@ -400,3 +400,98 @@ def compute_score(
         to_torch_auto_compose,
         tt_q_hidden=tt_q_hidden,
     )
+
+
+# ### PyTorch helper functions ###
+
+
+def compute_similarity_torch(q_reps: torch.Tensor, p_reps: torch.Tensor) -> torch.Tensor:
+    """Match FlagEmbedding inner-product similarity for dense/sparse tensors."""
+    if len(p_reps.size()) == 2:
+        return torch.matmul(q_reps, p_reps.transpose(0, 1))
+    return torch.matmul(q_reps, p_reps.transpose(-2, -1))
+
+
+def compute_dense_score_torch(
+    q_reps: torch.Tensor,
+    p_reps: torch.Tensor,
+    *,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Compute dense scores from torch embeddings returned by generator_vllm."""
+    scores = compute_similarity_torch(q_reps, p_reps) / temperature
+    return scores.view(q_reps.size(0), -1)
+
+
+def compute_sparse_score_torch(
+    q_reps: torch.Tensor,
+    p_reps: torch.Tensor,
+    *,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Compute sparse scores from torch sparse embeddings returned by generator_vllm."""
+    scores = compute_similarity_torch(q_reps, p_reps) / temperature
+    return scores.view(q_reps.size(0), -1)
+
+
+def _resolve_colbert_query_mask_torch(
+    q_reps: torch.Tensor,
+    q_mask: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """
+    Normalize query mask for ColBERT scoring.
+    Accepts either full attention_mask [Q, S] or CLS-dropped mask [Q, S-1].
+    If q_mask is omitted, infer validity from non-zero token vectors.
+    """
+    q_len = q_reps.shape[1]
+    if q_mask is None:
+        return (q_reps.abs().sum(dim=-1) > 0).to(q_reps.dtype)
+
+    if q_mask.shape[1] == q_len + 1:
+        mask = q_mask[:, 1:]
+    elif q_mask.shape[1] == q_len:
+        mask = q_mask
+    elif q_mask.shape[1] < q_len:
+        mask = torch.nn.functional.pad(q_mask, (0, q_len - q_mask.shape[1]), value=0)
+    else:
+        mask = q_mask[:, :q_len]
+    return mask.to(q_reps.dtype)
+
+
+def compute_colbert_score_torch(
+    q_reps: torch.Tensor,
+    p_reps: torch.Tensor,
+    q_mask: Optional[torch.Tensor] = None,
+    *,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Compute ColBERT scores from torch token embeddings returned by generator_vllm."""
+    token_scores = torch.einsum("qin,pjn->qipj", q_reps, p_reps)
+    scores = token_scores.max(-1).values
+    colbert_mask = _resolve_colbert_query_mask_torch(q_reps, q_mask)
+    q_lens = colbert_mask.sum(-1, keepdim=True).clamp(min=1)
+    scores = scores.sum(1) / q_lens
+    valid = (colbert_mask.sum(-1, keepdim=True) > 0).to(scores.dtype)
+    scores = scores * valid
+    return scores / temperature
+
+
+def ensemble_score_torch(
+    q_dense: torch.Tensor,
+    p_dense: torch.Tensor,
+    q_sparse: torch.Tensor,
+    p_sparse: torch.Tensor,
+    q_colbert: torch.Tensor,
+    p_colbert: torch.Tensor,
+    q_mask: Optional[torch.Tensor] = None,
+    *,
+    temperature: float = 1.0,
+    dense_weight: float = 1.0,
+    sparse_weight: float = 0.3,
+    colbert_weight: float = 1.0,
+) -> torch.Tensor:
+    """Compute the weighted M3 ensemble score from torch outputs."""
+    dense_scores = compute_dense_score_torch(q_dense, p_dense, temperature=temperature)
+    sparse_scores = compute_sparse_score_torch(q_sparse, p_sparse, temperature=temperature)
+    colbert_scores = compute_colbert_score_torch(q_colbert, p_colbert, q_mask=q_mask, temperature=temperature)
+    return dense_scores * dense_weight + sparse_scores * sparse_weight + colbert_scores * colbert_weight

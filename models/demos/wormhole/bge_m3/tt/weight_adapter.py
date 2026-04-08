@@ -52,6 +52,12 @@ class MLPWeights:
     layer_norm: LayerNormWeights | None
 
 
+@dataclass(frozen=True)
+class TinyLinearWeights:
+    weight: LazyWeight
+    bias: LazyWeight | None
+
+
 def _to_lazy_weight(tensor: torch.Tensor, dtype: object) -> LazyWeight:
     return LazyWeight(source=tensor, dtype=dtype)
 
@@ -182,4 +188,29 @@ def build_mlp_weights(
         wi_bias=_to_lazy_weight(_preprocess_linear_bias(wi_bias), dtype) if wi_bias is not None else None,
         wo_bias=_to_lazy_weight(_preprocess_linear_bias(wo_bias), dtype) if wo_bias is not None else None,
         layer_norm=_maybe_layer_norm_weights(output_layer_norm_state, norm_dtype),
+    )
+
+
+def build_colbert_linear_weights(state_dict: dict[str, torch.Tensor], dtype: object) -> TinyLinearWeights:
+    return _build_tiny_linear_weights(state_dict, scope="colbert_linear", dtype=dtype)
+
+
+def build_sparse_linear_weights(state_dict: dict[str, torch.Tensor], dtype: object) -> TinyLinearWeights:
+    sparse_linear_state = substate(state_dict, "sparse_linear")
+    raw_weight = _require_tensor(sparse_linear_state, "weight", scope="sparse_linear")
+    if raw_weight.ndim != 2 or raw_weight.shape[0] != 1:
+        raise ValueError(f"sparse_linear.weight must have shape [1, hidden_size], got {tuple(raw_weight.shape)}")
+    return _build_tiny_linear_weights(state_dict, scope="sparse_linear", dtype=dtype)
+
+
+def _build_tiny_linear_weights(
+    state_dict: dict[str, torch.Tensor],
+    *,
+    scope: str,
+    dtype: object,
+) -> TinyLinearWeights:
+    linear_state = substate(state_dict, scope)
+    return TinyLinearWeights(
+        weight=_to_lazy_weight(_preprocess_linear_weight(_require_tensor(linear_state, "weight", scope=scope)), dtype),
+        bias=_to_lazy_weight(_preprocess_linear_bias(linear_state["bias"]), dtype) if "bias" in linear_state else None,
     )
