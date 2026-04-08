@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
+
+import ttnn
 
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
@@ -87,3 +91,57 @@ def global_to_local_token_id(global_token_id: int, sp_factor: int, seq_len: int)
         local_token_id = chunk_size + offset_in_chunk
 
     return device_id, local_token_id
+
+
+def zero_cache_padding_zigzag(
+    kvpe_cache: ttnn.Tensor,
+    global_end_token: int,
+    sp_factor: int,
+    seq_len: int,
+    decode_chunk_align: int = 128,
+):
+    """Zero-pad KV cache for migration alignment under zigzag attention layout.
+
+    After prefill writes valid tokens to the cache, this function zeroes the
+    padding region from global_end_token up to the next decode_chunk_align
+    boundary. It handles the zigzag token mapping to dispatch per-device
+    zero_cache_range calls with correct local token ranges.
+
+    Args:
+        kvpe_cache: The mesh KV cache tensor (one shard per SP device).
+        global_end_token: First invalid global token position (effective seq_len).
+        sp_factor: Number of devices in the sequence parallel group.
+        seq_len: Total sequence length across all devices.
+        decode_chunk_align: Decode chunk alignment in tokens (default 128).
+    """
+    padded_end = math.ceil(global_end_token / decode_chunk_align) * decode_chunk_align
+    padded_end = min(padded_end, seq_len)
+
+    if global_end_token >= padded_end:
+        return
+
+    chunk_size = seq_len // (2 * sp_factor)
+    tile_size = 32  # KV cache tile height
+
+    # Accumulate local token ranges per device
+    # Each entry: [local_start, local_end) — we track min start and max end per device
+    device_ranges: dict[int, tuple[int, int]] = {}
+
+    # Walk the global padding region in tile-sized steps (32 tokens)
+    # Round global_end_token down to tile boundary for the start
+    global_start = (global_end_token // tile_size) * tile_size
+    for global_tok in range(global_start, padded_end, tile_size):
+        device_id, local_token_id = global_to_local_token_id(global_tok, sp_factor, seq_len)
+        local_tile_start = (local_token_id // tile_size) * tile_size
+        local_tile_end = local_tile_start + tile_size
+
+        if device_id not in device_ranges:
+            device_ranges[device_id] = (local_tile_start, local_tile_end)
+        else:
+            prev_start, prev_end = device_ranges[device_id]
+            device_ranges[device_id] = (min(prev_start, local_tile_start), max(prev_end, local_tile_end))
+
+    # Dispatch per-device zero_cache_range
+    device_tensors = ttnn.get_device_tensors(kvpe_cache)
+    for device_id, (local_start, local_end) in device_ranges.items():
+        ttnn.kv_cache.zero_cache_range(device_tensors[device_id], local_start, local_end)
