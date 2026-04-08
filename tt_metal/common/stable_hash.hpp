@@ -32,17 +32,30 @@ public:
         XXH3_64bits_update(&state_, &data, sizeof(data));
     }
 
+    // Bulk update from a raw pointer range — the fast path.
+    // Passes the entire region to xxHash in a single call.
+    void update(const void* data, std::size_t size) {
+        XXH3_64bits_update(&state_, data, size);
+    }
+
+    // Contiguous char* range — delegates to the bulk overload.
+    // Preferred over the generic iterator template for buffered reads.
+    void update(const char* begin, const char* end) {
+        if (begin < end) {
+            XXH3_64bits_update(&state_, begin, static_cast<std::size_t>(end - begin));
+        }
+    }
+
+    // Generic iterator range fallback — element by element.
+    // Prefer the pointer overloads above for contiguous data.
     template <typename ForwardIterator>
     void update(ForwardIterator begin, ForwardIterator end) {
         for (auto it = begin; it != end; ++it) {
-            // Feed each element as raw bytes through the uint64_t path
-            // to match the old per-element update() semantics.
             update(static_cast<uint64_t>(*it));
         }
     }
 
     void update(const std::string& s) {
-        // Hash the string content directly as a contiguous byte range.
         XXH3_64bits_update(&state_, s.data(), s.size());
     }
 

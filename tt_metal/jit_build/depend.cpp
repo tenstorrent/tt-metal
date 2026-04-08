@@ -63,7 +63,18 @@ namespace {
 
 uint64_t hash_file_content(std::istream& file) {
     tt::FNV1a hasher;
-    hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    // Read in 64 KiB chunks to avoid the per-character overhead of
+    // istreambuf_iterator.  The bulk update() overload passes each
+    // chunk to xxHash as a single contiguous region.
+    char buf[65536];
+    for (;;) {
+        file.read(buf, sizeof(buf));
+        std::streamsize bytes_read = file.gcount();
+        if (bytes_read <= 0) {
+            break;
+        }
+        hasher.update(buf, buf + bytes_read);
+    }
     return hasher.digest();
 }
 
