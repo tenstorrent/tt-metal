@@ -33,6 +33,8 @@ def prefill_forward(
     page_table=None,
     user_id=0,
     ccl_manager=None,
+    shared_kv=None,
+    keep_kv=False,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -49,6 +51,8 @@ def prefill_forward(
         page_table: optional paged attention table
         user_id: batch index for cache fill
         ccl_manager: optional CCL manager for TP > 1
+        shared_kv: optional (tt_k, tt_v) from source layer for KV sharing
+        keep_kv: if True, don't deallocate K/V (for KV source layers that share with later layers)
     """
     tp = mesh_config.tp if mesh_config else 1
 
@@ -58,17 +62,25 @@ def prefill_forward(
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv, config, weights.is_global, tp=tp)
 
-    # 3. Per-head norms
+    # 3. Per-head norms (only for Q if using shared K/V)
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
-    tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-    tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
-    # 4. RoPE (HF-style — cos/sin cache handles partial rotation via identity padding)
+    if shared_kv is not None:
+        # KV-shared layer: discard own K/V, use source layer's K/V
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        tt_k, tt_v = shared_kv
+    else:
+        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+
+    # 4. RoPE (skip for shared K — already RoPE'd by source layer)
     tt_q = apply_rope(tt_q, cos_cache, sin_cache)
-    tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+    if shared_kv is None:
+        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
 
-    # 5. Fill KV cache
-    if kv_cache is not None:
+    # 5. Fill KV cache (skip for KV-shared layers)
+    if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
         if page_table is not None:
             ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id)
@@ -88,12 +100,17 @@ def prefill_forward(
         sliding_window_size=sliding_window,
     )
     tt_q.deallocate(True)
-    tt_k.deallocate(True)
-    tt_v.deallocate(True)
+    # Keep K/V alive for source layers; shared layers don't own them
+    kept_kv = None
+    if shared_kv is None and not keep_kv:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+    elif keep_kv:
+        kept_kv = (tt_k, tt_v)
 
     # 7. Concat heads + output projection + allreduce
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
-    return tt_out
+    return tt_out, kept_kv

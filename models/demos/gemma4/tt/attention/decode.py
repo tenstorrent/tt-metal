@@ -34,6 +34,7 @@ def decode_forward(
     token_index,
     page_table=None,
     ccl_manager=None,
+    is_kv_shared=False,
 ):
     """
     Single-token decode attention, fully on device.
@@ -43,7 +44,7 @@ def decode_forward(
         cos_cache: [1, 1, max_seq_len, head_dim] - full cos cache on device
         sin_cache: [1, 1, max_seq_len, head_dim] - full sin cache on device
         weights: AttentionWeights container
-        kv_cache: [k_cache, v_cache] TT tensors
+        kv_cache: [k_cache, v_cache] TT tensors (for shared layers, this is the source layer's cache)
         config: Gemma4AttentionConfig
         mesh_config: MeshConfig
         mesh_device: TT device
@@ -51,6 +52,7 @@ def decode_forward(
         token_index: int position for RoPE cache slicing
         page_table: optional paged attention table
         ccl_manager: optional CCL manager for TP > 1
+        is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
     """
     tp = mesh_config.tp if mesh_config else 1
 
@@ -63,30 +65,41 @@ def decode_forward(
     # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
     tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-    tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
-    tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-    tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+
+    if is_kv_shared:
+        # KV-shared layer: discard own K/V, use source layer's KV cache directly
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+    else:
+        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
     # 4. RoPE (HF-style — cos/sin cache already handles partial rotation via identity padding)
     tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
-    tt_k = apply_rope(tt_k, cos_cache, sin_cache, token_index=token_index)
+    if not is_kv_shared:
+        tt_k = apply_rope(tt_k, cos_cache, sin_cache, token_index=token_index)
 
-    # 5. KV cache update — paged_update_cache needs HEIGHT_SHARDED input
+    # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
-        # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
-        tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-        tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+        if not is_kv_shared:
+            # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
+            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+            tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
-        if page_table is not None:
-            ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=position_idx, page_table=page_table)
-            ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table)
-        else:
-            ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=position_idx)
-            ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=position_idx)
+            if page_table is not None:
+                ttnn.experimental.paged_update_cache(
+                    k_cache, tt_k, update_idxs_tensor=position_idx, page_table=page_table
+                )
+                ttnn.experimental.paged_update_cache(
+                    v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
+                )
+            else:
+                ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=position_idx)
+                ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=position_idx)
     else:
         k_cache = tt_k
         v_cache = tt_v

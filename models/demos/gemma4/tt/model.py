@@ -93,6 +93,23 @@ class Gemma4Model:
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         n_layers = num_layers or hf_config.num_hidden_layers
 
+        # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
+        # from the last non-shared layer of the same type
+        full_n_layers = hf_config.num_hidden_layers
+        num_kv_shared = getattr(hf_config, "num_kv_shared_layers", 0) or 0
+        first_shared_idx = full_n_layers - num_kv_shared
+        self.kv_shared_layer_map = {}  # layer_idx -> source_layer_idx
+        if num_kv_shared > 0 and first_shared_idx < n_layers:
+            prev_layers = hf_config.layer_types[:first_shared_idx]
+            for i in range(first_shared_idx, n_layers):
+                lt = hf_config.layer_types[i]
+                if lt in prev_layers:
+                    source = len(prev_layers) - 1 - list(prev_layers)[::-1].index(lt)
+                    if source < n_layers:  # Source must be within our layer range
+                        self.kv_shared_layer_map[i] = source
+            if self.kv_shared_layer_map:
+                logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
+
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
@@ -180,8 +197,9 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
             )
-            # Create KV cache for this layer's attention
-            if create_kv_cache:
+            # Create KV cache for non-shared layers only
+            # Shared layers will use their source layer's KV cache
+            if create_kv_cache and i not in self.kv_shared_layer_map:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
@@ -197,9 +215,14 @@ class Gemma4Model:
             self.layers.append(layer)
 
         # Extract KV caches for external access (Generator interface)
+        # Shared layers point to their source layer's cache
         self.tt_kv_cache = []
-        for layer in self.layers:
-            self.tt_kv_cache.append(layer.self_attn.kv_cache)
+        for i, layer in enumerate(self.layers):
+            if i in self.kv_shared_layer_map:
+                source_idx = self.kv_shared_layer_map[i]
+                self.tt_kv_cache.append(self.layers[source_idx].self_attn.kv_cache)
+            else:
+                self.tt_kv_cache.append(layer.self_attn.kv_cache)
 
         # Final norm
         if state_dict and "model.language_model.norm.weight" in state_dict:
@@ -300,6 +323,11 @@ class Gemma4Model:
 
         is_mesh = hasattr(self.mesh_device, "shape")
 
+        # Determine which layers are KV sources (their K/V will be shared)
+        kv_source_indices = set(self.kv_shared_layer_map.values()) if not is_decode else set()
+        # Store K/V from source layers for sharing during prefill
+        shared_kv_store = {}  # source_layer_idx -> (tt_k, tt_v) kept alive on device
+
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             if rope_mats is not None:
@@ -320,6 +348,17 @@ class Gemma4Model:
                 )
 
             kv_cache = caches[i] if caches else None
+
+            # KV sharing: determine if this layer shares or provides K/V
+            shared_kv = None
+            keep_kv = False
+            is_kv_shared = i in self.kv_shared_layer_map
+            if not is_decode and is_kv_shared:
+                source_idx = self.kv_shared_layer_map[i]
+                shared_kv = shared_kv_store.get(source_idx)
+            elif not is_decode and i in kv_source_indices:
+                keep_kv = True
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -329,7 +368,21 @@ class Gemma4Model:
                 is_decode=is_decode,
                 token_index=token_index,
                 per_layer_input=pli_tt,
+                shared_kv=shared_kv,
+                keep_kv=keep_kv,
+                is_kv_shared=is_kv_shared,
             )
+
+            # For KV source layers during prefill, capture the K/V from the attention
+            # The K/V are kept alive on device (not deallocated) when keep_kv=True
+            if keep_kv and layer.self_attn._last_kv is not None:
+                shared_kv_store[i] = layer.self_attn._last_kv
+
+        # Deallocate any stored shared K/V tensors
+        for kv_pair in shared_kv_store.values():
+            if kv_pair is not None:
+                kv_pair[0].deallocate(True)
+                kv_pair[1].deallocate(True)
 
         # Final norm
         hidden_states = self.norm.forward(hidden_states)

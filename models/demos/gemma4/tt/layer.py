@@ -184,6 +184,9 @@ class Gemma4DecoderLayer:
         is_decode,
         token_index=None,
         per_layer_input=None,
+        shared_kv=None,
+        keep_kv=False,
+        is_kv_shared=False,
     ):
         """
         Decoder layer forward pass.
@@ -195,6 +198,9 @@ class Gemma4DecoderLayer:
             page_table: paged attention page table
             kv_cache: KV cache for this layer
             is_decode: True for decode mode
+            shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
+            keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
+            is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
 
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
@@ -210,6 +216,9 @@ class Gemma4DecoderLayer:
             kv_cache=kv_cache,
             is_decode=is_decode,
             token_index=token_index,
+            shared_kv=shared_kv,
+            keep_kv=keep_kv,
+            is_kv_shared=is_kv_shared,
         )
 
         if isinstance(attn_output, torch.Tensor):

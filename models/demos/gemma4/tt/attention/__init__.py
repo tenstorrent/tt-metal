@@ -31,7 +31,7 @@ class Gemma4AttentionConfig:
         self.rms_norm_eps = hf_config.rms_norm_eps
 
         self.is_sliding = self.layer_type == "sliding_attention"
-        self.use_kv_tying = getattr(hf_config, "attention_k_eq_v", True) and not self.is_sliding
+        self.use_kv_tying = getattr(hf_config, "attention_k_eq_v", False) and not self.is_sliding
 
         if self.is_sliding:
             self.num_key_value_heads = hf_config.num_key_value_heads
@@ -102,6 +102,9 @@ class Gemma4Attention:
         kv_cache=None,
         is_decode=True,
         token_index=None,
+        shared_kv=None,
+        keep_kv=False,
+        is_kv_shared=False,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -114,6 +117,9 @@ class Gemma4Attention:
             kv_cache: [k_cache, v_cache] or None
             is_decode: True for decode mode
             token_index: int position for decode RoPE slicing (decode only)
+            shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
+            keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
+            is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
@@ -132,9 +138,10 @@ class Gemma4Attention:
                 token_index=token_index,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
+                is_kv_shared=is_kv_shared,
             )
         else:
-            return prefill_forward(
+            tt_out, kept_kv = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
                 sin_cache=sin_cache,
@@ -145,4 +152,8 @@ class Gemma4Attention:
                 mesh_device=self.mesh_device,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
+                shared_kv=shared_kv,
+                keep_kv=keep_kv,
             )
+            self._last_kv = kept_kv
+            return tt_out
