@@ -1,8 +1,8 @@
 # LLK Helper Agent Flow
 
-Each phase produces a self-contained markdown artifact interpretable by a downstream agent without shared context. Human checkpoints gate design and test-coverage decisions. Include the current git commit hash in artifacts for staleness detection across sessions.
+Each phase produces a self-contained markdown artifact interpretable by a downstream agent with zero conversation context. Human checkpoints gate design and test-coverage decisions. Include the current git commit hash in artifacts for staleness detection.
 
-**Mode discipline**: Phases 0-4 are analysis only (no file edits, no commands). Phase 5 implements. Phase 6 is read-only.
+**Mode discipline**: Phases 0-4 are analysis only -- no file edits, no commands. Phase 5 implements. Phase 6 is read-only.
 
 **Priority**: Correctness > performance > simplicity.
 
@@ -10,11 +10,11 @@ Each phase produces a self-contained markdown artifact interpretable by a downst
  [Phase 0] Prior Work Detection -----> resume at appropriate phase
  [Phase 1] Research
  [Phase 2] Verification
- [Phase 3] Design Options  <--------- failure taxonomy routes here
-         ** HUMAN CHECKPOINT 1 **
- [Phase 4] Test Design
-         ** HUMAN CHECKPOINT 2 **
- [Phase 5] Implementation + Validation
+ [Phase 3] Design Options  <---+
+         ** HUMAN CHECKPOINT ** |
+ [Phase 4] Test Design         |  failure taxonomy
+         ** HUMAN CHECKPOINT ** |  routes to appropriate phase
+ [Phase 5] Implementation  ----+
  [Phase 6] Report
 ```
 
@@ -22,7 +22,7 @@ Each phase produces a self-contained markdown artifact interpretable by a downst
 
 ## Phase 0: Prior Work Detection
 
-**Agents**: Orchestrator only. Check for existing phase artifacts and resume at the earliest incomplete phase.
+**Agents**: Orchestrator only. Check for existing phase artifacts, resume at the earliest incomplete phase.
 
 **Artifact**: `status.md`
 
@@ -34,17 +34,17 @@ Each phase produces a self-contained markdown artifact interpretable by a downst
 
 ### 1a: Catalog
 
-Enumerate all target operations, group by functional similarity, locate source files. Search bottom-up (LLK function prefixes) and top-down (compute API headers, TTNN op factories).
+Enumerate target operations, group by functional similarity, locate source files. Search bottom-up (LLK function prefixes) and top-down (compute API headers, TTNN op factories).
 
 **Artifact**: `catalog.md` -- operation list, groups, file paths.
 
 ### 1b: Investigation
 
-Analyze each group across: device behavior, host integration, usage patterns / call sites, encapsulation boundary, CB management, existing helpers.
+Analyze each group across: device behavior, host integration, call sites, encapsulation boundary, CB management, existing helpers.
 
 Every factual claim gets a unique ID (C-001, C-002...) with file:line anchor and a 1-2 line excerpt. This **Claim Ledger** is the interface Phase 2 verifies against.
 
-**Artifact**: `investigation.md` -- per-group analysis as a Claim Ledger.
+**Artifact**: `investigation.md` -- per-group Claim Ledger.
 
 ---
 
@@ -52,11 +52,11 @@ Every factual claim gets a unique ID (C-001, C-002...) with file:line anchor and
 
 **Agents**: 1 fresh Explore agent (separate from Phase 1 to avoid confirmation bias).
 
-Verify every Claim Ledger entry against source code. Classify each as **CONFIRMED** / **INCORRECT** (with correction + evidence) / **UNVERIFIABLE**. Prioritize falsification over confirmation. INCORRECT findings are highest value -- they change the design.
+Verify every Claim Ledger entry against source code. Classify each as **CONFIRMED** / **INCORRECT** (with correction and evidence) / **UNVERIFIABLE**. Prioritize falsification over confirmation -- INCORRECT findings are highest value because they change the design.
 
 End with summary counts and the top corrections by impact.
 
-**Artifact**: `verification.md` -- annotated Claim Ledger with statuses, corrections, and summary.
+**Artifact**: `verification.md` -- annotated Claim Ledger with statuses and corrections.
 
 ---
 
@@ -66,16 +66,14 @@ End with summary counts and the top corrections by impact.
 
 Produce **2-3 design options**, each with:
 - API contract (signatures, enums, template parameters)
-- Abstraction boundary
+- Abstraction boundary (what the helper owns vs. what it exposes)
 - Before/after migration example
 - Migration tiers (Tier 1: straightforward, Tier 2: needs refactoring, Tier 3: blocked)
 - Trade-offs and coverage gaps
 
 **Artifact**: `proposal.md`
 
-### HUMAN CHECKPOINT 1
-
-Present options and **stop**. Human selects an option (or requests revision) and approves the API contract.
+**HUMAN CHECKPOINT**: Present options and **stop**. Human selects an option (or requests revision) and approves the API contract.
 
 ---
 
@@ -85,30 +83,17 @@ Present options and **stop**. Human selects an option (or requests revision) and
 
 Tests are designed before implementation. This is deliberate: designing tests with knowledge of the implementation biases them toward confirming it rather than validating the contract.
 
-### Raw LLK baseline
+**Raw LLK baseline**: Validate our understanding of the underlying LLK independent of the helper. These run first in Phase 5 to confirm the foundation before building on it.
 
-Tests that validate our understanding of the underlying LLK independent of the helper. These run first in Phase 5 to confirm the foundation before building on it.
+**Helper tests**: Isolate the helper -- when a test fails, it should be clear the bug is in the helper, not lower layers. Parameter coverage matrix (data formats x template args x runtime args), integration (default invocation, explicit args, chaining), edge cases.
 
-### Helper tests
+**Existing test audit**: Identify existing tests that exercise code paths the helper will replace. These must be migrated to use the helper for additional real-world coverage. List which can be migrated and which cannot (and why).
 
-Isolate the helper as much as possible -- when a test fails, it should be clear the bug is in the helper, not lower layers.
-- Parameter coverage matrix (data formats x template args x runtime args)
-- Integration (default invocation, explicit args, chaining)
-- Edge cases
-
-### Existing test audit
-
-Audit existing call sites and their tests. Identify tests that exercise code paths the helper will replace. These must be migrated to use the helper for additional real-world coverage. List which can be migrated and which cannot (and why).
-
-### Performance tests
-
-Helper vs. raw LLK across representative tile counts. Tracy device kernel duration (not wall-clock). Acceptable overhead thresholds determined by human during checkpoint.
+**Performance tests**: Helper vs. raw LLK across representative tile counts. Tracy device kernel duration (not wall-clock). Overhead thresholds determined by human during checkpoint.
 
 **Artifact**: `test_design.md` -- test matrix, existing test audit, benchmark protocol.
 
-### HUMAN CHECKPOINT 2
-
-Present test design and **stop**. Human reviews coverage, existing test migration plan, and performance thresholds.
+**HUMAN CHECKPOINT**: Present test design and **stop**. Human reviews coverage, existing test migration plan, and performance thresholds.
 
 ---
 
@@ -128,18 +113,16 @@ Present test design and **stop**. Human reviews coverage, existing test migratio
 
 **5f**: Migrate existing tests from Phase 4 audit. Run all tests (new + migrated) together. FAIL = fix and re-run 5f.
 
-**5g**: Performance benchmark. Unacceptable per Checkpoint 2 thresholds = fix helper, re-run from 5f.
+**5g**: Performance benchmark. Unacceptable per checkpoint thresholds = fix helper, re-run from 5f.
 
 **5h**: Migrate Tier 1 call sites. Re-run all tests to confirm no regression.
 
-### Failure taxonomy
-
-Not all failures are design failures. On any BLOCKER, classify the root cause before looping back:
+On any **BLOCKER**, classify root cause before looping back:
 
 | Root Cause | Route To |
 |------------|----------|
 | Design flaw | Phase 3 |
-| Research gap (investigation was wrong) | Phase 1/2 |
+| Research gap | Phase 1/2 |
 | Test harness bug | Fix in Phase 5 |
 | Environment issue | Escalate to human |
 
@@ -161,10 +144,8 @@ Not all failures are design failures. On any BLOCKER, classify the root cause be
 |-------|------|-------|-------|
 | 0 | Orchestrator | -- | File-existence check |
 | 1 | Explore | sonnet | May parallelize internally |
-| 2 | Explore | sonnet | Fresh agent, not Phase 1 agent |
+| 2 | Explore | sonnet | Fresh agent, not Phase 1 |
 | 3 | general-purpose | opus | |
 | 4 | general-purpose | opus | |
 | 5 | general-purpose | opus | Sequential sub-stages |
 | 6 | general-purpose | sonnet | |
-
-Sonnet for research (grep-heavy). Opus for design, test design, and implementation (reasoning-heavy).
