@@ -162,7 +162,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
-                return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)params[0])};
+                return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {
                 "relu_min_tile_init();",
@@ -464,7 +464,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32) {
                 return {
                     "unary_max_int32_tile_init();",
-                    fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
+                    fmt::format("unary_max_int32_tile({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             if (input_dtype == DataType::UINT32) {
                 return {
@@ -481,7 +481,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32) {
                 return {
                     "unary_min_int32_tile_init();",
-                    fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
+                    fmt::format("unary_min_int32_tile({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             if (input_dtype == DataType::UINT32) {
                 return {
@@ -532,7 +532,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32) {
                 return {
                     "clamp_tile_init();",
-                    fmt::format("clamp_tile_int32({}, {}, {});", idst, (uint)params[0], (uint)params[1])};
+                    fmt::format("clamp_tile_int32({}, {}, {});", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])), static_cast<uint32_t>(static_cast<int32_t>(params[1])))};
             }
             return {
                 "clamp_tile_init();",
