@@ -73,7 +73,13 @@ def get_device_peak_tflops_bf16() -> float:
     grid_size = device.compute_with_storage_grid_size()
     num_cores = grid_size.x * grid_size.y
 
-    tflops_per_core = 1.35 if is_blackhole(device) else 1.0
+    tflops_per_core = 0.0
+    if is_wormhole_b0(device):
+        tflops_per_core = 1.0
+    elif is_blackhole(device):
+        tflops_per_core = 1.35
+    else:
+        raise ValueError(f"Unknown device: {device.arch()}")
     return num_cores * tflops_per_core
 
 
@@ -1117,6 +1123,11 @@ def main():
         action="store_true",
         help="Enable memory usage tracking (prints memory stats after first iteration)",
     )
+    parser.add_argument(
+        "--print_summary",
+        action="store_true",
+        help="Print model layer-by-layer summary after creation",
+    )
 
     args = parser.parse_args()
 
@@ -1318,7 +1329,8 @@ def main():
 
             # Create model
             model = create_model_from_config(model_config)
-            summary(model)
+            if args.print_summary:
+                summary(model)
 
             # Count parameters
             total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
