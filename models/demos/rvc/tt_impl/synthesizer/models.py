@@ -283,6 +283,7 @@ class Generator:
                     kernel_size=k,
                     stride=u,
                     padding=(k - u) // 2,
+                    deallocate_input=True,
                 )
             )
 
@@ -488,6 +489,7 @@ class GeneratorNSF:
                         kernel_size=stride_f0 * 2,
                         stride=stride_f0,
                         padding=stride_f0 // 2,
+                        deallocate_input=True,
                     )
                 )
             else:

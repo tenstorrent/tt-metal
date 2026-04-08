@@ -59,6 +59,7 @@ class Conv1dConfiguration:
     weights_dtype: ttnn.DataType = ttnn.bfloat16
     dtype: ttnn.DataType = ttnn.bfloat16
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
+    deallocate_input: bool = False
     # slice_strategy: Optional[SliceStrategy] = None
     # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     # fp32_dest_acc_en: bool = False
@@ -137,6 +138,7 @@ def get_conv_configs(
             weights_dtype=ttnn.bfloat8_b,
             # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             output_layout=conv1d_config.output_layout,
+            deallocate_activation=conv1d_config.deallocate_input,
             # deallocate_activation=conv1d_config.deallocate_activation,
             # reallocate_halo_output=conv1d_config.reallocate_halo_output,
             # enable_act_double_buffer=conv1d_config.enable_act_double_buffer,
@@ -178,9 +180,7 @@ class ConvTranspose1d:
         groups: int = 1,
         bias_tensor: ttnn.Tensor | None = None,
         dtype: ttnn.DataType | None = None,
-        conv_config: ttnn.Conv2dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
-        memory_config: ttnn.MemoryConfig | None = None,
+        deallocate_input: bool = False,
     ) -> None:
         tile_width = 32
         if out_channels % tile_width == 0:
@@ -208,11 +208,10 @@ class ConvTranspose1d:
             groups=groups,
             dtype=dtype or ttnn.bfloat16,
             output_layout=output_layout,
+            deallocate_input=deallocate_input,
         )
         self.weight_tensor = weight_tensor
         self.bias_tensor = bias_tensor
-        self.compute_config = compute_config
-        self.memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str | None = None) -> None:
         if module_prefix is None:
