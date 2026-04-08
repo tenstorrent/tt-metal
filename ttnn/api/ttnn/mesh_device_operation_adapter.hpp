@@ -5,10 +5,11 @@
 #pragma once
 
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <memory>
 #include <optional>
-#include <functional>
 #include <concepts>
 #include <variant>
 #include "ttnn/distributed/types.hpp"
@@ -41,21 +42,39 @@ struct MeshDeviceOperationAdapter {
     using tensor_args_t = typename DeviceOperation::tensor_args_t;
     using spec_return_value_t = typename DeviceOperation::spec_return_value_t;
     using tensor_return_value_t = typename DeviceOperation::tensor_return_value_t;
-    using program_factory_t = typename DeviceOperation::program_factory_t;
 
-    // Early validation: if program_factory_t has more than one variant alternative,
-    // the operation must provide select_program_factory to choose between them.
+private:
+    struct DirectDescriptorFactory {
+        static auto create_descriptor(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            return DeviceOperation::create_descriptor(attrs, tensor_args, tensor_return_value);
+        }
+    };
+
+    template <typename T, typename = void>
+    struct resolve_program_factory {
+        using type = std::variant<DirectDescriptorFactory>;
+    };
+    template <typename T>
+    struct resolve_program_factory<T, std::void_t<typename T::program_factory_t>> {
+        using type = typename T::program_factory_t;
+    };
+
+public:
+    using program_factory_t = typename resolve_program_factory<DeviceOperation>::type;
+
     static_assert(
-        HasSelectProgramFactory<DeviceOperation> || std::variant_size_v<program_factory_t> == 1,
-        "DeviceOperation must implement select_program_factory when program_factory_t has more than one type. "
-        "For single-variant program_factory_t, the framework auto-selects it.");
+        HasDirectDescriptor<DeviceOperation> || HasSelectProgramFactory<DeviceOperation> ||
+            std::variant_size_v<program_factory_t> == 1,
+        "DeviceOperation must implement select_program_factory when program_factory_t has more than one type.");
 
-    // Delegate to base operation methods.
-    // Uses the framework helper: if the operation provides select_program_factory, it is called;
-    // otherwise, for single-variant program_factory_t, returns the sole type automatically.
     static program_factory_t select_program_factory(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        if constexpr (HasSelectProgramFactory<DeviceOperation>) {
+        if constexpr (HasDirectDescriptor<DeviceOperation>) {
+            return program_factory_t{DirectDescriptorFactory{}};
+        } else if constexpr (HasSelectProgramFactory<DeviceOperation>) {
             return DeviceOperation::select_program_factory(attrs, tensor_args);
         } else {
             return program_factory_t{std::variant_alternative_t<0, program_factory_t>{}};
@@ -152,12 +171,116 @@ struct MeshDeviceOperationAdapter {
         }
     };
 
+    // -----------------------------------------------------------------------
+    // DescriptorMeshWorkloadFactoryAdapter
+    //
+    // Adapts a ProgramDescriptorFactoryConcept factory for mesh dispatch.
+    // The developer writes ONLY create_descriptor (and optionally
+    // prepare_resources).
+    //
+    // The descriptor is created fresh on every dispatch.  On cache miss
+    // the framework builds a Program from it;
+    // on cache hit the generic apply_descriptor_runtime_args() copies all
+    // runtime args from the fresh descriptor into the cached Program.
+    // No override_runtime_arguments, no address scanning, no patching logic.
+    // -----------------------------------------------------------------------
+    template <ProgramDescriptorFactoryConcept DescriptorFactory>
+    struct DescriptorMeshWorkloadFactoryAdapter {
+        // --- Optional hook detection ---
+
+        static constexpr bool has_prepare_resources =
+            requires(const operation_attributes_t& a, const tensor_args_t& t, tensor_return_value_t& r) {
+                DescriptorFactory::prepare_resources(a, t, r);
+            };
+
+        // Deduce the return type of prepare_resources when it exists; fall back to
+        // monostate otherwise. SFINAE via the Dummy parameter prevents a hard error
+        // when DescriptorFactory::prepare_resources does not exist.
+        template <typename T, typename = void>
+        struct deduce_resource_type {
+            using type = std::monostate;
+        };
+        template <typename T>
+        struct deduce_resource_type<
+            T,
+            std::void_t<decltype(T::prepare_resources(
+                std::declval<const operation_attributes_t&>(),
+                std::declval<const tensor_args_t&>(),
+                std::declval<tensor_return_value_t&>()))>> {
+            using type = decltype(T::prepare_resources(
+                std::declval<const operation_attributes_t&>(),
+                std::declval<const tensor_args_t&>(),
+                std::declval<tensor_return_value_t&>()));
+        };
+
+        using resource_t = typename deduce_resource_type<DescriptorFactory>::type;
+
+        struct shared_variables_t {
+            [[no_unique_address]] resource_t resources{};
+        };
+        using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static tt::tt_metal::ProgramDescriptor invoke_create_descriptor(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            resource_t& resources) {
+            if constexpr (has_prepare_resources) {
+                return DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value, resources);
+            } else {
+                return DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+            }
+        }
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+            for (const auto& range : tensor_coords.ranges()) {
+                resource_t resources{};
+                if constexpr (has_prepare_resources) {
+                    resources = DescriptorFactory::prepare_resources(attrs, tensor_args, tensor_return_value);
+                }
+
+                auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
+                tt::tt_metal::Program program{desc};
+                mesh_workload.add_program(range, std::move(program));
+                shared_variables[range] = shared_variables_t{.resources = std::move(resources)};
+            }
+            return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+        }
+
+        static void apply_descriptor(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, sv.resources);
+                tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+            }
+        }
+    };
+
     static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
-        auto hash = compute_program_hash(attrs, tensor_args);
+        ttsl::hash::hash_t hash;
+
+        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else {
+            hash =
+                ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+        }
+
+        // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             hash = ttsl::hash::hash_objects(hash, coord);
         }
