@@ -218,6 +218,10 @@ def forward_prefill_deepseek(
     if x_full.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_full = ttnn.to_layout(x_full, ttnn.ROW_MAJOR_LAYOUT)
 
+    logger.warning(
+        f"[DS_PREFILL] input shapes: hidden={hidden_states.shape} indices={topk_expert_indices.shape} weights={topk_expert_weights.shape}"
+    )
+
     # Step 2: Device-side routing setup (offsets + counts on device, no host round-trip)
     if topk_expert_indices.dtype == ttnn.uint16:
         idx_for_routing = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
