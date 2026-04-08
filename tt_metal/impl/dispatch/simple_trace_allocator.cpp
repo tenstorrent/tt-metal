@@ -185,6 +185,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         for (uint32_t index = 0; index < programmable_core_count; index++) {
             auto core_type = hal.get_programmable_core_type(index);
+            if (!hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
+                continue;
+            }
             ProgramConfig& program_config = node.program->get_program_config(index);
             bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
 
@@ -252,7 +255,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
         constexpr uint32_t max_queued_programs = dev_msgs::launch_msg_buffer_num_entries - 1;
 
-        // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer.
+        // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. The launch
+        // message buffer is written to after the binary.
         int final_binary_sync_idx = subdevice_launch_window.size() >= max_queued_programs
                                         ? static_cast<int>(subdevice_launch_window.front())
                                         : -1;
