@@ -9,7 +9,23 @@ from ultralytics import YOLO
 
 from models.demos.yolov11l.reference import yolov11
 
-YOLOV11_L1_SMALL_SIZE = 16000
+YOLOV11_SUPPORTED_INPUT_RESOLUTIONS = (640, 1280)
+YOLOV11_DEFAULT_INPUT_H = 640
+YOLOV11_DEFAULT_INPUT_W = 640
+
+_YOLOV11_L1_SMALL_BASE_640 = 16000
+_YOLOV11_TRACE_REGION_BASE_E2E_640 = 6434816
+
+
+def yolov11_l1_small_size_for_res(inp_h: int, inp_w: int) -> int:
+    return int(_YOLOV11_L1_SMALL_BASE_640 * inp_h * inp_w // (640 * 640))
+
+
+def yolov11_trace_region_size_e2e_for_res(inp_h: int, inp_w: int) -> int:
+    return int(_YOLOV11_TRACE_REGION_BASE_E2E_640 * inp_h * inp_w // (640 * 640))
+
+
+YOLOV11_L1_SMALL_SIZE = yolov11_l1_small_size_for_res(YOLOV11_DEFAULT_INPUT_H, YOLOV11_DEFAULT_INPUT_W)
 
 
 def load_torch_model(model_location_generator=None):

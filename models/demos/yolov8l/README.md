@@ -63,12 +63,7 @@ Place test images in `models/demos/yolov8l/demo/images/`.
 TT still runs **640×640** tiles; use SAHI slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
 
 ```bash
-python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch \
-  --tt-slice-parallel-devices 4 --pre-resize-to 1280 1280 \
-  --tt-input-size 640 \
-  --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 \
-  --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 \
-  --confidence-threshold 0.55 --input /path/to/image.jpg
+ python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch --pre-resize-to 1280 1280 --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 --confidence-threshold 0.55 --input models/demos/yolov8l/demo/images/ --tt-trace-region-size 35000000
 ```
 
 `--tt-model` defaults to **yolov8l**; omit it for this demo. Other values (`yolov8s`, `yolov8x`) select those TT runners for comparison only.

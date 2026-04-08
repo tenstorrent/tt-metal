@@ -5,7 +5,11 @@
 import pytest
 
 import ttnn
-from models.demos.yolov11l.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov11l.common import (
+    load_torch_model,
+    yolov11_l1_small_size_for_res,
+    yolov11_trace_region_size_e2e_for_res,
+)
 from models.demos.yolov11l.reference import yolov11
 from models.demos.yolov11l.tt import ttnn_yolov11
 from models.demos.yolov11l.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
@@ -28,7 +32,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
+            "trace_region_size": yolov11_trace_region_size_e2e_for_res(1280, 1280),
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 def test_yolov11(device, reset_seeds, resolution, use_pretrained_weights, model_location_generator, min_channels=8):

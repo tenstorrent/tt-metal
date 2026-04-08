@@ -49,11 +49,13 @@ class YOLOv11PerformanceRunnerInfra:
 
         # batch_size is the full input batch N (one shard per mesh device in DP), same as YOLOv8l — not multiplied by num_devices again.
         self.torch_input_tensor = (
-            torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
+            torch.randn((batch_size, 3, self.resolution[0], self.resolution[1]), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
-        self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
+        self.torch_input_params = torch.randn(
+            (batch_size, 3, self.resolution[0], self.resolution[1]), dtype=torch.float32
+        )
         self.parameters = create_yolov11_model_parameters(self.torch_model, self.torch_input_params, device=self.device)
 
         self.ttnn_yolov11_model = ttnn_yolov11.TtnnYoloV11(self.device, self.parameters)
