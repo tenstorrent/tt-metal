@@ -357,7 +357,12 @@ def _default_results_parallel_branches(items) -> List:
 
 
 def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
-    """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`."""
+    """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
+
+    Fast path: if ``_BUILD_CACHE`` has an entry, go straight from cache to
+    ``patchable_generic_op`` — no ``build()``, no ``FusedOp``, no redundant IO
+    iteration.  Falls back to ``build()`` + ``launch()`` on cache miss.
+    """
     cache_device = device
     if cache_device is None:
         try:
@@ -365,17 +370,36 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         except ValueError:
             cache_device = None
     cache_key, ops = _fusion_cache_key_and_ops(container._items, surface_prefix, cache_device)
-    sig = (cache_key, tuple(id(op) for op in ops), kernel_dir)
-    if container._run_fused is None or container._run_signature != sig:
-        container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
-        container._run_signature = sig
-    container._run_fused.launch()
+
+    entry = _BUILD_CACHE.get(cache_key)
+    if entry is not None:
+        # Hot path: one dedup pass → dispatch.  No build(), no FusedOp.
+        seen: Set[int] = set()
+        inputs: List = []
+        for op in ops:
+            for t in op.input_tensors:
+                tid = id(t)
+                if tid not in seen:
+                    inputs.append(t)
+                    seen.add(tid)
+        if entry.output_sources:
+            outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+        else:
+            outputs = list(ops[-1].output_tensors) if ops else []
+        io_tensors = inputs + outputs
+        ttnn._ttnn.operations.experimental.patchable_generic_op(
+            io_tensors, entry.cached_descriptor, entry.address_slots
+        )
+    else:
+        # Cold path: full build (populates _BUILD_CACHE), then launch.
+        fused = container.build(device=device, kernel_dir=kernel_dir)
+        fused.launch()
+
     if results is None:
         if surface_prefix == "P":
             results = _default_results_parallel_branches(container._items)
         else:
             results = _default_results(container._items)
-    # Branches may have no DRAM outputs (e.g. GlobalCB-only push); align with results list.
     return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
 
