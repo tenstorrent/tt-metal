@@ -28,6 +28,7 @@ def run_distributed_rms_norm_decode_impl(
     mesh_device,
     num_devices,
     batch_size_per_row,
+    seq_len,
     hidden_size,
     epsilon,
     input_shard_grid,
@@ -72,9 +73,10 @@ def run_distributed_rms_norm_decode_impl(
         ttnn.TILE_SIZE,
     )
 
-    # Input shape is always (1, 1, 32, hidden_size) for decode
+    # Input shape: (1, 1, seq_len, hidden_size)
+    # seq_len is typically 8 or 32 for decode (in tiles)
     # batch_size_per_row affects memory config but not tensor shape
-    input_shape = (1, 1, 32, hidden_size)
+    input_shape = (1, 1, seq_len, hidden_size)
 
     # Shard height matches the actual decode config: roundup(batch_size_per_row, TILE_SIZE)
     # For batch_size_per_row in [8, 32], this rounds up to 32
@@ -286,13 +288,21 @@ def run_distributed_rms_norm_decode_impl(
 @pytest.mark.parametrize(
     "batch_size_per_row, hidden_size, input_shard_grid, output_shard_grid, config_name",
     [
-        # MTP hidden_norm, token_norm, head_norm configuration with batch_size_per_row=8
+        # MTP hidden_norm, token_norm, head_norm configuration with batch_size_per_row=8, seq_len=32
         (
             8,
             896 * 8,  # 7168 (DeepSeek V3 hidden_size)
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch8",
+            "mtp_norms_batch8_seq32",
+        ),
+        # Test with seq_len=8
+        (
+            8,
+            896 * 8,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+            None,
+            "mtp_norms_batch8_seq8",
         ),
         # MTP norms with batch_size_per_row=32
         (
@@ -300,7 +310,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch32",
+            "mtp_norms_batch32_seq32",
         ),
         # Decoder block mla_norm, mlp_norm configuration
         (
@@ -308,7 +318,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            "decoder_block_norms_batch8",
+            "decoder_block_norms_batch8_seq32",
         ),
         # Row batched model norm configuration
         (
@@ -330,10 +340,12 @@ def run_distributed_rms_norm_decode_impl(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+@pytest.mark.parametrize("seq_len", [8, 32])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_distributed_rms_norm_decode_configs(
     mesh_device,
     batch_size_per_row,
+    seq_len,
     hidden_size,
     input_shard_grid,
     output_shard_grid,
@@ -351,6 +363,7 @@ def test_distributed_rms_norm_decode_configs(
 
     logger.info(f"Testing configuration: {config_name}")
     logger.info(f"  batch_size_per_row: {batch_size_per_row}")
+    logger.info(f"  seq_len: {seq_len}")
     logger.info(f"  hidden_size: {hidden_size}")
     logger.info(f"  num_devices: {num_devices}")
     logger.info(f"  input_dtype: {input_dtype}, output_dtype: {output_dtype}")
@@ -359,83 +372,14 @@ def test_distributed_rms_norm_decode_configs(
         mesh_device=mesh_device,
         num_devices=num_devices,
         batch_size_per_row=batch_size_per_row,
+        seq_len=seq_len,
         hidden_size=hidden_size,
         epsilon=epsilon,
         input_shard_grid=input_shard_grid,
         output_shard_grid=output_shard_grid,
         topology=topology,
         num_iters=num_iters,
-        trace_mode=False,
+        trace_mode=True,
         input_dtype=input_dtype,
         output_dtype=output_dtype,
-    )
-
-
-@skip_for_blackhole("This is a wormhole test")
-@pytest.mark.parametrize(
-    "batch_size_per_row, hidden_size, input_shard_grid, output_shard_grid, config_name",
-    [
-        # Test with trace mode enabled - use smaller iteration count for faster testing
-        (
-            32,
-            896 * 8,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            "trace_mode_test",
-        ),
-    ],
-)
-@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 20]])
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize("input_dtype, output_dtype", [(ttnn.bfloat16, ttnn.bfloat16)])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_distributed_rms_norm_decode_trace_mode(
-    mesh_device,
-    batch_size_per_row,
-    hidden_size,
-    input_shard_grid,
-    output_shard_grid,
-    config_name,
-    num_iters,
-    warmup_iters,
-    trace_mode,
-    input_dtype,
-    output_dtype,
-    topology,
-    function_level_defaults,
-):
-    """Test DistributedRMSNorm in trace mode with signposts for performance measurement."""
-    epsilon = 1e-6
-    num_devices = 8
-
-    logger.info(f"Testing configuration: {config_name} with trace mode")
-    logger.info(f"  num_iters: {num_iters}, warmup_iters: {warmup_iters}")
-
-    profiler = BenchmarkProfiler()
-    run_distributed_rms_norm_decode_impl(
-        mesh_device=mesh_device,
-        num_devices=num_devices,
-        batch_size_per_row=batch_size_per_row,
-        hidden_size=hidden_size,
-        epsilon=epsilon,
-        input_shard_grid=input_shard_grid,
-        output_shard_grid=output_shard_grid,
-        topology=topology,
-        num_iters=num_iters,
-        trace_mode=trace_mode,
-        warmup_iters=warmup_iters,
-        input_dtype=input_dtype,
-        output_dtype=output_dtype,
-        profiler=profiler,
     )
