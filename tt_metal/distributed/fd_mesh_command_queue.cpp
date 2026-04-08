@@ -1191,17 +1191,20 @@ void FDMeshCommandQueue::record_end() {
                 }
             }
         }
-        uint32_t worker_ringbuffer_start =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
-        uint32_t worker_ringbuffer_size =
-            mesh_device_->allocator_impl()->get_config().l1_unreserved_base - worker_ringbuffer_start;
-        SimpleTraceAllocator allocator{
-            worker_ringbuffer_start,
-            worker_ringbuffer_size,
-            static_cast<uint32_t>(
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)),
-            static_cast<uint32_t>(
-                hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG))};
+        std::vector<SimpleTraceAllocator::RingbufferConfig> ringbuffer_configs;
+        ringbuffer_configs.reserve(hal.get_programmable_core_type_count());
+        for (uint32_t idx = 0; idx < hal.get_programmable_core_type_count(); idx++) {
+            auto core_type = hal.get_programmable_core_type(idx);
+            uint32_t start = hal.get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+            uint32_t size;
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                size = mesh_device_->allocator_impl()->get_config().l1_unreserved_base - start;
+            } else {
+                size = hal.get_dev_size(core_type, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+            }
+            ringbuffer_configs.push_back({start, size});
+        }
+        SimpleTraceAllocator allocator{std::move(ringbuffer_configs)};
         allocator.allocate_trace_programs(hal, trace_nodes);
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher

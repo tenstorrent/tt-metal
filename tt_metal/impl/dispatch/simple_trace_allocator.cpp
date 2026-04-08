@@ -149,8 +149,9 @@ void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<T
         sub_device_ids.insert(node.sub_device_id);
     }
     for (const auto& sub_device_id : sub_device_ids) {
-        worker_region_allocator_.reset_allocator();
-        active_eth_region_allocator_.reset_allocator();
+        for (auto& allocator : region_allocators_) {
+            allocator.reset_allocator();
+        }
         allocate_trace_programs_on_subdevice(hal, trace_nodes, sub_device_id);
     }
 }
@@ -158,36 +159,43 @@ void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<T
 void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
     const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
     uint32_t expected_workers_completed = 0;
-    std::optional<uint32_t> last_active_eth_sync_idx;
+    uint32_t programmable_core_count = hal.get_programmable_core_type_count();
+    // For core types where the binary goes to a fixed L1 address (not stored in the config buffer),
+    // track the last trace index that used each core type so we can sync before overwriting.
+    std::vector<std::optional<uint32_t>> last_fixed_addr_sync_idx(programmable_core_count);
     std::optional<int> last_stall_idx;
     std::deque<size_t> subdevice_launch_window;
 
     for (size_t i = 0; i < trace_nodes.size(); i++) {
         auto& node = *trace_nodes[i];
-        auto& program = *node.program;
         if (node.sub_device_id != sub_device_id) {
             continue;
         }
 
         std::optional<uint32_t> nonbinary_sync_idx;
         std::optional<uint32_t> binary_sync_idx;
-        uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
         // Reinitialize dispatch_metadata. TraceNodes may be shared across device ranges in a mesh
         // trace, so the caller (record_end) relies on this reinitialization to clear stale values
         // from a previous device range's processing.
         node.dispatch_metadata = TraceDispatchMetadata{};
-        node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
-        node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count_);
+        node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count);
+        node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count);
 
-        for (const auto& core_type : {HalProgrammableCoreType::TENSIX, HalProgrammableCoreType::ACTIVE_ETH}) {
-            uint32_t index = hal.get_programmable_core_type_index(core_type);
+        bool all_binaries_cached = true;
+
+        for (uint32_t index = 0; index < programmable_core_count; index++) {
+            auto core_type = hal.get_programmable_core_type(index);
             ProgramConfig& program_config = node.program->get_program_config(index);
-            uint32_t non_binary_size = core_type == HalProgrammableCoreType::TENSIX
-                                           ? program_config.kernel_text_offset
-                                           : node.program->get_program_config_sizes()[index];
+            bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
+
+            // When binaries are stored in the config buffer, the non-binary region covers only
+            // the data before the kernel text (RTAs, CBs, semaphores). The binary gets its own
+            // separately-cached region. When binaries are NOT in the config buffer (they go to a
+            // fixed L1 address from the ELF), the full config size is non-binary.
+            uint32_t non_binary_size = binary_in_config ? program_config.kernel_text_offset
+                                                        : node.program->get_program_config_sizes()[index];
             uint32_t binary_size = program_config.kernel_text_size;
-            auto& allocator =
-                core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
+            auto& allocator = region_allocators_[index];
 
             uint64_t pid = node.program->get_id();
             auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
@@ -196,20 +204,18 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             uint32_t binary_addr = 0;
 
-            // Tensix binaries are allocated separately from non-binary data in the ring buffer. Active ethernet
-            // binaries don't need a separate allocation: on architectures where the binary is stored in the config
-            // buffer (Blackhole), it's included in the non-binary allocation which covers the entire config; on
-            // architectures where it's not (Wormhole), the binary goes to a fixed L1 address from the ELF.
-            if (core_type == HalProgrammableCoreType::TENSIX) {
+            if (binary_in_config && binary_size > 0) {
+                // Binary is stored in the config buffer; allocate separately so it can be cached
+                // across invocations of the same program.
                 if (auto mem_addr = allocator.get_region(ExtraData::kBinary, pid)) {
                     binary_addr = *mem_addr;
-                    node.dispatch_metadata.send_binary = false;
                     allocator.update_region_trace_idx(*mem_addr, i);
                 } else {
+                    all_binaries_cached = false;
                     auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
                     if (!res.second.has_value()) {
-                        // Clear the allocator and try again. Should succeed unless the total size of the program is
-                        // larger than the config buffer.
+                        // Clear the allocator and try again. Should succeed unless the total size
+                        // of the program is larger than the config buffer.
                         allocator.reset_allocator();
                         std::tie(rta_sync_idx, rta_addr) =
                             allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
@@ -223,22 +229,30 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                     binary_addr = *res.second;
                     allocator.add_region(ExtraData::kBinary, pid, binary_addr);
                 }
+            } else if (!binary_in_config && binary_size > 0) {
+                // Binary goes to a fixed L1 address (not in the config buffer). Must sync with the
+                // previous program that used this fixed address before overwriting it.
+                all_binaries_cached = false;
+                if (last_fixed_addr_sync_idx[index].has_value()) {
+                    binary_sync_idx = merge_syncs(binary_sync_idx, last_fixed_addr_sync_idx[index]);
+                }
+                last_fixed_addr_sync_idx[index] = i;
             }
+
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
-            auto& ringbuffer_start =
-                core_type == HalProgrammableCoreType::TENSIX ? worker_ringbuffer_start_ : active_eth_ringbuffer_start_;
-            node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {.addr = *rta_addr + ringbuffer_start};
-            node.dispatch_metadata.binary_kernel_config_addrs[index] = {.addr = binary_addr + ringbuffer_start};
+            node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {
+                .addr = *rta_addr + ringbuffer_starts_[index]};
+            node.dispatch_metadata.binary_kernel_config_addrs[index] = {
+                .addr = binary_addr + ringbuffer_starts_[index]};
         }
 
-        bool has_active_eth_kernel = !program.kernel_binary_always_stored_in_ringbuffer();
+        node.dispatch_metadata.send_binary = !all_binaries_cached;
         extra_data_[i].finished_sync_count = expected_workers_completed + node.num_workers;
 
         // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
         constexpr uint32_t max_queued_programs = dev_msgs::launch_msg_buffer_num_entries - 1;
 
-        // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. We could
-        // ignore programs that only use active ethernet, but that's a very rare case and not worth the complexity.
+        // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer.
         int final_binary_sync_idx = subdevice_launch_window.size() >= max_queued_programs
                                         ? static_cast<int>(subdevice_launch_window.front())
                                         : -1;
@@ -248,16 +262,6 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         int final_nonbinary_sync_idx = -1;
         if (nonbinary_sync_idx.has_value()) {
             final_nonbinary_sync_idx = *nonbinary_sync_idx;
-        }
-        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet program's data.
-        // Active ethernet configs are always re-sent rather than cached.
-        if (has_active_eth_kernel) {
-            if (last_active_eth_sync_idx.has_value()) {
-                final_binary_sync_idx =
-                    std::max(final_binary_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
-            }
-            last_active_eth_sync_idx = i;
-            node.dispatch_metadata.send_binary = true;
         }
 
         if (!last_stall_idx.has_value()) {

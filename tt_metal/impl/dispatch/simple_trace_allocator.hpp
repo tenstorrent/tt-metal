@@ -23,15 +23,18 @@ class SimpleTraceAllocator {
     friend class SimpleTraceAllocatorFixture;
 
 public:
-    SimpleTraceAllocator(
-        uint32_t worker_ringbuffer_start,
-        uint32_t worker_ringbuffer_size,
-        uint32_t active_eth_ringbuffer_start,
-        uint32_t active_eth_ringbuffer_size) :
-        worker_region_allocator_(worker_ringbuffer_size, extra_data_),
-        active_eth_region_allocator_(active_eth_ringbuffer_size, extra_data_),
-        worker_ringbuffer_start_(worker_ringbuffer_start),
-        active_eth_ringbuffer_start_(active_eth_ringbuffer_start) {}
+    struct RingbufferConfig {
+        uint32_t start;
+        uint32_t size;
+    };
+
+    explicit SimpleTraceAllocator(const std::vector<RingbufferConfig>& ringbuffer_configs) {
+        region_allocators_.reserve(ringbuffer_configs.size());
+        for (auto& config : ringbuffer_configs) {
+            region_allocators_.emplace_back(config.size, extra_data_);
+            ringbuffer_starts_.push_back(config.start);
+        }
+    }
 
     void allocate_trace_programs(const Hal& hal, std::vector<TraceNode*>& trace_nodes);
 
@@ -113,13 +116,9 @@ private:
     void allocate_trace_programs_on_subdevice(
         const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id);
 
-    RegionAllocator worker_region_allocator_;
-    RegionAllocator active_eth_region_allocator_;
-
     std::vector<ExtraData> extra_data_;
-
-    uint32_t worker_ringbuffer_start_;
-    uint32_t active_eth_ringbuffer_start_;
+    std::vector<RegionAllocator> region_allocators_;
+    std::vector<uint32_t> ringbuffer_starts_;
 };
 
 }  // namespace tt::tt_metal
