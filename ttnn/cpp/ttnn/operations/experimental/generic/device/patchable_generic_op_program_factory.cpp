@@ -11,39 +11,19 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+#include "patchable_generic_op_helpers.hpp"
 #include "patchable_generic_op_program_factory.hpp"
 
 namespace ttnn::operations::experimental::generic::program {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 using tt::tt_metal::distributed::MeshWorkload;
+using ttnn::operations::experimental::generic::collect_io_tensor_addresses;
+using ttnn::operations::experimental::generic::compute_cb_io_tensor_map;
+using ttnn::operations::experimental::generic::find_io_tensor_index;
+using ttnn::operations::experimental::generic::OptionalAddr;
 
 namespace {
-
-using OptionalAddr = std::optional<std::uint32_t>;
-
-std::vector<OptionalAddr> collect_io_tensor_addresses(const patchable_tensor_args_t& tensor_args) {
-    std::vector<OptionalAddr> addrs;
-    addrs.reserve(tensor_args.io_tensors.size());
-    for (const auto& t : tensor_args.io_tensors) {
-        auto* buf = t.buffer();
-        if (buf != nullptr) {
-            addrs.push_back(buf->address());
-        } else {
-            addrs.push_back(std::nullopt);
-        }
-    }
-    return addrs;
-}
-
-std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, const std::vector<OptionalAddr>& addrs) {
-    for (size_t i = 0; i < addrs.size(); ++i) {
-        if (addrs[i].has_value() && addrs[i].value() == value) {
-            return static_cast<std::uint32_t>(i);
-        }
-    }
-    return std::nullopt;
-}
 
 void discover_address_slots(
     const ProgramDescriptor& desc,
@@ -74,14 +54,9 @@ void discover_address_slots(
         }
     }
 
-    for (size_t ci = 0; ci < desc.cbs.size(); ++ci) {
-        const auto* buf = desc.cbs[ci].buffer;
-        if (buf != nullptr) {
-            if (auto ti = find_io_tensor_index(buf->address(), tensor_addrs)) {
-                out.cb_tensor_slots.push_back(PatchableGenericMeshProgramFactory::CBTensorSlot{
-                    .cb_idx = static_cast<std::uint32_t>(ci), .io_tensor_index = *ti});
-            }
-        }
+    for (const auto& [cb_idx, io_tensor_index] : compute_cb_io_tensor_map(desc, tensor_addrs)) {
+        out.cb_tensor_slots.push_back(
+            PatchableGenericMeshProgramFactory::CBTensorSlot{.cb_idx = cb_idx, .io_tensor_index = io_tensor_index});
     }
 }
 
@@ -89,7 +64,7 @@ void patch_program_from_io_tensors(
     Program& program,
     PatchableGenericMeshProgramFactory::shared_variables_t& shared_vars,
     const patchable_tensor_args_t& tensor_args) {
-    const auto cur_addrs = collect_io_tensor_addresses(tensor_args);
+    const auto cur_addrs = collect_io_tensor_addresses(tensor_args.io_tensors);
 
     const auto& prev = shared_vars.prev_io_addresses;
     const bool have_prev = prev.size() == cur_addrs.size();
@@ -151,7 +126,7 @@ PatchableGenericMeshProgramFactory::cached_program_t PatchableGenericMeshProgram
         shared_vars.cb_handles.push_back(static_cast<CBHandle>(cb->id()));
     }
 
-    const auto tensor_addrs = collect_io_tensor_addresses(tensor_args);
+    const auto tensor_addrs = collect_io_tensor_addresses(tensor_args.io_tensors);
     discover_address_slots(program_descriptor, tensor_addrs, shared_vars);
 
     return {std::move(program), std::move(shared_vars)};
