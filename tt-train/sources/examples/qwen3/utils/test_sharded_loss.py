@@ -83,7 +83,7 @@ def pytorch_reference(logits_np, targets_np):
     return loss.item(), logits_t.grad.numpy()
 
 
-def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
+def run_test(ctx, device, mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     dp_size, tp_size = mesh_shape
     total_devices = dp_size * tp_size
     distributed = total_devices > 1
@@ -96,11 +96,6 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
         f"B={batch_size}, S={seq_len}, V={vocab_size}, local_V={raw_local_V})"
     )
     print(f"{'=' * 70}")
-
-    # ---- device setup ----
-    from utils.device_setup import setup_device
-
-    ctx, device = setup_device(dp_size, tp_size)
 
     # ---- random test data ----
     np.random.seed(42)
@@ -269,7 +264,6 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     print(f"Results: {passed} passed, {failed} failed, {total} total")
     print(f"{'=' * 70}")
 
-    ctx.close_device()
     return failed == 0
 
 
@@ -294,10 +288,16 @@ def main():
     )
     args = parser.parse_args()
 
-    all_ok = True
-    for vs in args.vocab_size:
-        ok = run_test(args.mesh_shape, args.batch_size, args.seq_len, vs)
-        all_ok = all_ok and ok
+    from utils.device_setup import setup_device
+
+    ctx, device = setup_device(*args.mesh_shape)
+    try:
+        all_ok = True
+        for vs in args.vocab_size:
+            ok = run_test(ctx, device, args.mesh_shape, args.batch_size, args.seq_len, vs)
+            all_ok = all_ok and ok
+    finally:
+        ctx.close_device()
     sys.exit(0 if all_ok else 1)
 
 
