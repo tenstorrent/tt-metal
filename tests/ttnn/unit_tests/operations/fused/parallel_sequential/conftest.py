@@ -8,17 +8,24 @@ with program cache disabled.  The fusion build cache persists (same device
 within a single test invocation), so re-runs hit the cache with stale
 CBDescriptor.buffer pointers and runtime arg addresses — exercising the
 patch_stale_descriptor path in patchable_generic_op.
+
+Only applies to test_parallel_sequential.py (other test files in this
+directory may have device state that doesn't tolerate re-running).
 """
 
 import pytest
 
+_TARGET_FILE = "test_parallel_sequential.py"
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    # Let the test run normally first.
     outcome = yield
     if outcome.excinfo is not None:
-        return  # failed on the normal run; skip stress re-runs
+        return
+
+    if not item.fspath.basename == _TARGET_FILE:
+        return
 
     device = item.funcargs.get("device")
     if device is None:
