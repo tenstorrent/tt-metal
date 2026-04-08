@@ -22,11 +22,18 @@ def main():
         config = yaml.safe_load(f)
 
     skus = config.get("skus", {})
-    if sku_name in skus and "mgd" in skus[sku_name]:
-        print(skus[sku_name]["mgd"])
-    else:
-        print(f"::error::MGD not found for SKU '{sku_name}'", file=sys.stderr)
+    if sku_name not in skus:
+        print(f"::error::SKU '{sku_name}' not found in {sku_config_path}", file=sys.stderr)
         sys.exit(1)
+
+    if "mgd" not in skus[sku_name]:
+        print(f"::error::SKU '{sku_name}' has no 'mgd' field", file=sys.stderr)
+        sys.exit(1)
+
+    # Print MGD content with 2-space indentation for each line (required for YAML block scalars)
+    mgd_content = skus[sku_name]["mgd"]
+    for line in mgd_content.splitlines():
+        print(f"  {line}")
 
 
 if __name__ == "__main__":
