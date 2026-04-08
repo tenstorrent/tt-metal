@@ -289,8 +289,7 @@ def test_cumsum_failing_cases(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
-    if layout == ttnn.TILE_LAYOUT:
-        ttnn.fill_implicit_tile_padding(ttnn_input_tensor, -42)
+
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

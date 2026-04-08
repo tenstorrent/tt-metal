@@ -147,7 +147,8 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
-        [16, 32, 33, 63],  # implicit padding issue.
+        [1, 1, 33, 63],  # implicit padding issue.
+        [1, 45, 70],  # implicit padding issue.
     ],
 )
 @pytest.mark.parametrize(
