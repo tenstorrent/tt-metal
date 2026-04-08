@@ -306,6 +306,10 @@ def fast_device_to_host(
     import torch
 
     mesh_shape = tuple(mesh_device.shape)
+
+    # Get mesh coordinates before issuing DMA — topology is on the original
+    # device tensor and maps each shard index to its (row, col) mesh position.
+    mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
     device_tensors = ttnn.get_device_tensors(tt_tensor)
 
     # Async DMA: issue all transfers then sync once
@@ -320,6 +324,10 @@ def fast_device_to_host(
     logical_shape = list(host_tensors[0].shape)
     shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
 
+    # Build coord→shard mapping using explicit mesh coordinates rather than
+    # assuming get_device_tensors() returns shards in row-major order.
+    shards_by_coord = {(int(c[0]), int(c[1])): s for c, s in zip(mesh_coords, shards)}
+
     # Validate: if a mesh axis is not gathered (concat_dims[axis] is None),
     # the tensor must be replicated along that axis (size 1), otherwise we'd
     # silently drop shards.
@@ -331,22 +339,21 @@ def fast_device_to_host(
             )
             raise ValueError(msg)
 
-    # Reassemble from 2D mesh.  Devices are in row-major order by mesh
-    # coordinate (r, c) where axis 0 varies across rows and axis 1 across cols.
+    # Reassemble from 2D mesh using explicit coordinate lookup.
     if concat_dims[0] is not None and concat_dims[1] is not None:
         rows = []
         for r in range(mesh_shape[0]):
-            row_shards = [shards[r * mesh_shape[1] + c] for c in range(mesh_shape[1])]
+            row_shards = [shards_by_coord[(r, c)] for c in range(mesh_shape[1])]
             rows.append(torch.cat(row_shards, dim=concat_dims[1]))
         return torch.cat(rows, dim=concat_dims[0])
     elif concat_dims[0] is not None:
         return torch.cat(
-            [shards[r * mesh_shape[1]] for r in range(mesh_shape[0])],
+            [shards_by_coord[(r, 0)] for r in range(mesh_shape[0])],
             dim=concat_dims[0],
         )
     elif concat_dims[1] is not None:
         return torch.cat(
-            [shards[c] for c in range(mesh_shape[1])],
+            [shards_by_coord[(0, c)] for c in range(mesh_shape[1])],
             dim=concat_dims[1],
         )
     else:
