@@ -16,7 +16,7 @@ MAX_MM_SEQ_LEN = 1024
 
 # SDPA chunk sizes must be multiples of the Tensor tile width (see sdpa_device_operation validation).
 _SDPA_Q_CHUNK = 128
-_SDPA_CANDIDATE_K_CHUNKS = (256, 128)
+_SDPA_CANDIDATE_K_CHUNKS = (512, 256, 128)
 
 
 def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:

@@ -40,7 +40,7 @@ def _require_single_device(device) -> None:
 def _resolve_model_name(model_name, model_location_generator):
     if model_location_generator is None:
         return model_name
-    return str(model_location_generator(model_name))
+    return str(model_location_generator(model_name, download_if_ci_v2=True, ci_v2_timeout_in_s=1800))
 
 
 def _to_ttnn_ids(ids: torch.Tensor, device, dtype=ttnn.uint32) -> ttnn.Tensor:

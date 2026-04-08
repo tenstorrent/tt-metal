@@ -149,23 +149,7 @@ class ModelArgs:
 
         return tokenizer
 
-    # def weight_cache_path(self, dtype: ttnn.DataType) -> Path:
-    #     cache_root_env = os.getenv("TT_CACHE_PATH")
-    #     if cache_root_env:
-    #         cache_root = Path(cache_root_env)
-    #     else:
-    #         model_path = Path(self.model_path)
-    #         if model_path.exists():
-    #             cache_root = model_path
-    #         else:
-    #             cache_root = Path.home() / ".cache" / "tt-metal" / "bge-m3"
-
-    #     dtype_name = _dtype_name(dtype)
-    #     cache_path = cache_root / f"tensor_cache_{dtype_name}"
-    #     cache_path.mkdir(parents=True, exist_ok=True)
-    #     self.resolved_weight_cache_path = cache_path
-    #     return cache_path
-
+    @staticmethod
     def num_to_corerange(x):
         assert x < 8 or x % 8 == 0
         num_x = min(x, 8)
@@ -223,6 +207,7 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
+    raise ValueError(f"Unsupported core grid size: {x}")
 
 
 def determine_device_name(mesh_device):
