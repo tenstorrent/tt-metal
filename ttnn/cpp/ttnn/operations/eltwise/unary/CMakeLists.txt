@@ -30,10 +30,6 @@ target_sources(
     PRIVATE
         common/unary_op_utils.cpp
         device/unary_composite_op.cpp
-        device/unary_device_operation.cpp
-        device/unary_program_factory.cpp
-        device/unary_sharded_program_factory.cpp
-        unary.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})

@@ -91,7 +91,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     };
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_group_1;
     compute_desc.compile_time_args = compute_kernel_args_group_1;
@@ -108,7 +108,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
         };
 
         KernelDescriptor compute_desc_2;
-        compute_desc_2.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
+        compute_desc_2.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
         compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc_2.core_ranges = core_group_2;
         compute_desc_2.compile_time_args = compute_kernel_args_group_2;

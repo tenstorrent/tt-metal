@@ -223,7 +223,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     };
 
     const KernelDescriptor::CompileTimeArgs reader_ct_args = {(std::uint32_t)in_cb_id};
-    const KernelDescriptor::CompileTimeArgs compute_ct_args = {1, num_tile_per_core};
 
     // calculate data movement runtime arguments: every core has the same runtime args
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
@@ -242,11 +241,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     KernelDescriptor compute_kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp",
         .core_ranges = all_cores,
-        .compile_time_args = compute_ct_args,
+        .compile_time_args = {},
         .defines = defines_relu,
-        .common_runtime_args = {},
+        .common_runtime_args = {num_tile_per_core},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
     };
 

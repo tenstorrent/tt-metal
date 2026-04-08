@@ -74,36 +74,12 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
-
     bool math_approx_mode = false;
-    tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1});
-
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2});
-    }
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp",
+        all_cores,
+        tt::tt_metal::ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .math_approx_mode = math_approx_mode});
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -126,6 +102,8 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
             unary_writer_kernel_id,
             core,
             {dst_buffer1_address, dst_buffer2_address, num_tiles_per_core, num_tiles_written});
+
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_per_core});
         num_tiles_written += num_tiles_per_core;
     }
 
