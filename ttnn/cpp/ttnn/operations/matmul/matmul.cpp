@@ -17,6 +17,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include <tt_stl/span.hpp>
 
 namespace ttnn::operations::matmul {
 
@@ -359,7 +360,41 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id};
-    return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
+    auto out_tensor = bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
+
+    // Adjust logical shape to honor broadcasting semantics with 1D bias (e.g., bias [1, 1, N] + matmul [M, N] -> [1, M,
+    // N])
+    if (bias.has_value()) {
+        const auto& bias_shape = bias.value().logical_shape();
+        const auto& out_shape = out_tensor.logical_shape();
+        // Reshape when bias has higher rank to reflect broadcasted leading dims
+        if (bias_shape.rank() > out_shape.rank()) {
+            std::vector<uint32_t> new_shape;
+            new_shape.reserve(bias_shape.rank());
+            for (int i = 0; i < static_cast<int>(bias_shape.rank()) - 2; ++i) {
+                new_shape.push_back(static_cast<uint32_t>(bias_shape[i]));
+            }
+            new_shape.push_back(static_cast<uint32_t>(out_shape[-2]));
+            new_shape.push_back(static_cast<uint32_t>(out_shape[-1]));
+            ttsl::Span<const uint32_t> span(new_shape.data(), new_shape.size());
+            out_tensor = ttnn::reshape(out_tensor, ttnn::Shape(span));
+        }
+    }
+    // If user provided an output tensor with a different rank, align to that logical shape
+    if (optional_output_tensor.has_value()) {
+        const auto& desired = optional_output_tensor->logical_shape();
+        const auto& current = out_tensor.logical_shape();
+        if (desired.rank() != current.rank()) {
+            out_tensor = ttnn::reshape(out_tensor, desired);
+        }
+    }
+
+    // if both bias and optional_output_tensor are provided, and the rank of the optional_output_tensor is higher than
+    // the rank of the bias, then the output tensor should be reshaped to the rank of the optional_output_tensor
+    // validation for bias shape (currently) => what if it has wrong dimension...
+    // broad casting rules shouldn't be violated (fine grained checks needed)
+    // which bias to be suporrted and which needs to be treated as error...
+    return out_tensor;
 }
 
 std::vector<Tensor> matmul_batched_weights(
