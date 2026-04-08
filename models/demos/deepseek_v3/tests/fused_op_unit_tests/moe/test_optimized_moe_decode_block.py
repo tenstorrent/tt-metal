@@ -19,7 +19,6 @@ from ttnn.experimental.moe.utils import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.nightly.tg.ccl.moe.test_all_to_all_dispatch_metadata_6U import get_shared_expert_to_device_map
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -1015,7 +1014,7 @@ def test_optimized_moe_decode_block(
             hidden_size,
             select_experts_k,
         )
-        # append shared exprts if necessary
+        # append shared experts if necessary
         if shared_expert_ids_to_devices is not None:
             torch_combine_golden = _add_shared_experts_to_combine_golden(
                 batch,

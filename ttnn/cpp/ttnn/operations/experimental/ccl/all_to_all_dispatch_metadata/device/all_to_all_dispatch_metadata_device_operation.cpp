@@ -113,6 +113,11 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
         "Expert mapping tensor first dimension must equal number of devices ({}), got {}",
         expected_devices,
         mapping_shape[0]);
+
+    const auto& shared_expert_ids = operation_attributes.shared_expert_ids;
+    if (shared_expert_ids.has_value()) {
+        TT_FATAL(!shared_expert_ids->empty(), "If shared_expert_ids is provided it must not be empty");
+    }
 }
 
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_hit(
@@ -210,6 +215,7 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         auto preallocated_scores_spec = output_tensors[2].tensor_spec();
         return {preallocated_output_spec, preallocated_indices_spec, preallocated_scores_spec};
     }
+
     return {output_tokens_spec, indices_spec, scores_spec};
 }
 

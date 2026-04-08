@@ -870,11 +870,7 @@ def attach_golden_function(
 
 def create_module_if_not_exists(module_name):
     if module_name in sys.modules:
-        existing_module = sys.modules[module_name]
-        # If it's already a package (has __path__), keep it as is
-        if hasattr(existing_module, "__path__"):
-            return existing_module
-        return existing_module
+        return sys.modules[module_name]
 
     # Recursively create parent modules if they don't exist
     parent_module_name, _, child_module_name = module_name.rpartition(".")

@@ -384,7 +384,6 @@ import ttnn.experimental_loader.golden_functions
 # This allows us to add new experimental modules without conflicting with experimental_loader
 if "ttnn.experimental" in sys.modules:
     import ttnn._experimental
-    import pkgutil
 
     # Discover all submodules in _experimental
     for _, name, ispkg in pkgutil.iter_modules(ttnn._experimental.__path__):

@@ -67,7 +67,8 @@ def map_shared_experts(
     import torch
 
     # assuming [devices, experts] -> linearized mesh coordinate of owning device
-    assert len(expert_mapping_tensor.shape) == 2
+    if len(expert_mapping_tensor.shape) != 2:
+        raise RuntimeError(f"Invalid shape of mapping tensor. Expected: 2. Got: {len(expert_mapping_tensor.shape)}")
 
     devices = expert_mapping_tensor.shape[0]
     routed_experts = expert_mapping_tensor.shape[1]

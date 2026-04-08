@@ -130,8 +130,8 @@ void kernel_main() {
 
             if constexpr (num_shared_experts > 0) {
                 auto* l1_scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-                for (uint32_t i = 0; i < num_shared_experts; ++i) {
-                    l1_scores_ptr[selected_experts_k + i] = bf16_one;
+                for (uint32_t e = 0; e < num_shared_experts; ++e) {
+                    l1_scores_ptr[selected_experts_k + e] = bf16_one;
                 }
             }
         }
