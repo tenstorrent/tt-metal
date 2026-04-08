@@ -3,13 +3,14 @@
 
 """Test Gemma 4 model config initialization on TT device."""
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def test_model_config():
