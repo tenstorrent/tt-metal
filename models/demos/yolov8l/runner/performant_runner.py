@@ -16,6 +16,8 @@ class YOLOv8lPerformantRunner:
         self,
         device,
         device_batch_size,
+        inp_h=None,
+        inp_w=None,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
         mesh_mapper=None,
@@ -30,6 +32,8 @@ class YOLOv8lPerformantRunner:
         self.runner_infra = YOLOv8lPerformanceRunnerInfra(
             device,
             device_batch_size,
+            inp_h=inp_h,
+            inp_w=inp_w,
             mesh_mapper=self.mesh_mapper,
             mesh_composer=self.mesh_composer,
             weights_mesh_mapper=self.weights_mesh_mapper,
