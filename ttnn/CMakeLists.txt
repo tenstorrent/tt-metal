@@ -293,6 +293,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gdn_fused/gdn_fused_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
@@ -705,6 +706,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
+        TTNN::Ops::Experimental::GdnFused
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -956,6 +958,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
+add_subdirectory(cpp/ttnn/operations/experimental/gdn_fused)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)

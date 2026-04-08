@@ -31,6 +31,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/gdn_fused/gdn_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
@@ -118,6 +119,7 @@ void py_module(nb::module_& mod) {
 
     copy::detail::bind_typecast(mod);
 
+    gdn_fused::detail::bind_experimental_gdn_fused_operations(mod);
     paged_cache::detail::bind_experimental_paged_cache_operations(mod);
     matmul::detail::bind_attn_matmul(mod);
     matmul::detail::bind_attn_matmul_from_cache(mod);
