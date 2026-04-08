@@ -86,6 +86,10 @@ autograd::TensorPtr sharded_cross_entropy_loss(
     if (targets_val.logical_shape().rank() == 2U) {
         targets_val = ttnn::reshape(targets_val, ttnn::Shape({B, 1U, S, 1U}));
     }
+    // UINT32 row-major with last dim 1 cannot typecast on WH (needs last padded dim % 32).
+    if (targets_val.layout() == ttnn::Layout::ROW_MAJOR) {
+        targets_val = ttnn::to_layout(targets_val, ttnn::Layout::TILE);
+    }
     auto targets_f32 = ttnn::typecast(targets_val, ttnn::DataType::FLOAT32);
 
     // one_hot: [B,1,S,1] == [1,1,1,local_V]  →  [B,1,S,local_V]  (broadcast)
