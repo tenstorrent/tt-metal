@@ -132,6 +132,12 @@ public:
 
     // Getters:
 
+    /**
+     * If MeshTensor is in a default constructed state.
+     * This will be true for a default constructed MeshTensor or a MeshTensor in a move-from state.
+     */
+    bool has_value() const;
+
     const TensorSpec& tensor_spec() const;
 
     /**

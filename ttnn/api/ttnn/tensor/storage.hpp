@@ -57,7 +57,7 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    HostTensor tensor;
+    std::shared_ptr<HostTensor> tensor_;
 };
 
 // DeviceStorage is a wrapper around the MeshTensor to fit the semantics of ttnn::Tensor.
@@ -233,7 +233,5 @@ private:
     std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder_;
     // End experimental features
 };
-
-using Storage = std::variant<HostStorage, DeviceStorage>;
 
 }  // namespace tt::tt_metal

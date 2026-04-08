@@ -56,23 +56,23 @@ HostTensor create_dummy_host_tensor(DistributedHostBuffer buffer) {
     return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
 }
 
-HostStorage::HostStorage(DistributedHostBuffer buffer) : tensor(create_dummy_host_tensor(std::move(buffer))) {}
+HostStorage::HostStorage(DistributedHostBuffer buffer) : HostStorage(create_dummy_host_tensor(std::move(buffer))) {}
 
-HostStorage::HostStorage(HostTensor tensor) : tensor(std::move(tensor)) {}
+HostStorage::HostStorage(HostTensor tensor) : tensor_(std::make_shared<HostTensor>(std::move(tensor))) {}
 
 HostStorage::HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology) :
-    tensor(HostTensor(other.buffer(), std::move(spec), std::move(topology))) {}
+    HostStorage(HostTensor(other.buffer(), std::move(spec), std::move(topology))) {}
 
 HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology) :
-    tensor(HostTensor(std::move(other.tensor), std::move(spec), std::move(topology))) {}
+    HostStorage(HostTensor(std::move(*other.tensor_), std::move(spec), std::move(topology))) {}
 
-const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
+const DistributedHostBuffer& HostStorage::buffer() const { return tensor_->buffer(); }
 
-const HostTensor& HostStorage::host_tensor() const { return tensor; }
-HostTensor& HostStorage::host_tensor() { return tensor; }
+const HostTensor& HostStorage::host_tensor() const { return *tensor_; }
+HostTensor& HostStorage::host_tensor() { return *tensor_; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
-    return HostStorage(tensor.transform(callable));
+    return HostStorage(tensor_->transform(callable));
 }
 
 // MeshTensor lifetime holder:
@@ -102,7 +102,11 @@ struct DeviceStorage::MeshTensorHolder {
     States state_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
-    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {}
+    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {
+        TT_FATAL(
+            std::get<Allocated>(state_).mesh_tensor_.has_value(),
+            "MeshTensor must not be in default constructed state.");
+    }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
 
