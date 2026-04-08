@@ -47,6 +47,47 @@ An example with the different features available is shown below:
         DEVICE_PRINT_DATA1("this is the data movement kernel on noc 1\n");
     }
 
+Strings
+^^^^^^^
+
+Runtime ``const char*`` pointers are printed as hex addresses since the host cannot read device memory.
+To print the actual string content, use ``CTSTR()`` which stores the string in the ELF at compile time
+so the host can resolve it:
+
+.. code-block:: c++
+
+    const char* s = "Hello world!";
+    DEVICE_PRINT("Pointer: {}\n", s);               // prints: Pointer: 0x12345678
+    DEVICE_PRINT("String: {}\n", CTSTR("Hello!"));  // prints: String: Hello!
+
+Enums
+^^^^^
+
+Enum types are supported natively. When DWARF debug info is present in the ELF, enum values are
+printed as their symbolic names. Use ``{:#}`` to include the fully-qualified type name:
+
+.. code-block:: c++
+
+    enum class Color : uint8_t { Red = 0, Green = 1, Blue = 2 };
+    DEVICE_PRINT("Color: {}\n", Color::Green);    // prints: Color: Green
+    DEVICE_PRINT("Color: {:#}\n", Color::Blue);   // prints: Color: Color::Blue
+
+Flag enums (with ``operator|``) are detected at compile time and printed with ``|`` separators:
+
+.. code-block:: c++
+
+    enum class Flags : uint32_t { A = 1, B = 2, C = 4 };
+    constexpr Flags operator|(Flags a, Flags b) {
+        return static_cast<Flags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    }
+    DEVICE_PRINT("Flags: {}\n", Flags::A | Flags::C);    // prints: Flags: A | C
+    DEVICE_PRINT("Flags: {:#}\n", Flags::A | Flags::C);  // prints: Flags: Flags::A | Flags::C
+
+If no DWARF debug info is available, enum values are printed as ``(TypeName)integer``.
+
+Circular Buffers
+^^^^^^^^^^^^^^^^
+
 Data from Circular Buffers can be printed using the ``TileSlice`` object. It can be constructed as described below, and fed directly to a ``DEVICE_PRINT`` call.
 
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
