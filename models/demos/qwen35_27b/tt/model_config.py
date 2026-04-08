@@ -242,6 +242,14 @@ class Qwen35ModelArgs(ModelArgs):
         if hasattr(self, "_real_n_kv_heads"):
             self.n_kv_heads = self._real_n_kv_heads
 
+        # ── MLP core grid override ──────────────────────────────────────
+        # Base class find_grid_k_n requires both K and N tile counts to be
+        # divisible by num_cores, but DRAM-sharded matmul only needs K.
+        # For dim=5120 (K_tiles=160), find_grid gives 32 cores (4x8) vs 8.
+        k_tiles = self.dim // TILE_SIZE
+        rows, cols = self.find_grid(k_tiles)
+        self.mlp_core_grid = ttnn.CoreGrid(x=cols, y=rows)
+
         # ── Qwen3.5-specific overrides ──────────────────────────────────
         self.rms_norm_add_unit_offset = True
         self.rope_dim = ROPE_DIM
