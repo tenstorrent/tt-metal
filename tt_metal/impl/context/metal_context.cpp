@@ -229,7 +229,10 @@ void MetalContext::initialize(
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
-        get_core_type_from_config(dispatch_core_config_), num_hw_cqs, hal(), is_galaxy_cluster,
+        get_core_type_from_config(dispatch_core_config_),
+        num_hw_cqs,
+        hal(),
+        is_galaxy_cluster,
         rtoptions().get_dram_backed_cq());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());

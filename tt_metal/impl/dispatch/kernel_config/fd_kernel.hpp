@@ -115,8 +115,7 @@ public:
         get_control_plane_(get_control_plane),
         get_dispatch_query_manager_(get_dispatch_query_manager),
         get_max_num_eth_cores_(get_max_num_eth_cores),
-        get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-    }
+        get_reads_dispatch_cores_(get_reads_dispatch_cores) {}
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including

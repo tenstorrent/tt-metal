@@ -116,9 +116,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     reader_thread_pool_(reader_thread_pool),
     prefetcher_dram_aligned_block_size_(
         MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(MetalContext::instance(mesh_device->impl().get_context_id())
-                                .dispatch_mem_map()
-                                .ringbuffer_size()),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance(mesh_device->impl().get_context_id()).dispatch_mem_map().ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
