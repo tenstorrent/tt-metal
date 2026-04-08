@@ -1197,7 +1197,7 @@ def ttnn_graph_report(request):
                 world_size = int(ttnn.distributed_context_get_size())
             else:
                 rank, world_size = 0, 1
-            json_path = report_path / f"graph_capture_{rank}_of_{world_size}.json"
+            json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
             if ttnn.distributed_context_is_initialized():
                 ttnn.distributed_context_barrier()
