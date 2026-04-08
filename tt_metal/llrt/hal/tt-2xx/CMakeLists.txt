@@ -40,4 +40,5 @@ target_link_libraries(
         umd::tt-umd
         TT::STL
         tt-logger::tt-logger
+        xxHash
 )
