@@ -263,20 +263,28 @@ def forward_prefill_deepseek(
     # Step 7: Combine
     combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
 
-    # Step 8: Weighted sum + reduce_scatter
+    # Step 8: Weighted sum + all_reduce
+    # GPT-OSS MLP returns full hidden_size (all_reduce, not reduce_scatter).
     combined_tiled = ttnn.to_layout(combined, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
 
-    # Each dispatch group (column) only processes its subset of experts.
-    # Reduce_scatter across TP axis sums partial results and scatters emb dim.
+    # Local weighted sum over topk dim
+    w_exp = ttnn.unsqueeze(w_reduce, dim=-1)
+    if w_exp.layout != ttnn.TILE_LAYOUT:
+        w_exp = ttnn.to_layout(w_exp, ttnn.TILE_LAYOUT)
+    weighted = ttnn.mul(combined_tiled, w_exp)
+    summed = ttnn.sum(weighted, dim=3)
+
+    # All-reduce across TP axis (full hidden_size on every device)
     if mesh_device.shape[1] > 1:
-        output = pc.reduce_module(combined_tiled, weights=w_reduce)
+        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
     else:
-        w_exp = ttnn.unsqueeze(w_reduce, dim=-1)
-        if w_exp.layout != ttnn.TILE_LAYOUT:
-            w_exp = ttnn.to_layout(w_exp, ttnn.TILE_LAYOUT)
-        weighted = ttnn.mul(combined_tiled, w_exp)
-        output = ttnn.sum(weighted, dim=3)
-    output = ttnn.squeeze(output, dim=0)
+        output = summed
+
+    # Match output rank to 4D
+    while len(output.shape) > 4:
+        output = ttnn.squeeze(output, dim=0)
+    while len(output.shape) < 4:
+        output = ttnn.unsqueeze(output, dim=0)
 
     return output

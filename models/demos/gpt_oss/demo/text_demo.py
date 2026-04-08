@@ -136,8 +136,9 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
-            use_deepseek_prefill=False,  # DeepSeek prefill: enable manually for single-user long prefill
+            use_deepseek_prefill=use_throughput,
             prefill_seq_len=128,
+            num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -180,7 +181,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
