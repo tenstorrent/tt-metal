@@ -59,6 +59,7 @@ class Conv1dConfiguration:
     weights_dtype: ttnn.DataType = ttnn.bfloat16
     dtype: ttnn.DataType = ttnn.bfloat16
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
+    deallocate_input: bool = False
     # slice_strategy: Optional[SliceStrategy] = None
     # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     # fp32_dest_acc_en: bool = False
@@ -209,6 +210,7 @@ def get_conv_configs(
             weights_dtype=conv1d_config.weights_dtype,
             # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             output_layout=conv1d_config.output_layout,
+            deallocate_activation=conv1d_config.deallocate_input,
             # deallocate_activation=conv1d_config.deallocate_activation,
             # reallocate_halo_output=conv1d_config.reallocate_halo_output,
             # enable_act_double_buffer=conv1d_config.enable_act_double_buffer,
@@ -248,6 +250,7 @@ class Conv1d:
         groups: int = 1,
         dtype: ttnn.DataType | None = None,
         activation: str | tuple[str, dict] | None = None,
+        deallocate_input: bool = False,
     ) -> None:
         if device is None:
             raise ValueError("device is required")
@@ -283,6 +286,7 @@ class Conv1d:
             activation=_normalize_conv2d_activation(activation),
             dtype=dtype or ttnn.bfloat16,
             output_layout=output_layout,
+            deallocate_input=deallocate_input,
         )
 
         self.device = device

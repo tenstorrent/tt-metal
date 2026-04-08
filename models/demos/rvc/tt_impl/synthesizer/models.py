@@ -270,6 +270,7 @@ class Generator:
             kernel_size=7,
             stride=1,
             padding="same",
+            deallocate_input=True,
         )
 
         self.ups: list[ConvTranspose1d] = []
@@ -300,6 +301,7 @@ class Generator:
             stride=1,
             padding="same",
             activation="tanh",
+            deallocate_input=True,
         )
         self.cond_linear = None
         if gin_channels != 0:
@@ -459,6 +461,7 @@ class GeneratorNSF:
             kernel_size=7,
             stride=1,
             padding="same",
+            deallocate_input=True,
         )
 
         self.ups: list[ConvTranspose1d] = []
@@ -511,6 +514,7 @@ class GeneratorNSF:
             stride=1,
             padding="same",
             activation="tanh",
+            deallocate_input=True,
         )
         self.cond_linear = Linear(device=device, in_features=gin_channels, out_features=upsample_initial_channel)
 

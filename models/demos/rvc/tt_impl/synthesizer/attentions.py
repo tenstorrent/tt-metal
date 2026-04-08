@@ -208,6 +208,7 @@ class FFN:
             out_channels=out_channels,
             kernel_size=kernel_size,
             padding="same",
+            deallocate_input=True,
         )
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:

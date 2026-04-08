@@ -199,6 +199,7 @@ class ConvFeatureExtractionModel:
                     stride=stride,
                     padding=0,
                     dtype=ttnn.bfloat16,
+                    deallocate_input=True,
                 )
             )
             in_d = dim
@@ -230,6 +231,8 @@ class ConvFeatureExtractionModel:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i, conv in enumerate(self.conv_layers):
+            if i == 3:
+                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             x = conv(x)
             if self.mode == "layer_norm":
                 x = self.layer_norms[i](x)
@@ -391,8 +394,6 @@ class HubertModel:
 
     def __call__(self, source: ttnn.Tensor, output_layer: int) -> ttnn.Tensor:
         x = self.feature_extractor(source)
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-
         x = self.layer_norm(x)
 
         if self.post_extract_proj is not None:

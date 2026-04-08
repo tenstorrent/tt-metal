@@ -130,6 +130,7 @@ class ResBlock1:
                     dilation=d_value,
                     padding="same",
                     activation=("leaky_relu", {"negative_slope": self.lrelu_slope}),
+                    deallocate_input=True,
                 )
             )
             self.convs2.append(
@@ -141,6 +142,7 @@ class ResBlock1:
                     stride=1,
                     dilation=1,
                     padding="same",
+                    deallocate_input=True,
                 )
             )
 
@@ -181,6 +183,7 @@ class ResBlock2:
                     stride=1,
                     dilation=d_value,
                     padding="same",
+                    deallocate_input=True,
                 )
             )
 
