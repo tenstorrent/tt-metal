@@ -11,13 +11,9 @@ equivalent results to the C++ implementation from _ttml.
 import numpy as np
 import pytest
 
+from python_test_utils import param_to_numpy_bf16_current
 import ttnn
 import ttml  # noqa: E402
-
-
-def _param_to_numpy_bf16_current(param):
-    """Read the current BF16-backed value to avoid stale cached FULL views."""
-    return ttnn.to_torch(param.get_value(ttml.autograd.PreferredPrecision.HALF)).float().cpu().numpy()
 
 
 @pytest.fixture
@@ -386,8 +382,8 @@ def test_gradient_flow(sample_data):
 
     cpp_weight_key = [k for k in cpp_params_before.keys() if "weight" in k.lower()][0]
     py_weight_key = [k for k in py_params_before.keys() if "weight" in k.lower()][0]
-    cpp_weight_before = _param_to_numpy_bf16_current(cpp_params_before[cpp_weight_key])
-    py_weight_before = _param_to_numpy_bf16_current(py_params_before[py_weight_key])
+    cpp_weight_before = param_to_numpy_bf16_current(cpp_params_before[cpp_weight_key])
+    py_weight_before = param_to_numpy_bf16_current(py_params_before[py_weight_key])
 
     # Train one step
     lr = 0.1
@@ -423,8 +419,8 @@ def test_gradient_flow(sample_data):
     cpp_params_after = cpp_model.parameters()
     py_params_after = py_model.parameters()
 
-    cpp_weight_after = _param_to_numpy_bf16_current(cpp_params_after[cpp_weight_key])
-    py_weight_after = _param_to_numpy_bf16_current(py_params_after[py_weight_key])
+    cpp_weight_after = param_to_numpy_bf16_current(cpp_params_after[cpp_weight_key])
+    py_weight_after = param_to_numpy_bf16_current(py_params_after[py_weight_key])
 
     # Parameters should have changed
     assert not np.allclose(

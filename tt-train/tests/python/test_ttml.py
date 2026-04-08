@@ -9,17 +9,13 @@ into the ttml Python package, with Python implementations taking precedence.
 """
 
 import inspect
-import pytest
 import numpy as np
+import pytest
 
+from python_test_utils import param_to_numpy_bf16_current
 import ttml  # noqa: E402
 import ttml._ttml  # noqa: E402
 import ttnn
-
-
-def _param_to_numpy_bf16_current(param):
-    """Read the current BF16-backed value to avoid stale cached FULL views."""
-    return ttnn.to_torch(param.get_value(ttml.autograd.PreferredPrecision.HALF)).float().cpu().numpy()
 
 
 def test_ttml_module_imported():
@@ -339,7 +335,7 @@ class TestCppOptimizersWithPythonModules:
 
         # Get initial weight values
         weight_key = [k for k in params.keys() if "weight" in k][0]
-        weight_before = _param_to_numpy_bf16_current(params[weight_key]).copy()
+        weight_before = param_to_numpy_bf16_current(params[weight_key]).copy()
 
         # Create C++ SGD optimizer with the Python module's parameters
         sgd_config = ttml.optimizers.SGDConfig.make(
@@ -370,7 +366,7 @@ class TestCppOptimizersWithPythonModules:
 
         # Verify weights changed
         params_after = model.parameters()
-        weight_after = _param_to_numpy_bf16_current(params_after[weight_key])
+        weight_after = param_to_numpy_bf16_current(params_after[weight_key])
 
         assert not np.allclose(weight_before, weight_after, atol=1e-6), "SGD optimizer should have updated the weights"
 
@@ -400,7 +396,7 @@ class TestCppOptimizersWithPythonModules:
         assert len(weight_keys) >= 2, "Should have both weight1 and weight2"
 
         # Store initial values
-        initial_weights = {k: _param_to_numpy_bf16_current(params[k]).copy() for k in weight_keys}
+        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in weight_keys}
 
         # Create C++ AdamW optimizer
         adamw_config = ttml.optimizers.AdamWConfig.make(
@@ -428,7 +424,7 @@ class TestCppOptimizersWithPythonModules:
         # Verify all weights changed
         params_after = model.parameters()
         for key in weight_keys:
-            weight_after = _param_to_numpy_bf16_current(params_after[key])
+            weight_after = param_to_numpy_bf16_current(params_after[key])
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"AdamW optimizer should have updated {key}"
@@ -466,7 +462,7 @@ class TestCppOptimizersWithPythonModules:
         assert any("inner" in k.lower() for k in param_names), "Should have inner_weight"
 
         # Store initial values
-        initial_weights = {k: _param_to_numpy_bf16_current(params[k]).copy() for k in param_names}
+        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in param_names}
 
         # Create optimizer and train
         sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
@@ -486,7 +482,7 @@ class TestCppOptimizersWithPythonModules:
         # Verify all weights (both outer and inner) were updated
         params_after = model.parameters()
         for key in param_names:
-            weight_after = _param_to_numpy_bf16_current(params_after[key])
+            weight_after = param_to_numpy_bf16_current(params_after[key])
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"Optimizer should have updated nested parameter {key}"
@@ -723,7 +719,7 @@ class TestModuleList:
         params = model.parameters()
 
         # Store initial values
-        initial_weights = {k: _param_to_numpy_bf16_current(params[k]).copy() for k in params.keys()}
+        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in params.keys()}
 
         # Create optimizer and train
         sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
@@ -743,7 +739,7 @@ class TestModuleList:
         # Verify all weights were updated
         params_after = model.parameters()
         for key in initial_weights:
-            weight_after = _param_to_numpy_bf16_current(params_after[key])
+            weight_after = param_to_numpy_bf16_current(params_after[key])
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"Optimizer should have updated parameter {key}"

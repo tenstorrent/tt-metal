@@ -28,6 +28,7 @@ import math
 import numpy as np
 import pytest
 
+from python_test_utils import param_to_numpy_bf16_current
 import ttnn
 import ttml
 from ttml.models import RunnerType, WeightTyingType
@@ -96,11 +97,6 @@ def _count_total_params(model) -> int:
 
 def _count_trainable_tensors(model) -> int:
     return sum(1 for p in model.parameters().values() if p.get_requires_grad())
-
-
-def _param_to_numpy_bf16_current(param):
-    """Read the current BF16-backed value to avoid stale cached FULL views."""
-    return ttnn.to_torch(param.get_value(ttml.autograd.PreferredPrecision.HALF)).float().cpu().numpy()
 
 
 # =============================================================================
@@ -702,7 +698,7 @@ class TestLoraTrainingStep:
         frozen_before = {}
         lora_before = {}
         for name, param in lora_model.parameters().items():
-            arr = _param_to_numpy_bf16_current(param).copy()
+            arr = param_to_numpy_bf16_current(param).copy()
             if param.get_requires_grad():
                 lora_before[name] = arr
             else:
@@ -731,12 +727,12 @@ class TestLoraTrainingStep:
         optimizer.step()
 
         for name, before in frozen_before.items():
-            after = _param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
             assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():
-            after = _param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
             if not np.allclose(before, after, atol=1e-6):
                 any_changed = True
                 break
@@ -752,7 +748,7 @@ class TestLoraTrainingStep:
         frozen_before = {}
         lora_before = {}
         for name, param in lora_model.parameters().items():
-            arr = _param_to_numpy_bf16_current(param).copy()
+            arr = param_to_numpy_bf16_current(param).copy()
             if param.get_requires_grad():
                 lora_before[name] = arr
             else:
@@ -781,12 +777,12 @@ class TestLoraTrainingStep:
         optimizer.step()
 
         for name, before in frozen_before.items():
-            after = _param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
             assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():
-            after = _param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
             if not np.allclose(before, after, atol=1e-6):
                 any_changed = True
                 break
