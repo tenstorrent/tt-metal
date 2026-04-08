@@ -199,6 +199,8 @@ class ModelPipeline:
         iteration = 0
         start_time = time.time()
         num_emits = 0
+        num_writes = 0
+        num_reads = 0
         signal_to_exit = False
         while len(generated_tokens) < max_new_tokens or signal_to_exit:
             iteration += 1
@@ -207,7 +209,11 @@ class ModelPipeline:
                 f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
             )
 
-            result = pending.popleft() if pending else self.model.read_result()
+            if pending:
+                result = pending.popleft()
+            else:
+                result = self.model.read_result()
+                num_reads += 1
 
             print("Got MD from Device: ")
             print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
@@ -274,6 +280,12 @@ class ModelPipeline:
                 result.token_1,
                 result.token_1_pos,
             )
+            num_writes += 2
+
+        while num_reads < num_writes:
+            self.model.read_result()
+            num_reads += 1
+
         end_time = time.time()
         print(f"Time taken: {end_time - start_time} seconds")
         print(f"Tokens per second: {num_emits / (end_time - start_time)}")
