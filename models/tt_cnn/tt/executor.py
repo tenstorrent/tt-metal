@@ -39,7 +39,6 @@ class Executor(ABC):
         Base implementation is a no-op; executors that require cross-CQ ordering
         (e.g. MultiCQTracedModelPipelinedIOExecutor) must override this.
         """
-        pass
 
 
 class ModelExecutor(Executor):
