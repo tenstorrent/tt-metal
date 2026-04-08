@@ -194,9 +194,11 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     torch.manual_seed(0)
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
-    pad_value = 1.0 if op == "prod" else None
-    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
-    # ttnn.fill_implicit_tile_padding(ttnn_tensor, -42) #implicit padding issue. - failed when padded with -42 instead of 1.0
+    # pad_value = 1.0 if op == "prod" else None
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)  # pad_value=pad_value)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_tensor, 42
+    )  # implicit padding issue. - failed when padded with -42 instead of 1.0, with 42 for min
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
 
