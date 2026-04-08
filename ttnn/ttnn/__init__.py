@@ -455,7 +455,6 @@ from ttnn.operations.pool import (
     prepare_grid_sample_grid,
 )
 
-from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

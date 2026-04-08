@@ -286,7 +286,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
@@ -669,7 +668,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::IsIn
@@ -918,7 +916,6 @@ add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
-add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
