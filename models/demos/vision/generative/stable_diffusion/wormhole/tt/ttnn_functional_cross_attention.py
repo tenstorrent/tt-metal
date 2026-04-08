@@ -675,10 +675,10 @@ class cross_attention:
                     num_heads=heads,
                 )
             else:
-                qkv_out = reshard_to(qkv_out, (8, 2), ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+                qkv_out = ttnn.to_memory_config(qkv_out, ttnn.L1_MEMORY_CONFIG)
                 query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
                     qkv_out,
-                    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                     num_heads=heads,
                 )
                 query = reshard_to(query, (2, 8), ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
