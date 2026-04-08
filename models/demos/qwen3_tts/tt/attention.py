@@ -222,12 +222,16 @@ class Attention(LightweightModule):
         batch_size = x.shape[0]
         is_decode = mode == "decode"
 
+        # Use DRAM for attention linear ops - L1 showed no benefit and adds overhead
+        linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+
         # QKV projection
-        xqkv = ttnn.linear(
-            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        xqkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=linear_mem_cfg)
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
+        # Note: Unlike Qwen VL, we can't use nlp_create_qkv_heads_decode because Qwen3-TTS
+        # has QK-norm (rms_norm) which requires interleaved memory, breaking the sharded flow.
+        # Keep in DRAM to preserve precision for QK-norm.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.num_heads,
@@ -498,7 +502,7 @@ class Attention(LightweightModule):
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=linear_mem_cfg,
         )
         ttnn.deallocate(attn_output)
 

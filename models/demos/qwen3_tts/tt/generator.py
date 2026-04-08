@@ -576,6 +576,48 @@ class Qwen3TTSGenerator:
         generated_tokens = torch.stack(tokens_per_group, dim=-1)
         return generated_tokens
 
+    def sample_tokens_on_device(
+        self,
+        output: Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None],
+    ) -> torch.Tensor:
+        """
+        Sample tokens using on-device argmax (greedy decoding only).
+
+        This is faster than sample_tokens for greedy decoding because:
+        - argmax runs on device instead of CPU
+        - Only transfers token IDs (int32) instead of full logits (bfloat16 * vocab_size)
+
+        Args:
+            output: Tuple of (codec_logits, cp_logits_list, _, _)
+
+        Returns:
+            Token IDs [batch, 16] for all code groups
+        """
+        codec_logits, cp_logits_list, _, _ = output
+
+        tokens_per_group = []
+
+        # Code 0 from Talker's codec_head - on-device argmax
+        codec_logits_untilized = ttnn.untilize(codec_logits, use_multicore=True)
+        token_0_device = ttnn.argmax(codec_logits_untilized, dim=-1, keepdim=False, use_multicore=True)
+        ttnn.deallocate(codec_logits_untilized)
+        token_0 = ttnn.to_torch(token_0_device).squeeze()
+        ttnn.deallocate(token_0_device)
+        tokens_per_group.append(token_0)
+
+        # Codes 1-15 from CodePredictor - on-device argmax
+        for logits in cp_logits_list:
+            logits_untilized = ttnn.untilize(logits, use_multicore=True)
+            token_device = ttnn.argmax(logits_untilized, dim=-1, keepdim=False, use_multicore=True)
+            ttnn.deallocate(logits_untilized)
+            token = ttnn.to_torch(token_device).squeeze()
+            ttnn.deallocate(token_device)
+            tokens_per_group.append(token)
+
+        # Stack all 16 codes: [batch, 16]
+        generated_tokens = torch.stack(tokens_per_group, dim=-1)
+        return generated_tokens
+
     def release_traces(self):
         """Release all captured traces."""
         if self.prefill_trace_id is not None:

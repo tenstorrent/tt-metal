@@ -89,17 +89,21 @@ class MLP(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: str = "prefill") -> ttnn.Tensor:
         """
         Apply SwiGLU MLP.
 
         Args:
             x: Input tensor of shape [batch, 1, seq_len, hidden_size]
+            mode: "prefill" or "decode" - decode uses L1 memory for speed
 
         Returns:
             Output tensor of same shape
         """
         seq_len = x.shape[-2]
+
+        # Use L1 for decode mode (small tensors fit in L1), DRAM for prefill
+        mem_cfg = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         # Reshape for large sequences to fit on device
         if seq_len >= 1024:
@@ -110,7 +114,7 @@ class MLP(LightweightModule):
             x,
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
         # Up projection
@@ -118,7 +122,7 @@ class MLP(LightweightModule):
             x,
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
         # SwiGLU: silu(gate) * up
@@ -126,7 +130,7 @@ class MLP(LightweightModule):
             gate_out,
             up_out,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
         ttnn.deallocate(gate_out)
@@ -137,7 +141,7 @@ class MLP(LightweightModule):
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
         ttnn.deallocate(hidden)

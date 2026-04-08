@@ -158,7 +158,7 @@ class DecoderLayer(LightweightModule):
         # Pre-norm MLP
         residual = x
         x = self.post_attention_layernorm(x)
-        x = self.mlp(x)
+        x = self.mlp(x, mode=mode)
         x = ttnn.add(residual, x)
 
         return x, updated_kv_cache
