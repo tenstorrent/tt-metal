@@ -2672,6 +2672,12 @@ class ModelArgs:
         else:
             self.pad_logits_to_power_of_2 = False
 
+        # Gemma 3 LM-head shard is ~131k tokens/device on 2-chip meshes; default 64k cap leaves
+        # Transformer.sampling / tt_sampling unset and breaks callers that pass sampling_params on decode
+        # (e.g. vLLM sample_on_device_mode decode_only).
+        if self.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+            self.device_sampling_max_per_device_vocab = 192 * 1024
+
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
         if self.num_devices:

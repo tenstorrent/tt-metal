@@ -96,6 +96,11 @@ class ModelArgs(TTModelArgs):
         # On N150/N300, padded per-device vocab is 262400//2 = 131200 (> legacy 64k cap). TTSampling
         # uses uint32 indices when local vocab exceeds uint16; allow device sampling for this shard size.
         self.device_sampling_max_per_device_vocab = 192 * 1024
+        if os.environ.get("GEMMA3_FORCE_HOST_SAMPLING", "").lower() in ("1", "true", "yes"):
+            self.device_sampling_max_per_device_vocab = 64 * 1024
+            logger.info(
+                "GEMMA3_FORCE_HOST_SAMPLING: device_sampling_max_per_device_vocab=64k → Transformer uses host sampling"
+            )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):

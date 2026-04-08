@@ -243,15 +243,42 @@ def test_multimodal_demo_text(
 
     can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
     non_greedy_decoding_on_device = can_sample_on_device and temperature > 0
-    device_sampling_params = (
-        SamplingParams(temperature=temperature, top_k=32, top_p=top_p) if can_sample_on_device else None
-    )
+    if can_sample_on_device:
+        if temperature <= 0:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+        else:
+            device_sampling_params = SamplingParams(temperature=temperature, top_k=32, top_p=top_p)
+    else:
+        device_sampling_params = None
 
-    # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
+    logger.info(
+        f"Gemma3 vision sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
+    )
+    logger.info(
+        f"[VERIFY_SAMPLING] tt_sampling present={model[0].sampling is not None}, "
+        f"_supports_on_device_sampling={getattr(model[0], '_supports_on_device_sampling', False)} "
+        f"→ can_sample_on_device={can_sample_on_device}"
+    )
+    if device_sampling_params is not None:
+        logger.info(
+            f"[VERIFY_SAMPLING] using DEVICE sampling: {device_sampling_params!r} "
+            f"(host: tokenizer + token-id tensors only; no get_batch_sampler softmax/argmax)"
+        )
+    else:
+        logger.info("[VERIFY_SAMPLING] using HOST get_batch_sampler (logits softmax/argmax on CPU)")
+
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=None,
         enable_trace=enable_trace,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+    )
+    generator.warmup_model_decode(
+        kv_cache=None,
+        enable_trace=enable_trace,
+        max_batch_size=max_batch_size,
+        num_blocks=0,
         can_sample_on_device=can_sample_on_device,
         non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
@@ -309,7 +336,7 @@ def test_multimodal_demo_text(
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
+    sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
