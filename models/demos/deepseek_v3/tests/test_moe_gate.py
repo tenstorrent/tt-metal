@@ -194,8 +194,8 @@ def test_forward_pass(
     passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
 
     # due to tie breaking, the first 2 indices are the most important
-    topk_indices_accuracy_required = 1 if mode == "decode" else 0.92
-    accuracy = tt_sorted_indices[:, :2].eq(ref_sorted_indices[:, :2]).float().mean()
+    topk_indices_accuracy_required = 0.93 if mode == "decode" else 0.84
+    accuracy = tt_sorted_indices.eq(ref_sorted_indices).float().mean()
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
     logger.info(f"TopK experts indices accuracy: {accuracy}")
