@@ -7,12 +7,12 @@
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
-    constexpr uint32_t slice_B = get_compile_time_arg_val(5);
+    constexpr uint32_t input_cb_id = get_named_compile_time_arg_val("cb_input_id");
+    constexpr uint32_t intermediate_cb = get_named_compile_time_arg_val("cb_interm_id");
+    constexpr uint32_t output_cb = get_named_compile_time_arg_val("cb_compute_output_id");
+    constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+    constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+    constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);

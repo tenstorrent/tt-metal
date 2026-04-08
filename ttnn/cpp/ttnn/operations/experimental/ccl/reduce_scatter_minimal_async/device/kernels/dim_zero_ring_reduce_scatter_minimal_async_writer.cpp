@@ -25,27 +25,27 @@ using namespace tt::tt_fabric::linear::experimental;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t output_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t slice_B = get_compile_time_arg_val(9);
+constexpr uint32_t my_chip_id = get_named_compile_time_arg_val("my_chip_id");
+constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+constexpr uint32_t cb_compute_output_id = get_named_compile_time_arg_val("cb_compute_output_id");
+constexpr uint32_t cb_reader_output_id = get_named_compile_time_arg_val("cb_reader_output_id");
+constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+constexpr uint32_t num_tiles_to_write_per_packet = get_named_compile_time_arg_val("num_tiles_to_write_per_packet");
+constexpr uint32_t output_num_pages = get_named_compile_time_arg_val("output_num_pages");
+constexpr uint32_t batch_num_pages = get_named_compile_time_arg_val("batch_num_pages");
+constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
 #ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(10);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(11);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(12);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(13);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
 
-constexpr uint32_t num_ct_args = 15;
+constexpr uint32_t num_ct_args = 5;
 #else
-constexpr uint32_t num_ct_args = 10;
+constexpr uint32_t num_ct_args = 0;
 #endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
@@ -111,10 +111,9 @@ void kernel_main() {
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
     auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
 
-    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 
 #ifdef USE_WORKER_MUX

@@ -17,16 +17,16 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t output_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t slice_B = get_compile_time_arg_val(9);
+constexpr uint32_t my_chip_id = get_named_compile_time_arg_val("my_chip_id");
+constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+constexpr uint32_t cb_input_id = get_named_compile_time_arg_val("cb_input_id");
+constexpr uint32_t cb_intermediate_id = get_named_compile_time_arg_val("cb_interm_id");
+constexpr uint32_t cb_reader_output_id = get_named_compile_time_arg_val("cb_reader_output_id");
+constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+constexpr uint32_t output_num_pages = get_named_compile_time_arg_val("output_num_pages");
+constexpr uint32_t batch_num_pages = get_named_compile_time_arg_val("batch_num_pages");
+constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -47,12 +47,11 @@ void kernel_main() {
     arg_idx++;  // start_pages_read_in_row (unused by dim0 kernel)
     arg_idx++;  // start_row_offset (unused by dim0 kernel)
 
-    constexpr uint32_t ct_idx = 10;
+    constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
     auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 
     uint32_t sem_target = 0;
