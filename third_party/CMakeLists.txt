@@ -25,6 +25,22 @@ if(NOT HWLOC_LIBRARY)
 endif()
 
 ############################################################################################################################
+# xxHash : https://github.com/Cyan4973/xxHash
+############################################################################################################################
+
+CPMAddPackage(
+    NAME xxHash
+    GITHUB_REPOSITORY Cyan4973/xxHash
+    GIT_TAG v0.8.2
+    DOWNLOAD_ONLY YES
+)
+if(xxHash_ADDED)
+    add_library(xxHash INTERFACE)
+    add_library(xxHash::xxHash ALIAS xxHash)
+    target_include_directories(xxHash SYSTEM INTERFACE "$<BUILD_INTERFACE:${xxHash_SOURCE_DIR}>")
+endif()
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
