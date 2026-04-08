@@ -26,9 +26,9 @@ BF16 golden: torch.mean(bf16_input.float(), dim=...).to(torch.bfloat16)
     path should also follow.
 
 FP32 golden: torch.mean(fp32_input, dim=...)
-  - PyTorch FP32 accumulation (same precision as device).
-  - Both device and PyTorch use FP32 arithmetic; differences arise from
-    operation ordering (tile-based vs sequential).
+  - PyTorch uses true IEEE 754 float32 accumulation.
+  - Unless the API uses SFPU-based true float32 accumulation kernels, the
+    tile engine accumulates in TF32, so accuracy may be lower / ULP higher.
 
 ULP is measured in the output dtype (BF16 or FP32).  Elements where
 |golden| is very small relative to the tensor's dynamic range are excluded
@@ -76,7 +76,7 @@ def _golden_mean_bf16(input_bf16: torch.Tensor, dim, keepdim: bool) -> torch.Ten
 
 
 def _golden_mean_fp32(input_fp32: torch.Tensor, dim, keepdim: bool) -> torch.Tensor:
-    """PyTorch FP32 mean — same accumulation width as device."""
+    """PyTorch IEEE 754 float32 mean; tile engine accumulates in TF32 unless SFPU kernels are used."""
     return torch.mean(input_fp32, dim=dim, keepdim=keepdim)
 
 
@@ -218,7 +218,9 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_des
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32: tile vs sequential ordering; sweeps add large 2D HW reductions—BH hit ~7.3e5 ULP class.
+# FP32: unless the API uses SFPU-based true float32 accumulation, the tile engine accumulates in
+# TF32, so accuracy may be lower / ULP higher than the IEEE 754 float32 reference (PyTorch).
+# Sweeps add large 2D HW reductions—BH hit ~7.3e5 ULP class.
 # fp32_dest_acc_en=True is required for FP32 inputs (device enforces this).
 _FP32_ULP_THRESHOLD = 800_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001

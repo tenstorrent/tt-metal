@@ -11,6 +11,8 @@ BF16 golden: torch.ops.aten._softmax.default(x, dim, half_to_float=False)
 
 FP32 golden: the same ATen op with FP32 input x.
   FP32 tests use fp32_dest_acc_en=True only (required on BH for FP32 softmax).
+  Unless the API uses SFPU-based true float32 accumulation kernels, the
+  tile engine accumulates in TF32, so accuracy may be lower / ULP higher.
   wide_uniform stress is BF16-only and restricted to softmax over H (dim=-2);
   wide_uniform over W is not covered here due to known mismatches on BH.
 

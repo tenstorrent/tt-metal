@@ -10,7 +10,8 @@ BF16 golden: torch.nn.functional.layer_norm on BF16 input (same dtype as device)
   FP32-accumulated arithmetic—matching the best-practice reference.
 
 FP32 golden: torch.nn.functional.layer_norm on FP32 input.
-  Differences vs hardware reflect tile-local vs fully sequential ordering.
+  Unless the API uses SFPU-based true float32 accumulation kernels, the
+  tile engine accumulates in TF32, so accuracy may be lower / ULP higher.
 
 BF16 tests parametrize fp32_dest_acc_en=[False, True] to document the accuracy
 cost of BF16-only accumulation and verify the recommended FP32-acc path.

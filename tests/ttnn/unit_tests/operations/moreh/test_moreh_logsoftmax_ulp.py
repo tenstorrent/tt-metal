@@ -10,8 +10,8 @@ BF16 golden: F.log_softmax(bf16_input.float(), dim=...).to(torch.bfloat16)
   FP32-accumulated reference convention used across these ULP tests.
 
 FP32 golden: F.log_softmax(fp32_input, dim=...)
-  Same nominal precision as a full FP32 device path; differences vs hardware
-  reflect operation ordering (tile-local vs fully sequential).
+  Unless the API uses SFPU-based true float32 accumulation kernels, the
+  tile engine accumulates in TF32, so accuracy may be lower / ULP higher.
 
 FP32 inputs require fp32_dest_acc_en=True in the compute kernel config;
 the FP32 ULP tests only exercise that supported combination.
