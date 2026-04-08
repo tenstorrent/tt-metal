@@ -253,7 +253,7 @@ These metrics depend on hardware signals inactive on Blackhole and are automatic
 
 **Architecture Differences**
 
-Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 140 raw counters (after filtering 15 RTL-dead signals) and computes 74 derived metrics. The difference is due to TDMA signals inactive on Blackhole (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off). Metrics that depend on dead signals are automatically hidden from BH output; three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas. Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
+Wormhole and Blackhole expose different sets of raw hardware signals, so the set of available computed metrics also differs by architecture. On Blackhole, some TDMA-related signals are inactive (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off), so metrics that depend on those signals are hidden from BH output; three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas. Blackhole also has additional L1 mux positions (3 extra for Tensix) providing deeper memory visibility. For the authoritative current counts of raw counters and derived metrics for each architecture, see ``tech_reports/PerfCounters/perf-counters.md``.
 
 For detailed hardware counter documentation including register maps and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
 

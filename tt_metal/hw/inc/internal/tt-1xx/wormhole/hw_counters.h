@@ -81,7 +81,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 #else
-// Tensix L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
+// Tensix L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1: WH has unpacker#1/ECC/pack1
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
@@ -104,7 +104,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
 #endif
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
-// Tensix L1 bank 1 (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
+// Tensix L1 bank 1 (MUX_CTRL[4] = 1): packer/risc, ext unpacker, ring1 NOC
 // Port 8: WH has TDMA packer 2
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
     {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},

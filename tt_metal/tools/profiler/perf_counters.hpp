@@ -90,9 +90,9 @@ enum PerfCounterType : uint16_t {
     WAITING_FOR_SFPU_IDLE_0,
     WAITING_FOR_SFPU_IDLE_1,
     WAITING_FOR_SFPU_IDLE_2,
-    THREAD_INSTRUCTIONS_0,
-    THREAD_INSTRUCTIONS_1,
-    THREAD_INSTRUCTIONS_2,
+    THREAD_INSTRUCTIONS_0,  // Deprecated: sel 24-26 are stall cycles, not instruction counts. Kept for enum compatibility.
+    THREAD_INSTRUCTIONS_1,  // Deprecated: see THREAD_STALLS_0/1/2 for the actual counters at these sels.
+    THREAD_INSTRUCTIONS_2,  // Deprecated: no RTL counter exists for per-thread total instruction counts.
     // L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
     L1_0_UNPACKER_0,            // Port 0: Unpacker #0
     L1_0_UNPACKER_1_ECC_PACK1,  // Port 1: Unpacker #1 / ECC / Packer #1
@@ -315,8 +315,8 @@ enum PerfCounterType : uint16_t {
 union PerfCounter {
     struct {
         uint32_t counter_value;
-        uint32_t ref_cnt : 23;
-        uint32_t counter_type : 9;
+        uint32_t ref_cnt : 24;
+        uint32_t counter_type : 8;
     } __attribute__((packed));
     uint64_t raw_data;
 
@@ -338,17 +338,6 @@ static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-b
 
 namespace kernel_profiler {
 
-constexpr PerfCounterGroup counter_groups[] = {
-    PerfCounterGroup::FPU,
-    PerfCounterGroup::PACK,
-    PerfCounterGroup::UNPACK,
-    PerfCounterGroup::L1_0,
-    PerfCounterGroup::L1_1,
-    PerfCounterGroup::INSTRN,
-    PerfCounterGroup::L1_2,
-    PerfCounterGroup::L1_3,
-    PerfCounterGroup::L1_4};
-constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_groups[0]);
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;

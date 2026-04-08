@@ -265,7 +265,7 @@ def main():
                     f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
-        # Validate L1 bank mutual exclusion - L1_0, L1_1, L1_4 share hardware registers
+        # Validate L1 bank mutual exclusion - all L1 banks (l1_0, l1_1, l1_2, l1_3, l1_4) share hardware mux
         l1_banks_enabled = []
         if bitfield & (1 << 3):
             l1_banks_enabled.append("l1_0")
