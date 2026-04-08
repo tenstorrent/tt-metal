@@ -209,6 +209,8 @@ def run_distributed_rms_norm_decode_impl(
         ref_lnorm = get_torch_rms(input_tensor_torch[i], [3], gamma_torch[i], epsilon)
         passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
         logger.info(f"Iteration {i}: {output}")
+        if not passing:
+            mesh_device.reset_sub_device_stall_group()
         assert passing, f"PCC check failed for iteration {i}"
 
     if trace_mode:
