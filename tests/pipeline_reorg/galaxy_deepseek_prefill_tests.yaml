@@ -18,6 +18,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "8x4 and random and max_sl and check_pcc and balanced" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k pcc -vvv --tb=short --timeout=900
   test_type: module
   skus:
     bh_galaxy:
