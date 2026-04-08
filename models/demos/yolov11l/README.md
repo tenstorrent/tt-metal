@@ -18,14 +18,14 @@ pytest --disable-warnings models/demos/yolov11l/tests/pcc/test_ttnn_yolov11.py::
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `95` FPS :
+- Runs for both `640x640` and `1280x1280`:
 ```
 pytest --disable-warnings models/demos/yolov11l/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ### Performant Demo with Trace+2CQ
-#### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `157` FPS :
+#### Multi Device (DP=8 on T3K 1x8 mesh):
+- Runs for both `640x640` and `1280x1280`:
   ```
   pytest --disable-warnings models/demos/yolov11l/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
@@ -66,6 +66,6 @@ YOLOv11l SAHI supports TT input size selection via `--tt-input-size {640,1280}`.
 
 ## Details
 - The entry point to the `yolov11l` is located at : `models/demos/yolov11l/tt/ttnn_yolov11.py`
-- Batch Size : `1` (Single Device), `2` (Multi Device).
+- Batch Size : `1` per device (effective batch scales with mesh, e.g. `8` on 1x8).
 - Supported Input Resolutions : `(640, 640)` and `(1280, 1280)` - (Height, Width).
 - Dataset used for evaluation : **COCO-2017**
