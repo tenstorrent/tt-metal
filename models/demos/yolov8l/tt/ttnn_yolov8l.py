@@ -8,7 +8,6 @@ import math
 import ttnn
 from models.demos.yolov8l.tt.tt_yolov8l_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
-from models.tt_cnn.tt.builder import Conv2dConfiguration, L1FullSliceStrategyConfiguration
 
 with open("models/demos/yolov8l/tt/configs.json", "r") as file:
     configs = json.load(file)
@@ -383,72 +382,9 @@ class TtConv:
 
         if self.is_detect_cv2:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        return x, out_h, out_w
+            return x, out_height, out_width
 
-
-def _make_yolov8_conv2d(
-    device,
-    parameters,
-    path,
-    input_params,
-    groups=1,
-    dilation=1,
-    act_block_h=False,
-    block_shard=False,
-    bfloat8=True,
-    change_shard=False,
-    deallocate_activation=False,
-    output_layout=ttnn.TILE_LAYOUT,
-    is_fused=True,
-    is_detect_cv2=False,
-    width_shard=False,
-    act_blocks=32,
-    enable_act_double_buffer=True,
-    reshard_if_not_optimal=False,
-    batch_size=1,
-):
-    _ = change_shard
-    _ = is_fused
-    k, s, pad, out_c, in_c = input_params
-    weight, bias = parameters[path]
-    weights_dtype = ttnn.bfloat8_b if bfloat8 else ttnn.bfloat16
-    output_dtype = ttnn.bfloat8_b if bfloat8 else ttnn.bfloat16
-    activation = None if is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-    configuration = Conv2dConfiguration(
-        input_height=1,
-        input_width=1,
-        in_channels=in_c,
-        out_channels=out_c,
-        batch_size=batch_size,
-        kernel_size=(k, k),
-        stride=(s, s),
-        padding=(pad, pad),
-        groups=groups,
-        dilation=(dilation, dilation),
-        weight=weight,
-        bias=bias,
-        activation=activation,
-        weights_dtype=weights_dtype,
-        output_dtype=output_dtype,
-        output_layout=output_layout,
-        sharding_strategy=_yolov8_sharding_strategy(
-            block_shard=block_shard,
-            width_shard=width_shard,
-            act_block_h=act_block_h,
-            act_blocks=act_blocks,
-            reshard_if_not_optimal=reshard_if_not_optimal,
-        ),
-        slice_strategy=L1FullSliceStrategyConfiguration(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-        enable_act_double_buffer=enable_act_double_buffer,
-        # Match legacy ttnn.Conv2dConfig default (False); True overflows L1 on some detect-head convs.
-        enable_weights_double_buffer=False,
-        deallocate_activation=deallocate_activation,
-        reallocate_halo_output=False,
-    )
-    return TtYolov8Conv2d(configuration, device, batch_size=batch_size, is_detect_cv2=is_detect_cv2)
+        return x, out_height, out_width
 
 
 class TtBottleneck:
@@ -472,7 +408,7 @@ class TtBottleneck:
         self.tilize = tilize
         self.shortcut = shortcut
         self.block_shard = block_shard
-        self.cv1 = _make_yolov8_conv2d(
+        self.cv1 = TtConv(
             device,
             parameters,
             f"{self.path}.cv1",
@@ -483,7 +419,7 @@ class TtBottleneck:
             output_layout=output_layout,
             slice_config=slice_config,
         )
-        self.cv2 = _make_yolov8_conv2d(
+        self.cv2 = TtConv(
             device,
             parameters,
             f"{self.path}.cv2",
@@ -556,7 +492,7 @@ class TtC2f:
             slice_config=self.slice_config,
         )
 
-        self.cv1_b = _make_yolov8_conv2d(
+        self.cv1_b = TtConv(
             device,
             self.parameters,
             f"{self.path}.cv1_b",
@@ -568,7 +504,7 @@ class TtC2f:
             slice_config=self.slice_config,
         )
 
-        self.cv2 = _make_yolov8_conv2d(
+        self.cv2 = TtConv(
             self.device,
             self.parameters,
             f"{self.path}.cv2",
@@ -721,10 +657,10 @@ class TtSppf:
         self.input_params = input_params
         self.batch_size = batch_size
 
-        self.cv1 = _make_yolov8_conv2d(
+        self.cv1 = TtConv(
             device, parameters, f"{path}.cv1", input_params=input_params[0], change_shard=True, block_shard=True
         )
-        self.cv2 = _make_yolov8_conv2d(
+        self.cv2 = TtConv(
             device, parameters, f"{path}.cv2", input_params=input_params[1], change_shard=True, block_shard=True
         )
 
@@ -757,7 +693,7 @@ class TtSppf:
 
 
 class TtDetectCv2:
-    def __init__(self, device, parameters, path, input_params, block_shard=False):
+    def __init__(self, device, parameters, path, input_params, block_shard=False, num_slices=32):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -769,7 +705,7 @@ class TtDetectCv2:
             input_params=input_params[0],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
         )
         self.conv1 = TtConv(
             device,
@@ -778,9 +714,9 @@ class TtDetectCv2:
             input_params=input_params[1],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
         )
-        self.conv2 = _make_yolov8_conv2d(
+        self.conv2 = TtConv(
             device,
             parameters,
             path,
@@ -790,7 +726,7 @@ class TtDetectCv2:
             change_shard=True,
             block_shard=block_shard,
             is_detect_cv2=True,
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
         )
 
     def __call__(self, x):
@@ -806,7 +742,7 @@ class TtDetectCv2:
 
 
 class TtDFL:
-    def __init__(self, device, parameters, path, input_params):
+    def __init__(self, device, parameters, path, input_params, num_slices=32):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -819,7 +755,7 @@ class TtDFL:
             bfloat8=True,
             is_fused=False,
             change_shard=False,
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
         )
 
     def __call__(self, x, c1=16):
@@ -836,7 +772,7 @@ class TtDFL:
 
 
 class TtDetect:
-    def __init__(self, device, parameters, path, input_params, nc=80, ch=(320, 640, 640)):
+    def __init__(self, device, parameters, path, input_params, nc=80, ch=(320, 640, 640), num_slices=32):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -853,14 +789,32 @@ class TtDetect:
             cv3_params = input_params["cv3_params"][i]["input_params"]
 
             self.detect_cv2_modules.append(
-                TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params, block_shard=block_shard)
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv2.{i}",
+                    input_params=cv2_params,
+                    block_shard=block_shard,
+                    num_slices=num_slices,
+                )
             )
             self.detect_cv3_modules.append(
-                TtDetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params, block_shard=block_shard)
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv3.{i}",
+                    input_params=cv3_params,
+                    block_shard=block_shard,
+                    num_slices=num_slices,
+                )
             )
 
         self.dfl_module = TtDFL(
-            device, parameters, f"{path}.dfl", input_params=input_params["dfl_params"]["input_params"]
+            device,
+            parameters,
+            f"{path}.dfl",
+            input_params=input_params["dfl_params"]["input_params"],
+            num_slices=num_slices,
         )
 
     def __call__(self, x, nc=80, ch=(), reg_max=16):
@@ -905,8 +859,9 @@ class TtDetectionModel:
         self.res = res
         self.reg_max = reg_max
         self.batch_size = batch_size
+        detect_num_slices = 16 if min(self.res) <= 640 else 32
 
-        self.conv_0 = _make_yolov8_conv2d(
+        self.conv_0 = TtConv(
             device,
             parameters,
             "model.0",
@@ -914,7 +869,7 @@ class TtDetectionModel:
             act_block_h=False,
             deallocate_activation=True,
         )
-        self.conv_1 = _make_yolov8_conv2d(
+        self.conv_1 = TtConv(
             device,
             parameters,
             "model.1",
@@ -932,7 +887,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
             cv2_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
         )
-        self.conv_3 = _make_yolov8_conv2d(
+        self.conv_3 = TtConv(
             device,
             parameters,
             "model.3",
@@ -949,9 +904,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
             cv2_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
         )
-        self.conv_5 = _make_yolov8_conv2d(
-            device, parameters, "model.5", input_params=[3, 2, 1, 512, 256], block_shard=True
-        )
+        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 512, 256], block_shard=True)
         self.c2f_6 = TtC2f(
             device,
             parameters,
@@ -964,7 +917,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
             cv2_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
         )
-        self.conv_7 = _make_yolov8_conv2d(
+        self.conv_7 = TtConv(
             device,
             parameters,
             "model.7",
@@ -1027,7 +980,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
             cv2_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
         )
-        self.conv_19 = _make_yolov8_conv2d(
+        self.conv_19 = TtConv(
             device, parameters, "model.19", input_params=conv_config["input_params"][5], block_shard=True
         )
         self.c2f_21 = TtC2f(
@@ -1042,7 +995,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
             cv2_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=32),
         )
-        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
+        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config, num_slices=detect_num_slices)
 
     def __call__(self, x):
         N, C, H, W = x.shape
