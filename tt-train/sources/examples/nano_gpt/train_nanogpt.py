@@ -45,13 +45,17 @@ from ttml.models.llama import (
     LlamaConfig,
     LlamaRopeScalingConfig,
 )
+from ttml.models.deepseek import (
+    DeepSeek,
+    DeepSeekConfig,
+)
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
+from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
 # Union type for models that share the same forward(input, mask) interface
-Model = Union[NanoGPT, Llama]
+Model = Union[NanoGPT, Llama, DeepSeek]
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -107,7 +111,7 @@ class ModelConfig:
     Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
     """
 
-    model_type: str = "gpt2"  # "gpt2" or "llama"
+    model_type: str = "gpt2"  # "gpt2", "llama", or "deepseek"
     model_path: str = ""
     vocab_size: int = 256
     embedding_dim: int = 384
@@ -129,6 +133,22 @@ class ModelConfig:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0  # 0 means no scaling
+    # DeepSeek-specific fields
+    inter_dim: Optional[int] = None
+    moe_inter_dim: int = 256
+    n_dense_layers: int = 2
+    n_routed_experts: int = 8
+    n_shared_experts: int = 1
+    n_activated_experts: int = 2
+    n_expert_groups: int = 2
+    n_limited_groups: int = 1
+    score_func: str = "sigmoid"
+    route_scale: float = 2.5
+    q_lora_rank: int = 256
+    kv_lora_rank: int = 128
+    qk_nope_head_dim: int = 64
+    qk_rope_head_dim: int = 32
+    v_head_dim: int = 64
 
 
 class LossAverageMeter:
@@ -450,6 +470,23 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
             config.high_freq_factor = rope_scaling.get("high_freq_factor", config.high_freq_factor)
             config.low_freq_factor = rope_scaling.get("low_freq_factor", config.low_freq_factor)
             config.original_context_length = rope_scaling.get("original_context_length", config.original_context_length)
+    elif config.model_type == "deepseek":
+        config.theta = transformer_config.get("theta", 10000.0)
+        config.inter_dim = transformer_config.get("inter_dim", config.inter_dim)
+        config.moe_inter_dim = transformer_config.get("moe_inter_dim", config.moe_inter_dim)
+        config.n_dense_layers = transformer_config.get("n_dense_layers", config.n_dense_layers)
+        config.n_routed_experts = transformer_config.get("n_routed_experts", config.n_routed_experts)
+        config.n_shared_experts = transformer_config.get("n_shared_experts", config.n_shared_experts)
+        config.n_activated_experts = transformer_config.get("n_activated_experts", config.n_activated_experts)
+        config.n_expert_groups = transformer_config.get("n_expert_groups", config.n_expert_groups)
+        config.n_limited_groups = transformer_config.get("n_limited_groups", config.n_limited_groups)
+        config.score_func = transformer_config.get("score_func", config.score_func)
+        config.route_scale = transformer_config.get("route_scale", config.route_scale)
+        config.q_lora_rank = transformer_config.get("q_lora_rank", config.q_lora_rank)
+        config.kv_lora_rank = transformer_config.get("kv_lora_rank", config.kv_lora_rank)
+        config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
+        config.qk_rope_head_dim = transformer_config.get("qk_rope_head_dim", config.qk_rope_head_dim)
+        config.v_head_dim = transformer_config.get("v_head_dim", config.v_head_dim)
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -720,7 +757,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
         model_config: Universal model configuration
 
     Returns:
-        A NanoGPT or Llama model instance
+        A NanoGPT, Llama, or DeepSeek model instance
     """
     if model_config.model_type == "gpt2":
         nanogpt_exp_config = NanoGPTExperimentalConfig(
@@ -767,6 +804,35 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             rope_scaling=rope_scaling_config,
         )
         return Llama(llama_config)
+    elif model_config.model_type == "deepseek":
+        inter_dim = model_config.inter_dim
+        if inter_dim is None:
+            inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
+        deepseek_config = DeepSeekConfig(
+            vocab_size=model_config.vocab_size,
+            dim=model_config.embedding_dim,
+            inter_dim=inter_dim,
+            moe_inter_dim=model_config.moe_inter_dim,
+            n_layers=model_config.num_blocks,
+            n_dense_layers=model_config.n_dense_layers,
+            n_heads=model_config.num_heads,
+            n_routed_experts=model_config.n_routed_experts,
+            n_shared_experts=model_config.n_shared_experts,
+            n_activated_experts=model_config.n_activated_experts,
+            n_expert_groups=model_config.n_expert_groups,
+            n_limited_groups=model_config.n_limited_groups,
+            score_func=model_config.score_func,
+            route_scale=model_config.route_scale,
+            q_lora_rank=model_config.q_lora_rank,
+            kv_lora_rank=model_config.kv_lora_rank,
+            qk_nope_head_dim=model_config.qk_nope_head_dim,
+            qk_rope_head_dim=model_config.qk_rope_head_dim,
+            v_head_dim=model_config.v_head_dim,
+            max_seq_len=model_config.max_sequence_length,
+            rope_theta=model_config.theta,
+            runner_type=model_config.runner_type,
+        )
+        return DeepSeek(deepseek_config)
     else:
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
@@ -1236,6 +1302,7 @@ def main():
 
             # Create model
             model = create_model_from_config(model_config)
+            summary(model)
 
             # Count parameters
             total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
@@ -1338,6 +1405,10 @@ def main():
                 input_tokens, target_tokens = collate_fn(batch_samples, seq_len)
                 actual_batch_size = batch_end - batch_start
 
+                # Composite SDPA (used by DeepSeek) has no built-in causal masking,
+                # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
+                # its native causal mode when mask is None.
+                attn_mask = mask if model_config.model_type == "deepseek" else None
                 loss_float, step_time, should_step = train_step(
                     model,
                     optimizer,
@@ -1345,7 +1416,7 @@ def main():
                     global_step,
                     input_tokens,
                     target_tokens,
-                    None,
+                    attn_mask,
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
