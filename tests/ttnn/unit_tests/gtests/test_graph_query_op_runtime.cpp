@@ -25,7 +25,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
-#include "common/tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -46,7 +45,7 @@ protected:
 
     void SetUp() override {
         std::srand(0);
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         device_holder_ = ttnn::open_mesh_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
         device_ = device_holder_.get();

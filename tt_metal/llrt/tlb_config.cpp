@@ -13,7 +13,6 @@
 
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include <umd/device/arch/blackhole_implementation.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -61,7 +60,7 @@ void configure_static_tlbs(
         case tt::ARCH::BLACKHOLE:
             get_static_tlb_size = blackhole::get_static_tlb_size;
             break;
-        default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
+        default: TT_THROW("Configuring static TLBs is not supported for {}", tt::arch_to_str(arch));
     }
 
     std::int32_t address = 0;

@@ -30,7 +30,7 @@
 //         if (!this->validate_dispatch_mode()) {
 //             GTEST_SKIP();
 //         }
-//         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+//         this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 //     }
 
 //     void CreateDeviceAndBeginCapture(

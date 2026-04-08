@@ -26,7 +26,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
             ids.push_back(id);

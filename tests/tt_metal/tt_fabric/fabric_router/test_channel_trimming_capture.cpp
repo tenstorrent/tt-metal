@@ -482,7 +482,7 @@ bool find_pair_for_direction(
 class Fabric1DChannelTrimmingFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }
@@ -611,7 +611,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_RuntimeOptionGette
 class Fabric2DChannelTrimmingFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }
@@ -1218,7 +1218,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
 class Fabric1DChannelTrimmingOverrideFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }
@@ -1281,7 +1281,7 @@ protected:
 class Fabric1DChannelTrimmingCaptureAndOverrideFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }
@@ -1414,7 +1414,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideFixture, UnicastTrafficWithOverride) {
 class Fabric1DChannelTrimmingOverrideChannel0OnlyFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }
@@ -1821,7 +1821,7 @@ TEST(ChannelTrimmingGlobalOverride, ApplyVC0S0S1AndVC1AllToEmptyBaseline) {
 class Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
             should_skip_ = true;
             return;
         }

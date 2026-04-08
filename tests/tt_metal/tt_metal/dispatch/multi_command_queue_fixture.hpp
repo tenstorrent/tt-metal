@@ -35,7 +35,7 @@ protected:
             GTEST_SKIP();
         }
 
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
@@ -104,7 +104,7 @@ protected:
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
 
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
     }
 

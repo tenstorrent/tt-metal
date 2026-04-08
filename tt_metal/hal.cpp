@@ -4,7 +4,6 @@
 
 #include <hal.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include <string>
@@ -24,7 +23,7 @@ tt::ARCH get_arch() { return tt::tt_metal::MetalContext::instance().hal().get_ar
 
 std::string get_arch_name() {
     auto arch_enum = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    return tt::get_string_lowercase(arch_enum);
+    return tt::arch_to_str(arch_enum);
 }
 
 uint32_t get_l1_size() {

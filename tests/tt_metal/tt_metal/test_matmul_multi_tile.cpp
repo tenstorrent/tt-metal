@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         TT_THROW("Command line arguments found exception", e.what());
     }
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+    const tt::ARCH arch = tt::arch_from_str(arch_name);
     pass &= run_matmul(arch, false);
     pass &= run_matmul(arch, true);
 

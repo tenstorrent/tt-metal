@@ -36,7 +36,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
-#include "common/tt_backend_api_types.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -90,7 +89,7 @@ protected:
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
 
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
         switch (arch_) {
@@ -149,7 +148,7 @@ public:
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
 
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
         if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&

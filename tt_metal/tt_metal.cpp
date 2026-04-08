@@ -60,7 +60,7 @@
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include <umd/device/types/arch.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 
@@ -355,7 +355,7 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-std::string get_platform_architecture_name() { return tt::get_string_lowercase(get_platform_architecture({})); }
+std::string get_platform_architecture_name() { return tt::arch_to_str(get_platform_architecture({})); }
 
 IDevice* GetActiveDevice(ChipId device_id) {
     IDevice* device = nullptr;

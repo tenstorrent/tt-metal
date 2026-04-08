@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 
 class GalaxyFixture : public MeshDispatchFixture {
     bool SkipTestSuiteIfNotGalaxyMotherboard() {
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         return !(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32);
     }
@@ -34,7 +34,7 @@ private:
 
 class TGFixture : public MeshDispatchFixture {
     void SkipTestSuiteIfNotTG() {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+        if (tt::arch_from_str(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "This test can only run on Wormhole B0";
         }
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();

@@ -34,7 +34,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel.hpp"
 
 using namespace tt;
@@ -44,7 +43,7 @@ using namespace tt::test_utils::df;
 class N300TestDevice {
 public:
     N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
@@ -214,7 +213,7 @@ int main(int argc, char** argv) {
         log_trace(tt::LogTest, "channel_counts[{}]: {}", i, channel_counts.back());
     }
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    auto arch = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_trace(tt::LogTest, "Need at least 2 devices to run this test");

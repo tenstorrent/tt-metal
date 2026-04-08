@@ -16,7 +16,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "test_host_kernel_common.hpp"
@@ -100,7 +99,7 @@ public:
         log_info(tt::LogTest, "Fabric Reliability Mode: {}", enchantum::to_string(reliability_mode));
 
         // Set up all available devices
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<ChipId> ids;
         ids.reserve(num_devices);
@@ -255,7 +254,7 @@ private:
 protected:
     static void SetUpTestSuite() {
         // Check specifically for Wormhole Galaxy
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
                                   (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
                                    tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster());

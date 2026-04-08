@@ -51,7 +51,7 @@ protected:
 
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
             MeshDispatchFixture::SetUp();
         } else {
@@ -71,7 +71,7 @@ protected:
 
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (this->arch_ == tt::ARCH::BLACKHOLE && num_devices == 2 && num_pci_devices >= 1) {
             MeshDispatchFixture::SetUp();
         } else {
@@ -119,7 +119,7 @@ protected:
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
 
-        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto arch = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (config_.arch.has_value() && *config_.arch != arch) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a machine with architecture {} that does not match the requested "
@@ -189,7 +189,7 @@ protected:
     MeshDeviceFixture4x8DispatchAgnostic() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}}) {}
 
     void SetUp() override {
-        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto arch = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (config_.arch.has_value() && *config_.arch != arch) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a machine with architecture {} that does not match the requested "

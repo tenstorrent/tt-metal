@@ -20,7 +20,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/arch.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
 using namespace tt;

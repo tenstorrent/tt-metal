@@ -25,7 +25,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         // Some CI machines have lots of cards, running all tests on all cards is slow
         // Coverage for multidevices is decent if we just confirm 2 work
@@ -98,7 +98,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
     }
@@ -151,7 +151,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
@@ -166,7 +166,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }

@@ -95,7 +95,7 @@ void read_translation_table(
 }  // namespace unit_tests::basic::test_noc
 
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
-    auto arch = tt::get_arch_from_string(get_umd_arch_name());
+    auto arch = tt::arch_from_str(get_umd_arch_name());
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -165,7 +165,7 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
     ASSERT_TRUE(mesh_device->close());
 }
 TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
-    auto arch = tt::get_arch_from_string(get_umd_arch_name());
+    auto arch = tt::arch_from_str(get_umd_arch_name());
     if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
         GTEST_SKIP();
     }

@@ -15,7 +15,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -71,7 +70,7 @@ protected:
     void SetUp() override {
         this->DetectDispatchMode();
         // Must set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
 
         std::vector<ChipId> ids;

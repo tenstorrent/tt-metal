@@ -11,7 +11,6 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
-#include "tt_backend_api_types.hpp"
 #include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {

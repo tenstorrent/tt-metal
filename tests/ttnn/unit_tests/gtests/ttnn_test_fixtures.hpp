@@ -19,7 +19,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "common/tt_backend_api_types.hpp"
 
 using namespace tt::tt_metal;  // For test
 
@@ -42,7 +41,7 @@ public:
     TTNNFixtureBase(int trace_region_size, int l1_small_size) :
         trace_region_size_(trace_region_size), l1_small_size_(l1_small_size), num_devices_(GetNumAvailableDevices()) {
         std::srand(0);
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
     }
 };
 

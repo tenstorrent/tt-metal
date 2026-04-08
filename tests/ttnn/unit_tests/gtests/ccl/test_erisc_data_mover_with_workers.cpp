@@ -49,7 +49,6 @@
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "common/tt_backend_api_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -81,7 +80,7 @@ void set_edm_runtime_args(
 class N300TestDevice {
 public:
     N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {

@@ -52,7 +52,6 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"

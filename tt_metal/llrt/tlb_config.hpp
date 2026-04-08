@@ -5,7 +5,6 @@
 #pragma once
 
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt_backend_api_types.hpp>
 #include <unordered_map>
 
 #include <umd/device/cluster.hpp>

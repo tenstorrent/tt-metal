@@ -20,7 +20,7 @@ namespace unit_tests::dm::quasar_cache {
 
 // Skip test if not running on Quasar with simulator
 bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    const auto arch = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
     if (arch != tt::ARCH::QUASAR) {
         return true;
     }

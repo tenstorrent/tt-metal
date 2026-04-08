@@ -30,7 +30,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
     }
@@ -90,7 +90,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
     }
 
@@ -106,7 +106,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         if (devices_.empty()) {
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
@@ -194,7 +194,7 @@ protected:
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
         init_max_cbs();
     }
@@ -227,7 +227,7 @@ protected:
         if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         if (needs_recovery_ || !devices_valid_) {
             destroy_shared_devices();
@@ -330,7 +330,7 @@ protected:
             GTEST_SKIP();
         }
 
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices_ < 2) {

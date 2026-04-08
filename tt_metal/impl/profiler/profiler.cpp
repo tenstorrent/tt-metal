@@ -41,7 +41,6 @@
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
 #include "profiler_types.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include "common/filesystem_utils.hpp"
 #include "context/metal_context.hpp"
 #include "context/context_types.hpp"
@@ -1086,9 +1085,8 @@ void dumpJsonNocTraces(
 
 void writeCSVHeader(
     std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency, uint32_t max_compute_cores) {
-    log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
-                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
-                 << std::endl;
+    log_file_ofs << "ARCH: " << tt::arch_to_str(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency
+                 << ", Max Compute Cores: " << max_compute_cores << std::endl;
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
                     "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;

@@ -39,7 +39,7 @@ protected:
         if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
         // These tests are only supported on Wormhole and Blackhole (skip Quasar)
         skip_if_unsupported_arch();
 
@@ -94,7 +94,7 @@ protected:
         if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        arch_ = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         skip_if_unsupported_arch();
 

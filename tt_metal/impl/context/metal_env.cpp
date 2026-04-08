@@ -17,11 +17,11 @@
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
+#include <umd/device/types/arch.hpp>
 #include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
@@ -523,7 +523,7 @@ MetalEnv::~MetalEnv() { this->impl_.reset(); }
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
-std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
+std::string MetalEnv::get_arch_name() const { return tt::arch_to_str(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
 uint32_t MetalEnv::get_l1_size() const {

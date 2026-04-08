@@ -20,7 +20,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -31,7 +30,7 @@ using namespace tt::test_utils;
 
 class DeviceParamFixture : public ::testing::TestWithParam<int> {
 protected:
-    tt::ARCH arch = tt::get_arch_from_string(get_umd_arch_name());
+    tt::ARCH arch = tt::arch_from_str(get_umd_arch_name());
 };
 
 namespace unit_tests_common::basic::test_device_init {

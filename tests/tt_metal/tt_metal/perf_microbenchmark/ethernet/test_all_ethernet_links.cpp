@@ -32,7 +32,6 @@
 
 #include <thread>
 #include "impl/context/metal_context.hpp"
-#include "common/tt_backend_api_types.hpp"
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
@@ -125,7 +124,7 @@ private:
 
 public:
     ConnectedDevicesHelper(const TestParams& params) {
-        this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch = tt::arch_from_str(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<ChipId> ids(this->num_devices, 0);

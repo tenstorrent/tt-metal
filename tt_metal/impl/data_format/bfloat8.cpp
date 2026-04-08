@@ -18,7 +18,6 @@
 #include "math.hpp"
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_backend_api_types.hpp"
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp8_tiles(
