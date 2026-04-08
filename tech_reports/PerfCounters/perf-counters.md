@@ -12,19 +12,21 @@ Each Tensix core contains hardware performance counters organized into five bank
 
 The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides three values per event: **req_cnt** (cycles the event signal was high), **grant_cnt** (cycles the grant/ready signal was high), and **ref_cnt** (total elapsed cycles). From these raw values, the profiler computes derived metrics like utilization (`req_cnt / ref_cnt`), backpressure (`(req_cnt - grant_cnt) / req_cnt`), and cross-bank ratios that combine counters from different banks.
 
-Ethernet (ERISC) cores also contain L1 performance counters with the same interface but different port mappings.
+Ethernet (ERISC) cores contain L1 performance counter hardware, but the MMIO readback path is hardwired to 0 in both WH and BH RTL (`i_l1_perf_cnt_out(64'h0)` in `tt_eth_core.sv`). ERISC perf counters are currently disabled in software.
 
 ## How It Works
 
-1. **Kernel starts**: The firmware calls `start_perf_counter()` which writes the start bit to all enabled counter banks. All counters begin accumulating from zero.
+1. **Kernel starts**: TRISC1 calls `start_perf_counter()` which writes the start bit to all enabled counter banks. All counters begin accumulating from zero.
 
 2. **Kernel runs**: While the kernel executes, each counter increments every cycle its input signal is high. All counters within a bank run simultaneously — there is no multiplexing during measurement.
 
-3. **Kernel ends**: The firmware calls `stop_perf_counter()` which freezes all counters, then reads each one by cycling through `counter_sel` values (which select which counter's output is routed to the read registers). Each counter value is packed into a 64-bit profiler marker and written to the profiler buffer.
+3. **Kernel ends**: TRISC1 calls `stop_perf_counter()` which freezes all counters. The counter values remain latched in the debug registers.
 
-4. **Host reads**: After the kernel completes, the host reads the profiler buffer and decodes each marker into a counter type, value, and reference count.
+4. **BRISC reads counters**: After all TRISCs complete (`wait_ncrisc_trisc()`), BRISC calls `read_perf_counters()` which reads each counter by cycling through `counter_sel` values. Each counter value is packed into a 64-bit profiler marker and written to BRISC's profiler buffer. Between counter groups, BRISC calls `quick_push()` to flush the buffer to DRAM when it fills up. TRISCs cannot do this because they have no NOC access.
 
-5. **Python processes**: `process_ops_logs.py` aggregates raw counter values across cores per operation and computes derived metrics (utilization percentages, backpressure rates, composite ratios). Results are written to CSV and printed to console.
+5. **Host reads**: After the kernel completes, the host reads the profiler data from DRAM and decodes each marker into a counter type, value, and reference count.
+
+6. **Python processes**: `perf_counter_analysis.py` aggregates raw counter values across cores per operation and computes derived metrics (utilization percentages, backpressure rates, composite ratios). Results are written to CSV and printed to console.
 
 ### How to Run
 
@@ -41,7 +43,7 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | | Wormhole | Blackhole |
 |---|---|---|
 | Tensix raw counters | 155 (3 RTL-dead filtered) | 207 (15 RTL-dead filtered) |
-| ERISC raw counters | 16 | 64 |
+| ERISC raw counters | disabled (MMIO readback = 0) | disabled (MMIO readback = 0) |
 | Derived metrics | 59 | 59 |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 3 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), and `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH). The TDMA_UNPACK grant bank 0 (counter_sel 256) measures 4-HF-cycle instructions on WH (vs math-not-blocked-by-src on BH). Grant banks 4-6 (counter_sels 260-262) map to srcB/srcA write-port and overwrite signals in a different order than BH. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
