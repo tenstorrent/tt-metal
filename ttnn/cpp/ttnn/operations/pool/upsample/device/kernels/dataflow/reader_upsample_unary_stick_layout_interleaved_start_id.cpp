@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -16,18 +17,19 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
     const auto s0 = TensorAccessor(src_args, src_addr, page_size);
 
+    experimental::CB in_cb(cb_id_in0);
+    experimental::Noc noc;
+
     const uint32_t end_id = start_page_id + num_pages;
 
     // reader copied the data from DRAM to CB buffer.
     for (uint32_t i = start_page_id; i < end_id; ++i) {
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        uint64_t src_noc_addr = s0.get_noc_addr(i);
+        in_cb.reserve_back(1);
 
-        noc_async_read(src_noc_addr, l1_write_addr, page_size);
+        noc.async_read(s0, in_cb, page_size, {.page_id = i}, {});
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        cb_push_back(cb_id_in0, 1);
+        in_cb.push_back(1);
     }
 }

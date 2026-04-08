@@ -4,7 +4,8 @@
 
 #include <stdint.h>
 
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     // Runtime arguments
@@ -20,24 +21,23 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<2>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_buffer_addr, aligned_stick_nbytes);
 
+    experimental::CB out_cb(cb_id_out);
+    experimental::Noc noc;
+
     // Process sticks assigned to this core
     uint32_t stick_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks; i++) {
         // Wait for data in CB
-        cb_wait_front(cb_id_out, 1);
-
-        // Get L1 read address
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+        out_cb.wait_front(1);
 
         // Write to output DRAM
-        uint64_t dst_noc_addr = output_tensor_accessor.get_noc_addr(stick_id);
-        noc_async_write(l1_read_addr, dst_noc_addr, aligned_stick_nbytes);
+        noc.async_write(out_cb, output_tensor_accessor, aligned_stick_nbytes, {}, {.page_id = stick_id});
 
         // Wait for write to complete
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Pop from CB
-        cb_pop_front(cb_id_out, 1);
+        out_cb.pop_front(1);
 
         stick_id++;
     }

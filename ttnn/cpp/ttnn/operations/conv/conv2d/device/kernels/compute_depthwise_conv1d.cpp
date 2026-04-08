@@ -18,6 +18,7 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #define DEBUG_PRINT 0
 
@@ -25,58 +26,63 @@ ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
 inline void eltwise_mul_and_add_block_v2(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t eltwise_mul_partials_cb_cb_id,
-    uint32_t temp_sum_cb,
-    uint32_t out_cb_id,
+    experimental::CB in0_cb,
+    experimental::CB in1_cb,
+    experimental::CB mul_partials_cb,
+    experimental::CB temp_cb,
+    experimental::CB out_cb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t total_blocks) {
-    uint32_t last_block_idx = total_blocks - 1;
+    const uint32_t in0_cb_id = in0_cb.get_cb_id();
+    const uint32_t in1_cb_id = in1_cb.get_cb_id();
+    const uint32_t mul_partials_cb_id = mul_partials_cb.get_cb_id();
+    const uint32_t temp_cb_id = temp_cb.get_cb_id();
+    const uint32_t out_cb_id = out_cb.get_cb_id();
+
     for (uint32_t i = 0; i < block_num_tiles; i++) {
-        cb_wait_front(in1_cb_id, 1);
-        cb_wait_front(in0_cb_id, 1);
-        cb_reserve_back(eltwise_mul_partials_cb_cb_id, 1);
+        in1_cb.wait_front(1);
+        in0_cb.wait_front(1);
+        mul_partials_cb.reserve_back(1);
         mul_tiles_init(in0_cb_id, in1_cb_id);
         ACQ();
         mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
-        pack_tile(0, eltwise_mul_partials_cb_cb_id);
+        pack_tile(0, mul_partials_cb_id);
         REL();
-        cb_push_back(eltwise_mul_partials_cb_cb_id, 1);
-        cb_pop_front(in0_cb_id, 1);
-        cb_pop_front(in1_cb_id, 1);
+        mul_partials_cb.push_back(1);
+        in0_cb.pop_front(1);
+        in1_cb.pop_front(1);
         if (idx == 0) {
-            copy_tile_to_dst_init_short(eltwise_mul_partials_cb_cb_id);
+            copy_tile_to_dst_init_short(mul_partials_cb_id);
             ACQ();
-            cb_wait_front(eltwise_mul_partials_cb_cb_id, 1);
-            cb_reserve_back(out_cb_id, 1);
-            copy_tile(eltwise_mul_partials_cb_cb_id, 0, 0);
+            mul_partials_cb.wait_front(1);
+            out_cb.reserve_back(1);
+            copy_tile(mul_partials_cb_id, 0, 0);
             pack_tile(0, out_cb_id);
             REL();
-            cb_push_back(out_cb_id, 1);
-            cb_pop_front(eltwise_mul_partials_cb_cb_id, 1);
+            out_cb.push_back(1);
+            mul_partials_cb.pop_front(1);
         } else {
-            add_tiles_init(eltwise_mul_partials_cb_cb_id, out_cb_id);
-            cb_wait_front(eltwise_mul_partials_cb_cb_id, 1);
-            cb_wait_front(out_cb_id, 1);
+            add_tiles_init(mul_partials_cb_id, out_cb_id);
+            mul_partials_cb.wait_front(1);
+            out_cb.wait_front(1);
             ACQ();
-            add_tiles(eltwise_mul_partials_cb_cb_id, out_cb_id, 0, 0, 0);
-            pack_tile(0, temp_sum_cb);
+            add_tiles(mul_partials_cb_id, out_cb_id, 0, 0, 0);
+            pack_tile(0, temp_cb_id);
             REL();
-            cb_push_back(temp_sum_cb, 1);
-            cb_pop_front(eltwise_mul_partials_cb_cb_id, 1);
-            cb_pop_front(out_cb_id, 1);
+            temp_cb.push_back(1);
+            mul_partials_cb.pop_front(1);
+            out_cb.pop_front(1);
 
-            copy_tile_to_dst_init_short(temp_sum_cb);
+            copy_tile_to_dst_init_short(temp_cb_id);
             ACQ();
-            cb_wait_front(temp_sum_cb, 1);
-            cb_reserve_back(out_cb_id, 1);
-            copy_tile(temp_sum_cb, 0, 0);
+            temp_cb.wait_front(1);
+            out_cb.reserve_back(1);
+            copy_tile(temp_cb_id, 0, 0);
             pack_tile(0, out_cb_id);
             REL();
-            cb_push_back(out_cb_id, 1);
-            cb_pop_front(temp_sum_cb, 1);
+            out_cb.push_back(1);
+            temp_cb.pop_front(1);
         }
     }
 }
@@ -120,6 +126,12 @@ void kernel_main() {
 
     constexpr uint32_t num_blocks = in0_num_blocks_h * in0_num_blocks_w;  // num_tokens window
 
+    experimental::CB cb_tilized_in0(tilized_in0_cb_id);
+    experimental::CB cb_in1(in1_cb_id);
+    experimental::CB cb_mul_partials(eltwise_mul_partials_cb);
+    experimental::CB cb_temp_sum(temp_sum_cb);
+    experimental::CB cb_out(out_cb_id);
+
     binary_op_init_common(in0_cb_id, in1_cb_id, out_cb_id);
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -131,14 +143,7 @@ void kernel_main() {
             reconfig_data_format_srca(tilized_in0_cb_id);
             pack_reconfig_data_format(eltwise_mul_partials_cb);
             eltwise_mul_and_add_block_v2(
-                tilized_in0_cb_id,
-                in1_cb_id,
-                eltwise_mul_partials_cb,
-                temp_sum_cb,
-                out_cb_id,
-                in0_block_num_tiles,
-                i,
-                num_blocks);
+                cb_tilized_in0, cb_in1, cb_mul_partials, cb_temp_sum, cb_out, in0_block_num_tiles, i, num_blocks);
 
         }  // for in0_num_blocks_h
     }  // for in0_num_blocks_w

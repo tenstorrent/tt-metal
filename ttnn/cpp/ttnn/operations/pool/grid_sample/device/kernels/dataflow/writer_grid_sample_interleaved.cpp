@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -18,6 +19,9 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
 
+    experimental::CB out_cb(cb_id_out0);
+    experimental::Noc noc;
+
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
 
     // For grid sample: output is row major, each stick is written directly
@@ -25,23 +29,15 @@ void kernel_main() {
     for (uint32_t stick_id = start_stick_id; stick_id < end_stick_id; stick_id++) {
         {
             // Wait for ntiles_c pages in output CB (one full stick)
-            cb_wait_front(cb_id_out0, ntiles_c);
+            out_cb.wait_front(ntiles_c);
 
-            // Get base read address for this stick's data
-            uint64_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+            // Write the complete stick
+            noc.async_write(out_cb, s0, output_stick_size, {}, {.page_id = stick_id});
 
-            // For row major grid sample output, we write one complete stick
-
-            uint64_t dst_noc_addr = s0.get_noc_addr(stick_id);
-
-            // Write the complete stick (ntiles_c * TILE_WIDTH elements)
-            // The data is already laid out correctly in the CB pages
-            noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
-
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
             // Pop the ntiles_c pages we just consumed
-            cb_pop_front(cb_id_out0, ntiles_c);
+            out_cb.pop_front(ntiles_c);
         }
     }
 }

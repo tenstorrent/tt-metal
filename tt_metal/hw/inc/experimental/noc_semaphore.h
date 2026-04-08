@@ -32,8 +32,7 @@ namespace experimental {
  *  - wait(value): Block until the semaphore is set to the specified value.  Does not decrement the semaphore.
  *  - wait_min(value): Block until the semaphore is at least the specified value.  Does not decrement the semaphore.
  *  - set(value): Set the semaphore to the specified value.
- *  - set_multicast(...): Set the semaphore value on multiple cores.
- *  - set_multicast_loopback_src(...): Set the semaphore value on multiple cores including the source.
+ *  - set_multicast(...): Set the semaphore value on multiple cores (use McastMode::INCLUDE_SRC to include sender).
  */
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
@@ -116,7 +115,6 @@ public:
 
     /**
      * @brief Set the semaphore value on multiple cores in a specified rectangular region of the NoC.
-     * @note Sender cannot be part of the multicast destinations.
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x_start The starting X coordinate of the region (inclusive).

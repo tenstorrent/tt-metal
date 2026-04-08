@@ -18,14 +18,14 @@ void kernel_main() {
     int32_t center_y = static_cast<int32_t>(get_arg_val<uint32_t>(6));
     uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
 
-    constexpr uint32_t output_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(1);
     constexpr uint32_t input_batch = get_compile_time_arg_val(2);
     constexpr uint32_t input_height = get_compile_time_arg_val(3);
     constexpr uint32_t input_width = get_compile_time_arg_val(4);
     constexpr uint32_t input_channels = get_compile_time_arg_val(5);
     constexpr uint32_t num_cb_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t fill_cb_id = get_compile_time_arg_val(7);
     constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
     constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t burst_size = get_compile_time_arg_val(10);
@@ -33,9 +33,14 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<11>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes_unaligned);
 
-    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
+    experimental::CB output_cb(output_cb_id);
+    experimental::CB fill_cb(fill_cb_id);
+    experimental::Noc noc;
+    experimental::UnicastEndpoint self_ep;
+
+    uint32_t fill_stick_addr = fill_cb.get_write_ptr();
     if constexpr (fill_is_zero) {
-        zero_out_page<fill_cb_index>(fill_stick_addr);
+        zero_out_page<fill_cb_id>(noc, fill_cb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
@@ -52,8 +57,8 @@ void kernel_main() {
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_burst =
             (num_sticks - local_stick_idx) < burst_size ? (num_sticks - local_stick_idx) : burst_size;
-        cb_reserve_back(output_cb_index, sticks_this_burst);
-        uint32_t l1_write_addr = get_write_ptr(output_cb_index);
+        output_cb.reserve_back(sticks_this_burst);
+        uint32_t write_offset = 0;
 
         for (uint32_t i = 0; i < sticks_this_burst; i++, local_stick_idx++) {
             const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
@@ -82,15 +87,24 @@ void kernel_main() {
             if (x_valid && y_valid) {
                 const uint32_t input_stick_index =
                     batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
-                const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
-                noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes_unaligned);
+                noc.async_read(
+                    input_tensor_accessor,
+                    output_cb,
+                    input_stick_nbytes_unaligned,
+                    {.page_id = input_stick_index},
+                    {.offset_bytes = write_offset});
             } else {
-                noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, input_stick_nbytes_unaligned);
+                noc.async_read(
+                    self_ep,
+                    output_cb,
+                    input_stick_nbytes_unaligned,
+                    experimental::local_addr(fill_stick_addr, noc.get_noc_id()),
+                    {.offset_bytes = write_offset});
             }
-            l1_write_addr += input_stick_nbytes;
+            write_offset += input_stick_nbytes;
         }
 
-        noc_async_read_barrier();
-        cb_push_back(output_cb_index, sticks_this_burst);
+        noc.async_read_barrier();
+        output_cb.push_back(sticks_this_burst);
     }
 }

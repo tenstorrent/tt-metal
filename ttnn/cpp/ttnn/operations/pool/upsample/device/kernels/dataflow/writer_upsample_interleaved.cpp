@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -29,6 +30,9 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_page_size);
 
+    experimental::CB out_cb(cb_id_out0);
+    experimental::Noc noc;
+
     constexpr uint32_t in_width = width / scale_w;
     constexpr uint32_t in_height = height / scale_h;
     uint32_t end_block_id = start_block_id + num_blocks_to_read;
@@ -38,9 +42,7 @@ void kernel_main() {
     uint32_t current_stick = block_height * start_block_id;
 
     for (uint32_t b = start_block_id; b < end_block_id; b++) {
-        cb_wait_front(cb_id_out0, num_tiles_per_block_row);
-
-        uint64_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+        out_cb.wait_front(num_tiles_per_block_row);
 
         for (uint32_t in_block_row = 0; in_block_row < block_height; ++in_block_row) {
             uint32_t curr_index = current_stick % (in_width * in_height);
@@ -48,7 +50,7 @@ void kernel_main() {
             uint32_t x = curr_index / in_width;
             uint32_t y = curr_index % in_width;
 
-            uint64_t read_addr = base_l1_read_addr + in_block_row * output_page_size;
+            uint32_t read_offset = in_block_row * output_page_size;
 
             // calculate the start index where writer will start writing the data.
             // total --> scale_h * scale_w times data will be written to the DRAM.
@@ -57,15 +59,15 @@ void kernel_main() {
 
             for (uint32_t j = 0; j < scale_h; j++) {
                 for (uint32_t k = 0; k < scale_w; k++) {
-                    uint64_t offset = j * width + k;
+                    uint32_t offset = j * width + k;
 
-                    uint64_t dst_noc_addr_1 = s0.get_noc_addr(start_index + offset);
-                    noc_async_write(read_addr, dst_noc_addr_1, output_page_size);
+                    noc.async_write(
+                        out_cb, s0, output_page_size, {.offset_bytes = read_offset}, {.page_id = start_index + offset});
                 }
             }
             current_stick++;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_block_row);
+        noc.async_write_barrier();
+        out_cb.pop_front(num_tiles_per_block_row);
     }
 }
