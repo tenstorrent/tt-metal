@@ -93,9 +93,7 @@ uint32_t FDKernel::get_max_num_eth_cores() const {
     return get_max_num_eth_cores_();
 }
 
-const DispatchMemMap& FDKernel::get_dispatch_mem_map() const {
-    return descriptor_.metal_context().dispatch_mem_map();
-}
+const DispatchMemMap& FDKernel::get_dispatch_mem_map() const { return descriptor_.metal_context().dispatch_mem_map(); }
 
 FDKernel* FDKernel::Generate(
     int node_id,
