@@ -2510,7 +2510,7 @@ void update_program_dispatch_commands(
     // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!MetalContext::instance().hal().has_stream_registers()) {
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
                                    mem_map.get_completion_counter_offset(cq_id) *
                                        MetalContext::instance().hal().get_alignment(HalMemType::L1) +
@@ -2727,7 +2727,7 @@ void update_traced_program_dispatch_commands(
     // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!hal.has_stream_registers()) {
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
                                    mem_map.get_completion_counter_offset(cq_id) * hal.get_alignment(HalMemType::L1) +
                                    mem_map.get_sync_offset(*sub_device_id);
