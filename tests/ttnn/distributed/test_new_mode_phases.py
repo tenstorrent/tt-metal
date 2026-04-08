@@ -394,9 +394,11 @@ class TestNewModePhase1Phase2:
         assert "RANK=4" in env_vars
         assert "GLOBAL_VAR=global_value" in env_vars
 
-        # Verify rankfile path is correct in the command
-        rankfile_path_str = str(rankfile_path.resolve())
-        assert rankfile_path_str in cmd_str, f"Rankfile path should be in command: {rankfile_path_str}"
+        # Rankfile path in MPI args is relative to mpirun cwd (ORIGINAL_CWD), not absolute (PRRTE parsing).
+        expected_rankfile_cli = ttrun_module.rankfile_path_for_mpi_cli(rankfile_path, ttrun_module.ORIGINAL_CWD)
+        assert (
+            expected_rankfile_cli in cmd_str
+        ), f"Rankfile path in command should be cwd-relative ({expected_rankfile_cli!r}): {cmd_str}"
 
     def test_phase1_vs_phase2_asymmetrical_different_counts(self, runner, temp_dir, monkeypatch):
         """Test Phase 1 and Phase 2 with asymmetrical slot distribution."""

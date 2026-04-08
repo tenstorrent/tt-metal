@@ -245,22 +245,27 @@ def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
     """True if ``mpi_args`` already specifies rankfile placement (token-aware, not substring-joined).
 
     Avoids false positives from unrelated arguments that happen to contain substrings such as
-    ``rankfile`` in paths.
+    ``rankfile`` in paths, and avoids treating unrelated ``--map-by`` policies as rankfile placement.
     """
     if not mpi_args:
         return False
     args = list(mpi_args)
     for i, arg in enumerate(args):
-        if arg == "--rankfile":
+        if arg in ("--rankfile", "-rankfile", "-rf"):
             return True
-        # Match legacy behavior: any ``--map-by`` defers to user placement (rankfile injection skipped).
+        if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
+            return True
         if arg == "--map-by":
+            if i + 1 < len(args) and "rankfile:file=" in args[i + 1]:
+                return True
+            continue
+        if arg.startswith("--map-by=") and "rankfile:file=" in arg:
             return True
         if "rankfile:file=" in arg:
             return True
         if arg == "rmaps_rankfile_path":
             return True
-        if i + 2 < len(args) and arg == "--mca" and args[i + 1] == "rmaps_rankfile_path":
+        if i + 2 < len(args) and arg in ("--mca", "-mca") and args[i + 1] == "rmaps_rankfile_path":
             return True
     return False
 
@@ -298,9 +303,9 @@ def inject_rankfile_mpi_args(
     """
     result: List[str] = []
 
-    # Prepend --host slots when requested and user did not already pass --host in base_mpi_args
+    # Prepend --host slots when requested and user did not already pass host selection in base_mpi_args
     if add_host_slots:
-        has_host = "--host" in (base_mpi_args or [])
+        has_host = has_host_selection_args(list(base_mpi_args or []))
         if not has_host:
             host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
             if host_str and total_ranks > 0:
@@ -1981,7 +1986,7 @@ def legacy_flow(
 
             # Add --host host1:N,host2:N for Phase 2 real cluster (skip when mock)
             if not mock_cluster_rank_binding:
-                has_host = "--host" in effective_mpi_args
+                has_host = has_host_selection_args(effective_mpi_args)
                 if not has_host:
                     host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
                     if host_str and total_ranks > 0:
@@ -2382,8 +2387,10 @@ def new_mode_flow(
     "--rankfile-syntax",
     type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
     default="auto",
-    help="Rankfile MPI syntax. 'auto' (default) uses --rankfile (Open MPI 4.x and 5.x). "
-    "Use 'map-by' for --map-by rankfile:file=... or 'mca' for -mca rmaps_rankfile_path.",
+    help="Rankfile MPI syntax. 'auto' (default) uses --rankfile for Open MPI 4.x and unknown, "
+    "and --map-by rankfile:file=... for Open MPI 5.x / PRRTE. "
+    "Use 'rankfile' to force --rankfile, 'map-by' to force --map-by rankfile:file=..., "
+    "or 'mca' for --mca rmaps_rankfile_path.",
 )
 @click.option(
     "--force-rediscovery",

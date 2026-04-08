@@ -288,7 +288,8 @@ public:
     const TopologyMapper& get_topology_mapper() const;
 
     // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
-    // setup). In multi-host runs, this is populated for source meshes local to this rank; other pairs return {}.
+    // setup). Inter-mesh connectivity is merged across hosts during setup, so multi-host runs can query any mesh pair
+    // with connectivity (empty when there is no inter-mesh link for that pair).
     std::vector<FabricNodeId> get_exit_fabric_node_ids_between_meshes(MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // For each inter-mesh link from `src_mesh_id` to `dst_mesh_id`, the exit `FabricNodeId` on the source mesh and

@@ -4,10 +4,13 @@
 
 #include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <set>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
