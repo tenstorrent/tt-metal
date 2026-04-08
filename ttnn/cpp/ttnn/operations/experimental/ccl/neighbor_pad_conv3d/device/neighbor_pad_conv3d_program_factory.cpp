@@ -234,6 +234,23 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
         w_rows_per_link = w_outer_dim_size / pad2_num_links;
         w_extra_rows = w_outer_dim_size % pad2_num_links;
+
+        // W-halo L1 recv buffer: fabric writes W-halo sticks to receiver's L1 (not DRAM) to
+        // guarantee ordering on BH. BH does not guarantee that fabric DRAM writes are visible
+        // to subsequent local NOC reads. L1 writes from the same fabric NOC channel are
+        // ordered with the following sem_inc, so by the time w_neighbor_sem fires, L1 is committed.
+        // W reader drains L1→DRAM locally with noc_async_write_barrier() before signaling conv3d.
+        {
+            uint32_t max_w_sticks_per_link = w_rows_per_link + (w_extra_rows > 0 ? 1 : 0);
+            uint32_t max_w_padding = std::max(op.np_pad2_left, op.np_pad2_right);
+            uint32_t w_recv_buf_size = max_w_sticks_per_link * max_w_padding * page_size;
+            if (w_recv_buf_size > 0) {
+                uint32_t recv_cb_index = tt::CB::c_in1;
+                CircularBufferConfig w_recv_cb_config = CircularBufferConfig(w_recv_buf_size, {{recv_cb_index, df}})
+                                                            .set_page_size(recv_cb_index, page_size);
+                CreateCircularBuffer(program, w_fabric_core_range, w_recv_cb_config);
+            }
+        }
     }
 
     // Compute H fabric unicast and multicast route configurations
@@ -479,10 +496,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             mesh_device);
 
         // W reader kernel
+        uint32_t recv_cb_index = tt::CB::c_in1;
         auto w_reader_kernel_config = ReaderDataMovementConfig{};
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
+        // NP_W_HALO_L1: route received W-halo sticks through L1 (not DRAM) to fix BH ordering.
+        w_reader_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
+        w_reader_kernel_config.defines["NP_W_HALO_L1"] = "1";
         if (conv_config.input_progress_t_batch_size > 0) {
             w_reader_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
         }
@@ -511,8 +532,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         auto w_writer_kernel_config = WriterDataMovementConfig{};
         w_writer_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_writer_kernel_config.compile_args);
-        w_writer_kernel_config.compile_args.push_back(0);            // use_l1_intermediate
-        w_writer_kernel_config.compile_args.push_back(0);            // recv_cb_id
+        w_writer_kernel_config.compile_args.push_back(1);              // use_l1_intermediate (L1 recv for BH ordering)
+        w_writer_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
         w_writer_kernel_config.compile_args.push_back(0);            // handle_incoming_writes
         w_writer_kernel_config.compile_args.push_back(1);            // is_w_fabric_writer
         w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
@@ -560,7 +581,17 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 w_reader_rt_args.push_back(op.np_padding_h);
                 // h_halo_hbot_base
                 w_reader_rt_args.push_back(outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim);
-                // progress_t_batch_size (read by W reader when NP_PROGRESS_SEM is defined)
+                // [14] recv_dram_offset (NP_W_HALO_L1): base DRAM page for received W-halo sticks.
+                // Equals the sender's outer_dim_offset_start_id = section_base + w_link_start * pw_this_dir.
+                {
+                    const uint32_t h_total_r = input_halo_dim_size + 2u * op.np_padding_h;
+                    const uint32_t wleft_base_r = outer_dim_size * 2u * op.np_padding_h * num_sticks_per_halo_dim;
+                    const uint32_t wright_base_r = wleft_base_r + outer_dim_size * op.np_pad2_left * h_total_r;
+                    const uint32_t pw_r = w_direction ? op.np_pad2_right : op.np_pad2_left;
+                    const uint32_t section_base_r = w_direction ? wright_base_r : wleft_base_r;
+                    w_reader_rt_args.push_back(section_base_r + w_link_start * pw_r);
+                }
+                // [15] progress_t_batch_size (NP_PROGRESS_SEM)
                 if (conv_config.input_progress_t_batch_size > 0) {
                     w_reader_rt_args.push_back(conv_config.input_progress_t_batch_size);
                 }
