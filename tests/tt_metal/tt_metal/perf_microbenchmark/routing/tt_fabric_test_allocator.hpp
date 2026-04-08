@@ -757,8 +757,7 @@ private:
             }
             num_links = max_link_id + 1;  // link_id is 0-indexed
 
-            // Per device max: 4 directions × num_links
-            mux_cores_per_device = NUM_DIRECTIONS * num_links;
+            mux_cores_per_device = get_max_connections_per_device() * num_links;
         }
 
         // 3. Build per-device receiver load histogram
@@ -907,7 +906,17 @@ private:
     static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
     static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
     static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
-    static constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
+
+    // Maximum Z-link fan-out per chip (a chip can have Z-links to at most 2 galaxies)
+    static constexpr uint32_t MAX_Z_NEIGHBORS = 2;
+
+    static uint32_t get_max_connections_per_device() {
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: return 4 + MAX_Z_NEIGHBORS;  // N, S, E, W + up to 2 Z destinations
+            default: return 4;                                     // N, S, E, W
+        }
+    }
 
     // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
     // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow

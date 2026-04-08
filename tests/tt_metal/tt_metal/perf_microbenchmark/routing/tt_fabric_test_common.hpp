@@ -385,12 +385,10 @@ public:
         std::unordered_map<MeshId, std::unordered_set<MeshId>> mesh_adjacency_map;
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& global_nodes = get_global_node_ids();
-        const std::vector<RoutingDirection> directions = {
-            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
         for (const auto& src_node : global_nodes) {
             MeshId src_mesh_id = src_node.mesh_id;
-            for (const auto& direction : directions) {
+            for (const auto& direction : FabricContext::routing_directions) {
                 const auto& neighbors = control_plane.get_chip_neighbors(src_node, direction);
                 for (const auto& [neighbor_mesh_id, neighbor_chips] : neighbors) {
                     if (neighbor_mesh_id != src_mesh_id && !neighbor_chips.empty()) {
@@ -900,20 +898,30 @@ public:
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_directional_neighbor_pairs(
         const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const override {
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
-        const std::vector<RoutingDirection> directions = {
-            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-        // Galaxy Ring/Torus uses coordinate-based neighbors, all others use control plane
+        // Galaxy Ring/Torus uses coordinate-based neighbors for N/S/E/W;
+        // Z always uses control plane (no coordinate dimension).
         const bool use_coordinate_neighbors =
             is_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
 
         for (const auto& src_node : device_ids) {
             const auto src_coord = get_device_coord(src_node);
-            for (const auto& direction : directions) {
-                std::optional<FabricNodeId> neighbor_opt;
-
-                if (use_coordinate_neighbors) {
-                    // Coordinate-based neighbor lookup with boundary wrapping
+            for (const auto& direction : FabricContext::routing_directions) {
+                if (direction == RoutingDirection::Z || !use_coordinate_neighbors) {
+                    // Control plane path: always for Z, also for non-Ring/non-Torus topologies.
+                    // Uses get_all_neighbor_node_ids() to handle multi-Z (multiple meshes).
+                    auto neighbors = get_all_neighbor_node_ids(src_node, direction);
+                    for (const auto& neighbor : neighbors) {
+                        bool is_valid = true;
+                        if (topology_ == Topology::Linear) {
+                            is_valid = are_devices_linear({src_node, neighbor});
+                        }
+                        if (is_valid) {
+                            pairs.emplace_back(src_node, neighbor);
+                        }
+                    }
+                } else {
+                    // Coordinate-based path: N/S/E/W only, for Galaxy Ring/Torus
                     const auto neighbor_coord = src_coord.get_neighbor(
                         mesh_shape_,
                         get_step_for_direction(direction),
@@ -921,34 +929,10 @@ public:
                         get_boundary_mode_for_dimension(get_dim_for_direction(direction)));
 
                     if (neighbor_coord.has_value()) {
-                        neighbor_opt = get_fabric_node_id(neighbor_coord.value());
-                    }
-                } else {
-                    // Control plane neighbor lookup
-                    const auto& neighbors =
-                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
-                            src_node, direction);
-
-                    if (!neighbors.empty()) {
-                        auto neighbor_mesh_it = neighbors.begin();
-                        const auto& neighbor_chips = neighbor_mesh_it->second;
-                        if (!neighbor_chips.empty()) {
-                            neighbor_opt = FabricNodeId(neighbor_mesh_it->first, neighbor_chips[0]);
+                        auto neighbor = get_fabric_node_id(neighbor_coord.value());
+                        if (neighbor != src_node) {
+                            pairs.emplace_back(src_node, neighbor);
                         }
-                    }
-                }
-
-                // Validate and add neighbor
-                if (neighbor_opt.has_value()) {
-                    const auto& neighbor = neighbor_opt.value();
-                    bool is_valid = (neighbor != src_node);
-
-                    if (is_valid && topology_ == Topology::Linear) {
-                        is_valid = are_devices_linear({src_node, neighbor});
-                    }
-
-                    if (is_valid) {
-                        pairs.emplace_back(src_node, neighbor);
                     }
                 }
             }
@@ -1293,14 +1277,19 @@ public:
 
     std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
-        // This function is used to get the neighbor node ID for a given source node ID and direction, returning nullopt
-        // if no neighbor is found.
+        // Strictly for N/S/E/W directions where at most one neighbor per direction is guaranteed.
+        // For Z direction, use get_all_neighbor_node_ids() instead — a chip can have Z-link
+        // neighbors in multiple meshes.
+        TT_FATAL(
+            direction != RoutingDirection::Z,
+            "get_neighbor_node_id_or_nullopt() does not support Z direction — a chip can have "
+            "Z-link neighbors in multiple meshes. Use get_all_neighbor_node_ids() instead.");
+
         std::optional<FabricNodeId> neighbor_node_id = std::nullopt;
 
         const auto& neighbors =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
 
-        // If more than 1 mesh is returned, throw an error.
         TT_FATAL(
             neighbors.size() <= 1,
             "Expected at most one neighbor mesh for {} in direction: {}",
@@ -1312,6 +1301,31 @@ public:
         }
 
         return neighbor_node_id;
+    }
+
+    // Returns ALL neighbors in a given direction, across all meshes.
+    // For N/S/E/W on a standard mesh, this typically returns 0 or 1 entries.
+    // For Z in a multi-galaxy cluster, this can return multiple entries with different mesh_ids.
+    std::vector<FabricNodeId> get_all_neighbor_node_ids(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        const auto& neighbors =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
+
+        std::vector<FabricNodeId> result;
+        for (const auto& [mesh_id, chip_ids] : neighbors) {
+            for (const auto& chip_id : chip_ids) {
+                FabricNodeId neighbor(mesh_id, chip_id);
+                if (neighbor != src_node_id) {
+                    result.emplace_back(neighbor);
+                }
+            }
+        }
+
+        // Sort by (mesh_id, chip_id) for deterministic ordering across hosts.
+        // get_chip_neighbors() returns unordered_map — iteration order is non-deterministic.
+        std::sort(result.begin(), result.end());
+
+        return result;
     }
 
     FabricNodeId get_neighbor_node_id(
@@ -1386,7 +1400,16 @@ public:
                 break;
             }
             case tt::tt_fabric::Topology::NeighborExchange: {
-                // NeighborExchange topology only performs syncs between a device's nearest neighbors
+                // NeighborExchange sync only supports N/S/E/W — its hop map is keyed by direction
+                // (one entry per direction), which collapses multi-Z by construction.
+                auto z_neighbors = get_all_neighbor_node_ids(src_device, RoutingDirection::Z);
+                TT_FATAL(
+                    z_neighbors.empty(),
+                    "NeighborExchange sync does not support Z-link topologies. "
+                    "Device {} has {} Z-link neighbor(s). "
+                    "Disable sync (--sync false) or use host-driven monitoring.",
+                    src_device,
+                    z_neighbors.size());
                 multi_directional_hops = this->get_hops_to_nearest_neighbors(src_device);
                 global_sync_val = multi_directional_hops.size();
                 break;

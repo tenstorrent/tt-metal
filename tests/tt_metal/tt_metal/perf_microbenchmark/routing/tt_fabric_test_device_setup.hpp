@@ -41,15 +41,18 @@ struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
     uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+    FabricNodeId dst_node_id{MeshId{0}, 0};
 
     bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id &&
+               dst_node_id == other.dst_node_id;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx, vc_id) < std::tie(other.direction, other.link_idx, other.vc_id);
+        return std::tie(direction, link_idx, vc_id, dst_node_id) <
+               std::tie(other.direction, other.link_idx, other.vc_id, other.dst_node_id);
     }
 };
 
@@ -57,7 +60,7 @@ struct ConnectionKey {
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
         return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
-               (std::hash<uint8_t>()(key.vc_id) << 2);
+               (std::hash<uint8_t>()(key.vc_id) << 2) ^ (std::hash<FabricNodeId>()(key.dst_node_id) << 3);
     }
 };
 
@@ -125,6 +128,7 @@ public:
         RoutingDirection direction,
         uint32_t link_idx,
         TestWorkerType worker_type,
+        const FabricNodeId& dst_node_id,
         uint8_t vc_id = 0);
 
     // Processing: Call once at start of create_kernels()
@@ -398,13 +402,14 @@ private:
     void create_mux_kernels();
 
     // Helper: Common connection registration logic for senders and receivers
-    // Registers a fabric connection for the specified direction and link
+    // Registers a fabric connection for the specified direction, link, and destination
     ConnectionKey register_fabric_connection(
         CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
         uint32_t link_idx,
+        const FabricNodeId& dst_node_id,
         uint8_t vc_id = 0);
 
     MeshCoordinate coord_;

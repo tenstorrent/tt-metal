@@ -19,9 +19,14 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// Maximum number of fabric connections supported per kernel (1 per direction: N, S, E, W)
-// This is used to size FabricConnectionArray storage without template proliferation
+// Maximum number of fabric connections supported per kernel.
+// This is used to size FabricConnectionArray storage without template proliferation.
+#ifdef ARCH_BLACKHOLE
+// 4 NESW directions + up to 2 Z-link destinations
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 6;
+#else
 static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
+#endif
 
 struct LocalArgsBuffer {
     uint32_t base_address = 0;

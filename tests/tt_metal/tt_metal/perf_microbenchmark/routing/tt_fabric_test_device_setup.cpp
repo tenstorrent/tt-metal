@@ -13,8 +13,13 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type, uint8_t vc_id) {
-    ConnectionKey key = {direction, link_idx, vc_id};
+    const CoreCoord& core,
+    RoutingDirection direction,
+    uint32_t link_idx,
+    TestWorkerType worker_type,
+    const FabricNodeId& dst_node_id,
+    uint8_t vc_id) {
+    ConnectionKey key = {direction, link_idx, vc_id, dst_node_id};
     auto& conn = connections_[key];
 
     // Store worker type for this core (for channel assignment later)
@@ -273,8 +278,9 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 static_cast<uint32_t>(mux_config->get_status_address())};
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
-            // Generate fabric connection args directly using passed parameters
-            const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
+            // Use the destination from the ConnectionKey directly instead of re-deriving
+            // from direction, which would lose multi-Z disambiguation.
+            const auto& neighbor_node_id = key.dst_node_id;
             if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
@@ -412,6 +418,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
         config.link_id,
+        dst_node_id,
         config.vc_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
@@ -472,7 +479,8 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id);
+            config.link_id,
+            dst_node_id);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -528,7 +536,8 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
         TestWorkerType::SYNC,
         this->test_device_ptr_->get_sync_connection_manager(),
         outgoing_direction,
-        sender_config.link_id);
+        sender_config.link_id,
+        sender_config.dst_node_ids[0]);
 
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
@@ -615,6 +624,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
+    const FabricNodeId& dst_node_id,
     uint8_t vc_id) {
     // Get available link indices for this direction (to validate link_idx)
     std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
@@ -634,7 +644,7 @@ ConnectionKey TestDevice::register_fabric_connection(
         static_cast<int>(outgoing_direction));
 
     // Check if this core already registered this connection
-    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id};
+    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, dst_node_id};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
@@ -643,15 +653,16 @@ ConnectionKey TestDevice::register_fabric_connection(
     }
 
     // Register the new connection with the connection manager
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, vc_id);
+    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, dst_node_id, vc_id);
 
     log_debug(
         tt::LogTest,
-        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}",
+        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, dst={}",
         static_cast<int>(worker_type),
         logical_core,
         static_cast<int>(outgoing_direction),
-        link_idx);
+        link_idx,
+        dst_node_id);
 
     return connection_key;
 }
@@ -720,7 +731,9 @@ void TestDevice::create_mux_kernels() {
         auto* mux_config = mux_worker.config_;
         const auto& connection_key = mux_worker.connection_key_;
 
-        const auto dst_node_id = route_manager_->get_neighbor_node_id(fabric_node_id_, connection_key.direction);
+        // Use the destination from the ConnectionKey directly instead of re-deriving
+        // from direction, which would lose multi-Z disambiguation.
+        const auto& dst_node_id = connection_key.dst_node_id;
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
