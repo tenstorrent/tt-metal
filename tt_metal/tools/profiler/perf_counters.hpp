@@ -604,6 +604,7 @@ void start_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     start_single_group(PerfCounterGroup::INSTRN);
 #endif
+#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     start_single_group(PerfCounterGroup::L1_2);
 #endif
@@ -612,6 +613,7 @@ void start_perf_counter() {
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     start_single_group(PerfCounterGroup::L1_4);
+#endif
 #endif
 }
 
@@ -637,6 +639,7 @@ void stop_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     stop_single_group(PerfCounterGroup::INSTRN);
 #endif
+#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     stop_single_group(PerfCounterGroup::L1_2);
 #endif
@@ -645,6 +648,7 @@ void stop_perf_counter() {
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     stop_single_group(PerfCounterGroup::L1_4);
+#endif
 #endif
 };
 
@@ -677,6 +681,7 @@ void read_perf_counters() {
     read_single_group(PerfCounterGroup::INSTRN);
     if (!bufferHasRoom(0)) { quick_push(); }
 #endif
+#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     read_single_group(PerfCounterGroup::L1_2);
     if (!bufferHasRoom(0)) { quick_push(); }
@@ -688,6 +693,7 @@ void read_perf_counters() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     read_single_group(PerfCounterGroup::L1_4);
 #endif
+#endif  // ARCH_BLACKHOLE
 };
 
 // TRISC1: RAII wrapper that starts counters in constructor and stops in destructor.
