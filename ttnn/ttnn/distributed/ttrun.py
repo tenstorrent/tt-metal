@@ -4,6 +4,7 @@
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
+import functools
 import os
 import re
 import shlex
@@ -30,6 +31,51 @@ MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostf
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
 ORIGINAL_CWD = Path.cwd().resolve()
+
+
+@functools.lru_cache(maxsize=1)
+def _detect_openmpi_major_version() -> Optional[int]:
+    """Detect the major version of the installed OpenMPI by parsing ``mpirun --version``.
+
+    Cached so ``mpirun --version`` runs at most once per process. Tests may call
+    ``_detect_openmpi_major_version.cache_clear()`` to reset.
+
+    Returns:
+        Major version (e.g. 4 or 5), or None if detection fails.
+    """
+    try:
+        result = subprocess.run(
+            ["mpirun", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "Open MPI" in line:
+                parts = line.split(")")
+                if len(parts) >= 2:
+                    version_str = parts[-1].strip()
+                    return int(version_str.split(".")[0])
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        logger.debug(f"{TT_RUN_PREFIX} Failed to detect OpenMPI version: {exc}")
+
+    return None
+
+
+def _get_rankfile_mpirun_args(resolved_rankfile_path: str) -> List[str]:
+    """Return mpirun argv fragment for rankfile placement for the installed OpenMPI major version.
+
+    OpenMPI 5.x deprecates ``--rankfile`` in favor of ``--map-by rankfile:file=<path>``.
+    Some OpenMPI 4.x setups do not handle the ``map-by`` rankfile form correctly; there
+    ``--rankfile`` is the stable interface (see rankfile handling fix in the tree).
+
+    If version detection fails, use ``--rankfile`` so behavior stays compatible with
+    older clusters without requiring a working ``mpirun`` at import time.
+    """
+    major = _detect_openmpi_major_version()
+    if major is not None and major >= 5:
+        return ["--map-by", f"rankfile:file={resolved_rankfile_path}"]
+    return ["--rankfile", resolved_rankfile_path]
 
 
 def get_local_network_interfaces() -> List[str]:
@@ -486,7 +532,8 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
     """Normalize rankfile MPI args and infer --host list when rankfile is provided.
 
     OpenMPI deprecates --rankfile in favor of --map-by rankfile:file=<path>.
-    This keeps backwards compatibility while avoiding deprecation warnings.
+    Deprecated ``--rankfile`` is rewritten via :func:`_get_rankfile_mpirun_args`
+    for OpenMPI 4.x vs 5.x compatibility.
     """
     if not mpi_args:
         return []
@@ -494,6 +541,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
     normalized_args = []
     detected_rankfile_path: Optional[str] = None
     rewrote_rankfile_args = False
+    rankfile_placement_args: Optional[List[str]] = None
     i = 0
 
     while i < len(mpi_args):
@@ -507,7 +555,8 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            rankfile_placement_args = _get_rankfile_mpirun_args(detected_rankfile_path)
+            normalized_args.extend(rankfile_placement_args)
             rewrote_rankfile_args = True
             i += 2
             continue
@@ -515,7 +564,8 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
             detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            rankfile_placement_args = _get_rankfile_mpirun_args(detected_rankfile_path)
+            normalized_args.extend(rankfile_placement_args)
             rewrote_rankfile_args = True
             i += 1
             continue
@@ -553,10 +603,11 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         normalized_args.append(arg)
         i += 1
 
-    if rewrote_rankfile_args and detected_rankfile_path:
+    if rewrote_rankfile_args and rankfile_placement_args is not None:
         logger.debug(
-            f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to "
-            f"--map-by rankfile:file={detected_rankfile_path}"
+            f"{TT_RUN_PREFIX} Rewrote deprecated MPI --rankfile to "
+            f"{' '.join(rankfile_placement_args)} "
+            f"(OpenMPI major={_detect_openmpi_major_version()!r})"
         )
 
     if detected_rankfile_path and not has_host_selection_args(normalized_args):
