@@ -140,7 +140,7 @@ def main() -> int:
         print(step_data)
 
         # Get additional metadata from CI ENV
-        arch_name = get_env("ARCH_NAME", required=False)
+        arch_name = get_env("CI_ARCH_NAME", required=False)
         ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
 
         # Build metrics payload and write JSON alongside the log
