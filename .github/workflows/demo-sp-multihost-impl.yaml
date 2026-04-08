@@ -45,7 +45,7 @@ jobs:
       - name: Extract MGD configuration from SKU
         id: extract-mgd
         run: |
-          python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" > /tmp/mgd_config.txt
+          python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml > /tmp/mgd_config.txt
           {
             echo "mgd<<EOF"
             cat /tmp/mgd_config.txt
