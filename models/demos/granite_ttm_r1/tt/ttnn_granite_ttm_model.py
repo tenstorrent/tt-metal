@@ -505,11 +505,10 @@ class TtnnGraniteTTMModel:
         hidden_states = self._head(hidden_states, device=device)
 
         # 8. De-normalise: y_hat = y_hat * scale + loc  (on-device broadcast)
-        hidden_states = ttnn.add(
-            ttnn.mul(hidden_states, scale, memory_config=ttnn.L1_MEMORY_CONFIG),
-            loc,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        hidden_states = ttnn.mul(hidden_states, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(scale)
+        hidden_states = ttnn.add(hidden_states, loc, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(loc)
         return hidden_states
 
 
@@ -578,6 +577,8 @@ def _ttnn_std_scaler(
         _consts["ones_small"] if _consts is not None else ttnn.ones_like(denom, memory_config=ttnn.L1_MEMORY_CONFIG)
     )
     denom = ttnn.maximum(denom, ones_small)
+    if _consts is None:
+        ttnn.deallocate(ones_small)
 
     # loc = sum(data * mask, dim=1) / denom   → [B, 1, C]
     weighted = ttnn.mul(data, mask, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -586,16 +587,20 @@ def _ttnn_std_scaler(
         denom,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn.deallocate(weighted)
 
     # variance = sum(((data - loc) * mask)^2, dim=1) / denom   → [B, 1, C]
     diff = ttnn.sub(data, loc, memory_config=ttnn.L1_MEMORY_CONFIG)
     masked_diff = ttnn.mul(diff, mask, memory_config=ttnn.L1_MEMORY_CONFIG)
     sq = ttnn.mul(masked_diff, masked_diff, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(masked_diff)
     variance = ttnn.div(
         ttnn.sum(sq, dim=1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG),
         denom,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn.deallocate(sq)
+    ttnn.deallocate(denom)
 
     # scale = sqrt(variance + minimum_scale)   → [B, 1, C]
     min_scale_t = (
@@ -607,8 +612,12 @@ def _ttnn_std_scaler(
         ttnn.add(variance, min_scale_t, memory_config=ttnn.L1_MEMORY_CONFIG),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn.deallocate(variance)
+    if _consts is None:
+        ttnn.deallocate(min_scale_t)
 
     # scaled = (data - loc) / scale   → [B, T, C]
     scaled = ttnn.div(diff, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(diff)
 
     return scaled, loc, scale

@@ -57,7 +57,9 @@ def preprocess_inputs(history: torch.Tensor, observed_mask: torch.Tensor | None 
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, torch.nn.Linear):
-        parameters["weight"] = preprocess_linear_weight(torch_model.weight, dtype=ttnn.bfloat16)
+        weight_dtype = ttnn.bfloat8_b if _USE_BF8_WEIGHTS else ttnn.bfloat16
+        parameters["weight"] = preprocess_linear_weight(torch_model.weight, dtype=weight_dtype)
+        # Bias stays bfloat16 for precision — it is small and accumulation-sensitive.
         parameters["bias"] = (
             preprocess_linear_bias(torch_model.bias, dtype=ttnn.bfloat16) if torch_model.bias is not None else None
         )
@@ -73,8 +75,14 @@ _LINEAR_COMPUTE_CONFIG = None
 _LINEAR_COMPUTE_CONFIG_LOFI = None
 
 # Set TTNN_LOFI=1 in the environment to switch all linear layers to LoFi
-# math fidelity.  Used for the E3 experiment in Stage 4.
+# math fidelity.  Per the TTNN model bringup guide (§3.3), LoFi should be
+# the default unless PCC drops below the threshold.
 _USE_LOFI = _os.getenv("TTNN_LOFI", "0") == "1"
+
+# Set TTNN_WEIGHT_BF8=1 to store linear weights as bfloat8_b (4-bit mantissa)
+# instead of bfloat16 (7-bit mantissa).  Per the YOLOv4 tech report (§2.3),
+# more efficient data types reduce memory bandwidth and can improve throughput.
+_USE_BF8_WEIGHTS = _os.getenv("TTNN_WEIGHT_BF8", "0") == "1"
 
 
 def get_linear_compute_config():

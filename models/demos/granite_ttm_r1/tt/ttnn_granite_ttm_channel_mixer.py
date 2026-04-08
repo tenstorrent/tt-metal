@@ -78,7 +78,10 @@ class TtnnGraniteTTMChannelMixer:
         )
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.mul(hidden_states, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn)
 
         # Residual connection
         out = ttnn.add(hidden_states, residual, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(hidden_states)
+        ttnn.deallocate(residual)
         return out
