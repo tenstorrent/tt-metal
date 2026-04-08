@@ -83,6 +83,13 @@ public:
         std::optional<DeviceAddr> address = std::nullopt);
     ~MeshBuffer();
 
+    // MeshBuffer manages device memory and owns the backing allocation. Copying would create
+    // multiple owners of the same device memory, leading to double-free on destruction.
+    MeshBuffer(const MeshBuffer&) = delete;
+    MeshBuffer& operator=(const MeshBuffer&) = delete;
+    MeshBuffer(MeshBuffer&& other) noexcept;
+    MeshBuffer& operator=(MeshBuffer&& other) noexcept;
+
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
     // destructor or the `deallocate` method deallocate the MeshBuffer.
     bool is_allocated() const;
