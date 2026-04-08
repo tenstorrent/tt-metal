@@ -12,6 +12,8 @@ import ttnn
 from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
 from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    Qwen3OmniMoeAudioEncoder,
+    Qwen3OmniMoeAudioEncoderLayer,
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCausalConvNet,
     Qwen3OmniMoeCausalTransConvNet,
@@ -82,6 +84,9 @@ from models.experimental.tt_symbiote.modules.conv import (
     TTNNConvTranspose1d,
     TTNNQwenOmniConv2dNHWC,
 )
+from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
+from models.experimental.tt_symbiote.modules.qwen_omni_audio_encoder import TTNNQwen3OmniMoeAudioEncoder
+from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -212,6 +217,8 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
+    Qwen3OmniMoeAudioEncoder: TTNNQwen3OmniMoeAudioEncoder,
+    Qwen3OmniMoeAudioEncoderLayer: TTNNQwen3OmniMoeAudioEncoderLayer,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
     Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
@@ -336,9 +343,12 @@ def _patch_module_symbiote_device_dtype_placeholder(module, *, cpu_device, dtype
     cls = type(module)
     if getattr(cls, "_tt_symbiote_device_patched", False):
         return
-    dev_attr = getattr(cls, "device", None)
-    if dev_attr is None or isinstance(dev_attr, property):
-        cls.device = property(lambda self, d=cpu_device: d)
+    # Do not replace ``TTNNModule.device`` — it must stay ``@property`` → mesh ``_device`` from ``set_device``.
+    # Replacing it with ``torch.device("cpu")`` breaks ``module_run`` (``ttnn.to_device(..., cpu)``).
+    if not isinstance(module, TTNNModule):
+        dev_attr = getattr(cls, "device", None)
+        if dev_attr is None or isinstance(dev_attr, property):
+            cls.device = property(lambda self, d=cpu_device: d)
     dtype_attr = getattr(cls, "dtype", None)
     if dtype_attr is None or isinstance(dtype_attr, property):
         cls.dtype = property(lambda self, d=dtype: d)

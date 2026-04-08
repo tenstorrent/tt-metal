@@ -103,8 +103,12 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                             _initialize_module_on_device(v, device, device_init)
                         _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
         elif isinstance(current_obj, TTNNModule):
-            # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping
-            current_obj._bypass_tensor_wrapping = parent_is_ttnn
+            # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping.
+            # ``_symbiote_force_bypass_inputs``: HF control-flow modules (e.g. audio tower) need
+            # torch ``feature_lens`` / masks; do not wrap kwargs to ttnn before ``forward``.
+            current_obj._bypass_tensor_wrapping = parent_is_ttnn or getattr(
+                current_obj, "_symbiote_force_bypass_inputs", False
+            )
             _initialize_module_on_device(current_obj, device, device_init)
             if hasattr(current_obj, "call"):
                 if not hasattr(current_obj.call, "_is_timed"):
