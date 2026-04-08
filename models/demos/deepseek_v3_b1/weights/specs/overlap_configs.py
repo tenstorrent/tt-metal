@@ -157,14 +157,14 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
         default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             raw_tensor_shape=(3584, 3072),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
         )
     )
     q_b_shard_spec: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             raw_tensor_shape=(1536, 12288),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             tp_dim=(None, 1),
         )
     )
@@ -172,7 +172,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
         default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9))}),
             raw_tensor_shape=(7168, 576),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
         )
     )
 
@@ -242,7 +242,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
 
     Fuses the following into a single WIDTH_SHARDED raw buffer:
 
-    * **o_proj** — BFP8, base logical shape (8192, 7168), TP along mesh
+    * **o_proj** — BFP4, base logical shape (8192, 7168), TP along mesh
       columns (tp_dim=(None, 0)), WIDTH_SHARDED on 112 cores.
     * **gate_mm** — BFP16, (7168, 256), WIDTH_SHARDED on 8 cores.
     * **attn_norm** — BFP16, (1, 7168), on core (12, 9).
@@ -262,7 +262,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
                 }
             ),
             raw_tensor_shape=(8192, 7168),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             tp_dim=(None, 0),
         )
     )
@@ -339,7 +339,7 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
         default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             raw_tensor_shape=(8192, 512),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             tp_dim=(None, 0),
         )
@@ -353,7 +353,7 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
                 }
             ),
             raw_tensor_shape=(512, 8192),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             tp_dim=(None, 0),
         )

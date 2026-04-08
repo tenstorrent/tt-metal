@@ -71,7 +71,7 @@ def fuse_q_ab_kv_a(
     kv_a_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse q_a, q_b, and kv_a projection weights into one overlapped buffer."""
@@ -118,7 +118,7 @@ def fuse_o_proj_gate_mm_norms(
     ffn_norm: torch.Tensor,
     device,
     *,
-    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse o_proj, gate_mm, and RMSNorm weights into one overlapped buffer."""
@@ -151,7 +151,7 @@ def fuse_kv_b12(
     kv_b2_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse kv_b1 and kv_b2 projection weights into one overlapped buffer."""
