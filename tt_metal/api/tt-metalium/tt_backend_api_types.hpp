@@ -34,6 +34,7 @@ enum class DataFormat : uint8_t {
     Tf32 = 4,
     UInt8 = 30,
     UInt16 = 9,
+    Int16 = 9,
     Int32 = 8,
     UInt32 = 24,
     RawUInt8 = 0xf0,
