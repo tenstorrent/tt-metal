@@ -201,14 +201,28 @@ def run_test_linear_impl(
                     compute_kernel_config=compute_config,
                 )
             else:
-                tt_output = ttnn.experimental.minimal_matmul(
-                    tt_all_gather_out_tensor,
-                    tt_weight,
-                    bias_tensor=tt_bias,
-                    fused_activation=activation_fn,
-                    compute_kernel_config=compute_config,
-                    config=matmul_config,
-                )
+                if chunks > 1:
+                    tt_output = ttnn.experimental.minimal_matmul_split(
+                        tt_all_gather_out_tensor,
+                        tt_weight,
+                        chunks=chunks,
+                        dim=-1,
+                        bias_tensor=tt_bias,
+                        fused_activation=activation_fn,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
+                else:
+                    tt_output = ttnn.experimental.minimal_matmul(
+                        tt_all_gather_out_tensor,
+                        tt_weight,
+                        bias_tensor=tt_bias,
+                        fused_activation=activation_fn,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
+            if chunks == 1:
+                tt_output = [tt_output]
 
         else:
             tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
@@ -463,7 +477,7 @@ def run_test_linear(
             1,
         ],
         [
-            (8, 4),
+            (4, 8),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
@@ -472,14 +486,14 @@ def run_test_linear(
             ttnn.Topology.Ring,
             1,
             8,
+            1,
             0,
-            1,
             8,
             8,
-            1,
+            0,
         ],
         [
-            (8, 4),
+            (4, 8),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
@@ -488,14 +502,14 @@ def run_test_linear(
             ttnn.Topology.Ring,
             2,
             4,
+            1,
             0,
-            1,
             8,
             8,
-            1,
+            0,
         ],
         [
-            (8, 4),
+            (4, 8),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
@@ -504,11 +518,11 @@ def run_test_linear(
             ttnn.Topology.Ring,
             4,
             2,
+            1,
             0,
-            1,
             8,
             8,
-            1,
+            0,
         ],
         [
             (4, 8),
@@ -529,10 +543,10 @@ def run_test_linear(
     ],
     ids=[
         "2x4links1",
-        "wh8x4links1",
-        "wh8x4links2",
-        "wh8x4links4",
-        "bh8x4links2",
+        "wh4x8links1",
+        "wh4x8links2",
+        "wh4x8links4",
+        "bh4x8links2",
     ],
     indirect=["mesh_device", "device_params"],
 )
