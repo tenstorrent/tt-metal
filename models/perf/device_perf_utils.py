@@ -390,6 +390,7 @@ def run_model_device_perf_test(
     batch_size: int = 1,
     margin: float = 0.015,
     comments: str = "",
+    has_signposts: bool = False,
 ):
     """
     Run device performance test for a model and validate results against expected performance.
@@ -415,7 +416,12 @@ def run_model_device_perf_test(
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+        command,
+        subdir=subdir,
+        num_iterations=num_iterations,
+        cols=cols,
+        batch_size=batch_size,
+        has_signposts=has_signposts,
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
     expected_results = check_device_perf(
