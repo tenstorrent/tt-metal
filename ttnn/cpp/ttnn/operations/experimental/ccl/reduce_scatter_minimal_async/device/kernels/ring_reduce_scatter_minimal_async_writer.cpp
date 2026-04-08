@@ -225,8 +225,9 @@ void kernel_main() {
                                                 : safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
-        int slice_idx = my_chip_id + (ring_size / 2);  // start with slice belonging to device half-way across in ring
-        uint32_t num_iters = (ring_size / 2) + 1;
+        constexpr uint32_t ring_size_by_2 = ring_size / 2;
+        int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
+        uint32_t num_iters = ring_size_by_2 + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, write_to_remote, write_to_interm,
@@ -240,7 +241,7 @@ void kernel_main() {
                 write_to_interm = true;      // write to interm_tensor or output_tensor
                 separate_even_odd_sems =
                     false;  // 2nd-last iter: send sem incrs separately for even & odd chunks to diff workers
-            } else if (i == (ring_size / 2)) {
+            } else if (i == ring_size_by_2) {
                 even_chunks = direction;
                 odd_chunks = !direction;
                 reduce_even_chunks = even_chunks;
@@ -248,14 +249,14 @@ void kernel_main() {
                 write_to_remote = false;
                 write_to_interm = false;
                 separate_even_odd_sems = false;
-            } else if (i == 1 || i == (ring_size / 2) - 1) {  // these two cases can coincide (ring_size = 4)
+            } else if (i == 1 || i == ring_size_by_2 - 1) {  // these two cases can coincide (ring_size = 4)
                 even_chunks = true;
                 odd_chunks = true;
                 reduce_even_chunks = (i == 1) ? direction : even_chunks;
                 reduce_odd_chunks = (i == 1) ? !direction : odd_chunks;
                 write_to_remote = true;
-                write_to_interm = (i == (ring_size / 2) - 1) ? direction : true;
-                separate_even_odd_sems = (i == (ring_size / 2) - 1);
+                write_to_interm = (i == ring_size_by_2 - 1) ? direction : true;
+                separate_even_odd_sems = (i == ring_size_by_2 - 1);
             } else {
                 even_chunks = true;
                 odd_chunks = true;

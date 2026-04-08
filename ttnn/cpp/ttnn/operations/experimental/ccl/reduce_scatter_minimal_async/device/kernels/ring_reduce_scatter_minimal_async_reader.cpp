@@ -90,8 +90,9 @@ void kernel_main() {
         // In the last iter we reduce 3 tensors (local + remote from fwd device + remote from bwd device).
         // In the last iter the writer outputs to local output tensor, in other iters it sends to next chip.
         // These behaviors are controlled by a "state machine" to avoid code duplication in the loop body.
-        int slice_idx = my_chip_id + (ring_size / 2);  // start with slice belonging to device half-way across in ring
-        uint32_t num_iters = (ring_size / 2) + 1;
+        constexpr uint32_t ring_size_by_2 = ring_size / 2;
+        int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
+        uint32_t num_iters = ring_size_by_2 + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
@@ -102,7 +103,7 @@ void kernel_main() {
                 reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
                 reduce_output =
                     false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-            } else if (i == (ring_size / 2)) {
+            } else if (i == ring_size_by_2) {
                 even_chunks = direction;
                 odd_chunks = !direction;
                 reduce_even_chunks = even_chunks;

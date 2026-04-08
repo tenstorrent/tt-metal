@@ -27,7 +27,8 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
-        uint32_t num_iters = (ring_size / 2) + 1;
+        constexpr uint32_t ring_size_by_2 = ring_size / 2;
+        uint32_t num_iters = ring_size_by_2 + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
@@ -38,7 +39,7 @@ void kernel_main() {
                 reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
                 reduce_output =
                     false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-            } else if (i == (ring_size / 2)) {
+            } else if (i == ring_size_by_2) {
                 even_chunks = direction;
                 odd_chunks = !direction;
                 reduce_even_chunks = even_chunks;
