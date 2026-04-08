@@ -30,7 +30,7 @@ inline void _calculate_dropout_(const int iterations, std::uint32_t probability,
     {
         ////////////////////////
         // Scale samples
-        // sfpi::dst_reg[0] = sfpi::dst_reg[0] * s2vFloat16b(scale);
+        // sfpi::dst_reg[0] = sfpi::dst_reg[0] * sFloat16b(scale);
         ///////////////////////
         TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);

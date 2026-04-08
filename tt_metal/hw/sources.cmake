@@ -5,7 +5,9 @@ set(HW_JIT_API_HEADERS
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
+    inc/api/debug/checkpoint.h
     inc/api/debug/dprint.h
+    inc/api/debug/dump.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
     inc/api/debug/dprint_pages.h
@@ -25,6 +27,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/page.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
+    inc/api/compute/atan2.h
     inc/api/compute/bcast.h
     inc/api/compute/binary_bitwise_sfpu.h
     inc/api/compute/binary_comp.h
@@ -89,6 +92,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
+    inc/api/compute/eltwise_unary/tanh_derivative.h
     inc/api/compute/eltwise_unary/threshold.h
     inc/api/compute/eltwise_unary/trigonometry.h
     inc/api/compute/eltwise_unary/typecast.h

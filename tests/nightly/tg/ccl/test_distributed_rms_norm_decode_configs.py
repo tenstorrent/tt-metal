@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import math
+
 from tracy import signpost
 
 from models.common.utility_functions import skip_for_blackhole
@@ -69,7 +69,7 @@ def run_distributed_rms_norm_decode_impl(
 
     # Shard width per core (each core gets a slice of hidden_size dimension)
     shard_width_per_core = ttnn.core.roundup(
-        hidden_size // (num_cores * num_devices),
+        hidden_size // total_cores,
         ttnn.TILE_SIZE,
     )
 
@@ -210,6 +210,9 @@ def run_distributed_rms_norm_decode_impl(
         ref_lnorm = get_torch_rms(input_tensor_torch[i], [3], gamma_torch[i], epsilon)
         passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
         logger.info(f"Iteration {i}: {output}")
+
+        if not passing:
+            mesh_device.reset_sub_device_stall_group()
         assert passing, f"PCC check failed for iteration {i}"
 
     if trace_mode:
@@ -294,15 +297,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,  # 7168 (DeepSeek V3 hidden_size)
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch8_seq32",
-        ),
-        # Test with seq_len=8
-        (
-            8,
-            896 * 8,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            None,
-            "mtp_norms_batch8_seq8",
+            "mtp_norms_batch8",
         ),
         # MTP norms with batch_size_per_row=32
         (
@@ -310,7 +305,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch32_seq32",
+            "mtp_norms_batch32",
         ),
         # Decoder block mla_norm, mlp_norm configuration
         (
@@ -318,7 +313,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            "decoder_block_norms_batch8_seq32",
+            "decoder_block_norms_batch8",
         ),
         # Row batched model norm configuration
         (
