@@ -40,7 +40,7 @@ GdnFusedProgramFactory::cached_program_t GdnFusedProgramFactory::create(
     const GdnFusedParams& operation_attributes, const GdnFusedInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     Program program{};
 
-    tt_metal::IDevice* device = tensor_args.conv_out.device();
+    auto* device = tensor_args.conv_out.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t max_cores = grid.x * grid.y;
 

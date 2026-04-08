@@ -563,26 +563,14 @@ def _gdn_full_fused(
     repeat_factor=3,
     key_dim_tp=512,
 ):
-    """Execute full fused GDN kernel (single or multi-device).
+    """Execute full fused GDN kernel via registered C++ op.
 
-    conv_out is in batched [1, B, qkv_dim_tp] format — the reader extracts
-    Q/K/V per-pair via sub-tile row reads.
-    Scalars (a, b) in [1, B, Nv_TP], constants (neg_exp_A, dt_bias) in [1, 1, Nv_TP].
-    Reader extracts per-pair scalars via sub-tile reads.
-    z is NOT passed — handled by caller via ttnn.silu().
+    Uses ttnn.experimental.gdn_fused() which dispatches through the C++ device
+    operation framework with automatic program caching and override_runtime_arguments().
+    Only the 3 changing buffer addresses (conv_out, a, b) are updated per call;
+    the compiled program is reused from cache.
     """
-    mesh_device = conv_out.device()
-    mesh_shape = mesh_device.shape
-    num_devices = mesh_shape[0] * mesh_shape[1]
-
-    state_in_l1 = state.memory_config().buffer_type == ttnn.BufferType.L1
-    state_is_sharded = state.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and state_in_l1
-
-    logger.debug(
-        f"GDN dispatch: num_devices={num_devices}, state_in_l1={state_in_l1}, state_is_sharded={state_is_sharded}"
-    )
-
-    all_tensors = [
+    ttnn.experimental.gdn_fused(
         conv_out,
         a_fused,
         b_fused,
@@ -594,55 +582,13 @@ def _gdn_full_fused(
         rms_eps_tt,
         state,
         output,
-    ]
-
-    if num_devices == 1:
-        devs = [ttnn.get_device_tensors(t)[0] for t in all_tensors]
-        grid = devs[0].device().compute_with_storage_grid_size()
-        logger.debug(f"GDN: single device, grid={grid.x}x{grid.y}, building program...")
-        program = _build_full_fused_device_program(
-            *devs,
-            num_pairs_total,
-            num_cores,
-            grid,
-            state_in_l1=state_in_l1,
-            state_is_sharded=state_is_sharded,
-            Nv_TP=Nv_TP,
-            Nk_TP=Nk_TP,
-            repeat_factor=repeat_factor,
-            key_dim_tp=key_dim_tp,
-        )
-        logger.debug(f"GDN: program built, dispatching generic_op...")
-        result = ttnn.generic_op(all_tensors, program)
-        logger.debug(f"GDN: generic_op returned")
-        return result
-
-    # Multi-device
-    per_device = [ttnn.get_device_tensors(t) for t in all_tensors]
-    mesh_program = ttnn.MeshProgramDescriptor()
-
-    for row in range(mesh_shape[0]):
-        for col in range(mesh_shape[1]):
-            device_idx = row * mesh_shape[1] + col
-            coord = ttnn.MeshCoordinate(row, col)
-            devs = [per_device[i][device_idx] for i in range(len(all_tensors))]
-            grid = devs[0].device().compute_with_storage_grid_size()
-
-            program = _build_full_fused_device_program(
-                *devs,
-                num_pairs_total,
-                num_cores,
-                grid,
-                state_in_l1=state_in_l1,
-                state_is_sharded=state_is_sharded,
-                Nv_TP=Nv_TP,
-                Nk_TP=Nk_TP,
-                repeat_factor=repeat_factor,
-                key_dim_tp=key_dim_tp,
-            )
-            mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
-
-    return ttnn.generic_op(all_tensors, mesh_program)
+        num_pairs=num_pairs_total,
+        num_cores=num_cores,
+        Nv_TP=Nv_TP,
+        Nk_TP=Nk_TP,
+        repeat_factor=repeat_factor,
+        key_dim_tp=key_dim_tp,
+    )
 
 
 # ---------------------------------------------------------------------------
