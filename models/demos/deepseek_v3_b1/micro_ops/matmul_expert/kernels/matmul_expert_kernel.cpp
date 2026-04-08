@@ -24,8 +24,6 @@ void kernel_main() {
     unified_kernels::setup_sharded_buffer(cb_in0, num_tiles_k);
     unified_kernels::setup_sharded_buffer(cb_index, 1);
 
-    // SRAM B data CB — only set up when sram_mm is active on this core.
-    // In DRAM-only mode, cb_in1 may alias cb_in1_dram; setup_sharded_buffer would corrupt it.
     if constexpr (get_named_compile_time_arg_val("sram_active") != 0) {
         constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
         unified_kernels::setup_sharded_buffer(cb_in1, 1);
@@ -110,7 +108,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_fmt")>;
 #endif
 
-    // Per-core activation: op.py sets sram_active/dram_active per core.
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;
     constexpr bool dram_active = get_named_compile_time_arg_val("dram_active") != 0;
     deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<SRAMArgs, sram_active> sram_mm;

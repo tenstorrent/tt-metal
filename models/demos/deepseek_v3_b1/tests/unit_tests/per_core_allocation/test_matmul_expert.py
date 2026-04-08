@@ -159,7 +159,16 @@ def _run_multi_device(mesh_device, M, K, N, formats_per_device, core_grid, pcc_t
 
     logger.info("Running ExpertKernel.op")
     index_tensor = _make_index_tensor(0, core_grid, mesh_device)
-    result_mesh = ExpertKernel.op(a_mesh, [ct], [], out_mesh, index_tensor, is_dram_flags=[0], num_active_experts=1)
+    result_mesh = ExpertKernel.op(
+        a_mesh,
+        [ct],
+        [],
+        out_mesh,
+        index_tensor,
+        is_dram_flags=[0],
+        num_active_experts=1,
+        sram_core_grid=core_grid,
+    )
 
     for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result_mesh)):
         output_torch = ttnn.to_torch(out_dev)
@@ -265,7 +274,14 @@ def _run_multi_device_multi_expert(
     logger.info(f"Running ExpertKernel.op with expert_idx={selected_expert_idx}")
     index_tensor = _make_index_tensor(selected_expert_idx, core_grid, mesh_device)
     result_mesh = ExpertKernel.op(
-        a_mesh, cts, [], out_mesh, index_tensor, is_dram_flags=[0] * num_experts, num_active_experts=1
+        a_mesh,
+        cts,
+        [],
+        out_mesh,
+        index_tensor,
+        is_dram_flags=[0] * num_experts,
+        num_active_experts=1,
+        sram_core_grid=core_grid,
     )
 
     for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result_mesh)):
@@ -708,6 +724,7 @@ def _run_dram_expert_multi_device(
         is_dram_flags=[1] * num_experts,
         num_active_experts=1,
         subblock_k=subblock_k,
+        dram_core_grid=compute_core_grid,
         dram_device_data=device_data,
         cores_per_bank=cores_per_bank,
     )

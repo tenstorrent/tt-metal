@@ -194,12 +194,12 @@ def _build_program_for_device(
     sram_cts: list = None,
     sram_fmt_l1_addr_core_values: list = None,
     sram_active_core_values: list = None,
+    dram_active_core_values: list = None,
     coord=None,
     # DRAM ingredients (optional).
     in1_backing_tensor=None,
     dram_meta_l1_addr_core_values: list = None,
     dram_fmt_dram_info: dict = None,
-    dram_active_core_values: list = None,
     dram_per_core_values: dict = None,
     subblock_k: int = 0,
     cores_per_bank: int = 1,
@@ -214,8 +214,6 @@ def _build_program_for_device(
     Pass DRAM ingredients (in1_backing_tensor, dram_*) for DRAM path.
     Pass both for hybrid. The builder derives all CT args from the provided ingredients.
     """
-    has_sram = sram_cts is not None and len(sram_cts) > 0
-    has_dram = in1_backing_tensor is not None
 
     core_grid = a_device.memory_config().shard_spec.grid
     K = a_device.memory_config().shard_spec.shape[1]
@@ -225,25 +223,24 @@ def _build_program_for_device(
     assert (Kt * out_w) % 2 == 0, f"total tiles K*N={Kt * out_w} must be even"
     assert out_w == 1 or out_w % 2 == 0, f"out_w must be 1 or even, got {out_w}"
 
-    # CB indices: SRAM B data = 1, DRAM streaming = 4 (separate in hybrid, aliased in standalone).
-    # cb_fmt = 5: double-buffered CB for fmt metadata streamed from DRAM.
+    # CB indices: always separate — SRAM B data = 1, DRAM streaming = 4, fmt metadata = 5.
     cb_in0, cb_in1, cb_out, cb_index = 0, 1, 2, 3
-    cb_in1_dram = 4 if (has_sram and has_dram) else cb_in1
+    cb_in1_dram = 4
     cb_fmt = 5
 
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_device)
-    cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if has_sram else []
+    cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_device)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_device)
     cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
 
-    if has_dram:
+    if in1_backing_tensor is not None:
         cb4_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_dram, in1_backing_tensor)
         cbs.append(cb4_desc)
 
         # cb_fmt: double-buffered for fmt metadata streamed from DRAM.
-        fmt_per_expert_bytes = dram_fmt_dram_info["fmt_per_expert_bytes"] if dram_fmt_dram_info else 0
+        fmt_per_expert_bytes = dram_fmt_dram_info["fmt_per_expert_bytes"]
         cb_fmt_page_size = _align(fmt_per_expert_bytes, 64) if fmt_per_expert_bytes > 0 else 64
         cb_fmt_desc = ttnn.CBDescriptor(
             total_size=2 * cb_fmt_page_size,
@@ -265,22 +262,18 @@ def _build_program_for_device(
     cb_in1_dram_total_bytes = num_in1_buffers * max_subblock_bytes
 
     # NOC max page size.
-    noc_max_page_size = 0
-    if has_dram:
-        device = a_device.device()
-        arch = device.arch()
-        if arch == ttnn.device.Arch.BLACKHOLE:
-            noc_max_page_size = 16384
-        elif arch == ttnn.device.Arch.WORMHOLE_B0:
-            noc_max_page_size = 8192
-        else:
-            raise ValueError(f"Unsupported architecture: {arch}")
+    device = a_device.device()
+    arch = device.arch()
+    if arch == ttnn.device.Arch.BLACKHOLE:
+        noc_max_page_size = 16384
+    elif arch == ttnn.device.Arch.WORMHOLE_B0:
+        noc_max_page_size = 8192
+    else:
+        raise ValueError(f"Unsupported architecture: {arch}")
 
-    # Semaphores (needed for DRAM pipeline).
+    # Semaphores (always needed — DRAM infrastructure always present).
     pipeline_sem_id = 0
-    semaphores = (
-        [ttnn.SemaphoreDescriptor(id=pipeline_sem_id, core_ranges=core_grid, initial_value=0)] if has_dram else []
-    )
+    semaphores = [ttnn.SemaphoreDescriptor(id=pipeline_sem_id, core_ranges=core_grid, initial_value=0)]
 
     # Named CT args — shared across all RISCs.
     named_ct_args = [
@@ -307,22 +300,22 @@ def _build_program_for_device(
         ("fmt_per_core_bytes", dram_fmt_dram_info["fmt_per_core_bytes"] if dram_fmt_dram_info else 0),
     ]
 
-    # Per-core descriptors — combine SRAM and DRAM ingredients.
+    # Per-core descriptors.
     per_core_descriptors = [
-        PerCoreCompileTimeDescriptor(
-            named_compile_time_arg="sram_fmt_l1_addr",
-            core_values=sram_fmt_l1_addr_core_values or [],
-            other_value=0,
-        ),
         PerCoreCompileTimeDescriptor(
             named_compile_time_arg="sram_active",
             core_values=sram_active_core_values or [],
-            other_value=1 if has_sram and not has_dram else 0,
+            other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
             named_compile_time_arg="dram_active",
             core_values=dram_active_core_values or [],
-            other_value=1 if has_dram and not has_sram else 0,
+            other_value=0,
+        ),
+        PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="sram_fmt_l1_addr",
+            core_values=sram_fmt_l1_addr_core_values or [],
+            other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
             named_compile_time_arg="dram_fmt_l1_addr",
@@ -809,8 +802,8 @@ class ExpertKernel:
         is_dram_flags: list,
         num_active_experts: int,
         subblock_k: int = 0,
-        sram_core_grid=None,
-        dram_core_grid=None,
+        sram_core_grid=None,  # CoreRangeSet for SRAM cores, or None if no SRAM.
+        dram_core_grid=None,  # CoreRangeSet for DRAM cores, or None if no DRAM.
         dram_device_data: dict = None,
         cores_per_bank: int = 1,
     ) -> ttnn.Tensor:
@@ -834,13 +827,6 @@ class ExpertKernel:
                               Required when dram_cts is non-empty.
             cores_per_bank: Compute cores per DRAM bank.
         """
-        has_sram_cts = bool(sram_cts)
-        has_dram_cts = bool(dram_cts)
-        if not has_sram_cts and not has_dram_cts:
-            raise ValueError("ExpertKernel requires at least one of sram_cts or dram_cts")
-        if has_dram_cts and not dram_device_data:
-            raise ValueError("dram_device_data is required when dram_cts is non-empty")
-
         mesh_device = a_tensor.device()
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -849,14 +835,8 @@ class ExpertKernel:
         out_per_device = ttnn.get_device_tensors(output_tensor)
         index_per_device = ttnn.get_device_tensors(index_tensor)
 
-        # Auto-derive core grids for single-path cases (hybrid must provide both explicitly).
-        if has_sram_cts and not has_dram_cts and not sram_core_grid:
-            sram_core_grid = a_per_device[0].memory_config().shard_spec.grid
-        if has_dram_cts and not has_sram_cts and not dram_core_grid:
-            dram_core_grid = a_per_device[0].memory_config().shard_spec.grid
-
-        has_sram = bool(sram_cts and sram_core_grid)
-        has_dram = bool(dram_cts and dram_core_grid)
+        if not sram_core_grid and not dram_core_grid:
+            raise ValueError("At least one of sram_core_grid or dram_core_grid must be provided")
 
         K = a_per_device[0].memory_config().shard_spec.shape[1]
         Kt = K // 32
@@ -865,7 +845,7 @@ class ExpertKernel:
 
         # --- SRAM setup (multi-device aware via create_expert_fmt_tensors) ---
         sram_fmt_per_device = {}
-        if has_sram:
+        if sram_core_grid:
             sram_cores = ttnn.corerange_to_cores(sram_core_grid)
             logger.info(
                 f"ExpertKernel: creating SRAM fmt tensors for {len(sram_cts)} experts on {len(sram_cores)} cores..."
@@ -885,9 +865,9 @@ class ExpertKernel:
                 )
                 all_routing[coord] = (is_dram_t, is_dram_l1, table_idx_t, table_idx_l1)
 
-        # Precompute core sets for per-core active flags (hybrid only).
-        sram_core_set = set((c.x, c.y) for c in ttnn.corerange_to_cores(sram_core_grid)) if has_sram else set()
-        dram_core_set = set((c.x, c.y) for c in ttnn.corerange_to_cores(dram_core_grid)) if has_dram else set()
+        # Precompute core sets for per-core active flags.
+        sram_core_set = set((c.x, c.y) for c in ttnn.corerange_to_cores(sram_core_grid)) if sram_core_grid else set()
+        dram_core_set = set((c.x, c.y) for c in ttnn.corerange_to_cores(dram_core_grid)) if dram_core_grid else set()
 
         mesh_program = ttnn.MeshProgramDescriptor()
         for row in range(mesh_rows):
@@ -902,7 +882,7 @@ class ExpertKernel:
                 # SRAM fmt for this device.
                 sram_fmt_l1 = []
                 sram_fmt_tensors_dev = {}
-                if has_sram:
+                if sram_core_grid:
                     sram_fmt_tensors_dev = sram_fmt_per_device[coord]
                     sram_cores_list = ttnn.corerange_to_cores(sram_core_grid)
                     sram_fmt_l1 = [
@@ -922,7 +902,7 @@ class ExpertKernel:
                     k: [] for k in ("bank_id", "vc", "core_in_bank_idx", "next_core_noc_x", "next_core_noc_y")
                 }
                 num_in1_buffers = 3
-                if has_dram:
+                if dram_device_data:
                     (
                         in1_backing,
                         dram_meta_tensors_dev,
@@ -932,27 +912,24 @@ class ExpertKernel:
                         num_in1_buffers,
                     ) = dram_device_data[coord]
 
-                # Per-core active flags (only when both paths present on this device).
-                sram_active_cv = None
-                dram_active_cv = None
-                if has_sram and has_dram:
-                    all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
-                    sram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in sram_core_set]
-                    dram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in dram_core_set]
+                # Per-core active flags — each core runs only the path it belongs to.
+                all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
+                sram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in sram_core_set]
+                dram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in dram_core_set]
 
                 program = _build_program_for_device(
                     a_dev,
                     out_dev,
                     idx_dev,
                     num_active_experts=num_active_experts,
-                    sram_cts=sram_cts if has_sram else None,
+                    sram_cts=sram_cts if sram_core_grid else None,
                     sram_fmt_l1_addr_core_values=sram_fmt_l1,
                     sram_active_core_values=sram_active_cv,
+                    dram_active_core_values=dram_active_cv,
                     coord=coord,
                     in1_backing_tensor=in1_backing,
                     dram_meta_l1_addr_core_values=dram_meta_l1,
-                    dram_fmt_dram_info=dram_fmt_dram_info if has_dram else None,
-                    dram_active_core_values=dram_active_cv,
+                    dram_fmt_dram_info=dram_fmt_dram_info,
                     dram_per_core_values=per_core_vals,
                     subblock_k=subblock_k,
                     cores_per_bank=cores_per_bank,
