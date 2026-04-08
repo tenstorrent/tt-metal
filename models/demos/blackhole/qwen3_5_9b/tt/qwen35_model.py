@@ -406,39 +406,40 @@ class Qwen35Model:
         x_last = x[:, -1:, :]
         logits = ttnn.linear(x_last, self.lm_head_weight)
 
-        # Now populate the pre-allocated KV caches from the concat-based cache
+        # Populate the pre-allocated KV caches from the concat-based prefill cache.
+        # Use paged_fill_cache which writes in the same tile format that paged_update_cache
+        # (used during decode) and sdpa_decode (used for attention) expect.
+        # Following the GPT-OSS pattern (attention/prefill.py:118-121): pass data in
+        # original [B, H_kv, S, D] shape with an identity page table.
         for layer in self.layers:
             if layer.is_full_attention:
                 attn = layer.attention
                 if attn.kv_cache_key is not None and attn.past_key is not None:
-                    # past_key shape: [B, H_kv, S, D] — copy into pre-allocated [B, H_kv, max_seq, D]
-                    past_k_torch = ttnn.to_torch(attn.past_key)
-                    past_v_torch = ttnn.to_torch(attn.past_value)
-                    S = past_k_torch.shape[2]
+                    # past_key: [B, H_kv, S, D], cache: [B, H_kv, max_seq, D]
+                    S = attn.past_key.shape[2]
+                    block_size = 64
 
-                    # Build full cache tensors with prefill data at positions 0..S-1
-                    full_k = torch.zeros(B, attn.num_kv_heads, attn.max_seq_len, attn.head_dim, dtype=torch.bfloat16)
-                    full_v = torch.zeros(B, attn.num_kv_heads, attn.max_seq_len, attn.head_dim, dtype=torch.bfloat16)
-                    full_k[:, :, :S, :] = past_k_torch
-                    full_v[:, :, :S, :] = past_v_torch
+                    # Identity page table: virtual block i → physical block i
+                    num_blocks = (S + block_size - 1) // block_size
+                    page_table = ttnn.from_torch(
+                        torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0),
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.device,
+                    )
 
-                    # Overwrite pre-allocated cache (deallocate old, load new to DRAM)
-                    ttnn.deallocate(attn.kv_cache_key)
-                    ttnn.deallocate(attn.kv_cache_value)
-                    attn.kv_cache_key = ttnn.from_torch(
-                        full_k,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    # Clip to page-aligned length (paged_fill_cache expects seq_len <= page_table pages * block_size)
+                    page_len = num_blocks * block_size
+                    k_fill = attn.past_key[:, :, :page_len, :] if page_len < attn.past_key.shape[2] else attn.past_key
+                    v_fill = (
+                        attn.past_value[:, :, :page_len, :] if page_len < attn.past_value.shape[2] else attn.past_value
                     )
-                    attn.kv_cache_value = ttnn.from_torch(
-                        full_v,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
+
+                    ttnn.experimental.paged_fill_cache(attn.kv_cache_key, k_fill, page_table, batch_idx=0)
+                    ttnn.experimental.paged_fill_cache(attn.kv_cache_value, v_fill, page_table, batch_idx=0)
+                    ttnn.deallocate(attn.past_key)
+                    ttnn.deallocate(attn.past_value)
+                    ttnn.deallocate(page_table)
 
                     attn.cache_pos = S
                     attn.update_mask_for_pos(S)
@@ -490,9 +491,13 @@ class Qwen35Model:
         # paged_update_cache needs one index per "batch" element where batch = B * num_kv_heads
         # (cache is reshaped to [B*H_kv, 1, max_seq, D] for the write).
         # All heads share the same position, so we replicate the value.
+        # Initialize position to max_seq_len-1 (staging area) so the warmup/capture
+        # runs don't corrupt real prefill data at position 0.  The actual decode loop
+        # overwrites this via copy_host_to_device_tensor before each trace replay.
         n_kv = self.args.n_kv_heads
+        safe_pos = self.args.max_seq_len - 1
         self._trace_position = ttnn.from_torch(
-            torch.zeros(n_kv, dtype=torch.int32),
+            torch.full((n_kv,), safe_pos, dtype=torch.int32),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -503,7 +508,9 @@ class Qwen35Model:
         saved_dn_states = self._save_deltanet_states()
 
         # 3. Warmup (compiles programs, BEFORE capture — host writes OK here)
-        _ = self.forward_decode_traced(self._trace_token_ids, self._trace_cos, self._trace_sin, self._trace_position)
+        # Pass position_tensor=None to use the staging+mask path (not sdpa_decode).
+        # sdpa_decode has a known issue reading caches populated by paged_fill_cache.
+        _ = self.forward_decode_traced(self._trace_token_ids, self._trace_cos, self._trace_sin)
         ttnn.synchronize_device(device)
 
         # 4. Restore states after warmup corruption, save again for capture
@@ -512,9 +519,7 @@ class Qwen35Model:
 
         # 5. Capture — ONLY device ops between begin/end
         self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._trace_output = self.forward_decode_traced(
-            self._trace_token_ids, self._trace_cos, self._trace_sin, self._trace_position
-        )
+        self._trace_output = self.forward_decode_traced(self._trace_token_ids, self._trace_cos, self._trace_sin)
         ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
 
         # 6. Restore DeltaNet states after capture corruption
@@ -524,6 +529,10 @@ class Qwen35Model:
 
     def decode_traced(self, token_ids, current_pos):
         """Execute traced decode: write inputs via host DMA, replay trace.
+
+        Uses the staging+mask approach: K/V are written to the staging position
+        (max_seq_len-1) inside the trace. After replay, the caller must copy
+        staging to the correct position and update the mask.
 
         Args:
             token_ids: torch.Tensor [1, 1] — token IDs (int64 or int32)
@@ -538,17 +547,7 @@ class Qwen35Model:
         ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
         ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
 
-        # Position tensor for paged_update_cache + sdpa_decode (inside trace)
-        # Replicate position for each kv_head (paged_update_cache treats B*H_kv as batch)
-        pos_host = ttnn.from_torch(
-            torch.full((self._trace_position_n_kv,), current_pos, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        ttnn.copy_host_to_device_tensor(pos_host, self._trace_position)
-
-        # Replay the captured trace — paged_update_cache + sdpa_decode run inside,
-        # no mask updates or post-trace cache copies needed.
+        # Replay the captured trace (staging approach — no position tensor)
         ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
 
         return self._trace_output
