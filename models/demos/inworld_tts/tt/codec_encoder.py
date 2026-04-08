@@ -152,7 +152,7 @@ class TtActivation1dTTNN(LightweightModule):
             z = self._zeros_cache[(T, C)]
         else:
             z = ttnn.zeros([1, T, 1, C], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-        x_interleaved = ttnn.concat([x_reshaped, z], dim=2)  # [1, T, 2, C]
+        x_interleaved = ttnn.concat([x_reshaped, z], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1, T, 2, C]
         x_up = ttnn.reshape(x_interleaved, [1, 1, T * 2, C])
 
         # FIR upsample filter (depthwise conv, groups=C, stride=1)
@@ -1008,7 +1008,9 @@ class TtCodecEncoder(LightweightModule):
 
         acoustic_tt = ttnn.to_layout(acoustic_tt, ttnn.TILE_LAYOUT)
         semantic_tt = ttnn.to_layout(semantic_tt, ttnn.TILE_LAYOUT)
-        fused_tt = ttnn.concat([acoustic_tt, semantic_tt], dim=-1)  # [1, 1, T, 2048]
+        fused_tt = ttnn.concat(
+            [acoustic_tt, semantic_tt], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, 1, T, 2048]
 
         projected_tt = ttnn.linear(
             fused_tt,

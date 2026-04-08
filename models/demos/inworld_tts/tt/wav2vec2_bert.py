@@ -195,10 +195,10 @@ class TtW2vSelfAttention(LightweightModule):
         k = ttnn.permute(ttnn.reshape(k, [1, seq_len, self.n_heads, self.head_dim]), (0, 2, 1, 3))
         v = ttnn.permute(ttnn.reshape(v, [1, seq_len, self.n_heads, self.head_dim]), (0, 2, 1, 3))
 
-        # Q @ K^T * scale on device
+        # Q @ K^T * scale on device (all in L1)
         k_t = ttnn.permute(k, (0, 1, 3, 2))  # [1, H, D, T]
-        scores = ttnn.matmul(q, k_t)  # [1, H, T, T]
-        scores = ttnn.multiply(scores, self.scale)
+        scores = ttnn.matmul(q, k_t, memory_config=L1)  # [1, H, T, T]
+        scores = ttnn.multiply(scores, self.scale, memory_config=L1)
 
         # Position bias on device via ttnn.embedding + ttnn.matmul
         # 1. Distance indices (static per seq_len, cached on device)
@@ -212,7 +212,7 @@ class TtW2vSelfAttention(LightweightModule):
         dist_tt = self._dist_cache[seq_len]
 
         # 2. Embedding lookup: [1, T*T] -> [1, T*T, 64]
-        pos_embed = ttnn.embedding(dist_tt, self.distance_embedding_tt)  # [1, T*T, 64]
+        pos_embed = ttnn.embedding(dist_tt, self.distance_embedding_tt, memory_config=L1)  # [1, T*T, 64]
         pos_embed = ttnn.reshape(pos_embed, [seq_len, seq_len, self.head_dim])  # [T, T, 64]
 
         # 3. Transpose for matmul: [T, T, 64] -> [T, 64, T]
@@ -224,19 +224,19 @@ class TtW2vSelfAttention(LightweightModule):
         q_for_bias = ttnn.reshape(q_for_bias, [seq_len, self.n_heads, self.head_dim])  # [T, 16, 64]
 
         # 5. Batched matmul: [T, 16, 64] @ [T, 64, T] -> [T, 16, T]
-        pos_bias = ttnn.matmul(q_for_bias, pos_embed_t)
+        pos_bias = ttnn.matmul(q_for_bias, pos_embed_t, memory_config=L1)
 
-        # 6. Reshape to [1, 16, T, T] and scale: [T, 16, T] -> [1, T, 16, T] -> [1, 16, T, T]
+        # 6. Reshape to [1, 16, T, T] and scale
         pos_bias = ttnn.reshape(pos_bias, [1, seq_len, self.n_heads, seq_len])  # [1, T, 16, T]
         pos_bias = ttnn.permute(pos_bias, (0, 2, 1, 3))  # [1, 16, T, T]
-        pos_bias = ttnn.multiply(pos_bias, 1.0 / (self.head_dim**0.5))
+        pos_bias = ttnn.multiply(pos_bias, 1.0 / (self.head_dim**0.5), memory_config=L1)
 
-        # Add bias + softmax + weighted sum on device
-        scores = ttnn.add(scores, pos_bias)
-        attn_weights = ttnn.softmax(scores, dim=-1)
-        attn_output = ttnn.matmul(attn_weights, v)  # [1, H, T, D]
+        # Add bias + softmax + weighted sum on device (all in L1)
+        scores = ttnn.add(scores, pos_bias, memory_config=L1)
+        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=L1)
+        attn_output = ttnn.matmul(attn_weights, v, memory_config=L1)  # [1, H, T, D]
 
-        # Head merge on device: [1, H, T, D] -> [1, T, H, D] -> [1, 1, T, dim]
+        # Head merge on device
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, W2V_DIM))
 
