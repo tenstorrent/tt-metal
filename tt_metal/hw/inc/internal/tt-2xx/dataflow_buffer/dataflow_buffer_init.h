@@ -137,9 +137,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
             uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            dfb::PackedTileCounter producer_tcs[16] = {};
             uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            dfb::PackedTileCounter consumer_tcs[16] = {};
             for (uint8_t i = 0; i < num_riscs; i++) {
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 
@@ -155,7 +155,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                             static_cast<uint32_t>(per_risc_ptr->flags.remapper_pair_index));
                         // DPRINT << "Setting clientL fields clientL=" << static_cast<uint32_t>(producer_client_type)
                         //        << " tc: " <<
-                        //        static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
+                        //        static_cast<uint32_t>(dfb::get_counter_id(per_risc_ptr->packed_tile_counter[0]))
                         //        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                         g_remapper_configurator.configure_clientL_all_fields(
                             producer_client_type,
@@ -181,11 +181,15 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     }
 
                     for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                        // DPRINT << "in remapper loop setting producer tc " << (uint32_t)i << " to " << (uint32_t)per_risc_ptr->packed_tile_counter[i] << ENDL();
                         producer_tcs[num_producer_tcs++] = per_risc_ptr->packed_tile_counter[i];
+                        // DPRINT << "got set to tc " << (uint32_t)producer_tcs[num_producer_tcs - 1] << ENDL();
                     }
                 } else {
                     for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                        DPRINT << "in remapper loop setting consumer tc " << (uint32_t)i << " to " << (uint32_t)per_risc_ptr->packed_tile_counter[i] << ENDL();
                         consumer_tcs[num_consumer_tcs++] = per_risc_ptr->packed_tile_counter[i];
+                        DPRINT << "got set to tc " << (uint32_t)consumer_tcs[num_consumer_tcs - 1] << ENDL();
                     }
                 }
             }
@@ -197,14 +201,17 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[txn_id];
                 dst.num_counters = static_cast<uint8_t>(num_producer_tcs);
                 for (uint8_t j = 0; j < dst.num_counters; j++) {
+                    // DPRINT << "Setting producer tc " << dfb::get_tensix_id(producer_tcs[j]) << " " << dfb::get_counter_id(producer_tcs[j]) << ENDL();
                     dst.tile_counters[j] = producer_tcs[j];
                 }
                 dst.tiles_to_post = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
                 // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
                 // do that here to avoid raising spurious interrupts
+                // DPRINT << "Clearing tiles to process for producer txn_id: " << static_cast<uint32_t>(txn_id) << ENDL();
                 CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
                 asm volatile("nop");
 
+                // DPRINT << "Setting tiles to process threshold for producer txn_id: " << static_cast<uint32_t>(txn_id) << " threshold: " << static_cast<uint32_t>(init_ptr->producer_txn_descriptor.num_entries_to_process_threshold) << ENDL();
                 SET_TILES_TO_PROCESS_THRES_TR_ACK(
                     txn_id, init_ptr->producer_txn_descriptor.num_entries_to_process_threshold);
             }
@@ -215,6 +222,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 dst.num_counters = static_cast<uint8_t>(num_consumer_tcs);
                 for (uint8_t j = 0; j < dst.num_counters; j++) {
                     dst.tile_counters[j] = consumer_tcs[j];
+                    DPRINT << "Setting consumer tc " << dfb::get_tensix_id(dst.tile_counters[j]) << " " << dfb::get_counter_id(dst.tile_counters[j]) << ENDL();
                 }
                 // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
                 // do that here to avoid raising spurious interrupts
@@ -230,21 +238,24 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         // Program which transaction ids should trigger the implicit sync ISR
         // per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0(producer_txn_id_mask);
+        // DPRINT << "Setting producer txn_id mask: " << HEX() << producer_txn_id_mask << DEC() << ENDL();
         uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
         reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
         CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
 
         // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(consumer_txn_id_mask);
+        DPRINT << "Setting consumer txn_id mask: " << HEX() << consumer_txn_id_mask << DEC() << ENDL();
         reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
         reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
         CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
 
         if (enable_remapper) {
-            // DPRINT << "Enabling remapper" << ENDL();
+            DPRINT << "Enabling remapper" << ENDL();
             g_remapper_configurator.enable_remapper();
         }
 
         if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
+            DPRINT << "Enabling DFB tile ISR" << ENDL();
             enable_dfb_tile_isr();
         } else {
             disable_dfb_tile_isr();
@@ -280,9 +291,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
 #elif !defined(COMPILE_FOR_TRISC)
                     uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                    // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
-                    //         << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
-                    //         << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
+                    DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
+                            << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
+                            << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
                     llk_intf_reset(tensix_id, tc_id);
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
 #endif

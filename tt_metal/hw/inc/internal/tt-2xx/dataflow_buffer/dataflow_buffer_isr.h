@@ -6,6 +6,7 @@
 
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
+#include "api/debug/dprint.h"
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr();
 inline __attribute__((always_inline)) void disable_dfb_tile_isr();
@@ -52,6 +53,9 @@ inline __attribute__((always_inline)) void dfb_tile_acker_irq_handler() {
             dfb::PackedTileCounter packed_tile_counter = txn_dfb_descriptor.tile_counters[i];
             uint8_t tensix_id = dfb::get_tensix_id(packed_tile_counter);
             uint8_t tc_id = dfb::get_counter_id(packed_tile_counter);
+            DPRINT << "dfb_tile_acker_irq_handler: trid " << static_cast<uint32_t>(trid) << ": tensix_id: " << static_cast<uint32_t>(tensix_id)
+                   << " tc_id: " << static_cast<uint32_t>(tc_id)
+                   << " acking " << static_cast<uint32_t>(txn_dfb_descriptor.tiles_to_ack) << ENDL();
             fast_llk_intf_inc_acked(tensix_id, tc_id, txn_dfb_descriptor.tiles_to_ack);
         }
 

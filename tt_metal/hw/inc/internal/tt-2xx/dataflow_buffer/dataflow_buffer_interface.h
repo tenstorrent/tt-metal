@@ -56,7 +56,7 @@ struct LocalDFBInterface {
     uint8_t
         num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t num_txn_ids;
+uint8_t num_txn_ids;
     uint8_t broadcast_tc;       // DM-DM BLOCKED producer: post to all TCs instead of round-robin
 #endif
 
@@ -67,7 +67,7 @@ struct LocalDFBInterface {
 // It is used by the ISR to understand which tile counters need to update which credits (post/ack)
 struct TxnDFBDescriptor {
     uint8_t num_counters;
-    dfb::PackedTileCounter tile_counters[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    dfb::PackedTileCounter tile_counters[18];
     union {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;

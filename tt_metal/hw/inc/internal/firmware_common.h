@@ -19,6 +19,14 @@
 #include "noc/noc_parameters.h"
 #include "api/debug/dprint.h"
 #include "risc_common.h"
+// Included here (after dprint.h) so that DPRINT is defined when dataflow_buffer_isr.h is compiled.
+// risc_common.h forward-declares dfb_implicit_sync_handler() to satisfy handle_interrupt without
+// pulling in this header through the dprint.h -> risc_common.h include chain.
+// Guarded by ARCH_QUASAR because dataflow_buffer_isr.h is tt-2xx specific; tt-1xx targets
+// (e.g. active_erisc) must not pick it up.
+#if !defined(COMPILE_FOR_TRISC) && defined(ARCH_QUASAR)
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h"
+#endif
 #if !defined(COMPILE_FOR_TRISC)
 #if defined(KERNEL_BUILD)
 #include "api/dataflow/dataflow_api.h"

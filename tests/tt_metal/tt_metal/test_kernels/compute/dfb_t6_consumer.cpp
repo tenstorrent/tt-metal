@@ -28,7 +28,6 @@ void kernel_main() {
         dfb.wait_front(1);
         UNPACK(DPRINT << "unpack consumer tile id " << tile_id << ENDL());
         dfb.pop_front(1);
-        PACK(DPRINT << "pack consumer tile id " << tile_id << ENDL());
     }
     DPRINT << "CBWW" << ENDL();
     dfb.finish();

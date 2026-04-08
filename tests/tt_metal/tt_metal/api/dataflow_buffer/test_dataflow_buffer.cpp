@@ -791,7 +791,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) {
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
