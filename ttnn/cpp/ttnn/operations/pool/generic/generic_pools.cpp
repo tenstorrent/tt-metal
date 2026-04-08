@@ -996,22 +996,22 @@ static std::vector<Tensor> pool2d(
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
 
-    // Use reduction path for global average pooling (kernel covers entire input with no padding).
-    // This is more efficient than the sliding window path for this special case.
-    // Only enabled when count_include_pad=true (avg_pool2d default) to avoid changing the
-    // computation for adaptive_avg_pool2d which passes count_include_pad=false and routes
-    // through avg_pool2d — the reduction kernel has different FP accumulation order than the
-    // sliding window kernel, so switching paths can cause PCC drift in model pipelines.
+    // Use reduction path for global average pooling (kernel covers entire input with no padding)
+    // This is more efficient than the sliding window path for this special case
     std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     bool is_global_pool =
-        count_include_pad && (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
+        (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
         (dilation_h == 1 && dilation_w == 1);
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
-        MemoryConfig mem_config = memory_config.value_or(input_tensor_4d.memory_config());
+        // Use interleaved memory for the reduction — the input may be sharded with a shard spec
+        // sized for the full spatial input, which won't fit the much smaller reduction output.
+        MemoryConfig input_mem = input_tensor_4d.memory_config();
+        MemoryConfig reduce_mem =
+            input_mem.is_sharded() ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, input_mem.buffer_type()} : input_mem;
         uint32_t hw = input_h * input_w;
         // count_include_pad is irrelevant here: is_global_pool guarantees padding is all zeros,
         // so every element in the kernel window is a real input value.
@@ -1019,27 +1019,37 @@ static std::vector<Tensor> pool2d(
 
         if (batch_size == 1) {
             // Fast path: input is already (1, 1, H*W, C). Just reduce dim 2.
-            // pool_sum handles ROW_MAJOR and TILE bfloat16 directly. Block float types
-            // (BFLOAT8_B, BFLOAT4_B) need conversion since the reduce kernel can't produce
-            // block float output.
+            // Convert to ROW_MAJOR first to strip tile padding — TILE inputs may have
+            // non-zero garbage in padded rows/cols from prior operations, which would
+            // corrupt the reduction sum. Also unshard if needed since pool_sum expects
+            // interleaved input.
             Tensor input = input_tensor_4d;
-            if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
+            if (input.is_sharded()) {
+                input = ttnn::to_memory_config(input, reduce_mem);
+            }
+            if (input.layout() != Layout::ROW_MAJOR) {
                 input = ttnn::to_layout(input, Layout::ROW_MAJOR);
             }
             // Note: pool_sum is deprecated but applies the scalar divisor inside the reduction
             // kernel (1 device op). ttnn::sum lacks a scalar param (would need sum + multiply = 2 ops),
             // and ttnn::mean can't handle divisor_override. Replace when ttnn::sum gains scalar support.
-            Tensor output = ttnn::operations::reduction::pool_sum(input, 2, mem_config, compute_kernel_config, scalar);
+            Tensor output = ttnn::operations::reduction::pool_sum(input, 2, reduce_mem, compute_kernel_config, scalar);
 
             // Fix logical channel count (zero-copy view)
             ttnn::Shape output_padded_shape = output.padded_shape();
             ttnn::Shape out_logical({1, 1, 1, channels});
             ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
             output = ttnn::experimental::view(output, out_logical, out_padded);
+            if (output.layout() != output_layout) {
+                output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
+            }
             return {output};
         }
 
-        // Multi-batch: reshape requires ROW_MAJOR, convert TILE inputs (e.g. BFLOAT8_B).
+        // Multi-batch: reshape requires ROW_MAJOR interleaved input.
+        if (input_tensor_4d.is_sharded()) {
+            input_tensor_4d = ttnn::to_memory_config(input_tensor_4d, reduce_mem);
+        }
         if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
             input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
         }
@@ -1056,12 +1066,15 @@ static std::vector<Tensor> pool2d(
         Tensor flat_input = ttnn::experimental::view(nhwc_input, flat_shape);
 
         Tensor output = ttnn::operations::reduction::pool_sum(
-            flat_input, int(flat_shape.rank() - 2), mem_config, compute_kernel_config, scalar);
+            flat_input, int(flat_shape.rank() - 2), reduce_mem, compute_kernel_config, scalar);
 
         ttnn::Shape output_padded_shape = output.padded_shape();
         ttnn::Shape correct_logical({1, 1, batch_size, channels});
         ttnn::Shape correct_padded({1, 1, output_padded_shape[0], output_padded_shape[3]});
         output = ttnn::reshape(output, correct_logical, correct_padded);
+        if (output.layout() != output_layout) {
+            output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
+        }
 
         return {output};
     }
