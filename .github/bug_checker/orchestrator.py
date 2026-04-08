@@ -52,8 +52,10 @@ def run_bug_check(
     )
 
     # Preflight: verify LLM is configured before entering the per-rule loop.
-    # This catches hard config errors (missing API key, missing anthropic package)
-    # early so the job fails loudly instead of silently skipping every rule.
+    # This is intentionally fail-closed for hard config errors (missing API key,
+    # missing anthropic package). Silently skipping every rule on a config error
+    # would give a false "no findings" result. The fail-open policy applies to
+    # per-rule runtime errors only (e.g. transient API failures).
     LLMSession()
 
     all_findings: list[Finding] = []

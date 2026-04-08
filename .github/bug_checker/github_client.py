@@ -206,14 +206,18 @@ def _truncate_diff(diff: str, changed_files: list[str]) -> tuple[str, list[str]]
 
     # The last file with a header in the truncated output may be incomplete —
     # its header survived the cut but its diff content may be partial.
+    # Only treat it as truncated if the cutoff is mid-section (i.e. the next
+    # line is NOT a new "diff --git" header or end-of-diff).
     last_file: str | None = None
     for raw_line in lines[:MAX_DIFF_LINES]:
         if raw_line.startswith("diff --git "):
             m = re.match(r"^diff --git a/\S+ b/(\S+)", raw_line)
             if m:
                 last_file = m.group(1)
-    if last_file:
-        files_in_truncated.discard(last_file)
+    if last_file and len(lines) > MAX_DIFF_LINES:
+        next_line = lines[MAX_DIFF_LINES]
+        if not next_line.startswith("diff --git "):
+            files_in_truncated.discard(last_file)
 
     truncated_files = [f for f in changed_files if f not in files_in_truncated]
     return truncated, truncated_files

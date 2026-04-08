@@ -85,17 +85,17 @@ jobs:
           SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
           RULE_ID: ${{ needs.parse-comment.outputs.rule-id }}
         run: |
-          CMD="python .github/bug_checker/run_bug_checker.py"
-          CMD="$CMD --pr $PR_NUMBER"
-          CMD="$CMD --subcommand $SUBCOMMAND"
+          cmd=(python .github/bug_checker/run_bug_checker.py)
+          cmd+=(--pr "$PR_NUMBER")
+          cmd+=(--subcommand "$SUBCOMMAND")
           if [ -n "$RULE_ID" ]; then
-            CMD="$CMD --rule-id $RULE_ID"
+            cmd+=(--rule-id "$RULE_ID")
           fi
           if [ "$SUBCOMMAND" = "run" ] || [ "$SUBCOMMAND" = "check-rule" ]; then
-            CMD="$CMD --sarif .github/bug-checker-results.sarif"
+            cmd+=(--sarif .github/bug-checker-results.sarif)
           fi
-          CMD="$CMD --post-comments --verbose"
-          eval $CMD
+          cmd+=(--post-comments --verbose)
+          "${cmd[@]}"
 
       - name: Upload SARIF
         if: >-
