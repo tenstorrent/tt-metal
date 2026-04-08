@@ -290,7 +290,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_active_experts_,
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
-        uint32_t index_l1_addr_>
+        uint32_t index_l1_addr_,
+        uint32_t zeros_addr_shifted_ = 812>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -305,6 +306,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr uint32_t zeros_addr_shifted = zeros_addr_shifted_;
     };
 
     struct WriterCTArgs {};
@@ -342,8 +344,6 @@ struct MatmulExpertCompressedDRAM {
             uint64_t next_sem_noc_addr = next_noc_addr | next_sem_l1;
 
             const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
-            const volatile uint8_t* table_idx_arr =
-                reinterpret_cast<const volatile uint8_t*>(CTArgs::table_idx_l1_addr);
 
             // CB base address — set on first DRAM expert.
             uint32_t cb_in1_base = 0;
@@ -355,8 +355,8 @@ struct MatmulExpertCompressedDRAM {
                 if (!is_dram_arr[expert_idx]) {
                     continue;  // Skip SRAM experts
                 }
-                uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[expert_idx]);
-                const volatile uint32_t* expert_meta = meta_base + table_idx * meta_stride;
+                // Index meta/fmt tables directly by global expert_idx (no table_idx indirection).
+                const volatile uint32_t* expert_meta = meta_base + expert_idx * meta_stride;
                 uint32_t expert_in1_addr = expert_meta[0];
                 uint32_t dram_read_offset = expert_meta[1];
                 const volatile uint32_t* block_size_ptr = expert_meta + 2;
@@ -378,8 +378,8 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(CTArgs::bank_id, expert_in1_addr);
-                // Use actual CB write pointer — cb_in1_base may differ after previous experts
-                // advanced the write pointer by num_iterations % num_buffers slots.
+                // Sequential slot: get_write_ptr follows the CB ring buffer in order.
+                // Fmt metadata uses relative offsets; TRISC reads slot_base from CB at runtime.
                 uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
                 uint32_t num_free_blocks_in_buffer = num_buffers;
                 uint32_t curr_block_trid = 1;
@@ -480,12 +480,14 @@ struct MatmulExpertCompressedDRAM {
             uint32_t addr_in0 = 0;
             uint32_t in0_face_r_dim = 0;
             uint32_t in0_tile_size = 0;
+            uint32_t in1_operand_id = 0;
 
             UNPACK(({
                 uint32_t in0_id = get_operand_id(CTArgs::cb_in0);
                 addr_in0 = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
                 in0_face_r_dim = get_operand_face_r_dim(in0_id);
                 in0_tile_size = get_local_cb_interface(in0_id).fifo_page_size;
+                in1_operand_id = get_operand_id(CTArgs::cb_in1);
             }));
 
             cb_wait_front(CTArgs::cb_index, 1);
@@ -494,8 +496,6 @@ struct MatmulExpertCompressedDRAM {
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
             const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
-            const volatile uint8_t* table_idx_arr =
-                reinterpret_cast<const volatile uint8_t*>(CTArgs::table_idx_l1_addr);
 
             // Count DRAM experts — all TRISCs agree on the loop bound.
             uint32_t num_dram_experts = 0;
@@ -510,8 +510,8 @@ struct MatmulExpertCompressedDRAM {
             }
 
             for (uint32_t i = 0; i < num_dram_experts; i++) {
-                uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[dram_expert_eids[i]]);
-                uint32_t fmt_l1_addr = CTArgs::fmt_l1_addr + table_idx * tiles_per_expert * sizeof(uint32_t);
+                // Index fmt table directly by global expert ID (no table_idx indirection).
+                uint32_t fmt_l1_addr = CTArgs::fmt_l1_addr + dram_expert_eids[i] * tiles_per_expert * sizeof(uint32_t);
                 const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
                 uint32_t fmt_tile_offset = 0;
 
@@ -524,14 +524,19 @@ struct MatmulExpertCompressedDRAM {
                     for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
 
+                        // Read CB slot base after wait — this is where NCRISC wrote the data.
+                        uint32_t slot_base = 0;
+                        UNPACK(({ slot_base = get_local_cb_interface(in1_operand_id).fifo_rd_ptr - 1; }));
+
                         const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
                         uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
+                        constexpr uint32_t zeros_addr = CTArgs::zeros_addr_shifted;
                         if (sb_k < CTArgs::num_subblocks_k - 1) {
-                            compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false>(
-                                fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
+                            compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
+                                fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                         } else {
-                            compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true>(
-                                fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
+                            compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
+                                fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                         }
 
                         addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;

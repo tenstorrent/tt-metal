@@ -302,6 +302,14 @@ class CompressedTensor:
             shard_mapping = self._per_device_shard_mapping[device_coord]
             return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _pages in shard_mapping])
 
+    def get_data_tensor(self) -> "ttnn.Tensor":
+        """Return the lockstep data tensor (non-per-core mode)."""
+        return self.data
+
+    def get_assignment_tensor(self) -> "ttnn.Tensor":
+        """Return the lockstep assignment tensor (non-per-core mode)."""
+        return self.assignment
+
     def get_data_tensors(self) -> list:
         """Return data tensor(s) for use in io_tensors lists (lifetime management).
 

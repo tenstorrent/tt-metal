@@ -1004,7 +1004,14 @@ def _run_hybrid_expert_multi_device(
     if dram_expert_ids:
         num_subblocks_k = Kt // subblock_k
         dram_device_data = create_dram_expert_tensors_multi_device(
-            mesh_device, dram_cts, subblock_k, num_subblocks_k, per_core_N, cores_per_bank=cores_per_bank
+            mesh_device,
+            dram_cts,
+            subblock_k,
+            num_subblocks_k,
+            per_core_N,
+            cores_per_bank=cores_per_bank,
+            num_total_experts=num_experts,
+            is_dram_flags=is_dram_flags,
         )
 
     result = ExpertKernel.op(
