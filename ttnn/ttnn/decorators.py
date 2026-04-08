@@ -290,6 +290,8 @@ TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs):
+    if ttnn.CONFIG.report_path is None:
+        return None
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
