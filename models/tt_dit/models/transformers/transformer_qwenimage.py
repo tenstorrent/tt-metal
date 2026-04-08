@@ -162,7 +162,7 @@ class QwenImageTransformer(Module):
         prompt = self.txt_norm(prompt)
         prompt = self.txt_in(prompt)
 
-        for i, block in enumerate(self.transformer_blocks, start=1):
+        for block in self.transformer_blocks:
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
@@ -172,9 +172,6 @@ class QwenImageTransformer(Module):
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
             )
-
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(spatial.device())
 
         # TODO: remove unsqueeze/squeeze when DistributedLayerNorm allows it
         spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
