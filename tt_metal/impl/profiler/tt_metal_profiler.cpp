@@ -381,9 +381,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         }
 
         CoreCoord eth_sender_core = connected_chips.at(device_id_receiver)[0];
-        auto [connected_chip_id, eth_receiver_core] =
-            MetalContext::instance().get_cluster().get_connected_ethernet_core(
-                std::make_tuple(device_id_sender, eth_sender_core));
+        auto eth_receiver_core = std::get<1>(MetalContext::instance().get_cluster().get_connected_ethernet_core(
+            std::make_tuple(device_id_sender, eth_sender_core)));
 
         const std::vector<uint32_t>& ct_args = {
             channel_count, static_cast<uint32_t>(sample_count), static_cast<uint32_t>(sample_size)};
@@ -635,7 +634,8 @@ void ProfilerSync(ProfilerSyncState state) {
                     MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
                         sender_device_id);
 
-                for (const auto& [receiver_device_id, eth_cores] : connected_chips) {
+                for (const auto& connected_chip : connected_chips) {
+                    ChipId receiver_device_id = connected_chip.first;
                     if (visited.contains(receiver_device_id) && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
                         num_connected_devices[*root_device]++;
