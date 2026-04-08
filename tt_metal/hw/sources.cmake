@@ -89,6 +89,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
+    inc/api/compute/eltwise_unary/tanh_derivative.h
     inc/api/compute/eltwise_unary/threshold.h
     inc/api/compute/eltwise_unary/trigonometry.h
     inc/api/compute/eltwise_unary/typecast.h
