@@ -288,6 +288,12 @@ def measure_ulp_with_near_zero_atol(
         the normal (non-near-zero) elements, and ``worst`` with the formula string
         ``|actual - golden| / ulp(golden) = max_ulp`` for the worst element.
         All values are 0.0 / empty string when there are no normal elements.
+
+        ``p95`` and ``p99`` are computed via ``torch.quantile`` only when there are
+        enough normal elements to make the percentile meaningful: p95 requires
+        ``n >= 20``, p99 requires ``n >= 100``.  Below those counts both fall back
+        to ``max_ulp``.  Callers should not interpret p95/p99 as true percentiles
+        for very small tensors.
     """
     expected_result = _normalize_tensor(expected_result)
     actual_result = _normalize_tensor(actual_result)
