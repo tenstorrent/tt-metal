@@ -199,7 +199,8 @@ class ModelPipeline:
             spec_accept = 0
             base_reject = 0
             spec_reject = 0
-
+            num_writes = 0
+            num_reads = 0
             # --- Speculative decode state machine --------------------------------
             iteration = 0
             start_time = time.time()
@@ -212,7 +213,11 @@ class ModelPipeline:
                 #     f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
                 # )
 
-                result = pending.popleft() if pending else self.model.read_result()
+                if pending:
+                    result = pending.popleft()
+                else:
+                    result = self.model.read_result()
+                    num_reads += 1
 
                 # print("Got MD from Device: ")
                 # print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
@@ -236,7 +241,7 @@ class ModelPipeline:
                             base_accept += 1
                             # print("Base Accept")
                             num_emits += 1
-                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens[slot_id]) >= max_new_tokens
                             continue
                         # On rejection, we discard the last unverified spec token and populate the new spec token
                         else:
@@ -246,7 +251,7 @@ class ModelPipeline:
                             base_reject += 1
                             # print("Base Reject")
                             num_emits += 1
-                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens[slot_id]) >= max_new_tokens
                     if result.token_0_type == TokenType.SPEC:
                         # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
                         if verified_spec_tokens:
@@ -269,9 +274,8 @@ class ModelPipeline:
 
                 if signal_to_exit:
                     continue
-                elif is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+                elif is_eos(result.token_0) or len(generated_tokens[slot_id]) >= max_new_tokens:
                     break
-
                 self._write_spec_pair(
                     result.token_0,
                     result.token_0_pos,
@@ -279,7 +283,13 @@ class ModelPipeline:
                     result.token_1_pos,
                     slot_id,
                 )
-            logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+                num_writes += 2
+
+            while num_reads < num_writes:
+                result = self.model.read_result()
+                num_reads += 1
+
+            logger.debug("Generation complete ({} tokens generated)", len(generated_tokens[slot_id]))
 
             end_time = time.time()
             print(f"Time taken for user {slot_id}: {end_time - start_time} seconds")
