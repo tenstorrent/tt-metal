@@ -11,7 +11,6 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-
 from tracy import signpost
 
 from models.common.utility_functions import skip_for_blackhole
