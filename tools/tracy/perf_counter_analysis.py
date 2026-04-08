@@ -49,13 +49,17 @@ BH_RTL_DEAD_COUNTERS = frozenset(
 )
 
 # WH RTL-confirmed dead counters: signals tied to constant 0 in Wormhole RTL.
-# - PACK_BANK6/7_GRANT: bank 6-7 grant tied to 2'b00 (same as BH)
-# - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 on WH (no multi-phase fidelity)
+# - PACK_BANK6/7_GRANT: bank 6-7 grant tied to 2'b00
+# - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 (no multi-phase fidelity)
+# - MATH_INSTRN_NOT_BLOCKED_SRC: grant 256 = hf_cycles==2'b11, always 0 (fidelity off)
+# - INSTRN_2_HF_CYCLES: grant 257 = hf_cycles==2'b01, always 0 (fidelity off)
 WH_RTL_DEAD_COUNTERS = frozenset(
     {
         "PACK_BANK6_GRANT",
         "PACK_BANK7_GRANT",
         "FIDELITY_PHASE_STALLS",
+        "MATH_INSTRN_NOT_BLOCKED_SRC",
+        "INSTRN_2_HF_CYCLES",
     }
 )
 
