@@ -219,13 +219,6 @@ jobs:
         run: |
             mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
 
-      - name: Run Fabric Test
-        continue-on-error: true
-        timeout-minutes: 20
-        run: |
-          tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
-
       - name: Run Pipeline Test
         timeout-minutes: 30
         run: |
@@ -242,6 +235,12 @@ jobs:
             --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
             --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
             /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+
+      - name: Run Fabric Test
+        timeout-minutes: 20
+        run: |
+          tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
+            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
 
   cleanup:
     name: Cleanup
