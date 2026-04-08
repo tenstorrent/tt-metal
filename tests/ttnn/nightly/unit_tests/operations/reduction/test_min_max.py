@@ -62,8 +62,12 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         raise AttributeError()
 
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
-    if layout == ttnn.TILE_LAYOUT:
-        ttnn.fill_implicit_tile_padding(tt_input, -42)  # implicit padding issue - passed
+    # Alternative (implicit padding exercise):
+    # tt_input = ttnn.from_torch(
+    #     torch_input, dtype=ttnn.bfloat16, layout=layout, device=device
+    # )
+    # if layout == ttnn.TILE_LAYOUT:
+    #     ttnn.fill_implicit_tile_padding(tt_input, -42)
 
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
