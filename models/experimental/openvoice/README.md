@@ -143,8 +143,7 @@ models/experimental/openvoice/
 ├── README.md                 # This file
 ├── TRADEOFFS.md             # Architecture tradeoffs and tuning
 ├── functional/              # Shared TTNN operations
-│   ├── operations.py        # Conv1d, LayerNorm, Attention, Flip, helpers
-│   └── preprocess.py        # Weight preprocessing
+│   └── operations.py        # Conv1d, LayerNorm, Attention, Flip, helpers
 ├── tt/                      # TTNN implementations
 │   ├── tone_color_converter.py   # High-level API
 │   ├── synthesizer.py            # Voice conversion pipeline
