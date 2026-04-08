@@ -151,7 +151,7 @@ Available counter groups:
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
 - ``all`` — all of the above (recommended starting point)
 
-**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously. When both are requested, the profiler automatically runs two passes and merges the results.
+**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously in a single ``python -m tracy`` run. To capture both, run them in separate passes. Automatic two-pass capture and merge is supported by the model-log wrapper (``process_model_log.run_device_profiler``).
 
 Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4`` (additional NOC ring ports).
 

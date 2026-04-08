@@ -794,14 +794,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
         // Note: All L1 banks share the same hardware mux and only one can be active at a time.
-        //       The profiler CLI (python -m tracy --profiler-capture-perf-counters) handles
-        //       multi-pass execution automatically when multiple L1 banks are requested.
+        //       To capture multiple L1 banks, run separate passes. The model-log wrapper
+        //       (process_model_log.run_device_profiler) supports automatic two-pass merge.
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
                 // All L1 banks share the same hardware mux — only one can be active at a time.
-                // The CLI (python -m tracy) handles multi-pass automatically, but the raw env var
-                // must specify at most one L1 bank.
+                // Specify at most one L1 bank per run.
                 constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
                 uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {
