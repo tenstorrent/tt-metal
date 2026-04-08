@@ -479,10 +479,14 @@ void AllocatorImpl::mark_allocations_unsafe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
 
-    static const bool env_tracking = std::getenv("TT_METAL_TRACE_ALLOC_TRACKING") != nullptr ||
-                                     std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
-    static const bool env_tracebacks = std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
-    static const bool env_skip_pcache = std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE") != nullptr;
+    auto env_var_enabled = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::string_view(value) == "1";
+    };
+    static const bool env_tracking =
+        env_var_enabled("TT_METAL_TRACE_ALLOC_TRACKING") || env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
+    static const bool env_tracebacks = env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
+    static const bool env_skip_pcache = env_var_enabled("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE");
     if (env_tracking) {
         tracking_enabled_ = true;
     }
