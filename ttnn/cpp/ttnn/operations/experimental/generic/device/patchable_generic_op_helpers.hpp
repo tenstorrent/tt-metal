@@ -86,7 +86,6 @@ struct AddressSlots {
     std::vector<PerCoreRTArgSlot> per_core_rt_arg_slots;
     std::vector<CommonRTArgSlot> common_rt_arg_slots;
     std::vector<CBSlot> cb_slots;
-    std::vector<OptionalAddr> io_addrs_at_build;
 };
 
 /// Compute the full address-slot mapping.  Must be called while buffer pointers
@@ -118,32 +117,17 @@ inline AddressSlots compute_address_slots(
         slots.cb_slots.push_back({cb_idx, io_idx});
     }
 
-    slots.io_addrs_at_build = std::move(tensor_addrs);
     return slots;
 }
 
 // ── Descriptor patching ─────────────────────────────────────────────────────
 
 /// Patch a ProgramDescriptor in place so all IO-tensor-derived addresses and
-/// buffer pointers reflect the current ``io_tensors``.  Returns immediately
-/// when all addresses match the build-time snapshot (zero-cost hot path).
+/// buffer pointers reflect the current ``io_tensors``.
 inline void patch_stale_descriptor(
     tt::tt_metal::ProgramDescriptor& desc, const std::vector<Tensor>& io_tensors, const AddressSlots& slots) {
-    // Quick check: if all IO tensor addresses match build time, nothing is stale.
-    bool needs_patch = false;
-    for (size_t i = 0; i < slots.io_addrs_at_build.size() && i < io_tensors.size(); ++i) {
-        if (slots.io_addrs_at_build[i].has_value()) {
-            auto* buf = io_tensors[i].buffer();
-            if (!buf || buf->address() != *slots.io_addrs_at_build[i]) {
-                needs_patch = true;
-                break;
-            }
-        }
-    }
-    if (!needs_patch) {
-        return;
-    }
-
+    // Always patch — even when addresses match, the Buffer* pointers may be
+    // stale (the L1 allocator can reuse the same address for a new Buffer object).
     for (const auto& slot : slots.per_core_rt_arg_slots) {
         auto* buf = io_tensors[slot.io_tensor_index].buffer();
         if (buf) {
