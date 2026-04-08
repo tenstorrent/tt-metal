@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& confi
                 m_momentum.emplace(
                     name,
                     autograd::create_tensor(
-                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                         /* requires_grad */ false));
             }
         }
@@ -51,7 +51,7 @@ void SGD::step() {
             continue;
         }
         auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         std::optional<ttnn::Tensor> momentum_buffer;
         if (m_config.momentum > 0.0) {
@@ -62,7 +62,7 @@ void SGD::step() {
                     /* requires_grad */ false);
                 it = m_momentum.emplace(name, std::move(buf)).first;
             }
-            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::FULL);
+            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::HALF);
         }
 
         // The first step should not apply dampening

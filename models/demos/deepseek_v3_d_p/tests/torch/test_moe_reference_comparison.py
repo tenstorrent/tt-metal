@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@ from unittest.mock import MagicMock
 # (the kernel functions are only used for fp8 quantization, not needed for bf16 testing)
 sys.modules["models.demos.deepseek_v3.reference.deepseek.kernel"] = MagicMock()
 
-import pytest
 import torch
 import torch.nn as nn
 from loguru import logger
@@ -105,7 +104,6 @@ def create_shared_weights(
     hidden_dim: int,
     n_routed_experts: int,
     n_shared_experts: int,
-    seed: int,
 ) -> tuple[list[dict], dict]:
     """
     Create random weights compatible with both implementations.
@@ -119,7 +117,6 @@ def create_shared_weights(
         routed_weights: List of dicts with gate_proj, up_proj, down_proj per expert
         shared_weights: Dict with gate_proj, up_proj, down_proj for shared expert
     """
-    torch.manual_seed(seed)
 
     routed_weights = []
     for _ in range(n_routed_experts):
@@ -202,8 +199,7 @@ def create_gate(emb_dim: int, n_routed_experts: int, num_experts_per_tok: int) -
     return gate
 
 
-@pytest.mark.parametrize("seed", [42])
-def test_moe_reference_pcc(seed: int):
+def test_moe_reference_pcc():
     """
     Compare tt_ref_moe vs ds_ref_moe (without gate).
 
@@ -213,6 +209,8 @@ def test_moe_reference_pcc(seed: int):
     - ISL: 1024
     - 256 routed experts, top-8 routing (topk=8 is gate constraint)
     """
+    torch.manual_seed(42)
+
     # Test configuration (scaled down from 671B)
     seq_len = 1024
     emb_dim = 224  # 7168 / 32
@@ -224,7 +222,7 @@ def test_moe_reference_pcc(seed: int):
     dispatch_group_size = 1  # Single "chip" for host-side test
     capacity_factor = 2.0
 
-    logger.debug(f"Test config: seed={seed}, seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"Test config: seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
     logger.debug(f"  n_routed_experts={n_routed_experts}, num_experts_per_tok={num_experts_per_tok}")
 
     # Create shared weights for both implementations
@@ -233,7 +231,6 @@ def test_moe_reference_pcc(seed: int):
         hidden_dim=hidden_dim,
         n_routed_experts=n_routed_experts,
         n_shared_experts=n_shared_experts,
-        seed=seed,
     )
 
     # 1. Create ds_ref_moe using reference/model.py Expert and MLP
@@ -290,7 +287,6 @@ def test_moe_reference_pcc(seed: int):
     )
 
     # 4. Generate test input
-    torch.manual_seed(seed + 1000)  # Different seed for input
     x = torch.randn(batch_size, seq_len, emb_dim, dtype=torch.float32)
     logger.debug(f"Input shape: {x.shape}")
 
