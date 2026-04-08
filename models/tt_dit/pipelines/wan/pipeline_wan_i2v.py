@@ -153,7 +153,12 @@ class WanPipelineI2V(WanPipeline):
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-        encoded_video_torch = fast_device_to_host(encoded_video_BCTHW, self.mesh_device, concat_dims)
+        encoded_video_torch = fast_device_to_host(
+            encoded_video_BCTHW,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.vae_ccl_manager,
+        )
         encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 

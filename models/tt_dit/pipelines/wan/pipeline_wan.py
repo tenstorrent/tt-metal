@@ -1038,7 +1038,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = fast_device_to_host(tt_video_BCTHW, self.mesh_device, concat_dims)
+            video_torch = fast_device_to_host(
+                tt_video_BCTHW,
+                self.mesh_device,
+                concat_dims,
+                ccl_manager=self.vae_ccl_manager,
+            )
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             if output_type == "np":
