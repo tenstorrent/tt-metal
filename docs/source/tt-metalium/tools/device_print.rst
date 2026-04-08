@@ -32,7 +32,7 @@ If only TT_METAL_DPRINT_CORES is set, the legacy DPRINT system will be used.
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
-    export TT_METAL_DEVICE_PRINT=1                      # required, use new DEVICE_PRINT system instead of legacy DPRINT. This option is avaiable only during deprecation period of DPRINT, and will be removed in a future release.
+    export TT_METAL_DEVICE_PRINT=1                      # required, use new DEVICE_PRINT system instead of legacy DPRINT. This option is available only during deprecation period of DPRINT, and will be removed in a future release.
 
 To generate device debug prints on the device, include the ``api/debug/device_print.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
@@ -53,13 +53,6 @@ An example with the different features available is shown below:
         // BF16 type printing is supported via provided type
         bf16_t my_bf16_val(0x3dfb); // Equivalent to 0.122559
         DEVICE_PRINT("BF16 value: {}\n", my_bf16_val);
-
-        // DEVICE_PRINT supports printing enums directly
-        TestEnum e = VAL1;
-        DEVICE_PRINT("Enum value: {}\n", e); // prints: Enum value: VAL1
-        DEVICE_PRINT("Enum long name: {:#x}\n", e); // prints: Enum long name: TestEnum::VAL1
-        // If it is not valid value of the enum or if debugging information is not available, it will print the underlying integer value
-        DEVICE_PRINT("Invalid enum value: {}\n", (TestEnum)5); // prints: Invalid enum value: 5
 
         // DEVICE_PRINT supports formatting options that are supported by fmtlib:
         DEVICE_PRINT("{:.5f}\n", 0.123456f);
