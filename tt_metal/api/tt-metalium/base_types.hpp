@@ -46,3 +46,7 @@ struct std::hash<tt::tt_metal::MathFidelity> {
         return static_cast<std::size_t>(obj);
     }
 };
+
+// Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
+using MathFidelity [[deprecated("Use tt::tt_metal::MathFidelity")]] = tt::tt_metal::MathFidelity;
+using UnpackToDestMode [[deprecated("Use tt::tt_metal::UnpackToDestMode")]] = tt::tt_metal::UnpackToDestMode;
