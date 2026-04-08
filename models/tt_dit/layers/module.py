@@ -224,7 +224,9 @@ class Module(ABC):
         Args:
             *args: Modules that cannot be co-resident in memory with this module.
         """
-        self.coresident_exclusions = set(args)
+        if self.coresident_exclusions is None:
+            self.coresident_exclusions = set()
+        self.coresident_exclusions.update(args)
 
     def evict_coresident_exclusions(self) -> None:
         """Evict the modules that cannot be resident in memory at the same time as this module."""
