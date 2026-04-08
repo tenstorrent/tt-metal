@@ -1117,7 +1117,7 @@ def _shard_device_impl(
                 tensor = torch.nn.functional.pad(tensor, (0, pad_last, 0, pad_second_to_last), mode="constant", value=0)
     if shard_dims[0] is None and shard_dims[1] is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+    elif shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dims[0])
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
