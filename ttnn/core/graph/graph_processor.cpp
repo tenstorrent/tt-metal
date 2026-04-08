@@ -775,7 +775,6 @@ nlohmann::json GraphProcessor::get_report() const {
     const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     metadata[kReportRank] = *world_ctx->rank();
     metadata[kReportWorldSize] = *world_ctx->size();
-
     report[kReportMetadata] = metadata;
 
     // Cluster descriptor (YAML content) - always try, returns empty if unavailable
