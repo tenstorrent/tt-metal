@@ -50,7 +50,7 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 
 **INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog concatenation in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons (thcon, unpack, pack, math, sem_zero, sem_max, move, trisc_reg_access, sfpu) start at sel 39 on WH and sel 31 on BH. The `instrn_counters` array is split by `#if defined(ARCH_BLACKHOLE)` to handle this difference.
 
-**Note**: No RTL counter exists for per-thread instruction issue counts. Sel 24-26 measures total stall cycles per thread (`THREAD_STALLS`). The `Thread IPC` metric was removed.
+**Note**: Per-thread instruction issue/grant counters exist (e.g. `*_INSTRN_ISSUED_*`), but there is no dedicated counter for *total* instructions per thread. Sel 24-26 measures total stall cycles per thread (`THREAD_STALLS`), not instruction counts. The `Thread IPC` metric was removed for this reason.
 
 ---
 
