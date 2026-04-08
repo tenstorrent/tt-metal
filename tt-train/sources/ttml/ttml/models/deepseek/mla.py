@@ -26,7 +26,9 @@ class MultiHeadLatentAttention(AbstractModuleBase):
     """Multi-head Latent Attention (MLA) layer.
 
     Follows the DeepSeek-V3 naive-mode attention:
-      Q: x -> wq_a -> norm -> wq_b -> split_heads -> [q_nope, q_pe] -> RoPE(q_pe) -> cat
+      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b -> split_heads
+      Q (q_lora_rank == 0): x -> wq -> split_heads   (direct, no LoRA bottleneck)
+      Both: -> [q_nope, q_pe] -> RoPE(q_pe) -> cat
       KV: x -> wkv_a -> [kv_latent, k_pe] -> norm(kv_latent) -> wkv_b -> split_heads
           -> [k_nope, v] + RoPE(k_pe) broadcast -> cat(k_nope, k_pe)
       Attention: composite_SDPA(Q, K, V, mask) -> fuse_heads -> wo
@@ -36,6 +38,7 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         super().__init__()
 
         self.n_heads = config.n_heads
+        self.q_lora_rank = config.q_lora_rank
         self.qk_nope_head_dim = config.qk_nope_head_dim
         self.qk_rope_head_dim = config.qk_rope_head_dim
         self.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
@@ -43,10 +46,17 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         self.kv_lora_rank = config.kv_lora_rank
         self.rope_params = rope_params
 
-        # Q path: down-project -> norm -> up-project
-        self.wq_a = LinearLayer(config.dim, config.q_lora_rank, has_bias=False)
-        self.q_norm = RMSNormLayer(config.q_lora_rank)
-        self.wq_b = LinearLayer(config.q_lora_rank, config.n_heads * self.qk_head_dim, has_bias=False)
+        # Q path: direct projection or LoRA bottleneck
+        if config.q_lora_rank == 0:
+            self.wq = LinearLayer(config.dim, config.n_heads * self.qk_head_dim, has_bias=False)
+            self.wq_a = None
+            self.q_norm = None
+            self.wq_b = None
+        else:
+            self.wq = None
+            self.wq_a = LinearLayer(config.dim, config.q_lora_rank, has_bias=False)
+            self.q_norm = RMSNormLayer(config.q_lora_rank)
+            self.wq_b = LinearLayer(config.q_lora_rank, config.n_heads * self.qk_head_dim, has_bias=False)
 
         # KV path: joint down-project (kv_latent + k_pe)
         self.wkv_a = LinearLayer(config.dim, config.kv_lora_rank + config.qk_rope_head_dim, has_bias=False)
@@ -69,7 +79,10 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         v_dim = self.v_head_dim
 
         # ── Q path ──
-        q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
+        if self.q_lora_rank == 0:
+            q = self.wq(x)  # [B, 1, S, n_heads * qk_head]
+        else:
+            q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
         q = split_heads(q, n_heads)  # [B, n_heads, S, qk_head]
 
         q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])

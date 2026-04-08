@@ -45,7 +45,7 @@ class DeepSeekConfig:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
-    # MLA
+    # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64

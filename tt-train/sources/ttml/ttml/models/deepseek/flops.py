@@ -45,8 +45,11 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     kv_lora = config.kv_lora_rank
 
     # ── MLA parameters per layer ──
-    # Q path: wq_a + wq_b
-    mla_q = d * q_lora + q_lora * n_heads * qk_head
+    # Q path: direct wq (q_lora_rank==0) or wq_a + wq_b (q_lora_rank>0)
+    if q_lora == 0:
+        mla_q = d * n_heads * qk_head
+    else:
+        mla_q = d * q_lora + q_lora * n_heads * qk_head
     # KV path: wkv_a + wkv_b
     mla_kv = d * (kv_lora + qk_rope) + kv_lora * n_heads * (qk_nope + v_head)
     # Output: wo
