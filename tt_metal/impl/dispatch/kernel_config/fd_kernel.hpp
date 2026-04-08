@@ -115,24 +115,7 @@ public:
         get_control_plane_(get_control_plane),
         get_dispatch_query_manager_(get_dispatch_query_manager),
         get_max_num_eth_cores_(get_max_num_eth_cores),
-        get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-        bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-        bool are_fd_kernels_on_same_core = descriptor.cluster().arch() == tt::ARCH::QUASAR && descriptor.num_cqs() == 1;
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            are_fd_kernels_on_same_core,
-            descriptor.rtoptions());
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            /*are_fd_kernels_on_same_core=*/false,
-            descriptor.rtoptions());
-    }
+        get_reads_dispatch_cores_(get_reads_dispatch_cores) {}
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -206,6 +189,8 @@ public:
     uint32_t get_max_num_eth_cores() const;
 
 protected:
+    const DispatchMemMap& get_dispatch_mem_map() const;
+
     // Attributes for an EDM client to connect to the router
     struct FDKernelEdmConnectionAttributes {
         size_t worker_flow_control_sem{0};
@@ -259,7 +244,6 @@ protected:
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
     GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
 };
 
 }  // namespace tt::tt_metal
