@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,8 @@ extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 extern "C" [[gnu::section(".start")]] void _start(uint32_t) {
+    DeviceZoneScopedMainChildN("ERISC-KERNEL");
+
     // Clear bss, we write to rtos_context_switch_ptr just below.
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
@@ -33,7 +35,6 @@ extern "C" [[gnu::section(".start")]] void _start(uint32_t) {
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    DeviceZoneScopedMainChildN("ERISC-KERNEL");
     WAYPOINT("K");
     kernel_main();
     WAYPOINT("KD");
