@@ -304,7 +304,7 @@ def test_ttnn_combine(
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
         mesh_mapper=mesh_mapper,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
