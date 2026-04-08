@@ -1130,6 +1130,26 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         use_llk_bcast = false;
     }
 
+    // On Blackhole, the B2D datacopy path (MOVB2D) has a known issue in FP32 dest
+    // accumulation mode with non-32-bit source formats (BH Issue #449).  SCALAR and
+    // ROW broadcasts use MOVB2D, which produces corrupted results when
+    // fp32_dest_acc_en is true.  COL broadcast is unaffected because it uses ELWADD
+    // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
+    // broadcast types on Blackhole when FP32 dest accumulation is active.
+    if (use_llk_bcast && fp32_dest_acc_en) {
+        tt::ARCH arch = tt::tt_metal::hal::get_arch();
+        if (arch == tt::ARCH::BLACKHOLE) {
+            auto sbt = operation_attributes.subtile_broadcast_type;
+            bool uses_movb2d =
+                (sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B ||
+                 sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
+                 sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
+            if (uses_movb2d) {
+                use_llk_bcast = false;
+            }
+        }
+    }
+
     if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines, is_where_op);
