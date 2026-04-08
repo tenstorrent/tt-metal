@@ -30,6 +30,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
+        case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -82,6 +83,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
+        case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }

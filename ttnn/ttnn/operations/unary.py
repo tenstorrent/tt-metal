@@ -101,6 +101,15 @@ def _golden_function_softsign(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.softsign, golden_function=_golden_function_softsign)
 
 
+def _golden_function_selu(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.selu(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
+
+
 def _golden_function_hardswish(input_tensor_a, *args, **kwargs):
     import torch
 

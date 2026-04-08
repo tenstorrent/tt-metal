@@ -19,4 +19,5 @@ enum class SfpuType {
     frac,
     atanh,
     sinh,
+    selu,
 };
