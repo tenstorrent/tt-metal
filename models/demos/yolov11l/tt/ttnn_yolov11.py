@@ -122,7 +122,10 @@ class TtnnYoloV11:
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = sharded_concat([x, x4], to_interleaved=False)
+        x = sharded_concat(
+            [x, x4],
+            to_interleaved=False,
+        )
         ttnn.deallocate(x4)
         x = self.c3k2_6(self.device, x)
         x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
