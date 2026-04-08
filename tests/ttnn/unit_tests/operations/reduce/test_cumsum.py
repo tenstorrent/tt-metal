@@ -145,7 +145,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
-        ([1, 151936], -1),  # low pcc issue, https://github.com/tenstorrent/tt-metal/issues/40878
+        ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(

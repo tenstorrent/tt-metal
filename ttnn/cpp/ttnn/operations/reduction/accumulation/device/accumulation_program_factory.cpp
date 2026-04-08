@@ -128,8 +128,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     const ReaderDataMovementConfig reader_config{reader_compile_time_args};
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 silently when fp32_dest_acc_en is True on Wormhole B0.
     const ComputeConfig compute_config{
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dst,
