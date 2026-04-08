@@ -187,8 +187,14 @@ struct TransposePreKBlock {
         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
         transpose_tile_block<in0_block_num_tiles_v>(in0_transpose_cb_id_v, in0_cb_id_v);
-        mm_block_init_short(
-            in0_cb_id_v, in1_cb_id_v, in1_transpose_tile_v, out_subblock_w_v, out_subblock_h_v, in0_block_w_v);
+        mm_block_init_short_with_dt(
+            in0_cb_id_v,
+            in1_cb_id_v,
+            in0_transpose_cb_id_v,
+            in1_transpose_tile_v,
+            out_subblock_w_v,
+            out_subblock_h_v,
+            in0_block_w_v);
         PACK((pack_reconfig_data_format(mm_partials_cb_id_v)));
     }
 };
