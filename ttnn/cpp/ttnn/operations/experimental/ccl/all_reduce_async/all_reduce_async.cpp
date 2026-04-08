@@ -172,27 +172,29 @@ ttnn::Tensor all_reduce_async(
     uint32_t resolved_num_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt));
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
         input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
-    auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
-    auto composite_dim = (dim == padded_tensor.padded_shape().size()) ? 0 : dim;
+    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
-        composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
+        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, std::nullopt);
+        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
 
-    // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
-    // convert to interleaved in this case
-    auto interleaved_tensor = padded_tensor;
-    bool change_mem_config = input_is_sharded;
+    // When input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops.
+    // Convert to interleaved in this case; otherwise work directly with input_tensor.
+    std::optional<ttnn::Tensor> interleaved_input_tensor;
+    const bool change_mem_config = input_is_sharded;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
             ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
+        interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
+    // .value_or() returns by value, .value() returns by reference
+    const ttnn::Tensor& working_input_tensor =
+        interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
     const bool composite_for_2d_mesh =
         tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
@@ -204,9 +206,12 @@ ttnn::Tensor all_reduce_async(
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
-            interleaved_tensor,
+            working_input_tensor,
             ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
-        interleaved_tensor.deallocate();
+        if (interleaved_input_tensor.has_value()) {
+            interleaved_input_tensor->deallocate();
+        }
+
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -226,12 +231,12 @@ ttnn::Tensor all_reduce_async(
 
         return ttnn::reshape(sum_tensor, initial_shape);
     }
+
     // Reduce scatter + all gather
-    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
-    padded_tensor.deallocate();
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
+
     ttnn::Tensor scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
-        interleaved_tensor,
+        working_input_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
@@ -241,7 +246,11 @@ ttnn::Tensor all_reduce_async(
         std::nullopt,
         topology,
         worker_subdevice_id_opt);
-    interleaved_tensor.deallocate();
+    if (interleaved_input_tensor.has_value()) {
+        interleaved_input_tensor->deallocate();
+    }
+
+    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
     auto gathered = ttnn::prim::all_gather_async(
         scattered_tensor,
         /*persistent_output_buffer*/ std::nullopt,
@@ -263,6 +272,7 @@ ttnn::Tensor all_reduce_async(
         /*sub_core_grid*/ std::nullopt,
         /*mesh_device*/ nullptr);
     scattered_tensor.deallocate();
+
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
@@ -285,27 +295,30 @@ ttnn::Tensor all_reduce_async(
     uint32_t resolved_num_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(input_tensor, num_devices);
-    auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
 
-    // convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates
-    bool change_mem_config = input_is_sharded;
-    auto interleaved_tensor = padded_tensor;
+    // Convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates.
+    // Otherwise work directly with input_tensor.
+    const bool change_mem_config = input_is_sharded;
+    std::optional<ttnn::Tensor> interleaved_input_tensor;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
             ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
+        interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
+    // .value_or() returns by value, .value() returns by reference
+    const ttnn::Tensor& working_input_tensor =
+        interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
-    // logic for taking the AG+local reduce code path
-    auto composite_dim = (dim == padded_tensor.padded_shape().size()) ? 0 : dim;
+    // Logic for taking the AG+local reduce code path
+    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
-        composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
+        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
+        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
     const bool composite_for_2d_mesh =
         tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
         ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology_);
@@ -320,8 +333,11 @@ ttnn::Tensor all_reduce_async(
         ag_shape_vec[0] = 1;
         ag_shape_vec[1] = initial_shape[0] * initial_shape[1];
 
-        auto reshaped_tensor = ttnn::reshape(interleaved_tensor, ttnn::Shape(ag_shape_vec));
-        interleaved_tensor.deallocate();
+        auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
+        if (interleaved_input_tensor.has_value()) {
+            interleaved_input_tensor->deallocate();
+        }
+
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -343,13 +359,11 @@ ttnn::Tensor all_reduce_async(
     }
 
     // Reduce scatter + all gather
-    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
-    padded_tensor.deallocate();
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
-            interleaved_tensor,
+            working_input_tensor,
             std::nullopt,
             dim,
             rs_global_semaphores.value(),
@@ -362,7 +376,7 @@ ttnn::Tensor all_reduce_async(
             cluster_axis);
     } else {
         scattered_tensor = ttnn::reduce_scatter(
-            interleaved_tensor,
+            working_input_tensor,
             dim,
             cluster_axis,
             worker_subdevice_id_opt,
@@ -375,8 +389,12 @@ ttnn::Tensor all_reduce_async(
             std::nullopt,
             std::nullopt);
     }
-    interleaved_tensor.deallocate();
+    if (interleaved_input_tensor.has_value()) {
+        interleaved_input_tensor->deallocate();
+    }
+
     ttnn::Tensor gathered;
+    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
     if (ag_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         TT_FATAL(barrier_semaphores.value().size() == 2, "Barrier semaphores must be of size 2");
         TT_FATAL(cluster_axis.has_value(), "Cluster axis is required for all gather");
@@ -412,6 +430,7 @@ ttnn::Tensor all_reduce_async(
             topology_);
     }
     scattered_tensor.deallocate();
+
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
