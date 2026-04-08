@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "tt_metal/impl/dispatch/simple_trace_allocator.hpp"
+#include "tt_metal/impl/trace/trace_node.hpp"
+#include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -38,6 +40,107 @@ protected:
 // NOLINTEND(cppcoreguidelines-virtual-class-destructor)
 
 using ExtraData = SimpleTraceAllocatorFixture::ExtraData;
+
+// NOLINTBEGIN(cppcoreguidelines-virtual-class-destructor)
+class SimpleTraceAllocatorDeviceFixture : public MeshDispatchFixture {
+protected:
+    struct ProgramSpec {
+        uint32_t nonbinary_size = 0;
+        uint32_t binary_size = 0;
+    };
+
+    enum class BinaryPlacement { InConfig, FixedAddress };
+
+    const Hal& hal_ = MetalContext::instance().hal();
+
+    std::optional<uint32_t> first_core_type_index(BinaryPlacement placement) const {
+        for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
+            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            if ((placement == BinaryPlacement::InConfig && binary_in_config) ||
+                (placement == BinaryPlacement::FixedAddress && !binary_in_config)) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::vector<ProgramSpec> make_program_specs(
+        uint32_t nonbinary_size, uint32_t binary_size, BinaryPlacement placement) const {
+        std::vector<ProgramSpec> specs(hal_.get_programmable_core_type_count());
+        for (uint32_t index = 0; index < specs.size(); ++index) {
+            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            if ((placement == BinaryPlacement::InConfig && binary_in_config) ||
+                (placement == BinaryPlacement::FixedAddress && !binary_in_config)) {
+                specs[index] = {.nonbinary_size = nonbinary_size, .binary_size = binary_size};
+            }
+        }
+        return specs;
+    }
+
+    std::shared_ptr<detail::ProgramImpl> make_program(const std::vector<ProgramSpec>& specs) const {
+        TT_FATAL(
+            specs.size() == hal_.get_programmable_core_type_count(),
+            "Expected {} program specs, got {}",
+            hal_.get_programmable_core_type_count(),
+            specs.size());
+
+        auto program = std::make_shared<detail::ProgramImpl>();
+        auto& program_config_sizes = program->get_program_config_sizes();
+        for (uint32_t index = 0; index < specs.size(); ++index) {
+            auto& program_config = program->get_program_config(index);
+            program_config = {};
+            program_config.kernel_text_offset = specs[index].nonbinary_size;
+            program_config.kernel_text_size = specs[index].binary_size;
+
+            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            program_config_sizes[index] =
+                specs[index].nonbinary_size + (binary_in_config ? specs[index].binary_size : 0);
+        }
+        return program;
+    }
+
+    TraceNode make_trace_node(
+        const std::vector<ProgramSpec>& specs,
+        SubDeviceId sub_device_id,
+        uint32_t num_workers,
+        std::shared_ptr<detail::ProgramImpl> program = nullptr) const {
+        program = program ? std::move(program) : make_program(specs);
+
+        TraceNode node{};
+        node.program = std::move(program);
+        node.program_runtime_id = static_cast<uint32_t>(node.program->get_id());
+        node.sub_device_id = sub_device_id;
+        node.num_workers = num_workers;
+        return node;
+    }
+
+    SimpleTraceAllocator make_allocator(uint32_t ringbuffer_size, uint32_t ringbuffer_start = 0) const {
+        std::vector<SimpleTraceAllocator::RingbufferConfig> configs;
+        configs.reserve(hal_.get_programmable_core_type_count());
+        for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
+            configs.push_back({.start = ringbuffer_start, .size = ringbuffer_size});
+        }
+        return SimpleTraceAllocator(configs);
+    }
+
+    std::vector<TraceNode*> make_trace_node_ptrs(std::vector<TraceNode>& trace_nodes) const {
+        std::vector<TraceNode*> ptrs;
+        ptrs.reserve(trace_nodes.size());
+        for (auto& trace_node : trace_nodes) {
+            ptrs.push_back(&trace_node);
+        }
+        return ptrs;
+    }
+
+    void allocate_on_subdevice(
+        SimpleTraceAllocator& allocator, std::vector<TraceNode>& trace_nodes, SubDeviceId sub_device_id) const {
+        auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+        allocator.extra_data_.clear();
+        allocator.extra_data_.resize(trace_nodes.size());
+        allocator.allocate_trace_programs_on_subdevice(hal_, trace_node_ptrs, sub_device_id);
+    }
+};
+// NOLINTEND(cppcoreguidelines-virtual-class-destructor)
 
 // --- intersects ---
 
@@ -382,6 +485,250 @@ TEST_F(SimpleTraceAllocatorFixture, StallAvoidanceIncreasesCost) {
     auto [sync, addr] = alloc.allocate_region(100, alloc_idx, ExtraData::kNonBinary, 30);
     ASSERT_TRUE(addr.has_value());
     EXPECT_EQ(*addr, 0u);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, SingleProgram) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(32, 16, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {make_trace_node(specs, SubDeviceId{0}, 3)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(256);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    ASSERT_EQ(
+        trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
+    ASSERT_EQ(
+        trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 32u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.sync_count, 0u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.stall_first);
+    EXPECT_FALSE(trace_nodes[0].dispatch_metadata.stall_before_program);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, TwoDistinctPrograms) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(32, 16, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 1), make_trace_node(specs, SubDeviceId{0}, 1)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(256);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 32u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 80u);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, SameProgramBinaryCached) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(32, 16, BinaryPlacement::InConfig);
+    auto shared_program = make_program(specs);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 1, shared_program), make_trace_node(specs, SubDeviceId{0}, 1, shared_program)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(256);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_FALSE(trace_nodes[1].dispatch_metadata.send_binary);
+    EXPECT_EQ(
+        trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr,
+        trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, BinaryEvictionRetriesAfterReset) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto small_binary_specs = make_program_specs(0, 30, BinaryPlacement::InConfig);
+    auto medium_binary_specs = make_program_specs(0, 40, BinaryPlacement::InConfig);
+    auto large_program_specs = make_program_specs(60, 40, BinaryPlacement::InConfig);
+    auto reused_program = make_program(small_binary_specs);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(small_binary_specs, SubDeviceId{0}, 1, reused_program),
+        make_trace_node(medium_binary_specs, SubDeviceId{0}, 1),
+        make_trace_node(large_program_specs, SubDeviceId{0}, 1),
+        make_trace_node(small_binary_specs, SubDeviceId{0}, 1, reused_program)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(100);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_EQ(trace_nodes[2].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[2].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 60u);
+    EXPECT_TRUE(trace_nodes[2].dispatch_metadata.send_binary);
+    EXPECT_EQ(trace_nodes[2].dispatch_metadata.sync_count, 2u);
+    EXPECT_TRUE(trace_nodes[2].dispatch_metadata.stall_first);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonBinaryEvictionSetsStallFirst) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(80, 0, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 2), make_trace_node(specs, SubDeviceId{0}, 5)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(100);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 2u);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_first);
+    EXPECT_FALSE(trace_nodes[1].dispatch_metadata.stall_before_program);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, BinaryOnlyEvictionSetsStallBeforeProgram) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(0, 40, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 2), make_trace_node(specs, SubDeviceId{0}, 5)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(40);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 2u);
+    EXPECT_FALSE(trace_nodes[1].dispatch_metadata.stall_first);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_before_program);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, FixedL1AddressBinarySync) {
+    auto core_index = first_core_type_index(BinaryPlacement::FixedAddress);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "All programmable core types store kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(0, 32, BinaryPlacement::FixedAddress);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 3), make_trace_node(specs, SubDeviceId{0}, 4)};
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(64);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 3u);
+    EXPECT_FALSE(trace_nodes[1].dispatch_metadata.stall_first);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_before_program);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, LaunchWindowOverflow) {
+    constexpr uint32_t max_queued_programs = dev_msgs::launch_msg_buffer_num_entries - 1;
+    std::vector<TraceNode> trace_nodes;
+    trace_nodes.reserve(max_queued_programs + 1);
+    auto specs = std::vector<ProgramSpec>(hal_.get_programmable_core_type_count());
+    for (uint32_t index = 0; index < max_queued_programs + 1; ++index) {
+        trace_nodes.push_back(make_trace_node(specs, SubDeviceId{0}, 1));
+    }
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(64);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.stall_first);
+    EXPECT_FALSE(trace_nodes[max_queued_programs].dispatch_metadata.stall_first);
+    EXPECT_TRUE(trace_nodes[max_queued_programs].dispatch_metadata.stall_before_program);
+    EXPECT_EQ(trace_nodes[max_queued_programs].dispatch_metadata.sync_count, 1u);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, SubDeviceFiltering) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(32, 16, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 1), make_trace_node(specs, SubDeviceId{1}, 1)};
+    trace_nodes[1].dispatch_metadata.send_binary = false;
+    trace_nodes[1].dispatch_metadata.sync_count = 99;
+    trace_nodes[1].dispatch_metadata.stall_first = true;
+
+    auto allocator = make_allocator(256);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.sync_count, 0u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.stall_first);
+
+    EXPECT_FALSE(trace_nodes[1].dispatch_metadata.send_binary);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 99u);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_first);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs.empty());
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs.empty());
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, LargeTraceSequence) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs(24, 16, BinaryPlacement::InConfig);
+    auto program_a = make_program(specs);
+    auto program_b = make_program(specs);
+    auto program_c = make_program(specs);
+
+    std::vector<TraceNode> trace_nodes;
+    trace_nodes.reserve(20);
+    for (uint32_t index = 0; index < 20; ++index) {
+        std::shared_ptr<detail::ProgramImpl> program = program_c;
+        if (index % 3 == 0) {
+            program = program_a;
+        } else if (index % 3 == 1) {
+            program = program_b;
+        }
+        trace_nodes.push_back(make_trace_node(specs, SubDeviceId{0}, (index % 4) + 1, program));
+    }
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(128);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    uint32_t workers_completed_before = 0;
+    for (size_t index = 0; index < trace_nodes.size(); ++index) {
+        const auto& metadata = trace_nodes[index].dispatch_metadata;
+        ASSERT_EQ(metadata.nonbinary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
+        ASSERT_EQ(metadata.binary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
+        EXPECT_LT(metadata.nonbinary_kernel_config_addrs[*core_index].addr, 128u);
+        EXPECT_LT(metadata.binary_kernel_config_addrs[*core_index].addr, 128u);
+        EXPECT_LE(metadata.sync_count, workers_completed_before);
+        workers_completed_before += trace_nodes[index].num_workers;
+    }
 }
 
 }  // namespace tt::tt_metal

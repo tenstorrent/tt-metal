@@ -21,6 +21,7 @@ class Hal;
 
 class SimpleTraceAllocator {
     friend class SimpleTraceAllocatorFixture;
+    friend class SimpleTraceAllocatorDeviceFixture;
 
 public:
     struct RingbufferConfig {
@@ -71,6 +72,7 @@ private:
 
     class RegionAllocator {
         friend class SimpleTraceAllocatorFixture;
+        friend class SimpleTraceAllocatorDeviceFixture;
 
     public:
         RegionAllocator(uint32_t ringbuffer_size, std::vector<ExtraData>& extra_data) :
