@@ -107,7 +107,7 @@ def overlap_tensors(
     # Build merged core list per lane (union of all entries' core ranges).
     lane_cores: list[list[tuple[int, int]]] = []
     for lane in tensors:
-        merged = reduce(lambda a, b: a.merge(b), (e.spec.core_range_set for e in lane)).merge_ranges()
+        merged = reduce(lambda a, b: a.merge(b), (e.spec.core_range_set for e in lane))
         lane_cores.append(_core_list(merged))
 
     for i in range(len(lane_cores)):
@@ -186,10 +186,8 @@ def overlap_tensors(
         row_tensors = [torch.cat([t.reshape(1, -1) for t in row_list], dim=1) for row_list in per_device_raw]
         combined = torch.cat(row_tensors, dim=0)
 
-    combined_crs = reduce(lambda a, b: a + b, lane_cores)
-    combined_crs = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in combined_crs]
-    ).merge_ranges()
+    all_cores = reduce(lambda a, b: a + b, lane_cores)
+    combined_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
     shard_spec = ttnn.ShardSpec(
         combined_crs,
         (1, uint32_per_shard),
