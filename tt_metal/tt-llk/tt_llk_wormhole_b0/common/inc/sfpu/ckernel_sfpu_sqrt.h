@@ -29,7 +29,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
         // Algorithm SQRT_10-bits, with modifications for reciprocal.
         sfpi::vFloat c           = x * y;
         sfpi::vFloat negative_y  = -y;
-        sfpi::vFloat infinity    = sfpi::s2vFloat16b(std::numeric_limits<float>::infinity());
+        sfpi::vFloat infinity    = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
         sfpi::vInt infinity_bits = sfpi::reinterpret<sfpi::vInt>(infinity);
         sfpi::vFloat t           = sfpi::vConstFloatPrgm1 + negative_y * c;
         if constexpr (RECIPROCAL)
@@ -65,7 +65,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
         sfpi::vFloat xy            = x * y;
         sfpi::vFloat negative_y    = -y;
         sfpi::vFloat c             = negative_y * xy;
-        sfpi::vFloat infinity      = sfpi::s2vFloat16b(std::numeric_limits<float>::infinity());
+        sfpi::vFloat infinity      = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
         sfpi::vInt infinity_bits   = sfpi::reinterpret<sfpi::vInt>(infinity);
         y                          = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
         xy                         = x * y;
