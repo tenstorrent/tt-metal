@@ -1620,116 +1620,17 @@ class TestDeepSeekV3:
 
     @stress_test_program_cache
     def test_q_kv_rms_norm(self, device):
-        """Parallel Q/KV RMS norms from the DeepSeek V3 MLA block.
+        """Parallel Q/KV RMS norms from the DeepSeek V3 MLA block (#41622).
+
+        Mimics production: weights persist, input tensors are fresh each
+        iteration (old buffers freed).  The decorator adds program cache
+        hit and miss re-runs on top.
 
         Q norm: 16 cores (0,0)-(3,3), width-sharded, shard [32, 96], total width 1536
         KV norm: 16 cores (5,0)-(6,7), width-sharded, shard [32, 32], total width 512
         """
         from models.experimental.ops.descriptors.fusion import Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-
-        torch.manual_seed(42)
-
-        # --- Q norm setup ---
-        q_cores = cores(0, 0, 3, 3)  # 4x4 = 16 cores
-        q_shard_w = 96
-        q_total_w = 16 * q_shard_w  # 1536
-
-        torch_q_input = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
-        torch_q_weight = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
-
-        q_shard_spec = ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        q_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=q_shard_spec,
-        )
-        q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(4, 4),
-            subblock_w=q_shard_w // 32,
-            block_h=1,
-            block_w=q_shard_w // 32,
-            inplace=False,
-        )
-
-        tt_q_input = ttnn.from_torch(torch_q_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
-        tt_q_weight = ttnn.from_torch(torch_q_weight, device=device, layout=ttnn.TILE_LAYOUT)
-
-        q_branch = rms_norm.rms_norm(
-            tt_q_input,
-            epsilon=1e-5,
-            weight=tt_q_weight,
-            memory_config=q_mem,
-            core_range_set=q_cores,
-            program_config=q_pc,
-        )
-
-        # --- KV norm setup ---
-        kv_cores = cores(5, 0, 6, 7)  # 2x8 = 16 cores
-        kv_shard_w = 32
-        kv_total_w = 16 * kv_shard_w  # 512
-
-        torch.manual_seed(123)
-        torch_kv_input = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
-        torch_kv_weight = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
-
-        kv_shard_spec = ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        kv_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=kv_shard_spec,
-        )
-        kv_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(2, 8),
-            subblock_w=kv_shard_w // 32,
-            block_h=1,
-            block_w=kv_shard_w // 32,
-            inplace=False,
-        )
-
-        tt_kv_input = ttnn.from_torch(torch_kv_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
-        tt_kv_weight = ttnn.from_torch(torch_kv_weight, device=device, layout=ttnn.TILE_LAYOUT)
-
-        kv_branch = rms_norm.rms_norm(
-            tt_kv_input,
-            epsilon=1e-5,
-            weight=tt_kv_weight,
-            memory_config=kv_mem,
-            core_range_set=kv_cores,
-            program_config=kv_pc,
-        )
-
-        # --- Fused parallel norms ---
-        [out_q, out_kv] = Parallel(q_branch, kv_branch).run(results=[q_branch, kv_branch])
-
-        # --- Verify ---
-        check_pcc(
-            torch_rms_norm(torch_q_input.float(), torch_q_weight.float()),
-            out_q,
-            pcc=0.98,
-            label="Q norm",
-        )
-        check_pcc(
-            torch_rms_norm(torch_kv_input.float(), torch_kv_weight.float()),
-            out_kv,
-            pcc=0.98,
-            label="KV norm",
-        )
-
-    @stress_test_program_cache
-    def test_q_kv_rms_norm_program_cache_disabled(self, device):
-        """Regression test for gh#41622: Parallel.run() crashes when program cache is disabled.
-
-        The fusion build cache stores a ProgramDescriptor whose CBDescriptor.buffer
-        pointers become stale after the original tensors are deallocated. With
-        program cache enabled, the C++ patching mechanism avoids re-dereferencing
-        the descriptor. With program cache disabled, Program{descriptor} is
-        reconstructed every call, dereferencing the stale pointers → crash.
-        """
-        from models.experimental.ops.descriptors.fusion import Parallel, clear_build_cache
-        from models.experimental.ops.descriptors.normalization import rms_norm
-
-        device.disable_and_clear_program_cache()
 
         q_cores = cores(0, 0, 3, 3)
         kv_cores = cores(5, 0, 6, 7)
@@ -1756,14 +1657,14 @@ class TestDeepSeekV3:
             inplace=False,
         )
 
-        # Weights persist across iterations (like a real model)
+        # Weights persist (like a real model)
         torch_q_weight = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
         torch_kv_weight = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
         tt_q_weight = ttnn.from_torch(torch_q_weight, device=device, layout=ttnn.TILE_LAYOUT)
         tt_kv_weight = ttnn.from_torch(torch_kv_weight, device=device, layout=ttnn.TILE_LAYOUT)
 
+        # Fresh input tensors each iteration (old buffers freed — stale addresses)
         for iteration in range(3):
-            # Fresh input tensors each iteration (old buffers freed)
             torch_q_input = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
             torch_kv_input = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
             tt_q_input = ttnn.from_torch(torch_q_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
@@ -1786,8 +1687,6 @@ class TestDeepSeekV3:
                 program_config=kv_pc,
             )
 
-            # Iteration 0: cold build (valid pointers). Iteration 1+: fusion cache hit
-            # with stale CBDescriptor.buffer pointers — crashes without the fix.
             [out_q, out_kv] = Parallel(q_branch, kv_branch).run()
 
             check_pcc(
@@ -1802,9 +1701,6 @@ class TestDeepSeekV3:
                 pcc=0.98,
                 label=f"KV norm iter {iteration}",
             )
-
-        # Re-enable program cache for subsequent tests
-        device.enable_program_cache()
 
 
 # ===========================================================================
