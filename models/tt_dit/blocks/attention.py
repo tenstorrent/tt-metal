@@ -43,7 +43,7 @@ class Attention(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         k_chunk_size: int = 512,
-        q_chunk_size: int = 128,
+        q_chunk_size: int = 256,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
