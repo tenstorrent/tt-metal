@@ -24,7 +24,8 @@ HF_MODEL=google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/demo/vision
 ```
 HF_MODEL=google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/demo/text_demo.py -k “performance and batch1”
 ```
-
+Notes:
+Use --dummy_weights true to enable dummy_weights loading in demo
 ### vLLM offline
 Tested with [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd)
 

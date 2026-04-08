@@ -4,6 +4,7 @@
 
 import gc
 import os
+from functools import lru_cache
 
 import torch
 from loguru import logger
@@ -14,6 +15,7 @@ from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, 
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -138,6 +140,34 @@ class ModelArgs(TTModelArgs):
     def _set_model_specific_params(self):
         self.rms_norm_add_unit_offset = True
         self.embed_scale = self.dim**0.5
+
+    @lru_cache(maxsize=None)
+    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+        """Lower max_cores_per_head_batch vs default (16) to shrink decode SDPA static CB usage.
+
+        Avoids L1 vs circular-buffer clashes when capturing/running decode traces after long multimodal prefills.
+        """
+        if prefetcher is not None:
+            sdpa_grid_size = (8, 8)
+            start_core = ttnn.CoreCoord(1, 0)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+                max_cores_per_head_batch=4,
+            )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+            max_cores_per_head_batch=4,
+        )
 
     # def _set_vision_params(self, vision_config):
     #     self.vision_dim = vision_config.get("hidden_size", 1280)
