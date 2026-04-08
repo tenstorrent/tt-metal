@@ -7,7 +7,7 @@ Multi-device setup aligned with ``test_encoder_wan.py`` / ``models/tt_dit/tests/
 
 - ``device_params`` with ``fabric_config=FABRIC_1D`` (``line_params``) for fabric-backed dispatch / CCL.
 - ``num_links`` passed into ``CCLManager`` (default ``1``).
-- Full mesh from ``pcc_mesh_shape_request_param()``; TT uses fixture ``work_mesh_device`` for optional ``(1,1)`` submesh.
+- ``mesh_device`` from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
 
 ``vae_hw_parallel_config_for_mesh`` supplies H/W mesh axes for ``WanVAEEncoder`` (rows×cols on multi-chip meshes).
 
@@ -24,7 +24,7 @@ from diffusers import AutoencoderKLWan
 
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import (
-    pcc_mesh_shape_request_param,
+    mesh_shape_request_param,
     vae_bthwc_to_torch,
     vae_hw_parallel_config_for_mesh,
 )
@@ -56,10 +56,10 @@ VIDEO_W = 320
 
 
 @pytest.fixture
-def vae_ccl_manager(work_mesh_device, num_links, topology):
+def vae_ccl_manager(mesh_device, num_links, topology):
     """Fabric-backed CCL for VAE conv / halo paths on multi-device meshes."""
     return CCLManager(
-        mesh_device=work_mesh_device,
+        mesh_device=mesh_device,
         num_links=num_links,
         topology=topology,
     )
@@ -148,7 +148,7 @@ def encode_ttnn(vae, video, mesh_device, ccl_manager):
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            pcc_mesh_shape_request_param(),
+            mesh_shape_request_param(),
             1,
             line_params,
             ttnn.Topology.Linear,
@@ -157,15 +157,15 @@ def encode_ttnn(vae, video, mesh_device, ccl_manager):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_encode_one_video_pcc(work_mesh_device, num_links, topology, vae_ccl_manager, vae):
+def test_encode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager, vae):
     assert num_links >= 1
     assert topology == ttnn.Topology.Linear
-    work_mesh_device.enable_program_cache()
+    mesh_device.enable_program_cache()
     torch.manual_seed(42)
     video = torch.randn(BATCH_SIZE, 3, VIDEO_T, VIDEO_H, VIDEO_W, dtype=torch.float32) * 2.0 - 1.0
 
     torch_out = encode_torch(vae, video.clone())
-    ttnn_out = encode_ttnn(vae, video.clone(), work_mesh_device, vae_ccl_manager)
+    ttnn_out = encode_ttnn(vae, video.clone(), mesh_device, vae_ccl_manager)
 
     torch_f = torch_out.float()
     ttnn_f = ttnn_out.float()

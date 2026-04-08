@@ -130,14 +130,10 @@ TTNN vs PyTorch reference; values are **PCC × 100** (%).
 | ----------------------- | ------- |
 | WanTransformer (action) | 99.9937 |
 | WanTransformer (video)  | 99.7345 |
-| Text encoder (UMT5)     | 99.5513 |
-| VAE encoder             | 99.9311 |
-| VAE decoder             | 99.6633 |
+| Text encoder (UMT5)     | 99.5643 |
+| VAE encoder             | 99.7292 |
+| VAE decoder             | 98.6633 |
 
-In N300, export below env variable to use Single-Mesh.
-```bash
-export LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1
-```
 
 ```bash
 # One file
@@ -253,9 +249,10 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 2. **PCC and intermediate dumps:** For several checks, **TT outputs and PCC are validated against intermediate tensors** produced by the PyTorch reference on a **separate host** (saved dumps from that run), rather than from a freshly executed reference path collocated with every TT invocation.
 3. **TT-Perf-Report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
 4. Multi-device support is not currently available.
-5. TTNN trace cannot be enabled for the full `run_inference` path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E `use_trace=True` single-transformer case.
-6. **Device memory (staged weights):** **Text encoder, VAE encoder, and transformer** device weights **cannot all be loaded at once** on typical configurations—doing so **risks OOM**, so the implementation loads or swaps modules rather than holding every submodule resident simultaneously.
-7. **Cold start vs steady state:** On a fresh run, much of the wall time is **loading weights** and **first-time kernel / graph compilation** for the text encoder, VAE, and transformer—not the denoise or decode loops alone. Expect long gaps before the first meaningful forward completes; per-step cost afterward is usually much smaller in comparison.
+5. VAE Decoder pcc is ~0.98.
+6. TTNN trace cannot be enabled for the full `run_inference` path from `tests/demo/demo.py` because **weight loading happens inside the loop** (and related dynamic setup), so there is no stable, traceable subgraph comparable to the E2E `use_trace=True` single-transformer case.
+7. **Device memory (staged weights):** **Text encoder, VAE encoder, and transformer** device weights **cannot all be loaded at once** on typical configurations—doing so **risks OOM**, so the implementation loads or swaps modules rather than holding every submodule resident simultaneously.
+8. **Cold start vs steady state:** On a fresh run, much of the wall time is **loading weights** and **first-time kernel / graph compilation** for the text encoder, VAE, and transformer—not the denoise or decode loops alone. Expect long gaps before the first meaningful forward completes; per-step cost afterward is usually much smaller in comparison.
 
 ## Model Notes
 

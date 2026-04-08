@@ -32,7 +32,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.cache import model_cache_dir
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import pcc_mesh_shape_request_param
+from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params
 
@@ -286,7 +286,7 @@ def _make_action_grid_id(
     ("mesh_device", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
-            pcc_mesh_shape_request_param(),
+            mesh_shape_request_param(),
             1,
             line_params,
             ttnn.Topology.Linear,
@@ -297,7 +297,7 @@ def _make_action_grid_id(
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_transformer_model_video_and_action(
-    work_mesh_device: ttnn.MeshDevice,
+    mesh_device: ttnn.MeshDevice,
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
@@ -316,15 +316,15 @@ def test_wan_transformer_model_video_and_action(
     if not LINGBOT_VA_CHECKPOINT.exists():
         pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
 
-    # ``work_mesh_device``: full mesh or (1,1) submesh when LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH is set.
-    _, cols = tuple(work_mesh_device.shape)
-    if work_mesh_device.get_num_devices() > 1 and cols > 1 and NUM_HEADS % cols != 0:
+    # Full mesh from the fixture: single-device runs use (1,1); multi-device (e.g. N300) use (1,2) etc.
+    _, cols = tuple(mesh_device.shape)
+    if mesh_device.get_num_devices() > 1 and cols > 1 and NUM_HEADS % cols != 0:
         pytest.skip(
-            f"NUM_HEADS={NUM_HEADS} not divisible by tensor_parallel factor {cols} for mesh {work_mesh_device.shape}"
+            f"NUM_HEADS={NUM_HEADS} not divisible by tensor_parallel factor {cols} for mesh {mesh_device.shape}"
         )
 
-    parallel_config = _make_parallel_config(work_mesh_device, sp_axis=0, tp_axis=1)
-    ccl_manager = _make_ccl_manager(work_mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis=0, tp_axis=1)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
     torch_model = _load_torch_reference()
     torch_model.eval()
@@ -367,14 +367,14 @@ def test_wan_transformer_model_video_and_action(
         model_name="lingbot_va",
         subfolder="transformer",
         parallel_config=parallel_config,
-        mesh_shape=tuple(work_mesh_device.shape),
+        mesh_shape=tuple(mesh_device.shape),
         required=False,
     )
     use_cache = cache_dir is not None and cache_dir.is_dir()
 
     def _instantiate_tt_model() -> WanTransformer3DModel:
         return _make_wan_transformer(
-            mesh_device=work_mesh_device,
+            mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
@@ -407,10 +407,10 @@ def test_wan_transformer_model_video_and_action(
         prompt_video.shape,
         timestep_video.shape,
     )
-    spatial_tt = _ttnn_input(work_mesh_device, spatial_video)
-    prompt_tt = _ttnn_input(work_mesh_device, prompt_video)
-    timestep_tt = _ttnn_input(work_mesh_device, timestep_video, dtype=ttnn.float32)
-    grid_tt = _ttnn_input(work_mesh_device, grid_id_video, dtype=ttnn.float32)
+    spatial_tt = _ttnn_input(mesh_device, spatial_video)
+    prompt_tt = _ttnn_input(mesh_device, prompt_video)
+    timestep_tt = _ttnn_input(mesh_device, timestep_video, dtype=ttnn.float32)
+    grid_tt = _ttnn_input(mesh_device, grid_id_video, dtype=ttnn.float32)
     tt_video_t = None
     try:
         tt_video_t = tt_model(
@@ -420,7 +420,7 @@ def test_wan_transformer_model_video_and_action(
             grid_id=grid_tt,
             action_mode=False,
         )
-        tt_video = _ttnn_output_to_torch_float(tt_video_t, work_mesh_device, parallel_config, kind="video")
+        tt_video = _ttnn_output_to_torch_float(tt_video_t, mesh_device, parallel_config, kind="video")
     finally:
         ttnn.deallocate(spatial_tt)
         ttnn.deallocate(prompt_tt)
@@ -439,10 +439,10 @@ def test_wan_transformer_model_video_and_action(
         prompt_action.shape,
         timestep_action.shape,
     )
-    spatial_a_tt = _ttnn_input(work_mesh_device, spatial_action)
-    prompt_a_tt = _ttnn_input(work_mesh_device, prompt_action)
-    timestep_a_tt = _ttnn_input(work_mesh_device, timestep_action, dtype=ttnn.float32)
-    grid_a_tt = _ttnn_input(work_mesh_device, grid_id_action, dtype=ttnn.float32)
+    spatial_a_tt = _ttnn_input(mesh_device, spatial_action)
+    prompt_a_tt = _ttnn_input(mesh_device, prompt_action)
+    timestep_a_tt = _ttnn_input(mesh_device, timestep_action, dtype=ttnn.float32)
+    grid_a_tt = _ttnn_input(mesh_device, grid_id_action, dtype=ttnn.float32)
     tt_action_t = None
     try:
         tt_action_t = tt_model(
@@ -452,7 +452,7 @@ def test_wan_transformer_model_video_and_action(
             grid_id=grid_a_tt,
             action_mode=True,
         )
-        tt_action = _ttnn_output_to_torch_float(tt_action_t, work_mesh_device, parallel_config, kind="action")
+        tt_action = _ttnn_output_to_torch_float(tt_action_t, mesh_device, parallel_config, kind="action")
     finally:
         ttnn.deallocate(spatial_a_tt)
         ttnn.deallocate(prompt_a_tt)

@@ -10,8 +10,7 @@ Multi-device setup follows ``models/tt_dit/tests/encoders/umt5/test_umt5.py``:
 - ``parallel_config_and_ccl_manager``: ``tensor_parallel.factor = mesh_device.shape[1]``,
   ``mesh_axis=1`` (column TP).
 
-Mesh shape from ``pcc_mesh_shape_request_param()`` (full system mesh). TT paths use fixture
-``work_mesh_device`` (``(1,1)`` submesh when ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH`` is set).
+Mesh shape comes from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
 
 **Wall time:** ``pytestmark = pytest.mark.timeout(600)``. Shorten sequence with
 ``LINGBOT_VA_UMT5_PCC_SEQ_LEN`` (e.g. ``128``).
@@ -29,7 +28,7 @@ from transformers import UMT5EncoderModel
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_num_devices,
-    pcc_mesh_shape_request_param,
+    mesh_shape_request_param,
     umt5_encoder_hidden_states_to_torch,
     umt5_mesh_mapper_for_text_inputs,
     umt5_pad_input_ids_and_mask,
@@ -61,13 +60,13 @@ SEQ_LEN = int(os.environ.get("LINGBOT_VA_UMT5_PCC_SEQ_LEN", "512"))
 
 
 @pytest.fixture
-def parallel_config_and_ccl_manager(work_mesh_device, num_links, topology):
+def parallel_config_and_ccl_manager(mesh_device, num_links, topology):
     """Same TP/CCL construction as ``test_umt5.parallel_config_and_ccl_manager``."""
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=work_mesh_device.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
     )
     ccl_manager = CCLManager(
-        mesh_device=work_mesh_device,
+        mesh_device=mesh_device,
         num_links=num_links,
         topology=topology,
     )
@@ -92,7 +91,7 @@ def hf_model():
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            pcc_mesh_shape_request_param(),
+            mesh_shape_request_param(),
             1,
             line_params,
             ttnn.Topology.Linear,
@@ -102,7 +101,7 @@ def hf_model():
     indirect=["mesh_device", "device_params"],
 )
 def test_umt5_encoder_comparison(
-    work_mesh_device,
+    mesh_device,
     num_links,
     topology,
     parallel_config_and_ccl_manager,
@@ -113,10 +112,10 @@ def test_umt5_encoder_comparison(
     encoder_parallel_config, ccl_manager = parallel_config_and_ccl_manager
     tp_factor = encoder_parallel_config.tensor_parallel.factor
 
-    if mesh_num_devices(work_mesh_device) > 1 and tp_factor > 1 and hf_model.config.num_heads % tp_factor != 0:
+    if mesh_num_devices(mesh_device) > 1 and tp_factor > 1 and hf_model.config.num_heads % tp_factor != 0:
         pytest.skip(
             f"HF num_heads={hf_model.config.num_heads} not divisible by encoder TP factor {tp_factor} "
-            f"for mesh {work_mesh_device.shape}"
+            f"for mesh {mesh_device.shape}"
         )
 
     text_weights = {k: v.cpu() for k, v in hf_model.state_dict().items()}
@@ -151,38 +150,38 @@ def test_umt5_encoder_comparison(
 
     tt_encoder = TTUMT5Encoder(
         config=umt5_config,
-        mesh_device=work_mesh_device,
+        mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=encoder_parallel_config,
     )
     tt_encoder.load_torch_state_dict(text_weights)
 
-    mesh_mapper = umt5_mesh_mapper_for_text_inputs(work_mesh_device, encoder_parallel_config)
+    mesh_mapper = umt5_mesh_mapper_for_text_inputs(mesh_device, encoder_parallel_config)
     input_ids_pad, attention_mask_pad, pad_n = umt5_pad_input_ids_and_mask(
-        input_ids, attention_mask, work_mesh_device, encoder_parallel_config
+        input_ids, attention_mask, mesh_device, encoder_parallel_config
     )
 
     tt_input = ttnn.from_torch(
         input_ids_pad,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
-        device=work_mesh_device,
+        device=mesh_device,
         mesh_mapper=mesh_mapper,
     )
     tt_mask = ttnn.from_torch(
         attention_mask_pad,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=work_mesh_device,
+        device=mesh_device,
         mesh_mapper=mesh_mapper,
     )
 
-    ttnn.synchronize_device(work_mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     tt_hidden = tt_encoder(tt_input, attention_mask=tt_mask)
     tt_last = tt_hidden[-1]
-    tt_out = umt5_post_encoder_hidden_states(ccl_manager, tt_last, tt_mask, work_mesh_device, encoder_parallel_config)
-    ttnn.synchronize_device(work_mesh_device)
+    tt_out = umt5_post_encoder_hidden_states(ccl_manager, tt_last, tt_mask, mesh_device, encoder_parallel_config)
+    ttnn.synchronize_device(mesh_device)
     tt_embed = umt5_encoder_hidden_states_to_torch(tt_out).float()
 
     if pad_n:

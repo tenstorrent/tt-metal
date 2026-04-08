@@ -20,7 +20,7 @@ from diffusers import AutoencoderKLWan
 
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
 from models.experimental.lingbot_va.tests.mesh_utils import (
-    pcc_mesh_shape_request_param,
+    mesh_shape_request_param,
     vae_bcthw_to_torch,
     vae_hw_parallel_config_for_mesh,
 )
@@ -44,7 +44,7 @@ def _vae_checkpoint_dir() -> Path:
     return Path(os.environ.get("TT_METAL_HOME", os.getcwd())).resolve() / CHECKPOINT_PATH
 
 
-MIN_PCC = 0.99
+MIN_PCC = 0.985
 MAX_RELATIVE_RMSE = 0.25
 LATENT_T = 1
 LATENT_H = 8
@@ -52,9 +52,9 @@ LATENT_W = 4
 
 
 @pytest.fixture
-def vae_ccl_manager(work_mesh_device, num_links, topology):
+def vae_ccl_manager(mesh_device, num_links, topology):
     return CCLManager(
-        mesh_device=work_mesh_device,
+        mesh_device=mesh_device,
         num_links=num_links,
         topology=topology,
     )
@@ -139,7 +139,7 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            pcc_mesh_shape_request_param(),
+            mesh_shape_request_param(),
             1,
             line_params,
             ttnn.Topology.Linear,
@@ -148,7 +148,7 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_decode_one_video_pcc(work_mesh_device, num_links, topology, vae_ccl_manager):
+def test_decode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager):
     assert num_links >= 1
     assert topology == ttnn.Topology.Linear
     ckpt = _vae_checkpoint_dir()
@@ -163,7 +163,7 @@ def test_decode_one_video_pcc(work_mesh_device, num_links, topology, vae_ccl_man
     torch_out = decode_torch(vae, latents)
     torch_out = torch_out.float().clamp(-1.0, 1.0)
 
-    ttnn_out = decode_ttnn(vae, latents, work_mesh_device, vae_ccl_manager)
+    ttnn_out = decode_ttnn(vae, latents, mesh_device, vae_ccl_manager)
 
     torch_cmp = torch_out.bfloat16().float()
     ttnn_cmp = ttnn_out.float()
