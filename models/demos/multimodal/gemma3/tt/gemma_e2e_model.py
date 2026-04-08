@@ -61,9 +61,6 @@ class TtGemmaModel(Transformer):
     def encode_vision_embeddings_from_pixels(self, pixel_values):
         """
         Run only the vision tower and return host patch embeddings for image token positions.
-
-        Prefill should call this (or receive precomputed embeddings from the runner) separately
-        from text embedding, then pass ``vision_embeddings`` into ``prepare_inputs_prefill``.
         """
         vision_output = self.compute_vision_token(pixel_values)
         comp_vision_output = ttnn.to_torch(
@@ -81,7 +78,9 @@ class TtGemmaModel(Transformer):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
-        TODO: Debate whether this function is responsible for padding
+
+        For multimodal prompts, pass ``vision_embeddings`` (host tensor from
+        :meth:`encode_vision_embeddings_from_pixels`); ``pixel_values`` is not accepted here.
         """
 
         S = pt_tokens.shape[-1]
@@ -103,9 +102,10 @@ class TtGemmaModel(Transformer):
         if vision_embeddings is not None:
             tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
         elif pixel_values is not None:
-            # Legacy: vision not split at the Generator; still supported for direct calls.
-            tokens_embd = self._fuse_vision_into_text_embeddings(
-                pt_tokens, tokens_embd, self.encode_vision_embeddings_from_pixels(pixel_values)
+            raise ValueError(
+                "prepare_inputs_prefill no longer accepts pixel_values; run vision separately via "
+                "encode_vision_embeddings_from_pixels(...) and pass vision_embeddings=... "
+                "(GemmaMultimodalGenerator does this before prefill)."
             )
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
