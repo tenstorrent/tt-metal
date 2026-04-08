@@ -32,6 +32,13 @@ constexpr auto dst_args = TensorAccessorArgs<3>();
 constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 // Input tensor TensorAccessorArgs start right after dst_args (used in fabric_only mode)
 constexpr auto src_args = TensorAccessorArgs<ct_after_dst>();
+// NP_W_HALO_L1: recv_cb_id comes after src_args (only when NP_W_HALO_L1 is defined).
+// The W writer on the neighbor chip delivers W-halo sticks to our L1 recv_cb instead of DRAM,
+// guaranteeing NOC-ordering within L1 (fabric data write → sem_inc, both to L1 = ordered).
+#if defined(NP_W_HALO_L1)
+constexpr uint32_t ct_after_src = src_args.next_compile_time_args_offset();
+constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src);
+#endif
 
 template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_id) {
@@ -87,145 +94,185 @@ void kernel_main() {
     const uint32_t h_dev = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t h_padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t h_halo_hbot_base = get_arg_val<uint32_t>(arg_idx++);
+#if defined(NP_W_HALO_L1)
+    // [14] recv_dram_offset: base DRAM page in the compact halo buffer for received W-halo sticks.
+    // Equals the sender chip's outer_dim_offset_start_id (same value on all chips, uniform MeshBuffer).
+    // Only valid when NP_W_HALO_L1 is defined (fabric_only mode).
+    const uint32_t recv_dram_offset = get_arg_val<uint32_t>(arg_idx++);
+#endif
+#if defined(NP_PROGRESS_SEM)
+    const uint32_t progress_t_batch_size = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     const bool is_fabric_only = (input_buffer_addr != 0);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
     const auto src_accessor = TensorAccessor(src_args, input_buffer_addr, stick_size);
 
-    // Wait for Phase 1 to complete.
-    if (barrier_count > 0) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
-    }
-
-    // H_total = h_dev + 2 * h_padding (extended rows per T-slice in fabric_only mode)
     const uint32_t h_total = h_dev + 2u * h_padding;
 
-    // Main loop: read boundary sticks from source buffer(s) → CB for the paired writer.
-    for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
-        if (is_first_chip) {
-            if (!is_padding_zeros) {
-                cb_reserve_back(cb_output_id, 1);
-                uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                if (is_fabric_only) {
-                    // fabric_only: compute source from h_ext and t
-                    uint32_t global_row = outer_dim_start + outer_dim;
-                    uint32_t t = global_row / h_total;
-                    uint32_t h_ext = global_row % h_total;
-                    // W-boundary column within a row (no W padding in compact buffer / input tensor)
-                    uint32_t w_col = direction ? (num_interior_sticks - 1u) : 0u;
-                    uint32_t page;
-                    if (h_ext < h_padding) {
-                        // H-top halo row: read from compact halo buffer H-top section
-                        page = t * h_padding * num_interior_sticks + h_ext * num_interior_sticks + w_col;
-                        noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
-                    } else if (h_ext < h_padding + h_dev) {
-                        // Interior row: read from unpadded input tensor
-                        uint32_t h_local = h_ext - h_padding;
-                        page = t * h_dev * num_interior_sticks + h_local * num_interior_sticks + w_col;
-                        noc_async_read(get_noc_addr(page, src_accessor), dst_l1_addr, stick_size);
+    // Batch sizing: when per-T-batch pipelining is active, process rows in T-batch-sized
+    // chunks synchronized with the H writer.  Otherwise process all rows in one shot.
+#if defined(NP_PROGRESS_SEM)
+    const uint32_t rows_per_batch = (progress_t_batch_size > 0) ? progress_t_batch_size * h_total : outer_dim_size;
+#else
+    const uint32_t rows_per_batch = outer_dim_size;
+#endif
+    const uint32_t num_full_batches = outer_dim_size / rows_per_batch;
+    const uint32_t remainder = outer_dim_size - num_full_batches * rows_per_batch;
+    const uint32_t total_batches = num_full_batches + (remainder > 0 ? 1u : 0u);
+
+    volatile tt_l1_ptr uint32_t* barrier_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr);
+    volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
+
+    uint32_t od_start = 0;
+    for (uint32_t batch = 0; batch < total_batches; batch++) {
+        const uint32_t batch_rows = (batch < num_full_batches) ? rows_per_batch : remainder;
+
+        // Wait for H writer to commit this T-batch's H-halo (cumulative, no reset).
+        if (barrier_count > 0) {
+            noc_semaphore_wait_min(barrier_sem_ptr, (batch + 1) * barrier_count);
+        }
+
+        // Main loop: read boundary sticks from source buffer(s) → CB for the paired writer.
+        for (uint32_t outer_dim = od_start; outer_dim < od_start + batch_rows; outer_dim++) {
+            if (is_first_chip) {
+                if (!is_padding_zeros) {
+                    cb_reserve_back(cb_output_id, 1);
+                    uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
+                    if (is_fabric_only) {
+                        uint32_t global_row = outer_dim_start + outer_dim;
+                        uint32_t t = global_row / h_total;
+                        uint32_t h_ext = global_row % h_total;
+                        uint32_t w_col = direction ? (num_interior_sticks - 1u) : 0u;
+                        uint32_t page;
+                        if (h_ext < h_padding) {
+                            page = t * h_padding * num_interior_sticks + h_ext * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
+                        } else if (h_ext < h_padding + h_dev) {
+                            uint32_t h_local = h_ext - h_padding;
+                            page = t * h_dev * num_interior_sticks + h_local * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, src_accessor), dst_l1_addr, stick_size);
+                        } else {
+                            uint32_t h_bot = h_ext - h_padding - h_dev;
+                            page = h_halo_hbot_base + t * h_padding * num_interior_sticks +
+                                   h_bot * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
+                        }
                     } else {
-                        // H-bot halo row: read from compact halo buffer H-bot section
-                        uint32_t h_bot = h_ext - h_padding - h_dev;
-                        page = h_halo_hbot_base + t * h_padding * num_interior_sticks + h_bot * num_interior_sticks +
-                               w_col;
-                        noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
+                        uint32_t row_base = (outer_dim_start + outer_dim) * output_row_width;
+                        uint32_t col;
+                        if (direction) {
+                            col = pad2_left + num_interior_sticks - 1;
+                        } else {
+                            col = pad2_left;
+                        }
+                        noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_output_id, 1);
                 } else {
-                    // Non-fabric_only: read one boundary stick from output DRAM (standard path).
-                    // direction=0: leftmost interior, direction=1: rightmost interior
-                    uint32_t row_base = (outer_dim_start + outer_dim) * output_row_width;
-                    uint32_t col;
-                    if (direction) {
-                        col = pad2_left + num_interior_sticks - 1;
-                    } else {
-                        col = pad2_left;
-                    }
-                    noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                    cb_reserve_back(cb_output_id, 1);
+                    zeroPad<stick_size>(cb_output_id);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_output_id, 1);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
-            } else {
-                cb_reserve_back(cb_output_id, 1);
-                zeroPad<stick_size>(cb_output_id);
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+            }
+
+            if (!is_last_chip) {
+                for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
+                    cb_reserve_back(cb_output_id, 1);
+                    uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
+                    if (is_fabric_only) {
+                        uint32_t global_row = outer_dim_start + outer_dim;
+                        uint32_t t = global_row / h_total;
+                        uint32_t h_ext = global_row % h_total;
+                        uint32_t w_col;
+                        if (direction) {
+                            w_col = padding - pad_id;
+                        } else {
+                            w_col = num_interior_sticks - pad_id;
+                        }
+                        uint32_t page;
+                        if (h_ext < h_padding) {
+                            page = t * h_padding * num_interior_sticks + h_ext * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
+                        } else if (h_ext < h_padding + h_dev) {
+                            uint32_t h_local = h_ext - h_padding;
+                            page = t * h_dev * num_interior_sticks + h_local * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, src_accessor), dst_l1_addr, stick_size);
+                        } else {
+                            uint32_t h_bot = h_ext - h_padding - h_dev;
+                            page = h_halo_hbot_base + t * h_padding * num_interior_sticks +
+                                   h_bot * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
+                        }
+                    } else {
+                        uint32_t row_base = (outer_dim_start + outer_dim) * output_row_width;
+                        uint32_t col;
+                        if (direction) {
+                            col = pad2_left + (padding - pad_id);
+                        } else {
+                            col = pad2_left + num_interior_sticks - pad_id;
+                        }
+                        noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_output_id, 1);
+                }
             }
         }
 
-        if (!is_last_chip) {
-            // Read boundary sticks from source to send to neighbor.
-            for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
-                cb_reserve_back(cb_output_id, 1);
-                uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                if (is_fabric_only) {
-                    uint32_t global_row = outer_dim_start + outer_dim;
-                    uint32_t t = global_row / h_total;
-                    uint32_t h_ext = global_row % h_total;
-                    // For direction=0: send leftmost interior cols (padding - pad_id)th from left
-                    // For direction=1: send rightmost interior cols
-                    uint32_t w_col;
-                    if (direction) {
-                        w_col = padding - pad_id;  // leftmost interior (to send left)
-                    } else {
-                        w_col = num_interior_sticks - pad_id;  // rightmost interior (to send right)
-                    }
-                    uint32_t page;
-                    if (h_ext < h_padding) {
-                        page = t * h_padding * num_interior_sticks + h_ext * num_interior_sticks + w_col;
-                        noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
-                    } else if (h_ext < h_padding + h_dev) {
-                        uint32_t h_local = h_ext - h_padding;
-                        page = t * h_dev * num_interior_sticks + h_local * num_interior_sticks + w_col;
-                        noc_async_read(get_noc_addr(page, src_accessor), dst_l1_addr, stick_size);
-                    } else {
-                        uint32_t h_bot = h_ext - h_padding - h_dev;
-                        page = h_halo_hbot_base + t * h_padding * num_interior_sticks + h_bot * num_interior_sticks +
-                               w_col;
-                        noc_async_read(get_noc_addr(page, dst_accessor), dst_l1_addr, stick_size);
-                    }
-                } else {
-                    uint32_t row_base = (outer_dim_start + outer_dim) * output_row_width;
-                    uint32_t col;
-                    if (direction) {
-                        // Send leftmost boundary: interior column (padding - pad_id)
-                        col = pad2_left + (padding - pad_id);
-                    } else {
-                        // Send rightmost boundary: interior column (W - pad_id)
-                        col = pad2_left + num_interior_sticks - pad_id;
-                    }
-                    noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+        // Wait for neighbor's W-halo sticks for this batch (cumulative).
+        if (!is_first_chip) {
+            noc_semaphore_wait_min(w_neighbor_sem_ptr, od_start + batch_rows);
+#if defined(NP_W_HALO_L1)
+            {
+                const uint32_t recv_buf_base = get_write_ptr(recv_cb_id);
+                uint32_t dram_page = recv_dram_offset + od_start;
+                for (uint32_t od = 0; od < batch_rows; od++) {
+                    const uint32_t l1_read_addr = recv_buf_base + (od_start + od) * stick_size;
+                    noc_async_write(l1_read_addr, get_noc_addr(dram_page, dst_accessor), stick_size);
+                    dram_page++;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
             }
+#endif
         }
+
+#if defined(NP_PROGRESS_SEM)
+        // Signal conv3d readers that this T-batch's H-halo + W-halo are committed.
+        // Only dir=0 fires to match the single per-T-batch increment conv3d expects.
+        if (progress_t_batch_size > 0 && !direction) {
+            noc_async_write_barrier();
+            for (uint32_t i = 0; i < num_reader_cores; i++) {
+                const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
+                const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
+                noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1);
+            }
+            noc_async_atomic_barrier();
+        }
+#endif
+
+        od_start += batch_rows;
     }
 
-    // Incoming W padding from neighbor: the neighbor's W writer sent padding sticks
-    // directly to our output DRAM via fabric. Wait for all sem_incs confirming each
-    // outer_dim's data has been sent.
+    // Reset semaphores after all batches.
+    noc_semaphore_set(barrier_sem_ptr, 0);
     if (!is_first_chip) {
-        volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
-        noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
-        // Reset after all waits complete (safe: no more fabric increments expected)
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
     }
 
 #if defined(NP_PROGRESS_SEM)
-    // Signal conv3d readers that all compact buffer data (H-halo + W-halo) is committed.
-    // H-halo ordering: all sticks go through L1→CB→local DRAM (noc_async_write_barrier()
-    // in handle_incoming_writes guarantees commit before Phase 2 signal fires). The
-    // fabric_only mode routes ALL sticks through L1 (not just corners) because BH does
-    // not provide DRAM ordering between fabric writes and NOC reads.
-    noc_async_write_barrier();
-    for (uint32_t i = 0; i < num_reader_cores; i++) {
-        const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
-        const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
-        noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1);
+    // One-shot signal for non-per-T-batch paths (standalone NP with NP_PROGRESS_SEM).
+    if (progress_t_batch_size == 0) {
+        noc_async_write_barrier();
+        for (uint32_t i = 0; i < num_reader_cores; i++) {
+            const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
+            const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
+            noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1);
+        }
+        noc_async_atomic_barrier();
     }
-    noc_async_atomic_barrier();
 #endif
 }

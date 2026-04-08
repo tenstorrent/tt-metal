@@ -483,16 +483,29 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
+        if (conv_config.input_progress_t_batch_size > 0) {
+            w_reader_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
+        }
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
             "phase2_w_reader.cpp",
             w_fabric_core_range,
             w_reader_kernel_config);
-        SetCommonRuntimeArgs(
-            program,
-            w_reader_kernel_id,
-            {halo_buffer->address(), op.barrier_semaphore.address(), op.w_neighbor_semaphore.address()});
+        {
+            std::vector<uint32_t> w_reader_crta = {
+                halo_buffer->address(),
+                op.barrier_semaphore.address(),
+                op.w_neighbor_semaphore.address(),
+                (conv_config.input_progress_t_batch_size > 0) ? progress_sem_l1_addr : 0u,
+                static_cast<uint32_t>(reader_noc_coords.size()),
+            };
+            for (const auto& [x, y] : reader_noc_coords) {
+                w_reader_crta.push_back(x);
+                w_reader_crta.push_back(y);
+            }
+            SetCommonRuntimeArgs(program, w_reader_kernel_id, w_reader_crta);
+        }
 
         // W writer kernel
         auto w_writer_kernel_config = WriterDataMovementConfig{};
@@ -547,6 +560,10 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 w_reader_rt_args.push_back(op.np_padding_h);
                 // h_halo_hbot_base
                 w_reader_rt_args.push_back(outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim);
+                // progress_t_batch_size (read by W reader when NP_PROGRESS_SEM is defined)
+                if (conv_config.input_progress_t_batch_size > 0) {
+                    w_reader_rt_args.push_back(conv_config.input_progress_t_batch_size);
+                }
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // W writer runtime args
@@ -1235,6 +1252,10 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
             wr[0] = halo_buffer_addr;
             wr[1] = barrier_sem_addr;
             wr[2] = w_sem_addr;
+            // wr[3] = progress_sem_l1_addr — ping-pong semaphore, update each call
+            if (op.conv_config.input_progress_t_batch_size > 0) {
+                wr[3] = op.conv_config.input_progress_sem_addr;
+            }
 
             auto& ww = GetCommonRuntimeArgs(program, shared_vars.np_artifacts.w_writer_kernel_id);
             ww[0] = halo_buffer_addr;
