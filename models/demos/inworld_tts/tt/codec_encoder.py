@@ -61,19 +61,21 @@ class TtActivation1dTTNN(LightweightModule):
         C = alpha.shape[0]
         self.C = C
 
-        # SnakeBeta params on device [1, 1, 1, C] for broadcasting over [1, 1, T, C]
-        # ROW_MAJOR to match the all-ROW_MAJOR pipeline (no TILE conversions)
+        # SnakeBeta params on device [1, 1, 1, C] in L1 for broadcasting over [1, 1, T, C]
+        # L1 keeps element-wise ops (sin, pow, mul, add) in L1 instead of falling to DRAM
         self.alpha_tt = ttnn.from_torch(
             alpha.reshape(1, 1, 1, -1).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         self.beta_tt = ttnn.from_torch(
             beta.reshape(1, 1, 1, -1).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # FIR filter kernels as ttnn host tensors for conv1d (depthwise: [C, 1, K])
@@ -155,11 +157,11 @@ class TtActivation1dTTNN(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.DRAM_MEMORY_CONFIG)
+        x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.L1_MEMORY_CONFIG)
         if x_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_tt = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT)
 
-        # === SNAKEBETA on device (ROW_MAJOR) ===
+        # === SNAKEBETA on device (ROW_MAJOR, L1) ===
         x_tt = x_tt + (1.0 / self.beta_tt) * ttnn.pow(ttnn.sin(self.alpha_tt * x_tt), 2)
 
         # === DOWNSAMPLE: FIR lowpass + stride-2 decimation ===
@@ -185,7 +187,7 @@ class TtActivation1dTTNN(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.DRAM_MEMORY_CONFIG)
+        x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.L1_MEMORY_CONFIG)
         if x_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_tt = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -375,10 +377,7 @@ class TtConv1d(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
-        # Untilize if needed. When output_layout=ROW_MAJOR was honored by the conv kernel,
-        # the output is already ROW_MAJOR. When the framework falls back to TILE (e.g. DRAM
-        # slicing), we still need to untilize explicitly.
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         if output_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
             output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
         return output_tensor, out_length
@@ -683,7 +682,7 @@ class TtSemanticEncoder(LightweightModule):
         )
         self._cached[cache_key + "_w"] = dw
         self._cached[cache_key + "_b"] = db
-        return ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
 
     def forward_ttnn(self, x_tt: ttnn.Tensor, T: int) -> ttnn.Tensor:
         """Device-only forward: initial conv -> res blocks -> final conv.
