@@ -205,7 +205,7 @@ class ModelPipeline:
             start_time = time.time()
             num_emits = 0
             signal_to_exit = False
-            while len(generated_tokens[slot_id]) < max_new_tokens:
+            while len(generated_tokens[slot_id]) < max_new_tokens or signal_to_exit:
                 iteration += 1
                 # print("\n\n")
                 # print(
