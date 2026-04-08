@@ -110,8 +110,11 @@ jobs:
 
           merge_base=""
           if [[ "$do_full_scan" != "true" ]]; then
-            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
-            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+            # Use HEAD rather than github.ref_name: when called from a pull_request
+            # event via workflow_call, ref_name is "<pr_number>/merge" which is not
+            # a valid git ref. HEAD is always the correctly checked-out commit.
+            merge_base=$(git merge-base HEAD origin/main)
+            echo "Merge base between HEAD and main: $merge_base"
           fi
 
           echo "Do a scan: $do_scan"
