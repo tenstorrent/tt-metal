@@ -21,8 +21,8 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
 
     Follows the standard LLM FLOPs formula:
       flops = 6 * params_active_per_token
-            + 2 * n_layers * seq_len * n_heads * qk_head_dim    (Q @ K^T, fwd+bwd)
-            + 2 * n_layers * seq_len * n_heads * v_head_dim     (attn_weights @ V, fwd+bwd)
+            + 6 * n_layers * seq_len * n_heads * qk_head_dim    (Q @ K^T, fwd+bwd)
+            + 6 * n_layers * seq_len * n_heads * v_head_dim     (attn_weights @ V, fwd+bwd)
 
     Args:
         config: DeepSeekConfig instance
@@ -75,11 +75,12 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     )
 
     # ── Attention QK^T and attn@V FLOPs (scale with seq_len) ──
-    # Forward: Q@K^T is [S, qk_head] @ [qk_head, S] = 2*S*qk_head per head per position
-    # For training: 2x (fwd + bwd)
-    attn_qk_flops = 2 * n_layers * seq_len * n_heads * qk_head
-    # attn_weights @ V: [S, S] @ [S, v_head] = 2*S*v_head per head per position
-    attn_v_flops = 2 * n_layers * seq_len * n_heads * v_head
+    # Q@K^T: [S, qk_head] @ [qk_head, S] per head per layer
+    #   fwd: 2*S*qk_head, bwd dQ: 2*S*qk_head, bwd dK: 2*S*qk_head => 6*S*qk_head
+    attn_qk_flops = 6 * n_layers * seq_len * n_heads * qk_head
+    # attn_weights @ V: [S, S] @ [S, v_head] per head per layer
+    #   fwd: 2*S*v_head, bwd d_attn: 2*S*v_head, bwd dV: 2*S*v_head => 6*S*v_head
+    attn_v_flops = 6 * n_layers * seq_len * n_heads * v_head
 
     # ── Total ──
     # 6 FLOPs per parameter per token (fwd + bwd_input + bwd_weight, each 2 FLOPs)
