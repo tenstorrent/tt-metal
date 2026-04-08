@@ -337,14 +337,28 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([1, 16, 32, 64]),
+        torch.Size([4, 2, 64, 32]),
+        torch.Size([1, 128, 14, 14]),
+        torch.Size([2, 16, 64, 120]),
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
-def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
+@pytest.mark.parametrize("prealloc_out_mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc_out_mem_config, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
+    output_tensor = None
+    if prealloc_out_mem_config is not None:
+        output_tensor = ttnn.from_torch(
+            torch.zeros(input_shapes, dtype=in_data.dtype),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prealloc_out_mem_config,
+        )
 
     grid_size = ttnn.CoreGrid(y=1, x=8)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -357,7 +371,11 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
         pytest.xfail("Input tensors to batch norm must be interleaved")
 
     tt_output_tensor_on_device = ttnn.batch_norm(
-        input_tensor, running_mean=mean_tensor, running_var=var_tensor, memory_config=sharded_mem_config
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        memory_config=sharded_mem_config,
+        output=output_tensor,
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)

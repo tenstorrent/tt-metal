@@ -75,13 +75,24 @@ For single-host tests, run the test with appropriate environment variables and c
 
 ### Multi-Host Tests
 
-For multi-host tests, use `tt-run` with the appropriate cluster and rank binding configurations:
+For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_ttrun.md** in the distributed Python package (alongside `ttrun.py`) for **auto allocation** vs **legacy** mode.
 
-1. **Run the test** with `tt-run`:
+1. **Run the test** (prefer **auto allocation** — `--mesh-graph-descriptor` and `--mock-cluster-rank-binding` are mutually exclusive with `--rank-binding`):
    ```bash
-   tt-run --mock-cluster-rank-binding <cluster_desc_mapping> \
-          --rank-binding <rank_bindings> \
-          --mpi-args "--tag-output --allow-run-as-root" \
+   # Auto allocation: Phase 1 generates rank bindings under generated/ttrun/<cache_id>/
+   tt-run --mesh-graph-descriptor <mesh_graph_desc.textproto> \
+          --mock-cluster-rank-binding <cluster_desc_mapping.yaml> \
+          --mpi-args "--allow-run-as-root" \
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+          --gtest_filter=<TestName>
+   ```
+   Use the same **MGD** path the test expects (often the `mesh_graph_desc_path` in the corresponding rank bindings file under `tests/tt_metal/distributed/config/`).
+
+   **Legacy:** if you already have rank bindings and only need the mock mapping:
+   ```bash
+   tt-run --mock-cluster-rank-binding <cluster_desc_mapping.yaml> \
+          --rank-binding <rank_bindings.yaml> \
+          --mpi-args "--allow-run-as-root" \
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
           --gtest_filter=<TestName>
    ```
@@ -96,9 +107,9 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
 
 - `TestDualGalaxyControlPlaneInit` (world_size=2):
   ```bash
-  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml \
-         --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml \
-         --mpi-args "--tag-output --allow-run-as-root" \
+  tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml \
+         --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
 
@@ -108,9 +119,9 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
 
 - `TestDual2x4ControlPlaneInit` (world_size=2):
   ```bash
-  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml \
-         --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml \
-         --mpi-args "--tag-output --allow-run-as-root" \
+  tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml \
+         --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestDual2x4ControlPlaneInit"
 
@@ -120,9 +131,9 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
 
 - `TestBigMesh2x4ControlPlaneInit` (world_size=4):
   ```bash
-  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/big_mesh_2x4_cluster_desc_mapping.yaml \
-         --rank-binding tests/tt_metal/distributed/config/big_mesh_2x4_rank_bindings.yaml \
-         --mpi-args "--tag-output --allow-run-as-root" \
+  tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x4_big_mesh_cluster_desc_mapping.yaml \
+         --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestBigMesh2x4ControlPlaneInit"
 
@@ -132,9 +143,9 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
 
 - `TestBHQB4x4ControlPlaneInit` (world_size=4):
   ```bash
-  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bhqb_4x4_cluster_desc_mapping.yaml \
-         --rank-binding tests/tt_metal/distributed/config/bhqb_4x4_rank_bindings.yaml \
-         --mpi-args "--tag-output --allow-run-as-root" \
+  tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_mapping.yaml \
+         --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestBHQB4x4ControlPlaneInit"
 
@@ -144,9 +155,9 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
 
 - `TestClosetBox3PodTTSwitchControlPlaneInit` (world_size=3):
   ```bash
-  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/closet_box_3pod_ttswitch_cluster_desc_mapping.yaml \
-         --rank-binding tests/tt_metal/distributed/config/closet_box_3pod_ttswitch_rank_bindings.yaml \
-         --mpi-args "--tag-output --allow-run-as-root" \
+  tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_superpod_cluster_desc_mapping.yaml \
+         --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestClosetBox3PodTTSwitchControlPlaneInit"
 

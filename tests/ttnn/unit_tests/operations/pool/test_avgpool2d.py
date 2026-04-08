@@ -123,17 +123,12 @@ def test_avg_pool2d_post_commit(
         ([2, 32, 1024, 1024], 8),
         ([1, 320, 384, 384], 6),
         ([1, 64, 96, 96], 4),
+        ([1, 64, 96, 96], 0),  # auto num_slices: exercises L1 estimation -> slice determination path
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
-    (
-        # Wide and normal reductions go to normal kernels
-        # Large reductions go to large kernels
-        # Reductions which are large and wide at the same time
-        # go to large kernels
-        (3, 3),
-    ),
+    ((3, 3),),
 )
 @pytest.mark.parametrize(
     "stride",
@@ -155,7 +150,7 @@ def test_avg_pool2d_post_commit(
 )
 @pytest.mark.parametrize(
     "count_include_pad",
-    [True],
+    [True, False],  # False exercises per-element scalar CB path in DRAM slicing L1 estimation
 )
 @pytest.mark.parametrize(
     "shard_scheme",
