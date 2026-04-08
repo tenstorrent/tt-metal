@@ -112,10 +112,15 @@ def run(
     else:
         # Convert list to tuple if needed
         shape_q = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
-        # Default K shape for sample - use larger sequence length for KV cache
-        b, nh, sq, d = shape_q
-        # For decode, K and V have accumulated cache, use 2048 as default cache size
-        shape_k = (b, nh, 2048, d)
+        # Use traced K/V shapes from kwargs if available (V2 format stores them separately)
+        traced_b_shape = kwargs.get("input_b_shape")
+        traced_c_shape = kwargs.get("input_c_shape")
+        if traced_b_shape is not None:
+            shape_k = tuple(traced_b_shape) if isinstance(traced_b_shape, (list, tuple)) else traced_b_shape
+        else:
+            # Default K shape for sample - use larger sequence length for KV cache
+            b, nh, sq, d = shape_q
+            shape_k = (b, nh, 2048, d)
 
     # Extract dimensions following unit test pattern
     # Q shape: [1, b, nh_q, d]
