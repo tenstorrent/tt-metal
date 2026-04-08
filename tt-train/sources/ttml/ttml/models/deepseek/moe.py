@@ -65,6 +65,17 @@ class MoE(AbstractModuleBase):
                 f"integer exactly representable in bf16. On-device routing via "
                 f"ttnn.topk + ttnn.eq would produce incorrect expert masks."
             )
+        if config.n_expert_groups > 1:
+            if config.n_routed_experts % config.n_expert_groups != 0:
+                raise ValueError(
+                    f"n_routed_experts ({config.n_routed_experts}) must be divisible by "
+                    f"n_expert_groups ({config.n_expert_groups}) for grouped routing reshape."
+                )
+            if not (1 <= config.n_limited_groups <= config.n_expert_groups):
+                raise ValueError(
+                    f"n_limited_groups ({config.n_limited_groups}) must be in "
+                    f"[1, n_expert_groups={config.n_expert_groups}]."
+                )
 
         self.dim = config.dim
         self.num_experts = config.n_routed_experts
@@ -144,11 +155,9 @@ class MoE(AbstractModuleBase):
             _topk_values, topk_indices = ttnn.topk(biased, self.n_activated, dim=-1)
         # topk_indices: [B, 1, S, n_activated]
 
-        # ── 3. Build per-expert masks, denom, and token count accumulator ──
+        # ── 3. Build per-expert masks and denom ──
         expert_masks = {}
         denom = None
-        # token_counts_batch: [1, 1, 1, num_experts] — count of tokens routed to each expert this batch
-        token_counts_batch = None
 
         for expert_idx in range(self.num_experts):
             match = ttnn.eq(topk_indices, float(expert_idx))
@@ -157,12 +166,6 @@ class MoE(AbstractModuleBase):
             mask_narrow = ttnn.gt(match_any, 0.0)
             mask_narrow = ttnn.typecast(mask_narrow, ttnn.DataType.BFLOAT16)
             expert_masks[expert_idx] = mask_narrow
-
-            # Sum this expert's mask to get token count: scalar = sum over [B, 1, S, 1]
-            # Reshape to [1, 1, 1, B*S] then sum to get a single scalar, but we need
-            # per-expert counts in a [1, 1, 1, num_experts] tensor.
-            # Simpler: sum the mask to a scalar, place into a one-hot position.
-            # We'll accumulate into token_counts_batch by concat at the end.
 
             if self.score_func == "sigmoid":
                 score_i_raw = ttnn.slice(scores_val, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
