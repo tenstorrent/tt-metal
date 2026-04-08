@@ -26,6 +26,147 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def init_kvpe_cache(config, mesh_device, seq_len, mesh_shape, sp_axis):
+    """
+    Initialize KVPE cache for MLA.
+
+    Args:
+        config: Model configuration
+        mesh_device: Mesh device for TT
+        seq_len: Sequence length
+        mesh_shape: Shape of mesh device
+        sp_axis: Sequence parallel axis
+
+    Returns:
+        tt_kvpe_cache: Initialized KVPE cache on device
+    """
+    # hack in num_layers into batch size, so they are contiguous in memory
+    num_layers = 1
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    seq_len_local = seq_len // mesh_shape[sp_axis]
+    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+
+    BH_NUM_DRAM_BANKS = 8
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    grid = ttnn.CoreRangeSet(core_ranges)
+
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32  # this is a predefined constant
+
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+
+    tt_kvpe_cache = ttnn.from_torch(
+        torch_kvpe_cache,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    return tt_kvpe_cache
+
+
+def run_mla_inference(
+    config,
+    weights,
+    mesh_device,
+    seq_len,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    is_balanced,
+    topology,
+    tt_kvpe_cache,
+):
+    """
+    Utility function to run MLA inference without host comparison.
+
+    Args:
+        config: Model configuration
+        weights: Model weights dictionary
+        mesh_device: Mesh device for TT
+        seq_len: Sequence length
+        mesh_shape: Shape of mesh device
+        sp_axis: Sequence parallel axis
+        tp_axis: Tensor parallel axis
+        is_balanced: Whether to use balanced chunk ordering
+        topology: Topology (Linear or Ring)
+        tt_kvpe_cache: Initialized KVPE cache on device
+
+    Returns:
+        Tuple of (tt_output, hidden_states, chunk_order, shard_dims)
+    """
+    # Create TT MLA
+    logger.info("Creating TT MLA...")
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=is_balanced,
+        topology=topology,
+    )
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+
+    # Verify TT MLA exists
+    assert mla_tt is not None, "TT MLA should exist"
+
+    # Create test inputs
+    batch_size = 1
+    hidden_size = config.hidden_size
+
+    logger.info(f"Creating test inputs: batch_size={batch_size}, seq_len={seq_len}, hidden_size={hidden_size}")
+
+    # Create random input tensor (generate in float32, then convert to bfloat16)
+    torch.manual_seed(42)
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
+
+    # Reorder hidden_states for balanced ring attention
+    sp_factor = mesh_shape[sp_axis]
+    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+    tt_input = hidden_states.unsqueeze(0)  # [1, batch, seq, hidden]
+    if is_balanced:
+        tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
+
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
+    tt_hidden_states = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_output = mla_tt.forward(
+        hidden_states=tt_hidden_states,
+        rope_tensors=rope_tensors,
+        kvpe_cache=tt_kvpe_cache,
+    )
+
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
+    return tt_output, hidden_states, chunk_order, shard_dims
+
+
 @pytest.fixture
 def random_weights(config_only):
     """
@@ -106,7 +247,7 @@ def random_weights(config_only):
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024, 6400], ids=["seq128k", "seq100k", "seq6k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
@@ -159,7 +300,6 @@ def test_mla(
 
     # Create reference MLA
     if use_pretrained:
-        # For pretrained, create from weights
         logger.info("Creating reference MLA with pretrained weights...")
         mla_ref = create_mla_reference(
             config=config,
@@ -168,7 +308,6 @@ def test_mla(
             module_path="model.layers.0.self_attn",
         )
     else:
-        # For random, use same weights
         logger.info("Creating reference MLA with random weights...")
         mla_ref = create_mla_reference(
             config=config,
@@ -177,76 +316,40 @@ def test_mla(
             module_path="model.layers.0.self_attn",
         )
 
-    # Create TT MLA
-    logger.info("Creating TT MLA...")
-
-    # hack in num_layers into batch size, so they are contiguous in memory
-    num_layers = 1
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
-
-    BH_NUM_DRAM_BANKS = 8
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
-    ]
-    grid = ttnn.CoreRangeSet(core_ranges)
-
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32  # this is a predefined constant
-
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
-        grid=grid,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.DRAM,
-        nd_shard_spec=kv_nd_shard_spec,
-    )
-
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    mla_tt = ttMLA(
-        config,
-        weights,
-        mesh_device,
-        layer_idx=0,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_balanced=is_balanced,
-        topology=topology,
-    )
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    rope_tensors = rope_setup.get_rope_tensors(seq_len)
-
-    # Verify both exist
+    # Verify reference MLA exists
     assert mla_ref is not None, "Reference MLA should exist"
-    assert mla_tt is not None, "TT MLA should exist"
 
     # Test forward pass comparison
     logger.info("=" * 80)
     logger.info(f"Testing forward pass comparison (seq_len={seq_len})")
     logger.info("=" * 80)
 
-    # Create test inputs
+    # Initialize KVPE cache
+    tt_kvpe_cache = init_kvpe_cache(
+        config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+    )
+
+    # Run MLA inference using utility function
+    tt_output, hidden_states, chunk_order, shard_dims = run_mla_inference(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=is_balanced,
+        topology=topology,
+        tt_kvpe_cache=tt_kvpe_cache,
+    )
+
     batch_size = 1
-    hidden_size = config.hidden_size
 
-    logger.info(f"Creating test inputs: batch_size={batch_size}, seq_len={seq_len}, hidden_size={hidden_size}")
-
-    # Create random input tensor (generate in float32, then convert to bfloat16)
-    torch.manual_seed(42)
-    hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
-
+    # Host comparison: Run reference forward pass if needed
     if skip_host_comparison == False:
         # Check for cached reference results to avoid expensive host attention computation
         cache_dir = Path(os.environ.get("DEEPSEEK_V3_MLA_REF_CACHE", "/tmp/deepseek_v3_mla_ref_cache"))
@@ -295,34 +398,7 @@ def test_mla(
             logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
             logger.info(f"  Output std:   {ref_output.std().item():.4f}")
 
-    # Reorder hidden_states for balanced ring attention
-    sp_factor = mesh_shape[sp_axis]
-    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
-    tt_input = hidden_states.unsqueeze(0)  # [1, batch, seq, hidden]
-    if is_balanced:
-        tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
-
-    shard_dims = [None, None]
-    shard_dims[tp_axis] = -1
-    shard_dims[sp_axis] = -2
-    tt_hidden_states = ttnn.from_torch(
-        tt_input,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
-    tt_output = mla_tt.forward(
-        hidden_states=tt_hidden_states,
-        rope_tensors=rope_tensors,
-        kvpe_cache=tt_kvpe_cache,
-    )
-
-    ttnn.synchronize_device(mesh_device)
-    ttnn.distributed_context_barrier()
-
-    if skip_host_comparison == False:
+        # Compare TT output with reference output
         tt_output_cpu = ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
