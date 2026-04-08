@@ -4,6 +4,9 @@
 
 #include "losses.hpp"
 
+#include <fmt/core.h>
+
+#include <cstdio>
 #include <stdexcept>
 #include <vector>
 
@@ -35,6 +38,22 @@ autograd::TensorPtr sharded_cross_entropy_loss(
         tp_size = mesh_shape[cluster_axis.value()];
     } else {
         tp_size = static_cast<uint32_t>(device->num_devices());
+    }
+
+    {
+        std::string dims_str;
+        for (size_t d = 0; d < mesh_shape.dims(); ++d) {
+            if (d > 0) {
+                dims_str += 'x';
+            }
+            dims_str += fmt::format("{}", mesh_shape[d]);
+        }
+        fmt::print(
+            stderr,
+            "[ttml] sharded_cross_entropy_loss: mesh_shape=[{}] tp_size={} cluster_axis={}\n",
+            dims_str,
+            tp_size,
+            cluster_axis.has_value() ? fmt::format("{}", cluster_axis.value()) : std::string("nullopt"));
     }
 
     // ---------------------------------------------------------------
