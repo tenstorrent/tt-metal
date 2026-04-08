@@ -90,9 +90,9 @@ def init_kv_cache(config, device, max_seq_len, weights_mesh_mapper, n_layers=Non
                 kv_cache_layer.append(cache_k_or_v)
             kv_cache.append(kv_cache_layer)
 
-            # Pre-allocate cross-attention cache for tracing
+            # Pre-allocate cross-attention cache for tracing ([B, H, S_enc, d], SDPA-native K layout)
             # bfloat16 to match calculate_key_values output dtype
-            cross_k = torch.zeros((batch_size, num_heads, head_dim, encoder_seq_len))
+            cross_k = torch.zeros((batch_size, num_heads, encoder_seq_len, head_dim))
             cross_k = ttnn.as_tensor(
                 cross_k,
                 dtype=ttnn.bfloat16,
@@ -143,13 +143,13 @@ def calculate_key_values(config, key_value_states, *, parameters):
 
     # num_kv_heads=0 is required here because we're calling nlp_create_qkv_heads
     # on just the K or V tensor (not combined QKV)
+    # K stays [B, H, S_enc, d] (same head layout as V) for fused cross-attention SDPA — no extra permute.
     key_states = ttnn.experimental.nlp_create_qkv_heads(
         key_states,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         num_heads=config.encoder_attention_heads,
         num_kv_heads=0,
     )[0]
-    key_states = ttnn.permute(key_states, [0, 1, 3, 2])
 
     value_states = ttnn.experimental.nlp_create_qkv_heads(
         value_states,
@@ -159,6 +159,26 @@ def calculate_key_values(config, key_value_states, *, parameters):
     )[0]
 
     return key_states, value_states
+
+
+def ffn_linear_thin_m(activations, weight, bias):
+    """
+    FFN matmul path for small effective M (e.g. decode with few tokens): stage activations in L1 and
+    use ttnn.linear with the full device grid, matching the tuned projection pattern in calculate_key_values.
+    """
+    device = activations.device()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    activations_l1 = ttnn.to_memory_config(activations, ttnn.L1_MEMORY_CONFIG)
+    out_l1 = ttnn.linear(
+        activations_l1,
+        weight,
+        bias=bias,
+        core_grid=core_grid,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(activations_l1)
+    return ttnn.to_memory_config(out_l1, WHISPER_MEMORY_CONFIG)
 
 
 def get_decode_sdpa_configs(config, bsz, device):
@@ -196,66 +216,66 @@ def get_decode_sdpa_configs(config, bsz, device):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
+# Per-device cache for cross-attention fused SDPA (avoid rebuilding each forward)
+_CROSS_SDPA_CONFIG_CACHE = {}
+
+
+def get_cross_sdpa_program_and_compute_configs(device):
+    key = id(device)
+    if key not in _CROSS_SDPA_CONFIG_CACHE:
+        compute_grid_size = device.compute_with_storage_grid_size()
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=True,
+        )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        _CROSS_SDPA_CONFIG_CACHE[key] = (program_config, compute_kernel_config)
+    return _CROSS_SDPA_CONFIG_CACHE[key]
+
+
 def functional_sdpa(
-    query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
+    query_states,
+    key_states,
+    value_states,
+    scaling,
+    attention_mask,
+    is_cross_attention=False,
+    is_decode=False,
+    *,
+    deallocate_cross_key_states=False,
 ):
     if is_cross_attention:
-        head_num = query_states.shape[1]
-        if head_num == 20:  # openai/whisper-large-v3 & distil-whisper/distil-large-v3 models
-            core_grid = ttnn.CoreGrid(y=4, x=5)
-        elif head_num == 16:  # openai/whisper-medium
-            core_grid = ttnn.CoreGrid(y=4, x=4)
-        elif head_num == 12:  # openai/whisper-small
-            core_grid = ttnn.CoreGrid(y=3, x=4)
-        elif head_num == 8:  # openai/whisper-base
-            core_grid = ttnn.CoreGrid(y=2, x=4)
-        elif head_num == 6:  # openai/whisper-tiny
-            core_grid = ttnn.CoreGrid(y=2, x=3)
-        else:
-            raise ValueError(f"Unsupported head number: {head_num}")
+        # K from calculate_key_values / cross cache is [B, H, S_enc, d] (same as V sequence layout).
+        device = query_states.device()
+        program_config, compute_kernel_config = get_cross_sdpa_program_and_compute_configs(device)
 
-        height_sharded_config_query_states = ttnn.create_sharded_memory_config(
-            query_states.padded_shape,
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        query_states = ttnn.to_memory_config(query_states, height_sharded_config_query_states)
+        query_states = ttnn.to_memory_config(query_states, WHISPER_MEMORY_CONFIG)
+        key_states = ttnn.to_memory_config(key_states, WHISPER_MEMORY_CONFIG)
+        value_states = ttnn.to_memory_config(value_states, WHISPER_MEMORY_CONFIG)
 
-        height_sharded_config_key_states = ttnn.create_sharded_memory_config(
-            key_states.padded_shape,
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        key_states = ttnn.to_memory_config(key_states, height_sharded_config_key_states)
-
-        height_sharded_config_value_states = ttnn.create_sharded_memory_config(
-            value_states.padded_shape,
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        value_states = ttnn.to_memory_config(value_states, height_sharded_config_value_states)
-
-        query_states *= scaling
-
-        attn_weights = ttnn.matmul(query_states, key_states, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
-        ttnn.deallocate(query_states)
-        ttnn.deallocate(key_states)
-
-        attn_weights = ttnn.softmax_in_place(attn_weights, dim=-1)
-
-        attn_probs = dropout(attn_weights, p=0, training=False)
-
-        attn_output = ttnn.matmul(
-            attn_probs,
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
             value_states,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            scale=scaling,
+            attn_mask=attention_mask,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=WHISPER_MEMORY_CONFIG,
         )
-        ttnn.deallocate(attn_probs)
+        ttnn.deallocate(query_states)
+        if deallocate_cross_key_states:
+            ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
-        attn_output = ttnn.to_memory_config(attn_output, WHISPER_MEMORY_CONFIG)
 
     elif (not is_decode) and (query_states.shape[-2] == value_states.shape[-2]):
         ## Encoder-self-attention
@@ -364,6 +384,7 @@ def whisper_attention(
             attention_mask,
             is_cross_attention=is_cross_attention,
             is_decode=is_decode,
+            deallocate_cross_key_states=(cross_attn_cache is None),
         )
     else:
         if not is_decode:
@@ -484,10 +505,10 @@ def encoder_layer(config, hidden_states, *, parameters):
         memory_config=WHISPER_MEMORY_CONFIG,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
-    hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
+    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc1.weight, parameters.fc1.bias)
     hidden_states = gelu(hidden_states)
     hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
+    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc2.weight, parameters.fc2.bias)
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
@@ -599,10 +620,10 @@ def decoder_layer(
         bias=parameters.final_layer_norm.bias,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
-    hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
+    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc1.weight, parameters.fc1.bias)
     hidden_states = gelu(hidden_states)
     hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
+    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc2.weight, parameters.fc2.bias)
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
