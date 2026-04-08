@@ -93,9 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
-    runs-on:
-      group: exabox
-      labels: exabox-multihost-with-nfs
+    runs-on: ${{ matrix.test-group.runs_on }}
     timeout-minutes: 90  # Overall timeout for the entire job
     outputs:
       test-result: ${{ steps.run-test.outcome }}
