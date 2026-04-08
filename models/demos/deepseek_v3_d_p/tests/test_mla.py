@@ -117,64 +117,6 @@ def run_mla_inference(
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
-@pytest.fixture
-def random_weights(config_only):
-    """
-    Generate random weights for testing using the config.
-
-    Args:
-        config_only: HuggingFace config (only downloads config files, not weight shards)
-
-    Returns:
-        Tuple of (config, weights_dict) in bfloat16
-    """
-    config = config_only
-
-    torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
-
-    # Use proper initialization scale from config (typically 0.02)
-    std = config.initializer_range
-
-    # Generate random weights matching MLA architecture using actual config
-    # Generate in float32 first, then convert to bfloat16 for better numerical properties
-    weights = {
-        "q_a_proj.weight": (torch.randn(config.q_lora_rank, config.hidden_size) * std).to(torch.bfloat16),
-        "q_a_layernorm.weight": torch.ones(config.q_lora_rank, dtype=torch.bfloat16),
-        "q_b_proj.weight": (
-            torch.randn(
-                config.num_attention_heads * (config.qk_nope_head_dim + config.qk_rope_head_dim),
-                config.q_lora_rank,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "kv_a_proj_with_mqa.weight": (
-            torch.randn(
-                config.kv_lora_rank + config.qk_rope_head_dim,
-                config.hidden_size,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "kv_a_layernorm.weight": torch.ones(config.kv_lora_rank, dtype=torch.bfloat16),
-        "kv_b_proj.weight": (
-            torch.randn(
-                config.num_attention_heads * (config.qk_nope_head_dim + config.v_head_dim),
-                config.kv_lora_rank,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "o_proj.weight": (
-            torch.randn(
-                config.hidden_size,
-                config.num_attention_heads * config.v_head_dim,
-            )
-            * std
-        ).to(torch.bfloat16),
-    }
-
-    logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
-    return config, weights
-
-
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
