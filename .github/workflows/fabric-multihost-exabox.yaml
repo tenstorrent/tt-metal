@@ -59,7 +59,6 @@ jobs:
             allocationType: MGD
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
-              exabox.tenstorrent.com/quad: B89
             topologyKeys:
               - exabox.tenstorrent.com/quad
             mgd: |-
