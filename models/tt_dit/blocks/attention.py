@@ -76,7 +76,7 @@ class Attention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,  # NOTE: False is more correct
+            exp_approx_mode=True,  # Faster exponential approximation
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

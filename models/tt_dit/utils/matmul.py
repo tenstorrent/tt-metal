@@ -94,6 +94,26 @@ grid_13_9_configs = {
     (9472, 3456, 5120): (8, 12, 4, (1, 2)),
 }
 
+# Known best blockings for 11x10 core grid (Blackhole P150/P300) for Qwen-Image TP=2
+# Each value is a tuple: (M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w))
+grid_11_10_configs = {
+    # Transformer matmuls (inner_dim=3072 with TP=2 -> 1536 per device, joint_attn_dim varies)
+    (4096, 3072, 1536): (16, 8, 4, (2, 2)),  # img_in / txt_in projections
+    (512, 3072, 1536): (4, 8, 4, (2, 2)),
+    (4096, 3072, 6144): (16, 8, 8, (2, 2)),  # FF layers
+    (4096, 6144, 3072): (16, 8, 8, (2, 2)),
+    (512, 3072, 6144): (4, 8, 8, (2, 2)),
+    (512, 6144, 3072): (4, 8, 8, (2, 2)),
+    (32, 3072, 6144): (2, 8, 8, (2, 2)),  # time embedding
+    (32, 256, 3072): (2, 8, 8, (1, 2)),
+    (4096, 3072, 64): (8, 8, 2, (2, 2)),  # proj_out
+    # VAE matmuls
+    (128, 32, 32): (2, 1, 1, (2, 1)),
+    (16384, 384, 1152): (16, 8, 4, (2, 2)),
+    (16384, 384, 384): (16, 8, 4, (2, 2)),
+    (256, 192, 384): (4, 4, 4, (2, 2)),
+}
+
 grid_12_10_configs = {
     (9472, 5120, 1280): (16, 8, 4, (2, 2)),
     (128, 5120, 1280): (1, 16, 8, (1, 2)),
@@ -120,6 +140,11 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         config_tuple = grid_89_configs.get((M, K, N))
     elif getattr(core_grid, "x", None) == 13 and getattr(core_grid, "y", None) == 9:
         config_tuple = grid_13_9_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
+    elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
+        config_tuple = grid_11_10_configs.get((M, K, N))
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
