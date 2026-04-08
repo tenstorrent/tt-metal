@@ -43,8 +43,6 @@ bool run_command(const std::string& cmd, const std::filesystem::path& log_file, 
 }
 
 void create_file(const std::filesystem::path& file_path) {
-    namespace fs = std::filesystem;
-
     tt::filesystem::safe_create_directories(file_path.parent_path());
 
     // just making sure the file is there. Don't need to worry about the state

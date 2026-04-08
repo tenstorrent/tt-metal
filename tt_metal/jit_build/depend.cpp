@@ -4,6 +4,7 @@
 
 #include "depend.hpp"
 #include "common/stable_hash.hpp"
+#include "tt_stl/fmt.hpp"
 
 #include <cstddef>
 #include <filesystem>
