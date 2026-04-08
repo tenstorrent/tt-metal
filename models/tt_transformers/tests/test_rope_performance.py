@@ -4,12 +4,12 @@
 """
 Device profiling harness: compare rotary-embedding op time (HF vs mllama RoPE) via Tracy + simple_text_demo.
 
-Runs selected phase(s) per module constant :data:`ROPE_PERF_MODE` (``"full"``, ``"prefill"``, or
-``"decode"``): 1 layer, seqlen 1024, 2 generated tokens, batch sizes 1 and 32 under `python -m tracy`,
-parses the ops CSV and captured demo logs (TTFT, decode tok/s/user), prints a Markdown table, and removes temp dirs on success.
+Runs once per parametrized demo phase (``prefill`` or ``decode``): 1 layer, seqlen 1024, 2 generated
+tokens, batch sizes 1 and 32 under `python -m tracy`, parses the ops CSV and captured demo logs (TTFT,
+decode tok/s/user), prints a Markdown table, and removes temp dirs on success.
 
-Set the model with env `HF_MODEL` only. Edit ``ROPE_PERF_MODE`` in this file to change which demo phase(s)
-run (``full`` = prefill + decode; ``prefill`` or ``decode`` = that phase only).
+Set the model with env `HF_MODEL` only. Phase is selected via :func:`pytest.mark.parametrize` on
+``rope_perf_mode`` (``prefill`` or ``decode``).
 
 Optional: set env `MESH_DEVICE` (e.g. ``N150``, ``N300``) — passed through to the Tracy subprocess via
 ``os.environ.copy()`` in :func:`_rope_perf_subprocess_env`, same as ``simple_text_demo`` expects.
@@ -40,9 +40,6 @@ DEMO_TEST = "models/tt_transformers/demo/simple_text_demo.py::test_demo_text"
 PYTEST_ADDOPTS_DEVICE_PERF = '-k "device-perf and performance"'
 
 TIMEOUT_TEST = 1200
-
-# Which simple_text_demo phase(s) to profile: "full" (prefill + decode), "prefill", or "decode".
-ROPE_PERF_MODE = "full"
 
 ROPE_OPS = frozenset(
     {
@@ -342,7 +339,7 @@ def _rope_perf_subprocess_env(*, hf_model: str) -> dict[str, str]:
 
 
 def _rope_perf_demo_modes(rope_perf_mode: str) -> tuple[str, ...]:
-    """Map :data:`ROPE_PERF_MODE` / mode string to simple_text_demo ``--mode`` values (prefill and/or decode)."""
+    """Map ``rope_perf_mode`` / mode string to simple_text_demo ``--mode`` values (prefill and/or decode)."""
     key = rope_perf_mode.strip().lower()
     if key == "full":
         return ("prefill", "decode")
@@ -385,17 +382,18 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
 
 
 @pytest.mark.timeout(14400)
-def test_rope_performance_comparison_table():
+@pytest.mark.parametrize("rope_perf_mode", ["prefill", "decode"])
+def test_rope_performance_comparison_table(rope_perf_mode: str):
     """
-    Compare HF vs mllama RoPE device time for phase(s) from :data:`ROPE_PERF_MODE` (full, prefill, or decode),
-    bs in {1, 32}, 1 layer, seqlen 1024, 2 generated tokens. Model from ``HF_MODEL`` env only.
+    Compare HF vs mllama RoPE device time for ``rope_perf_mode`` (prefill or decode), bs in {1, 32},
+    1 layer, seqlen 1024, 2 generated tokens. Model from ``HF_MODEL`` env only.
     Optional ``MESH_DEVICE`` is inherited by the Tracy subprocess. Prints a Markdown table (run pytest with -s).
     """
     hf_model = os.environ.get("HF_MODEL")
     assert (
         hf_model is not None
     ), "HF_MODEL is not set, it needs to be set to a HuggingFace model name, for example: export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct"
-    demo_modes = _rope_perf_demo_modes(ROPE_PERF_MODE)
+    demo_modes = _rope_perf_demo_modes(rope_perf_mode)
     model_id = model_display_id(hf_model)
 
     table_rows: list[dict[str, Any]] = []
@@ -454,7 +452,7 @@ def test_rope_performance_comparison_table():
     print("\n### RoPE device time (HF vs mllama)\n")
     print(f"`HF_MODEL`: `{hf_model}`")
     print(f"`MESH_DEVICE`: `{mesh_device_display}`")
-    print(f"`ROPE_PERF_MODE`: `{ROPE_PERF_MODE}` (demo phases: {', '.join(demo_modes)})\n")
+    print(f"`rope_perf_mode`: `{rope_perf_mode}` (demo phases: {', '.join(demo_modes)})\n")
     print(
         "*Difference metrics (per table row; HF vs mllama):* "
         "`pct_diff_ttft_%` / `pct_diff_tok_s_u_%` / `pct_diff_rope_*` = 100 × (HF − mllama) / HF. "
