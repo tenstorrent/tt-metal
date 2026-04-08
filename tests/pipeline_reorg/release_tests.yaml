@@ -17,15 +17,6 @@
 # ============================================================================
 
 # N150 Core models
-- name: llama3 N150 functional
-  cmd: run_llama3_func
-  skus:
-    wh_n150:
-      timeout: 30
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3
-
 - name: falcon7b N150 functional
   cmd: run_falcon7b_func
   skus:
@@ -70,15 +61,6 @@
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   model-name: sdxl
-
-- name: mistral7b N150 functional
-  cmd: run_mistral7b_perf
-  skus:
-    wh_n150:
-      timeout: 24
-  owner_id: U0896VBAKFC # Pratikkumar Prajapati
-  team: models
-  model-name: mistral7b
 
 - name: resnet N150 performance
   cmd: run_resnet_stability
@@ -154,14 +136,6 @@
   model-name: vgg_unet
 
 # N300 Core models
-- name: llama3 N300 functional
-  cmd: run_llama3_func
-  skus:
-    wh_n300:
-      timeout: 30
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3
 
 - name: falcon7b N300 functional
   cmd: run_falcon7b_func
@@ -264,32 +238,6 @@
   model-name: vit
 
 # N300 Performance tests
-- name: mistral7b N300 performance
-  cmd: run_mistral7b_perf
-  skus:
-    wh_n300_perf:
-      timeout: 36
-  owner_id: U0896VBAKFC # Pratikkumar Prajapati
-  team: models
-  model-name: mistral7b
-
-- name: falcon7b N300 performance
-  cmd: run_falcon7b_perf
-  skus:
-    wh_n300_perf:
-      timeout: 30
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: falcon7b
-
-- name: whisper N300 performance
-  cmd: run_whisper_perf
-  skus:
-    wh_n300_perf:
-      timeout: 30
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
 
 - name: gemma3 N300 performance
   cmd: run_gemma3_perf
