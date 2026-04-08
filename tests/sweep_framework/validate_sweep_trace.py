@@ -40,7 +40,6 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
-        "hash",
     }
 )
 
@@ -56,6 +55,9 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
+                continue
+            # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
+            if k == "hash" and isinstance(v, (int, float)):
                 continue
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
