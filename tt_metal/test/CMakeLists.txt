@@ -47,3 +47,13 @@ install(
     PATTERN
     "*.yaml"
 )
+
+# Install SOC descriptor YAML files for mock device testing.
+# These are required by get_soc_description_file(), which looks for files in:
+# get_root_dir() + "/tt_metal/soc_descriptors/"
+install(
+    FILES
+        ${PROJECT_SOURCE_DIR}/tt_metal/soc_descriptors/quasar_32_arch.yaml
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/soc_descriptors
+    COMPONENT metalium-validation
+)
