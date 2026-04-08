@@ -19,6 +19,7 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -534,6 +535,12 @@ int main() {
             WAYPOINT("D");
 
             wait_ncrisc_trisc();
+
+            // Read perf counter values after all TRISCs finish. TRISC1 started/stopped
+            // the counters (via RecordPerfCounters RAII), but BRISC reads them because
+            // it has NOC access to push the L1 profiler buffer to DRAM when it fills up.
+            // The perf counter debug registers are shared across all RISCs on the core.
+            ReadPerfCounters();
 
             trigger_sync_register_init();
 

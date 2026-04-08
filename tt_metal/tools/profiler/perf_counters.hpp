@@ -328,10 +328,10 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-bit");
 
-// ERISC perf counters disabled: the MMIO readback path is hardwired to 0 in both
-// WH and BH RTL (i_l1_perf_cnt_out(64'h0) in tt_eth_core.sv). The counters run
-// but software cannot read the values. Enable ERISC support when RTL is fixed.
-#if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1)
+// Perf counter start/stop runs on TRISC1 (wraps the compute kernel).
+// Counter readout and DRAM push runs on BRISC (has NOC access for DRAM writes).
+// ERISC perf counters disabled: MMIO readback hardwired to 0 in RTL.
+#if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_BRISC))
 
 #include "kernel_profiler.hpp"
 #include "api/debug/assert.h"
@@ -615,8 +615,10 @@ void start_perf_counter() {
 #endif
 }
 
+// stop_perf_counter: stops all enabled counter groups (freezes hardware counters).
+// Called from TRISC1 at the end of the compute kernel scope.
+// Does NOT read counter values — that happens on BRISC which has NOC access for DRAM push.
 void stop_perf_counter() {
-    // Stop all enabled groups first
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
     stop_single_group(PerfCounterGroup::FPU);
 #endif
@@ -644,38 +646,52 @@ void stop_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     stop_single_group(PerfCounterGroup::L1_4);
 #endif
+};
 
-    // Read all enabled groups
+// read_perf_counters: reads all enabled counter groups and writes markers to the profiler buffer.
+// Called from BRISC after wait_ncrisc_trisc() — BRISC has NOC access so it can push the L1
+// profiler buffer to DRAM (via quick_push) between groups when the buffer fills up.
+// The perf counter debug registers are shared across all RISCs on the Tensix core,
+// so BRISC can read counter values that were started/stopped by TRISC1.
+void read_perf_counters() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
     read_single_group(PerfCounterGroup::FPU);
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
     read_single_group(PerfCounterGroup::PACK);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
     read_single_group(PerfCounterGroup::UNPACK);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
     read_single_group(PerfCounterGroup::L1_0);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
     read_single_group(PerfCounterGroup::L1_1);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     read_single_group(PerfCounterGroup::INSTRN);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     read_single_group(PerfCounterGroup::L1_2);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
     read_single_group(PerfCounterGroup::L1_3);
+    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     read_single_group(PerfCounterGroup::L1_4);
 #endif
 };
 
-// Wrapper struct for starting and stopping performance counters using scope of PerfCounterWrapper object
+// TRISC1: RAII wrapper that starts counters in constructor and stops in destructor.
+// Counter readout happens later on BRISC via read_perf_counters().
 struct PerfCounterWrapper {
     PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
     ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
@@ -685,6 +701,7 @@ struct PerfCounterWrapper {
 
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
+#define ReadPerfCounters() kernel_profiler::read_perf_counters();
 #define RecordPerfCounters() kernel_profiler::PerfCounterWrapper _perf_counter_wrapper_;
 
 #else
@@ -692,6 +709,7 @@ struct PerfCounterWrapper {
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
+#define ReadPerfCounters()
 #define RecordPerfCounters()
 
 #endif
