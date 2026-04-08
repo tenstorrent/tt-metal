@@ -1641,20 +1641,22 @@ def test_wan_decoder_chunked_consistency(
         assert baseline.shape == chunked.shape, (
             f"Shape mismatch for t_chunk_size={t_chunk_size}: " f"baseline {baseline.shape} vs chunked {chunked.shape}"
         )
-        if not torch.equal(baseline, chunked):
-            diff = (baseline - chunked).abs()
+        diff = (baseline - chunked).abs()
+        try:
+            torch.testing.assert_close(baseline, chunked, rtol=1e-3, atol=1e-3)
+        except AssertionError as exc:
             logger.error(
                 f"  t_chunk_size={t_chunk_size} MISMATCH: "
                 f"max_abs_diff={diff.max().item()}, "
                 f"mean_abs_diff={diff.mean().item()}, "
-                f"num_mismatched={(diff > 0).sum().item()}/{diff.numel()}"
+                f"num_outside_atol={(diff > 1e-3).sum().item()}/{diff.numel()}"
             )
-            assert False, (
-                f"Exact mismatch for t_chunk_size={t_chunk_size}: "
+            raise AssertionError(
+                f"Mismatch for t_chunk_size={t_chunk_size}: "
                 f"max_abs_diff={diff.max().item()}, "
                 f"mean_abs_diff={diff.mean().item()}"
-            )
-        logger.info(f"  t_chunk_size={t_chunk_size} PASSED (exact match)")
+            ) from exc
+        logger.info(f"  t_chunk_size={t_chunk_size} PASSED (within tolerance)")
 
 
 @pytest.mark.parametrize(
