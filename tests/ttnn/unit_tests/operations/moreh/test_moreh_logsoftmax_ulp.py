@@ -91,29 +91,40 @@ def _run_ttnn_logsoftmax(
 # Test parameters: strategy-consistent shape sweeps (multiples of 32 for tiles)
 # ---------------------------------------------------------------------------
 
-_SMALL_INNER = [32, 160, 352]  # small / medium / large inner dim
-_LARGE_W_LAST = [160, 480]  # small and large W for LARGE_W strategy
-_LARGE_H_PENULT = [128, 384]  # small and large H for LARGE_H strategy
-_LARGE_C_DIMS = [7, 16, 32]  # small (sub-tile) / medium / large (tile-boundary) C
+# 2D SMALL strategies: inner dim at small / medium / large; no outer N,C
+_SMALL_INNER = [32, 160, 352]
+# 4D LARGE strategies: small/large for the reduction dim; small/large (N,C) pairs
+_N_C_PAIRS = [(1, 1), (2, 3)]  # (N_small,C_small) and (N_large,C_large)
+_LARGE_W_SIZES = [160, 480]  # small and large W for LARGE_W strategy
+_LARGE_H_SIZES = [128, 384]  # small and large H for LARGE_H strategy
+_LARGE_C_DIMS = [7, 32]  # small (sub-tile) and large (tile-boundary) C
 
 
 def _build_moreh_logsoftmax_strategy_cases():
+    """Build strategy cases with N×C outer-dim variation for LARGE strategies."""
     st = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
     cases = []
 
+    # 2D SMALL strategies: no N,C (2D input)
     for w in _SMALL_INNER:
         cases.append(((32, w), 1, st.SMALL_W, f"SMALL_W-32x{w}"))
     for h in _SMALL_INNER:
         cases.append(((h, 32), 0, st.SMALL_H, f"SMALL_H-{h}x32"))
 
-    for w in _LARGE_W_LAST:
-        cases.append(((2, 3, 128, w), 3, st.LARGE_W, f"LARGE_W-2x3x128x{w}"))
-    cases.append(((1, 2, 64, 320), 3, st.LARGE_W, "LARGE_W-1x2x64x320"))
-    for h in _LARGE_H_PENULT:
-        cases.append(((2, 3, h, 160), 2, st.LARGE_H, f"LARGE_H-2x3x{h}x160"))
+    # 4D LARGE_W: vary (N,C) pair and W; fix H=128
+    for n, c in _N_C_PAIRS:
+        for w in _LARGE_W_SIZES:
+            cases.append(((n, c, 128, w), 3, st.LARGE_W, f"LARGE_W-{n}x{c}x128x{w}"))
 
-    for c in _LARGE_C_DIMS:
-        cases.append(((1, c, 32, 32), 1, st.LARGE_C, f"LARGE_C-1x{c}x32x32"))
+    # 4D LARGE_H: vary (N,C) pair and H; fix W=160
+    for n, c in _N_C_PAIRS:
+        for h in _LARGE_H_SIZES:
+            cases.append(((n, c, h, 160), 2, st.LARGE_H, f"LARGE_H-{n}x{c}x{h}x160"))
+
+    # 4D LARGE_C: C is the reduction dim (small/large); vary N as outer dim
+    for n in [1, 2]:
+        for c in _LARGE_C_DIMS:
+            cases.append(((n, c, 32, 32), 1, st.LARGE_C, f"LARGE_C-{n}x{c}x32x32"))
 
     return cases
 
@@ -125,7 +136,9 @@ _STRATEGY_CASES = _build_moreh_logsoftmax_strategy_cases()
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# BF16 max-ULP caps: fp32_dest_acc_en=True uses the tighter threshold (12), False uses 24.
+# BF16 max-ULP caps: fp32_dest_acc_en=True threshold=12 (observed peak ~8), False threshold=24 (observed peak ~8).
+# The two modes produce similar peaks for logsoftmax because log-softmax normalizes internally,
+# making it far less sensitive to accumulation precision than ttnn.mean or ttnn.layer_norm.
 _BF16_ULP_THRESHOLD_FP32_DEST = 12
 _BF16_ULP_THRESHOLD_BF16_DEST = 24
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.001

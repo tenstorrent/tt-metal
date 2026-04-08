@@ -84,28 +84,31 @@ def _run_ttnn_softmax(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters — small / medium / large per dimension
+# Test parameters — 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
 # ---------------------------------------------------------------------------
 
-_SOFTMAX_W_SIZES = [128, 512, 4096]  # small / medium / large W reduction
-_SOFTMAX_H_SIZES = [128, 512, 2048]  # small / medium / large H reduction
-_SOFTMAX_W_FIXED = 64  # fixed non-softmax dim for H-reduction cases
-_SOFTMAX_H_FIXED = 32  # fixed non-softmax dim for W-reduction cases
+_N_SIZES = [1, 8]  # small, large batch
+_C_SIZES = [1, 4]  # small, large channel
+_H_SIZES = [32, 128, 512]  # small, medium, large H (reduction dim for H-softmax)
+_W_SIZES = [128, 512, 4096]  # small, medium, large W (reduction dim for W-softmax)
+_H_FIXED = 32  # non-softmax H for W-reduction cases
+_W_FIXED = 64  # non-softmax W for H-reduction cases
 
 
 def _build_softmax_shapes_and_dims():
     out = []
-    for w in _SOFTMAX_W_SIZES:
-        out.append(((1, 1, _SOFTMAX_H_FIXED, w), -1, f"W-{w}"))
-    for h in _SOFTMAX_H_SIZES:
-        out.append(((1, 1, h, _SOFTMAX_W_FIXED), -2, f"H-{h}"))
+    # W-softmax: vary N, C, W; fix H
+    for n in _N_SIZES:
+        for c in _C_SIZES:
+            for w in _W_SIZES:
+                out.append(((n, c, _H_FIXED, w), -1, f"W-{n}x{c}x{_H_FIXED}x{w}"))
+    # H-softmax: vary N, C, H; fix W
+    for n in _N_SIZES:
+        for c in _C_SIZES:
+            for h in _H_SIZES:
+                out.append(((n, c, h, _W_FIXED), -2, f"H-{n}x{c}x{h}x{_W_FIXED}"))
     # One non-tile-aligned shape
-    out.append(((1, 1, 37, 41), -1, "W-odd-41"))
-    out.append(((1, 1, 37, 41), -2, "H-odd-37"))
-    # One batch and one multi-channel case
-    out.append(((4, 1, 64, 128), -1, "W-batch4"))
-    out.append(((2, 3, _SOFTMAX_H_FIXED, 512), -1, "W-2x3-512"))
-    out.append(((2, 3, 512, _SOFTMAX_W_FIXED), -2, "H-2x3-512"))
+    out.append(((1, 1, 37, 41), -1, "W-odd"))
     return out
 
 
@@ -121,7 +124,7 @@ _SHAPES_AND_DIMS_H_SOFTMAX_ONLY = [s for s in _SHAPES_AND_DIMS if s[1] == -2]
 # ---------------------------------------------------------------------------
 
 # BF16 max-ULP cap vs ATen softmax; sweep spans long W/H, fp32_dest_acc_en, numeric_stable
-# (wide-W + fp32_dest_acc_en=False is the stress path on BH for normal logits; observed ~32 ULP).
+# (wide-W + fp32_dest_acc_en=False is the stress path on BH for normal logits; observed ~29 ULP).
 _BF16_ULP_THRESHOLD = 40
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 

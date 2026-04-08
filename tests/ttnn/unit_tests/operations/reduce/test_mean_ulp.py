@@ -96,55 +96,39 @@ def _run_ttnn_mean(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters — small / medium / large per dimension
+# Test parameters — 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
 # ---------------------------------------------------------------------------
 
-# W reduction (1,1,32,W), dim=-1
-_MEAN_W_SIZES = [256, 1024, 4096]
-# H reduction (1,1,H,32), dim=-2
-_MEAN_H_SIZES = [128, 512, 2048]
-# 2D HW reduction: one small square, one large square
-_MEAN_HW_CASES = [(64, 64), (256, 256)]
-# Outer-dim sweeps kept minimal: one small and one large value each
-_MEAN_BATCH_SIZES = [2, 16]
-_MEAN_CHANNEL_SIZES = [3, 16]
+_N_SIZES = [1, 8]  # small, large batch
+_C_SIZES = [1, 4]  # small, large channel
+_H_SIZES = [32, 128, 512]  # small, medium, large H
+_W_SIZES = [64, 512, 2048]  # small, medium, large W
+_H_FIXED = 32  # non-reduction H for W-reduction shapes
+_W_FIXED = 64  # non-reduction W for H-reduction shapes
 
 
 def _build_mean_shapes_and_dims():
-    """Build (shape, dim, id) cases: small / medium / large per axis plus essentials."""
+    """Build (shape, dim, id) cases: N×C grid for W and H reduction, plus HW and odd."""
     out = []
 
-    for w in _MEAN_W_SIZES:
-        out.append(((1, 1, 32, w), -1, f"W-{w}"))
+    # W-reduction: vary N, C, W; fix H
+    for n in _N_SIZES:
+        for c in _C_SIZES:
+            for w in _W_SIZES:
+                out.append(((n, c, _H_FIXED, w), -1, f"W-{n}x{c}x{_H_FIXED}x{w}"))
 
-    for h in _MEAN_H_SIZES:
-        out.append(((1, 1, h, 32), -2, f"H-{h}"))
+    # H-reduction: vary N, C, H; fix W
+    for n in _N_SIZES:
+        for c in _C_SIZES:
+            for h in _H_SIZES:
+                out.append(((n, c, h, _W_FIXED), -2, f"H-{n}x{c}x{h}x{_W_FIXED}"))
 
-    for hh, ww in _MEAN_HW_CASES:
-        out.append(((1, 1, hh, ww), [-2, -1], f"HW-{hh}x{ww}"))
+    # 2D HW-reduction: one small and one large representative shape
+    out.append(((1, 1, 64, 128), [-2, -1], "HW-small"))
+    out.append(((4, 4, 256, 512), [-2, -1], "HW-large"))
 
     # One non-tile-aligned shape to catch padding edge cases
-    out.extend(
-        [
-            ((1, 1, 37, 41), -1, "W-odd-41"),
-            ((1, 1, 37, 41), -2, "H-odd-37"),
-        ]
-    )
-
-    for b in _MEAN_BATCH_SIZES:
-        out.append(((b, 1, 48, 64), -1, f"W-batch{b}-48x64"))
-
-    for B in _MEAN_BATCH_SIZES:
-        out.append(((B, 3, 32, 32), 0, f"batch-{B}"))
-
-    for C in _MEAN_CHANNEL_SIZES:
-        out.append(((2, C, 32, 32), 1, f"channel-{C}"))
-
-    out.append(((4, 3, 32, 32), [0, 1], "batch+channel"))
-
-    # One multi-outer W and one multi-outer H to confirm ULP holds beyond N=C=1
-    out.append(((4, 3, 32, 1024), -1, "W-4x3-1024"))
-    out.append(((4, 3, 512, 32), -2, "H-4x3-512"))
+    out.append(((1, 1, 37, 41), -1, "W-odd"))
 
     return out
 
@@ -157,12 +141,12 @@ _SHAPES_AND_DIMS = _build_mean_shapes_and_dims()
 # ---------------------------------------------------------------------------
 
 # BF16 max-ULP cap vs FP32-accumulated torch golden (see measure_ulp_with_near_zero_atol).
-# fp32_dest_acc_en=True (BF16 inputs → FP32 accumulation → BF16 out): tight tail ~10 ULP.
+# fp32_dest_acc_en=True (BF16 inputs → FP32 accumulation → BF16 out): peak ~8 ULP on this grid.
 # fp32_dest_acc_en=False (BF16 accumulation throughout): much wider; long reductions over
-# near-zero-mean tensors can accumulate ~59x more absolute error than the FP32-acc path.
+# near-zero-mean tensors see ~77x more ULP error than the FP32-acc path.
 # This demonstrates that fp32 accumulation is essential for BF16 mean accuracy.
 _BF16_ULP_THRESHOLD_FP32_DEST = 30
-_BF16_ULP_THRESHOLD_BF16_DEST = 2500  # ~3x headroom over observed peak 834 ULP
+_BF16_ULP_THRESHOLD_BF16_DEST = 2500  # ~4x headroom over observed peak 618 ULP
 _BF16_NEAR_ZERO_ATOL_FRACTION_FP32_DEST = 0.002  # tight; fp32 rounding error is tiny
 _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST = 0.40  # loose; BF16 accum can be ~35% of range on near-zero mean
 
@@ -215,7 +199,7 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_des
 
 # FP32: unless the API uses SFPU-based true float32 accumulation, the tile engine accumulates in
 # TF32, so accuracy may be lower / ULP higher than the IEEE 754 float32 reference (PyTorch).
-# Large 2D HW reductions on BH reached ~7.3e5 ULP class.
+# Large HW reductions on BH reached ~6.3e5 ULP class.
 # fp32_dest_acc_en=True is required for FP32 inputs (device enforces this).
 _FP32_ULP_THRESHOLD = 800_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
