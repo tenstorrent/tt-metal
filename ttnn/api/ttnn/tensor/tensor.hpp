@@ -238,12 +238,10 @@ public:
 
     // Returns the associated HostTensor.
     const HostTensor& host_tensor() const&;
-    HostTensor& host_tensor() &;
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated MeshTensor.
     const MeshTensor& mesh_tensor() const&;
-    MeshTensor& mesh_tensor() &;
     const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
