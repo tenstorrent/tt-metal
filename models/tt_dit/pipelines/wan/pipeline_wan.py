@@ -1032,6 +1032,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
                 tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
                 tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
+                tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=1.0)
                 tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
 
             concat_dims = [None, None]
