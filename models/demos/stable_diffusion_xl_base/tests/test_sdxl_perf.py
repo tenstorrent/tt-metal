@@ -286,6 +286,7 @@ def test_sdxl_perf_device(test_id, command, subdir, model_name, num_iterations, 
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "0" if "clip_encoder" in command else "5"
 
+    has_signposts = "clip_encoder" in command or "autoencoder_kl" in command
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_perf,
@@ -295,4 +296,5 @@ def test_sdxl_perf_device(test_id, command, subdir, model_name, num_iterations, 
         batch_size=batch_size,
         margin=margin,
         comments=comments,
+        has_signposts=has_signposts,
     )

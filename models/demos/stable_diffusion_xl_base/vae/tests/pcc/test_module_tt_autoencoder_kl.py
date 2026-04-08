@@ -7,6 +7,7 @@ import pytest
 import torch
 from diffusers import AutoencoderKL
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
@@ -82,6 +83,7 @@ def test_vae(
         ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     logger.info("Running TT model")
+    signpost("start")
     if vae_block == "encoder":
         output_tensor = tt_vae.encode(ttnn_input_tensor)
 
@@ -92,6 +94,7 @@ def test_vae(
 
         output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
         output_tensor = output_tensor.reshape(B, C, H, W)
+    signpost("stop")
     logger.info("TT model done")
 
     del vae

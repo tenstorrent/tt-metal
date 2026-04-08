@@ -7,6 +7,7 @@ import time
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 import ttnn
@@ -143,7 +144,9 @@ def test_clip_encoder(
 
     ttnn.ReadDeviceProfiler(mesh_device)
 
+    signpost("start")
     tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device)
+    signpost("stop")
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
