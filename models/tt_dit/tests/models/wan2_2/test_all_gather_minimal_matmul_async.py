@@ -211,6 +211,8 @@ def run_test_linear_impl(
                         compute_kernel_config=compute_config,
                         config=matmul_config,
                     )
+            if chunks == 1:
+                tt_output = [tt_output]
 
         else:
             tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
