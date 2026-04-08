@@ -55,10 +55,16 @@ void apply_mask_on_reg(
     add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
     mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
 
+    // Add mask to scaled matmul result:
+    // masked positions receive large negative values (will be 0.0 after softmax),
+    // unmasked positions remain unchanged
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
+// TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
+// provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
+// exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 template <PoolType pool_type, ReduceDim reduce_dim>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,

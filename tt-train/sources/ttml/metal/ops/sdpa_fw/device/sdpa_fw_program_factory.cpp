@@ -323,7 +323,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    const uint32_t block_size = get_block_size(qWt, 4U);
+    // With fp32_dest_acc_en=true, DST has only 4 registers (indices 0-3).
+    // update_cur_mm_out and final normalization use DST[0..block_size-1] for data tiles
+    // plus DST[block_size] for the unary_bcast operand, so we need block_size + 1 <= 4.
+    const uint32_t block_size = get_block_size(qWt, 3U);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -366,6 +369,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
+    // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
+    // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
+    // through this CB for the softmax critical path (~20 ms regression).
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program,
         all_cores,
@@ -375,20 +381,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kAttentionWeightsTiles);
 
     [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
-        program,
-        all_cores,
-        kPrevMaxValueCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kMaxValueHolderTiles);
+        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
 
     [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
-        program,
-        all_cores,
-        kCurMaxValueCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kMaxValueHolderTiles);
+        program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
 
     // lets try to use precise data format for holding exp sum/diff values
     [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
