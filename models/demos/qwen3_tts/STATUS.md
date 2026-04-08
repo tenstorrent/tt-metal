@@ -111,7 +111,9 @@ source python_env/bin/activate
 ### Basic Usage (uses included Jim reference voice)
 ```bash
 python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
-    --text "Hello, this is a test of text to speech."
+    --text "Hello, this is a test of text to speech." \
+    --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav \
+    --ref-text "Jason, can we take a look at the review slides"
 ```
 
 ### Full Options
@@ -132,6 +134,13 @@ python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
 python models/demos/qwen3_tts/demo/demo_pure_reference_tts.py \
     --text "Hello, this is a test." \
     --output /tmp/cpu_output.wav
+```
+
+### Web Demo (Gradio UI)
+```bash
+python models/demos/qwen3_tts/demo/web_demo.py
+# Opens on http://localhost:7777
+# Pre-warms all prefill buckets and traces on startup
 ```
 
 ## Supported Languages
@@ -158,13 +167,15 @@ models/demos/qwen3_tts/
 ├── demo/
 │   ├── demo_full_ttnn_tts.py      # Main TTNN demo
 │   ├── demo_pure_reference_tts.py # CPU reference demo
+│   ├── web_demo.py                # Gradio web UI (port 7777)
 │   ├── bleed_detector.py          # Reference audio bleed detection
 │   ├── jim_reference.wav          # Default reference audio (4s)
 │   └── REFERENCE_AUDIO.md         # Reference audio documentation
 ├── reference/
 │   └── functional.py              # PyTorch reference implementations
 ├── tt/
-│   ├── qwen3_tts.py              # Main TTNN model
+│   ├── qwen3_tts.py              # Main TTNN model (N150)
+│   ├── qwen3_tts_mesh.py         # N300 tensor parallel (WIP)
 │   ├── talker.py                 # Talker transformer
 │   ├── code_predictor.py         # Code predictor
 │   ├── attention.py              # GQA attention with KV cache
@@ -180,5 +191,5 @@ models/demos/qwen3_tts/
 ## Known Limitations
 
 1. **Speech Tokenizer Encoder/Decoder on CPU** - Conv layers too large for L1 SRAM
-2. **Single device only** - N300 tensor parallel support not yet implemented
+2. **Single device only** - N300 tensor parallel support is WIP (see `tt/qwen3_tts_mesh.py`)
 3. **Reference audio bleeding** - ICL models briefly echo reference; use `--trim-frames` or `--auto-trim-bleed`
