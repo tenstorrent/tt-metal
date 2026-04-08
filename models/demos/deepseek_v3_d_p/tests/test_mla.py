@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def init_kvpe_cache(config, mesh_device, seq_len, mesh_shape, sp_axis):
+def init_kvpe_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers):
     """
     Initialize KVPE cache for MLA.
 
@@ -41,7 +41,7 @@ def init_kvpe_cache(config, mesh_device, seq_len, mesh_shape, sp_axis):
         tt_kvpe_cache: Initialized KVPE cache on device
     """
     # hack in num_layers into batch size, so they are contiguous in memory
-    num_layers = 1
+    num_layers = num_kvpe_cache_layers
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
     seq_len_local = seq_len // mesh_shape[sp_axis]
     torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
@@ -331,6 +331,7 @@ def test_mla(
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
     )
 
     # Run MLA inference using utility function
@@ -420,7 +421,7 @@ def test_mla(
             tt_kvpe_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
-        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:, :1, :, :]
+        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
 
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
