@@ -191,14 +191,26 @@ def run_test_linear_impl(
                     compute_kernel_config=compute_config,
                 )
             else:
-                tt_output = ttnn.experimental.minimal_matmul(
-                    tt_all_gather_out_tensor,
-                    tt_weight,
-                    bias_tensor=tt_bias,
-                    fused_activation=activation_fn,
-                    compute_kernel_config=compute_config,
-                    config=matmul_config,
-                )
+                if chunks > 1:
+                    tt_output = ttnn.experimental.minimal_matmul_split(
+                        tt_all_gather_out_tensor,
+                        tt_weight,
+                        chunks=chunks,
+                        dim=-1,
+                        bias_tensor=tt_bias,
+                        fused_activation=activation_fn,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
+                else:
+                    tt_output = ttnn.experimental.minimal_matmul(
+                        tt_all_gather_out_tensor,
+                        tt_weight,
+                        bias_tensor=tt_bias,
+                        fused_activation=activation_fn,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
 
         else:
             tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
