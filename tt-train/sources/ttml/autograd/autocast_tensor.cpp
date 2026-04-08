@@ -46,7 +46,7 @@ const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision prefer
     // TODO: Lazy precision caching can leave the FULL/FLOAT32 view stale
     // after in-place updates that mutate only the BF16 tensor (e.g. optimizer step).
     // Revisit cache invalidation/refresh strategy so both views stay coherent.
-    // Tracking issue: https://github.com/tenstorrent/tt-metal/issues/41657
+    // Tracking: #41657
 
     if (preferred_precision == PreferredPrecision::HALF) {
         if (!has_half()) {
