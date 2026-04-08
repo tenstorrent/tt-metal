@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 from conftest import is_galaxy
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_L1_SMALL_SIZE_BH
 
@@ -313,14 +313,22 @@ def get_device_name():
 
     num_devices = ttnn.GetNumAvailableDevices()
     if is_galaxy():
+        if is_blackhole():
+            return "bh galaxy"
         return "galaxy"
     elif num_devices == 0:
         return "cpu"
     elif num_devices == 1:
+        if is_blackhole():
+            return "p150"
         return "n150"
     elif num_devices == 2:
+        if is_blackhole():
+            return "p300"
         return "n300"
     elif num_devices == 8:
+        if is_blackhole():
+            return "bh t3k"
         return "t3k"
 
 
