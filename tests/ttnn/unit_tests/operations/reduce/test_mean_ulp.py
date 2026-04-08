@@ -47,12 +47,27 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_mean_compute_kernel_config(device, fp32_dest_acc_en: bool):
+    """Arch-aware compute kernel config (same pattern as test_softmax_ulp)."""
+    try:
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=True,
+        )
+    except TypeError:
+        return get_compute_kernel_options(fp32_dest_acc_en)
 
 
 def _golden_mean_bf16(input_bf16: torch.Tensor, dim, keepdim: bool) -> torch.Tensor:
@@ -65,11 +80,18 @@ def _golden_mean_fp32(input_fp32: torch.Tensor, dim, keepdim: bool) -> torch.Ten
     return torch.mean(input_fp32, dim=dim, keepdim=keepdim)
 
 
-def _run_ttnn_mean(input_torch: torch.Tensor, ttnn_dtype, device, dim, keepdim: bool) -> torch.Tensor:
+def _run_ttnn_mean(
+    input_torch: torch.Tensor,
+    ttnn_dtype,
+    device,
+    dim,
+    keepdim: bool,
+    compute_kernel_config=None,
+) -> torch.Tensor:
     """Send tensor to device, run ttnn.mean, return host torch tensor."""
     tt_input = ttnn.from_torch(input_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.fill_implicit_tile_padding(tt_input, 42)
-    tt_out = ttnn.mean(tt_input, dim=dim, keepdim=keepdim)
+    tt_out = ttnn.mean(tt_input, dim=dim, keepdim=keepdim, compute_kernel_config=compute_kernel_config)
     return ttnn.to_torch(tt_out)
 
 
@@ -140,9 +162,14 @@ _SHAPES_AND_DIMS = _build_mean_shapes_and_dims()
 # ---------------------------------------------------------------------------
 
 # BF16 max-ULP cap vs FP32-accumulated torch golden (see measure_ulp_with_near_zero_atol).
-# Shape/distribution sweeps (long reductions, wide_uniform) widen tails vs tiny fixed shapes.
-_BF16_ULP_THRESHOLD = 30
-_BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
+# fp32_dest_acc_en=True (BF16 inputs → FP32 accumulation → BF16 out): tight tail ~10 ULP.
+# fp32_dest_acc_en=False (BF16 accumulation throughout): much wider; long reductions over
+# near-zero-mean tensors can accumulate ~59x more absolute error than the FP32-acc path.
+# This demonstrates that fp32 accumulation is essential for BF16 mean accuracy.
+_BF16_ULP_THRESHOLD_FP32_DEST = 30
+_BF16_ULP_THRESHOLD_BF16_DEST = 2500  # ~3x headroom over observed peak 834 ULP
+_BF16_NEAR_ZERO_ATOL_FRACTION_FP32_DEST = 0.002  # tight; fp32 rounding error is tiny
+_BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST = 0.40  # loose; BF16 accum can be ~35% of range on near-zero mean
 
 
 @pytest.mark.parametrize(
@@ -152,8 +179,13 @@ _BF16_NEAR_ZERO_ATOL_FRACTION = 0.002
 )
 @pytest.mark.parametrize("distribution", ["normal", "wide_uniform"])
 @pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
-def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim):
-    """Characterize BF16 mean ULP vs FP32-accumulated Torch golden."""
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
+def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_dest_acc_en):
+    """Characterize BF16 mean ULP vs FP32-accumulated Torch golden.
+
+    fp32_dest_acc_en=True reflects the recommended path (BF16 inputs accumulated in FP32).
+    fp32_dest_acc_en=False documents the accuracy cost of BF16-only accumulation.
+    """
     torch.manual_seed(42)
     if distribution == "normal":
         x = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
@@ -161,18 +193,23 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim):
         x = torch.empty(shape, dtype=torch.float32).uniform_(-1e3, 1e3).to(torch.bfloat16)
 
     golden = _golden_mean_bf16(x, dim=dim, keepdim=keepdim)
-    actual = _run_ttnn_mean(x, ttnn.bfloat16, device, dim=dim, keepdim=keepdim)
+    ckc = _make_mean_compute_kernel_config(device, fp32_dest_acc_en)
+    actual = _run_ttnn_mean(x, ttnn.bfloat16, device, dim=dim, keepdim=keepdim, compute_kernel_config=ckc)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
-        golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
+    ulp_threshold = _BF16_ULP_THRESHOLD_FP32_DEST if fp32_dest_acc_en else _BF16_ULP_THRESHOLD_BF16_DEST
+    atol_fraction = (
+        _BF16_NEAR_ZERO_ATOL_FRACTION_FP32_DEST if fp32_dest_acc_en else _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST
     )
-    spec = f"{desc} {distribution} shape={shape} dim={dim} keepdim={keepdim}"
+    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+        golden, actual, ulp_threshold, atol_fraction
+    )
+    spec = f"{desc} {distribution} shape={shape} dim={dim} keepdim={keepdim} fp32_acc={fp32_dest_acc_en}"
     logger.info(
-        f"ttnn.mean ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.mean ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[BF16 {desc} {distribution} keepdim={keepdim}] {msg}"
+    assert passed, f"[BF16 {desc} {distribution} keepdim={keepdim} fp32_acc={fp32_dest_acc_en}] {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +217,7 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim):
 # ---------------------------------------------------------------------------
 
 # FP32: tile vs sequential ordering; sweeps add large 2D HW reductions—BH hit ~7.3e5 ULP class.
+# fp32_dest_acc_en=True is required for FP32 inputs (device enforces this).
 _FP32_ULP_THRESHOLD = 800_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 
@@ -192,7 +230,7 @@ _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 @pytest.mark.parametrize("distribution", ["normal", "wide_uniform"])
 @pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
 def test_mean_ulp_fp32(device, shape, dim, desc, distribution, keepdim):
-    """Characterize FP32 mean ULP vs Torch FP32 golden."""
+    """Characterize FP32 mean ULP vs Torch FP32 golden; fp32_dest_acc_en=True only."""
     torch.manual_seed(42)
     if distribution == "normal":
         x = torch.randn(shape, dtype=torch.float32)
@@ -200,14 +238,15 @@ def test_mean_ulp_fp32(device, shape, dim, desc, distribution, keepdim):
         x = torch.empty(shape, dtype=torch.float32).uniform_(-1e3, 1e3)
 
     golden = _golden_mean_fp32(x, dim=dim, keepdim=keepdim)
-    actual = _run_ttnn_mean(x, ttnn.float32, device, dim=dim, keepdim=keepdim)
+    ckc = _make_mean_compute_kernel_config(device, fp32_dest_acc_en=True)
+    actual = _run_ttnn_mean(x, ttnn.float32, device, dim=dim, keepdim=keepdim, compute_kernel_config=ckc)
 
     passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} {distribution} shape={shape} dim={dim} keepdim={keepdim}"
     logger.info(
-        f"ttnn.mean ULP (FP32) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.mean ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if not passed:
         logger.info(f"  {msg}")

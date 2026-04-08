@@ -53,6 +53,20 @@ from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 # ---------------------------------------------------------------------------
 
 
+def _make_logsoftmax_compute_kernel_config(device, fp32_dest_acc_en: bool):
+    """Arch-aware compute kernel config (same pattern as test_softmax_ulp)."""
+    try:
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=True,
+        )
+    except TypeError:
+        return get_compute_kernel_options(fp32_dest_acc_en)
+
+
 def _golden_logsoftmax_bf16(input_bf16: torch.Tensor, dim: int) -> torch.Tensor:
     """Log-softmax with FP32 intermediate, result cast to BF16."""
     return F.log_softmax(input_bf16.float(), dim=dim).to(torch.bfloat16)
@@ -74,7 +88,7 @@ def _run_ttnn_logsoftmax(
     """Send tensor to device, run moreh logsoftmax, return host torch tensor."""
     tt_input = ttnn.from_torch(input_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.fill_implicit_tile_padding(tt_input, 42)
-    compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
+    compute_kernel_config = _make_logsoftmax_compute_kernel_config(device, fp32_dest_acc_en)
     tt_out = ttnn.operations.moreh.logsoftmax(
         tt_input,
         dim,
