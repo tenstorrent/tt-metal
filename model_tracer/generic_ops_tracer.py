@@ -419,12 +419,18 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # from argument values so they don't pollute deduplication or storage
         _sanitize_object_addresses(arguments)
 
-        return {
+        result = {
             "operation": operation_name,
             "arguments": arguments,
             "source": test_source,
             "machine_info": enhanced_machine_info,
         }
+
+        sweep_source_hash = data.get("sweep_source_hash")
+        if sweep_source_hash:
+            result["sweep_source_hash"] = sweep_source_hash
+
+        return result
     except Exception as e:
         print(f"⚠️ Error processing {json_file}: {e}")
         return None
@@ -614,6 +620,10 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                 ],
             }
 
+            sweep_source_hash = operation.get("sweep_source_hash")
+            if sweep_source_hash:
+                config_entry["sweep_source_hash"] = sweep_source_hash
+
             master_data["operations"][op_name]["configurations"].append(config_entry)
             new_configs_added += 1
             next_config_id += 1
@@ -729,7 +739,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     # Save master file
     try:
         with open(master_file_path, "w") as f:
-            json.dump(master_data, f, indent=2, default=str)
+            json.dump(master_data, f, indent=2, sort_keys=True, default=str)
     except Exception as e:
         print(f"❌ Error saving master file: {e}")
 
@@ -1079,7 +1089,7 @@ def fix_memory_config_in_json(json_file):
 
         # Write back the fixed JSON
         with open(json_file, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, sort_keys=True)
 
         print(f"✅ Fixed {fixed_count_ref[0]} shard_spec entries")
         return fixed_count_ref[0]
@@ -1120,7 +1130,7 @@ def recompute_config_hashes(json_file):
                 updated += 1
 
     with open(json_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, sort_keys=True)
 
     print(f"✅ Recomputed hashes: {updated} changed")
     return updated

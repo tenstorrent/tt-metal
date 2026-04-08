@@ -125,10 +125,8 @@ blackhole:
   - tests/nightly/t3000/
   - tests/ttnn/unit_tests/operations/point_to_point/
 
-  # Base functionality - simulator limitations (tilize/untilize, layout conversion)
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
-
   # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
@@ -140,16 +138,10 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
 
   # Pool tests (same as wormhole + BH-specific)
-  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
-  - tests/ttnn/unit_tests/operations/pool/test_rotate.py
-  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_grid_sample.py
-  - tests/ttnn/unit_tests/operations/pool/test_upsample.py
 
   # Matmul tests (same simulator limitations as wormhole)
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/matmul/test_linear.py
 
   # Fused tests (same simulator limitations as wormhole + BH-specific)
@@ -163,12 +155,9 @@ blackhole:
   # Reduce tests (same as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
-  - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
   # Skipping due to CI failure - issue #41286
