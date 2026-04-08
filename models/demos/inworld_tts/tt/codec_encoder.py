@@ -54,6 +54,7 @@ class TtActivation1d(LightweightModule):
         beta: torch.Tensor,
         up_filter: torch.Tensor,
         down_filter: torch.Tensor,
+        channels : int,
         device,
     ):
         """Initialize anti-aliased SnakeBeta activation.
@@ -63,55 +64,80 @@ class TtActivation1d(LightweightModule):
             beta: [C] SnakeBeta beta parameter
             up_filter: [1, 1, K] FIR upsampling filter
             down_filter: [1, 1, K] FIR lowpass/downsampling filter
+            channels: number of channels (C)
             device: TTNN device (unused, for API compatibility)
         """
         super().__init__()
         self.device = device
+        self.channels = channels
         
-        # Store parameters as torch tensors for CPU computation
-        self.alpha = ttnn.from_torch(alpha)
-        self.beta =  ttnn.from_torch(beta)
-        up_filter = up_filter.squeeze(0).expand(C, -1, -1)  # [C, 1, K]
-        down_filter = down_filter.squeeze(0).expand(C, -1, -1)  # [C, 1, K]
-        self.up_filter = ttnn.from_torch(up_filter * 2)
-        self.down_filter = ttnn.from_torch(down_filter)
-
+        # Store parameters as ttnn tensors
+        self.alpha = ttnn.from_torch(alpha, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.beta = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        
+        # Prepare filters
+        # For conv_transpose2d: weight shape should be [in_channels, out_channels, kernel_h, kernel_w]
+        # We have [1, 1, K], need to reshape to [C, 1, 1, K] for depthwise (groups=C)
+        up_filter_expanded = up_filter.squeeze(0)  # [1, K]
+        up_filter_4d = up_filter_expanded.unsqueeze(0).unsqueeze(0).expand(channels, 1, 1, -1)  # [C, 1, 1, K]
+        self.up_filter = ttnn.from_torch(up_filter_4d * 2.0, dtype=ttnn.bfloat16)
+        
+        # For conv1d: weight shape should be [out_channels, in_channels//groups, kernel_size]
+        # For depthwise (groups=C), this becomes [C, 1, K]
+        down_filter_expanded = down_filter.squeeze(0).expand(channels, -1, -1)  # [C, 1, K]
+        self.down_filter = ttnn.from_torch(down_filter_expanded, dtype=ttnn.bfloat16)
+        
+        # Store kernel sizes and padding
+        self.K_up = up_filter_4d.shape[3]
+        self.K_down = down_filter_expanded.shape[2]
+        self.kernel_size = (1, self.K_up)
+        self.pad_w = (self.K_up - 2) // 2
+        
+        # For downsampling conv1d padding
+        self.pad_left = self.K_down // 2
+        self.pad_right = self.K_down // 2 - 1 if self.K_down % 2 == 0 else self.K_down // 2
+        
+        # Conv2d configuration
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.float32,
+            deallocate_activation=False,
+            output_layout=ttnn.TILE_LAYOUT,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            act_block_h_override=32,
+            config_tensors_in_dram=True,
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply anti-aliased SnakeBeta activation using CPU reference.
+        """Apply anti-aliased SnakeBeta activation using TTNN operations.
 
         Args:
             x: [B, C, T] input tensor (torch)
         Returns:
             [B, C, T] output tensor (torch)
         """
-        B, C, T = x.shape
+        B, _, T, C = x.shape
 
-        # Expand kernels for this batch
-        # up_kernel = self.up_kernel.expand(C, -1, -1)  # [C, 1, K]
-        # down_kernel = self.down_kernel.expand(C, -1, -1)  # [C, 1, K]
-
+        # Convert torch tensor to ttnn tensor: [B, C, T] -> [B, 1, T, C] (NHWC with H=1)
+        
         # === UPSAMPLE using TTNN ConvTranspose2D (height=1 for 1D operation) ===
-        # Reshape input for 2D conv: [B, C, T] -> [B, 1, T, C] (NHWC with H=1)
-        # x_nhwc = x.unsqueeze(1).permute(0, 1, 3, 2)  # [B, 1, T, C]
-        
-        # Prepare weight for conv_transpose2d: [C, 1, 1, K] (IOHW format)
-        # up_weight_2d = up_kernel.unsqueeze(2) * 2.0  # [C, 1, 1, K]
-        
-        # ConvTranspose2D with height=1, width=T, stride=(1,2) for 2x upsampling in width
         x_up_ttnn, [out_h, out_w], [self.up_filter, _] = ttnn.conv_transpose2d(
             input_tensor=x,
-            weight_tensor=self.up_filter,  # [C, 1, 1, K]
+            weight_tensor=self.up_filter,
             in_channels=C,
             out_channels=C,
             device=self.device,
             bias_tensor=None,
-            kernel_size=(1, self.K_up),  # height=1, width=K
-            stride=(1, 2),  # no stride in height, 2x in width for upsampling
-            padding=(0, self.pad_w),  # no padding in height
+            kernel_size=self.kernel_size,  # (1, K)
+            stride=(1, 2),  # 2x upsampling in width dimension
+            padding=(0, self.pad_w),
             output_padding=(0, 0),
             batch_size=B,
-            input_height=1,  # height dimension is 1
-            input_width=T,  # width dimension is time
+            input_height=1,
+            input_width=T,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             groups=C,  # Depthwise
@@ -122,13 +148,10 @@ class TtActivation1d(LightweightModule):
         )
         
         # Apply SnakeBeta activation using TTNN ops
-        
         x_act = ttnn_snake_beta(x_up_ttnn, self.alpha, self.beta)
 
         # === DOWNSAMPLE using TTNN Conv1d with stride=2 ===
-        # Prepare downsampling kernel
-        
-        # Apply downsampling filter with stride=2 via TTNN
+        # Conv1d expects [B, 1, W, C] input
         x_down_ttnn, out_len, [self.down_filter, _] = ttnn.conv1d(
             input_tensor=x_act,
             weight_tensor=self.down_filter,
@@ -140,13 +163,14 @@ class TtActivation1d(LightweightModule):
             stride=2,  # Decimate by 2
             padding=(self.pad_left, self.pad_right),
             batch_size=B,
-            input_length=x_act.shape[2],
+            input_length=out_w,  # Use output width from conv_transpose2d
             dtype=ttnn.bfloat16,
             conv_config=ttnn.Conv1dConfig(
                 weights_dtype=ttnn.float32,
                 deallocate_activation=False,
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 act_block_h_override=32,
+                config_tensors_in_dram=True,
             ),
             compute_config=self.compute_config,
             groups=C,  # Depthwise
@@ -154,14 +178,15 @@ class TtActivation1d(LightweightModule):
             return_weights_and_bias=True,
         )
         
-
+        # Convert back to torch tensor: [B, 1, T_out, C] -> [B, C, T_out]
+        
         return x_down_ttnn
 
 
 
 
 class TtConv1d(LightweightModule):
-    def __init__(self, in_channels : int, out_channels: int, weight: torch.Tensor, bias: Optional[torch.Tensor], kernel_size: int, padding, device):
+    def __init__(self, in_channels : int, out_channels: int, weight: torch.Tensor, bias: Optional[torch.Tensor], kernel_size: int, padding, device, stride=1):
         super().__init__()
         self.weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16)
         # Reshape bias to [1, 1, 1, out_channels] for conv1d (implemented as conv2d with height=1)
@@ -176,6 +201,7 @@ class TtConv1d(LightweightModule):
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             act_block_h_override=32,
         )
+        self.stride=stride
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -186,7 +212,7 @@ class TtConv1d(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
         )
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x) :
         """Run Conv1d on input tensor.
 
         Args:
@@ -194,21 +220,19 @@ class TtConv1d(LightweightModule):
         Returns:
             [B, C, T] torch tensor
         """
-        # Convert torch tensor to ttnn tensor
-        x_ttnn = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         
         output_tensor, out_length, (self.weight, self.bias) = ttnn.conv1d(
-            input_tensor=x_ttnn,
+            input_tensor=x,
             weight_tensor=self.weight,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             device=self.device,
             bias_tensor=self.bias,
             kernel_size=self.kernel_size,
-            stride=1,
+            stride=self.stride,
             padding=self.padding,
             batch_size=x.shape[0],
-            input_length=x.shape[2],
+            input_length=x.shape[-2],
             dtype=ttnn.bfloat16,
             conv_config=self.conv_config,
             compute_config=self.compute_config,  # fp32_dest_acc_en=True
@@ -217,18 +241,7 @@ class TtConv1d(LightweightModule):
             return_weights_and_bias=True,
         )
         
-        # Convert back to torch tensor
-        output_torch = ttnn.to_torch(output_tensor)
-        
-        # Reshape from [B, 1, T, C] (NHWC) to [B, C, T] (BCT)
-        # ttnn.conv1d returns 4D output in NHWC format (batch, height=1, time, channels)
-        if output_torch.dim() == 4:
-            output_torch = output_torch.squeeze(1).permute(0, 2, 1)  # [B, 1, T, C] -> [B, T, C] -> [B, C, T]
-        
-        # Convert to float32 to match expected dtype for downstream operations
-        output_torch = output_torch.float()
-        
-        return output_torch
+        return output_tensor
 
 
 class TtEncoderResidualUnit(LightweightModule):
@@ -252,25 +265,27 @@ class TtEncoderResidualUnit(LightweightModule):
         super().__init__()
         self.device = device
         
+
+        C_in = weights["conv1_weight"].shape[1]  # input channels
+        C_out = weights["conv1_weight"].shape[0]  # output channels
         # First activation (anti-aliased SnakeBeta)
         self.act1 = TtActivation1d(
             alpha=weights["act1_alpha"],
             beta=weights["act1_beta"],
             up_filter=weights["act1_up_filter"],
             down_filter=weights["act1_down_filter"],
+            channels=C_in,
             device=device,
         )
         
         # First conv: k=7, pad=3
-        C_in = weights["conv1_weight"].shape[1]  # input channels
-        C_out = weights["conv1_weight"].shape[0]  # output channels
         self.conv1 = TtConv1d(
             in_channels=C_in,
             out_channels=C_out,
             weight=weights["conv1_weight"],
             bias=weights["conv1_bias"],
             kernel_size=7,
-            padding=3,
+            padding=(3, 3),
             device=device,
         )
         
@@ -280,6 +295,7 @@ class TtEncoderResidualUnit(LightweightModule):
             beta=weights["act2_beta"],
             up_filter=weights["act2_up_filter"],
             down_filter=weights["act2_down_filter"],
+            channels=C_out,
             device=device,
         )
         
@@ -307,7 +323,6 @@ class TtEncoderResidualUnit(LightweightModule):
         # First activation + conv
         h = self.act1(x)
         h = self.conv1(h)
-        
         # Second activation + conv
         h = self.act2(h)
         h = self.conv2(h)
@@ -345,12 +360,17 @@ class TtEncoderBlock(LightweightModule):
             res_weights = {k[len(prefix):]: v for k, v in weights.items() if k.startswith(prefix)}
             self.residual_units.append(TtEncoderResidualUnit(res_weights, device))
         
+
+        C_in = weights["downsample_weight"].shape[1]  # input channels
+        C_out = weights["downsample_weight"].shape[0]  # output channels
+
         # Final activation before downsampling
         self.final_activation = TtActivation1d(
             alpha=weights["act_alpha"],
             beta=weights["act_beta"],
             up_filter=weights["act_up_filter"],
             down_filter=weights["act_down_filter"],
+            channels=C_in,
             device=device,
         )
         
@@ -365,9 +385,17 @@ class TtEncoderBlock(LightweightModule):
         self.pad_left = pad_left
         self.pad_right = pad_right
         
-        C_in = weights["downsample_weight"].shape[1]  # input channels
-        C_out = weights["downsample_weight"].shape[0]  # output channels
-        
+        self.downsample_conv = TtConv1d(
+            in_channels=C_in,
+            out_channels=C_out,
+            weight=weights["downsample_weight"],
+            bias=weights["downsample_bias"],
+            kernel_size=kernel_size,
+            padding=(pad_left, pad_right),
+            device=device,
+            stride=stride,
+        )
+    
         # Store downsampling parameters for manual conv computation
         # (TtConv1d doesn't support variable stride, so we'll use reference for now)
         self.downsample_weight = weights["downsample_weight"]
@@ -388,11 +416,8 @@ class TtEncoderBlock(LightweightModule):
         
         # Apply final activation
         x = self.final_activation(x)
-        
         # Apply downsampling conv (with asymmetric padding)
-        x = F.pad(x, (self.pad_left, self.pad_right))
-        x = F.conv1d(x, self.downsample_weight, self.downsample_bias, stride=self.stride)
-        
+        x  = self.downsample_conv(x)
         return x
 
 
@@ -441,6 +466,7 @@ class TtAcousticEncoder(LightweightModule):
             beta=state_dict[final_prefix + "0.act.beta"],
             up_filter=state_dict[final_prefix + "0.upsample.filter"],
             down_filter=state_dict[final_prefix + "0.downsample.lowpass.filter"],
+            channels=1536,
             device=device,
         )
         final_weight = weight_norm_compute(
@@ -468,7 +494,6 @@ class TtAcousticEncoder(LightweightModule):
         """
         # Initial conv: Conv1d(1, 48, k=7, pad=3)
         x = self.initial_conv1d(waveform)
-        
         # 5 encoder blocks with progressive downsampling
         for encoder_block in self.encoder_blocks:
             x = encoder_block(x)

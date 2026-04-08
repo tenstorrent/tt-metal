@@ -613,8 +613,6 @@ def activation1d_forward(
     down_kernel = down_filter.squeeze(0).expand(C, -1, -1)  # [C, 1, K]
     K = up_kernel.shape[-1]
 
-    print(f"Upsampling kernel shape: {up_filter.shape}, Downsampling kernel shape: {down_filter.shape}")
-    print(f"Upsampling kernel shape: {up_kernel.shape}, Downsampling kernel shape: {down_kernel.shape}")
     # For even-length FIR filters, use asymmetric padding to preserve length
     pad_left = K // 2
     pad_right = K // 2 - 1 if K % 2 == 0 else K // 2
@@ -714,7 +712,6 @@ def encoder_block_forward(
     pad_right = pad_total - pad_left
     x = F.pad(x, (pad_left, pad_right))
     x = F.conv1d(x, weights["downsample_weight"], weights["downsample_bias"], stride=stride)
-
     return x
 
 
@@ -745,14 +742,12 @@ def acoustic_encoder_forward(
     )
     bias = state_dict["conv_blocks.0.bias"]
     x = F.conv1d(waveform, weight, bias, padding=3)
-
     # 5 encoder blocks
     for block_idx in range(5):
         block_prefix = f"conv_blocks.{block_idx + 1}."
         block_weights = _extract_encoder_block_weights(state_dict, block_prefix, channels[block_idx])
         x = encoder_block_forward(x, block_weights, strides[block_idx])
-    return x
-
+    
     # Final block: SnakeBeta(1536) + Conv1d(1536, 1024, k=3) with weight norm
     final_prefix = "conv_final_block."
     x = activation1d_forward(
@@ -768,7 +763,6 @@ def acoustic_encoder_forward(
     )
     final_bias = state_dict[final_prefix + "1.bias"]
     x = F.conv1d(x, final_weight, final_bias, padding=1)
-
     return x
 
 

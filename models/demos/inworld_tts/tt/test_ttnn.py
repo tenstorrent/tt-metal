@@ -373,7 +373,10 @@ class TestTtAcousticEncoder:
 
         ref_out = ref.acoustic_encoder_forward(x, sd)
         tt_enc = TtAcousticEncoder(sd, device)
-        tt_out = tt_enc(x)
+        x_nlc = ttnn.from_torch(x.permute(0, 2, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [B, L, C]
+        tt_out = ttnn.to_torch(tt_enc(x_nlc))
+
+        tt_out = tt_out.squeeze(0).permute(0, 2, 1)  # [B, C, L] -> [B, L, C] to match reference
 
         pcc = compute_pcc(ref_out, tt_out)
         print(f"Ref mean = {ref_out.mean().item():.6f}, TTNN mean = {tt_out.mean().item():.6f}")
