@@ -37,10 +37,14 @@ def _fabric_config_for_num_procs(num_procs: int):
 @contextlib.contextmanager
 def open_mesh_device():
     my_rank = int(ttnn.distributed_context_get_rank())
-
+    num_procs = int(ttnn.distributed_context_get_size())
     worker_l1_size = 1431568
-    if my_rank == 62:
-        worker_l1_size = 1499000
+    if num_procs == 64:
+        if my_rank == 62:
+            worker_l1_size = 1499000
+    elif num_procs == 16:
+        if my_rank == 14:
+            worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
