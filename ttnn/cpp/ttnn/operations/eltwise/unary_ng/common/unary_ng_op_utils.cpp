@@ -678,7 +678,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";
         case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
-        case UnaryOpType::HARDSHRINK: return "eltwise_sfpu.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }

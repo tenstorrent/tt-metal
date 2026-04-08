@@ -522,7 +522,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {}u);", idst, lambda_bits)};
         }
-        case UnaryOpType::LOGIT: return {};
         case UnaryOpType::SOFTSHRINK:
             return {
                 "softshrink_tile_init();",
@@ -1022,7 +1021,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "eltwise_sfpu.cpp";
         case UnaryOpType::HARDSWISH:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return "hardswish_kernel_sfpu.cpp";

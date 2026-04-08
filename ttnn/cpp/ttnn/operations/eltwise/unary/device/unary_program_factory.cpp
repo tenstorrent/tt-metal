@@ -66,14 +66,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             .set_page_size(src0_cb_index, input_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::LOGIT) {
-        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
-                .set_page_size(tmp0_cb_index, input_cb_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
-    }
-
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
@@ -107,9 +99,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        if (ops_chain[0].type() == UnaryOpType::LOGIT) {
-            unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        }
     }
 
     bool math_approx_mode = std::all_of(
@@ -302,8 +291,6 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = ntiles_per_block * 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
@@ -340,9 +327,6 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        if (ops_chain[0].type() == UnaryOpType::LOGIT) {
-            unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        }
     }
 
     bool math_approx_mode = std::all_of(
