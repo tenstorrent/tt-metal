@@ -22,7 +22,6 @@ file(
     moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/*
     moreh_dot/device/kernels/*
     moreh_dot_backward/device/kernels/*
-    moreh_fold/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
     moreh_linear_backward/device/kernels/*
@@ -110,10 +109,6 @@ target_sources(
             moreh_dot_backward/moreh_dot_backward.hpp
             moreh_dot_backward/moreh_dot_backward_nanobind.hpp
             moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp
-            # moreh_fold/
-            moreh_fold/fold.hpp
-            moreh_fold/fold_nanobind.hpp
-            moreh_fold/device/fold_device_operation.hpp
             # moreh_getitem/
             moreh_getitem/moreh_getitem.hpp
             moreh_getitem/moreh_getitem_nanobind.hpp
@@ -253,9 +248,6 @@ target_sources(
         moreh_sum/device/moreh_sum_nc_program_factory.cpp
         moreh_sum/device/moreh_sum_w_program_factory.cpp
         moreh_sum/moreh_sum.cpp
-        moreh_fold/fold.cpp
-        moreh_fold/device/fold_device_operation.cpp
-        moreh_fold/device/fold_program_factory_rm.cpp
         moreh_helper_functions.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_program_factory.cpp

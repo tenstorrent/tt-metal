@@ -15,10 +15,8 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     device/kernels/*
-    generic/device/kernels/*
     grid_sample/device/kernels/*
     rotate/device/kernels/*
-    upsample/device/kernels/*
 )
 
 target_sources(
@@ -33,9 +31,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        generic/device/pool_multi_core_program_factory.cpp
-        generic/device/pool_op.cpp
-        generic/generic_pools.cpp
         global_avg_pool/global_avg_pool.cpp
         grid_sample/device/grid_sample_device_operation.cpp
         grid_sample/device/grid_sample_bilinear_program_factory.cpp
@@ -48,13 +43,6 @@ target_sources(
         rotate/device/rotate_bilinear_program_factory.cpp
         rotate/rotate.cpp
         pool_utils.cpp
-        upsample/device//upsample_bilinear_program_factory_multicore.cpp
-        upsample/device/upsample_common.cpp
-        upsample/device/upsample_device_operation.cpp
-        upsample/device/upsample_program_factory_multicore_sharded.cpp
-        upsample/device/upsample_program_factory_multicore_interleaved.cpp
-        upsample/device/upsample_nearest_float_program_factory.cpp
-        upsample/upsample.cpp
 )
 
 target_include_directories(ttnn_op_pool PRIVATE ${FixmeOpIncDirs})

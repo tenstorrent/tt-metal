@@ -437,17 +437,12 @@ from ttnn.operations.reduction import ReduceType
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
-    Conv2dConfig,
     get_conv_output_dim,
     Conv2dSliceConfig,
     Conv2dDRAMSliceHeight,
     Conv2dDRAMSliceWidth,
     Conv2dL1Full,
     Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
     Op2DSliceConfig,
     Op2DDRAMSliceHeight,
@@ -462,8 +457,6 @@ from ttnn.operations.pool import (
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
-
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

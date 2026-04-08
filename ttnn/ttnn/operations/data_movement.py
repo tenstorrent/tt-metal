@@ -145,20 +145,6 @@ def _golden_function(tensor, shape, **_):
 ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
-    import torch
-
-    input_tensor = input_tensor.permute(0, 3, 1, 2)
-    ret = torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
-    ret = ret.permute(0, 2, 3, 1)
-    return ret
-
-
-ttnn.attach_golden_function(
-    ttnn.upsample,
-    golden_function=_golden_function,
-)
-
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
 SliceDeviceOperation = ttnn._ttnn.operations.data_movement.SliceDeviceOperation

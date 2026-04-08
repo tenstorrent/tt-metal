@@ -14,7 +14,6 @@
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_fold/fold_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.hpp"
@@ -43,7 +42,6 @@ void bind_moreh_operations(nb::module_& mod) {
     moreh_cumsum::bind_moreh_cumsum_operation(mod);
     moreh_dot_backward::bind_moreh_dot_backward_operation(mod);
     moreh_dot::bind_moreh_dot_operation(mod);
-    moreh_fold::bind_moreh_fold_operation(mod);
     moreh_getitem::bind_moreh_getitem_operation(mod);
     moreh_linear_backward::bind_moreh_linear_backward_operation(mod);
     moreh_linear::bind_moreh_linear_operation(mod);

@@ -16,7 +16,6 @@ cumsum = ttnn._ttnn.operations.moreh.moreh_cumsum
 cumsum_backward = ttnn._ttnn.operations.moreh.moreh_cumsum_backward
 dot = ttnn._ttnn.operations.moreh.moreh_dot
 dot_backward = ttnn._ttnn.operations.moreh.moreh_dot_backward
-fold = ttnn._ttnn.operations.moreh.moreh_fold
 getitem = ttnn._ttnn.operations.moreh.moreh_getitem
 linear = ttnn._ttnn.operations.moreh.moreh_linear
 linear_backward = ttnn._ttnn.operations.moreh.moreh_linear_backward
