@@ -247,6 +247,37 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
     return torch_tensor
 
 
+_to_torch_zero_copy_warned = False
+
+
+def _to_torch_zero_copy(t: ttnn.Tensor) -> torch.Tensor:
+    """Convert a host ttnn tensor to a PyTorch tensor, preferring zero-copy.
+
+    Uses ``to_torch_with_padded_shape`` when available — for ROW_MAJOR host
+    tensors this wraps the existing buffer directly (zero-copy) instead of
+    copying through ``decode_tensor_data`` as ``to_torch`` always does.
+
+    Falls back to ``to_torch`` if the method is removed, with a one-time
+    warning so the performance regression is visible.
+
+    TODO: Once ``to_torch`` supports a ``padded_output`` parameter (or the
+    zero-copy path becomes the default for ROW_MAJOR), switch to that and
+    remove this helper.
+    """
+    global _to_torch_zero_copy_warned
+    try:
+        return t.to_torch_with_padded_shape()
+    except AttributeError:
+        if not _to_torch_zero_copy_warned:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "to_torch_with_padded_shape unavailable, falling back to to_torch (slower d2h)"
+            )
+            _to_torch_zero_copy_warned = True
+        return ttnn.to_torch(t)
+
+
 def fast_device_to_host(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -259,8 +290,8 @@ def fast_device_to_host(
 
     1. Issues async DMA for all per-device shards concurrently.
     2. Synchronizes once.
-    3. Uses ``to_torch_with_padded_shape`` which wraps the host buffer directly
-       as a PyTorch tensor (zero-copy for ROW_MAJOR).
+    3. Converts to PyTorch with zero-copy when possible (see
+       :func:`_to_torch_zero_copy`), falling back to standard ``to_torch``.
     4. Trims tile padding and concatenates on host.
 
     Args:
@@ -281,9 +312,9 @@ def fast_device_to_host(
     host_tensors = [dt.cpu(blocking=False) for dt in device_tensors]
     ttnn.synchronize_device(mesh_device)
 
-    # Zero-copy to_torch (wraps existing host buffer, no memcpy)
+    # Zero-copy to_torch when available, otherwise standard to_torch
     with ThreadPoolExecutor(max_workers=len(host_tensors)) as pool:
-        shards = list(pool.map(ttnn.Tensor.to_torch_with_padded_shape, host_tensors))
+        shards = list(pool.map(_to_torch_zero_copy, host_tensors))
 
     # Trim physical (tile-padded) shape to logical shape — view, no copy
     logical_shape = list(host_tensors[0].shape)
