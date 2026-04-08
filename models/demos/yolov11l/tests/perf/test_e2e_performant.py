@@ -69,6 +69,7 @@ def run_yolov11_inference(
     ids=["640", "1280"],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
@@ -105,6 +106,15 @@ def test_e2e_performant(
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    [
+        # (2, 2),
+        (1, 8),
+    ],
+    indirect=True,
+    ids=["t3k_1x8"],
+)
+@pytest.mark.parametrize(
     "resolution",
     [
         (640, 640),
@@ -113,6 +123,7 @@ def test_e2e_performant(
     ids=["640", "1280"],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
