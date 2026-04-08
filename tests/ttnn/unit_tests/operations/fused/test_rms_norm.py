@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+import os
 
 pytestmark = pytest.mark.use_module_device
 
@@ -79,14 +80,25 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.999,
-        rtol=0.091,
-        atol=0.129,
-        frobenius_threshold=0.052,
-    )
+    # Higher frobenius_threshold for ttsim due to issue #41530
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.091,
+            atol=0.129,
+            frobenius_threshold=0.09,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.091,
+            atol=0.129,
+            frobenius_threshold=0.052,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [1])
