@@ -429,8 +429,9 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Flush i$ on ethernet riscs
-inline __attribute__((always_inline)) void flush_erisc_icache() {
+// Flush i$ by executing enough NOPs to evict all cache lines.
+// Required on ERISC and DRISC cores which lack MMIO-based cache flush registers.
+inline __attribute__((always_inline)) void manually_flush_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
