@@ -257,15 +257,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. The launch
         // message buffer is written to after the binary.
-        int final_binary_sync_idx = subdevice_launch_window.size() >= max_queued_programs
-                                        ? static_cast<int>(subdevice_launch_window.front())
-                                        : -1;
-        if (binary_sync_idx.has_value()) {
-            final_binary_sync_idx = std::max(final_binary_sync_idx, static_cast<int>(binary_sync_idx.value()));
-        }
-        int final_nonbinary_sync_idx = -1;
-        if (nonbinary_sync_idx.has_value()) {
-            final_nonbinary_sync_idx = *nonbinary_sync_idx;
+        if (subdevice_launch_window.size() >= max_queued_programs) {
+            binary_sync_idx = merge_syncs(binary_sync_idx, static_cast<uint32_t>(subdevice_launch_window.front()));
         }
 
         if (!last_stall_idx.has_value()) {
@@ -278,17 +271,21 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         }
 
         // Only one sync count can currently be specified, so pick the latest one.
-        int sync_count_to_use = std::max(final_nonbinary_sync_idx, final_binary_sync_idx);
-        if (final_nonbinary_sync_idx > last_stall_idx.value_or(-1)) {
-            TT_ASSERT(sync_count_to_use >= 0, "Sync count to use is negative");
-            node.dispatch_metadata.sync_count = extra_data_[sync_count_to_use].finished_sync_count;
-            node.dispatch_metadata.stall_first = true;
-            last_stall_idx = sync_count_to_use;
-        } else if (final_binary_sync_idx > last_stall_idx.value_or(-1)) {
-            TT_ASSERT(sync_count_to_use >= 0, "Sync count to use is negative");
-            node.dispatch_metadata.sync_count = extra_data_[sync_count_to_use].finished_sync_count;
-            node.dispatch_metadata.stall_before_program = true;
-            last_stall_idx = sync_count_to_use;
+        // nonbinary sync requires stall_first (before writing config data); binary-only sync uses
+        // stall_before_program (after config, before binary/launch).
+        bool needs_nonbinary_sync =
+            nonbinary_sync_idx.has_value() && static_cast<int>(*nonbinary_sync_idx) > last_stall_idx.value_or(-1);
+        bool needs_binary_sync =
+            binary_sync_idx.has_value() && static_cast<int>(*binary_sync_idx) > last_stall_idx.value_or(-1);
+        if (needs_nonbinary_sync || needs_binary_sync) {
+            uint32_t combined_sync_idx = *merge_syncs(nonbinary_sync_idx, binary_sync_idx);
+            node.dispatch_metadata.sync_count = extra_data_[combined_sync_idx].finished_sync_count;
+            if (needs_nonbinary_sync) {
+                node.dispatch_metadata.stall_first = true;
+            } else {
+                node.dispatch_metadata.stall_before_program = true;
+            }
+            last_stall_idx = static_cast<int>(combined_sync_idx);
         }
         expected_workers_completed += node.num_workers;
         subdevice_launch_window.push_back(i);
