@@ -322,7 +322,9 @@ class TTNNQwenLayerNorm(TTNNModule):
 
         if not self._is_distributed:
             return super().set_output_tensors_config_impl(output_tensors)
-        if getattr(self, "_distributed_gather_layernorm", False):
+        if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+            self, "_force_replicated_input_layernorm", False
+        ):
             name = self.module_name or ""
             # Do not dim-0-shard LN output: vision rotary cos/sin stay full seq length; sharding breaks q*cos broadcast.
             if "merger" in name and "ln_q" in name:
@@ -361,7 +363,9 @@ class TTNNQwenLayerNorm(TTNNModule):
         if self.device is not None and self.device.get_num_devices() > 1:
             ncol = int(list(self.device.shape)[-1])
             ntiles = self.embedding_dim // 32
-            if ntiles % ncol != 0:
+            # Audio tower (etc.): activations are replicated on the mesh, not width-sharded — avoid
+            # ``layer_norm_post_all_gather`` + per-shard gamma (expects local last dim = embed/num_devices).
+            if getattr(self, "_force_replicated_input_layernorm", False) or ntiles % ncol != 0:
                 self._distributed_gather_layernorm = True
                 # Host TT tensors without mesh placement; ``move_weights_to_device_impl`` uses
                 # ``from_torch(..., device=..., mesh_mapper=...)`` (``to_device`` has no mesh_mapper).
@@ -436,7 +440,10 @@ class TTNNQwenLayerNorm(TTNNModule):
         if not self.elementwise_affine:
             return
         if self.device.get_num_devices() > 1:
-            if getattr(self, "_distributed_gather_layernorm", False):
+            if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+                self, "_force_replicated_input_layernorm", False
+            ):
+                self._distributed_gather_layernorm = True
                 rep = ttnn.ReplicateTensorToMesh(self.device)
                 w = self.torch_weight.reshape(1, -1).to(torch.bfloat16)
                 self.tt_weight = ttnn.from_torch(
@@ -548,7 +555,9 @@ class TTNNQwenLayerNorm(TTNNModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         original_shape = tuple(int(d) for d in x.shape)
         if self._is_distributed and self.elementwise_affine:
-            if getattr(self, "_distributed_gather_layernorm", False):
+            if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+                self, "_force_replicated_input_layernorm", False
+            ):
                 return self._forward_distributed_gather_ln(x, original_shape)
             return self._forward_distributed(x, original_shape)
         if x.layout != ttnn.TILE_LAYOUT:
