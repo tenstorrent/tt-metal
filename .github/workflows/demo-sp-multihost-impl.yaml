@@ -17,16 +17,6 @@ on:
         type: string
         default: "sp1"
         description: "Single pod configuration (sp1, sp4, sp5)"
-      topology-dims:
-        required: false
-        type: string
-        default: "32,4"
-        description: "Device topology dimensions (e.g., '32,4' for 32x4)"
-      host-topology-dims:
-        required: false
-        type: string
-        default: "4,1"
-        description: "Host topology dimensions (e.g., '4,1')"
 
 jobs:
   load-test-matrix:
@@ -111,22 +101,16 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Create MGD configuration
+      - name: Extract MGD configuration from SKU
         id: mgd
         run: |
-          MGD_CONFIG='
-            mesh_descriptors {
-              name: \"M0\"
-              arch: BLACKHOLE
-              device_topology { dims: [ ${{ inputs.topology-dims }} ] dim_types: [ RING,RING ] }
-              host_topology   { dims: [ ${{ inputs.host-topology-dims }} ] }
-              channels { count: 2 policy: RELAXED }
-            }
-            top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
-          '
-          echo "mgd<<EOF" >> $GITHUB_OUTPUT
-          echo "$MGD_CONFIG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          pip3 install PyYAML
+          python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" > /tmp/mgd_config.txt
+          {
+            echo "mgd<<EOF"
+            cat /tmp/mgd_config.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
