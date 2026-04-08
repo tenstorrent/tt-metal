@@ -11,7 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 TEST_PADDING_VALUE = -42
-
 pytestmark = pytest.mark.use_module_device
 
 

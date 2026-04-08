@@ -152,7 +152,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (2, 1, 128, 8192),
         # (1, 1, 1025, 3201)  # Implicit padding case
         # Disabled due to issue #31983:
-        # Fails when per-device feature size is not divisible by 32 (invalid reshape assumption)
+        # getting critical error and sometimes hardware reset request
     ],
 )
 @pytest.mark.parametrize(
@@ -186,7 +186,7 @@ def test_layernorm_part_2_with_program_cache(
         (1, 1, 2048, 8192),
         # (1,1,32,33) # Implicit padding case
         # Disabled due to issue #31983:
-        # Incorrect results when padding values are included in computation for non tile-aligned inputs
+        # failing when shape changed
     ],
 )
 @pytest.mark.parametrize(

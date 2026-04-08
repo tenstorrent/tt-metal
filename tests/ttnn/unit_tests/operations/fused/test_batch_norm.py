@@ -13,7 +13,6 @@ from itertools import product
 from models.common.utility_functions import comp_pcc
 
 TEST_PADDING_VALUE = -42
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -68,6 +67,7 @@ def test_batch_norm_tests(
         if bias
         else (None, None)
     )
+
     if (not training) and ((not check_mean) or (not check_var)):
         pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
@@ -394,7 +394,7 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
-        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size) still passing
     ],
 )
 def test_batch_norm_qid_Default(input_shapes, device):
@@ -417,7 +417,7 @@ def test_batch_norm_qid_Default(input_shapes, device):
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
-        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size) still passing
     ],
 )
 def test_batch_norm_qid(input_shapes, device):

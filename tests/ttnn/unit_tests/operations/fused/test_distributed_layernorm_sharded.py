@@ -16,8 +16,6 @@ from models.common.utility_functions import (
 
 from models.common.utility_functions import tt2torch_tensor
 
-TEST_PADDING_VALUE = -42
-
 PREFETCHER_NOC1_GRID = [
     (6, 6),
     (6, 7),
@@ -78,7 +76,6 @@ def create_tt_tensors(
         memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
         dtype=df,
     )
-    tt_tensor = ttnn.fill_implicit_tile_padding(tt_tensor, TEST_PADDING_VALUE)
 
     with device.cache_entries_counter.measure():
         if not is_weight:

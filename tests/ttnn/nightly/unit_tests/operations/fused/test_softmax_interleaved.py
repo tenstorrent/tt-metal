@@ -32,6 +32,7 @@ def test_softmax(device, inplace, dtype):
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -73,6 +74,7 @@ def test_softmax_with_program_cache(device, inplace):
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -102,6 +104,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
