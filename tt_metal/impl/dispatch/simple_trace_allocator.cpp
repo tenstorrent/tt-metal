@@ -195,8 +195,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             // the data before the kernel text (RTAs, CBs, semaphores). The binary gets its own
             // separately-cached region. When binaries are NOT in the config buffer (they go to a
             // fixed L1 address from the ELF), the full config size is non-binary.
-            uint32_t non_binary_size = binary_in_config ? program_config.kernel_text_offset
-                                                        : node.program->get_program_config_sizes()[index];
+            uint32_t non_binary_size =
+                binary_in_config ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
             uint32_t binary_size = program_config.kernel_text_size;
             auto& allocator = region_allocators_[index];
 

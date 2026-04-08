@@ -241,7 +241,6 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     return ret;
 }
 
-
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
     // Get all kernels across all programs in the MeshWorkload

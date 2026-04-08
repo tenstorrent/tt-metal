@@ -1798,7 +1798,6 @@ bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
                 .empty());
 }
 
-
 Program::Program(Program&& other) noexcept = default;
 
 Program& Program::operator=(Program&& other) noexcept = default;
