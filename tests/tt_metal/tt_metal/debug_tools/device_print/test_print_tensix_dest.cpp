@@ -283,7 +283,7 @@ static DramBuffer prepare_reader(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {DEFAULT_INPUT_CB_INDEX, 0}});
+            .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
@@ -315,7 +315,7 @@ static DramBuffer prepare_writer(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, 0}});
+            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(
