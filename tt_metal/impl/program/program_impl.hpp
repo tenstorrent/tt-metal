@@ -310,8 +310,6 @@ public:
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
 
-    bool kernel_binary_always_stored_in_ringbuffer();
-
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
     // Dispatches detail::collect_kernel_meta, device is nullable

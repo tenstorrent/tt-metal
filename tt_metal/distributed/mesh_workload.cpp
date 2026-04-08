@@ -241,15 +241,6 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     return ret;
 }
 
-bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Return true if kernel binaries cannot be placed in a ring buffer for
-    // any program in the MeshWorkload
-    bool stored_in_ring_buf = true;
-    for (auto& [device_range, program] : programs_) {
-        stored_in_ring_buf &= program.impl().kernel_binary_always_stored_in_ringbuffer();
-    }
-    return stored_in_ring_buf;
-}
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
