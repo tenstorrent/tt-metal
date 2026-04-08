@@ -428,18 +428,8 @@ class HostInterface:
         entries = []
         if self.h2d_socket and h2d_program is not None:
             entries.append((self.h2d_mesh_core_coord.device_coord, h2d_program))
-            print(
-                f"  HostInterface._build_programs: h2d device={self.h2d_mesh_core_coord.device_coord} "
-                f"core={self.h2d_mesh_core_coord.core_coord} uses_fabric={h2d_uses_fabric} "
-                f"same_device={same_device}"
-            )
         if self.d2h_socket and d2h_program is not None and not same_device:
             entries.append((self.d2h_mesh_core_coord.device_coord, d2h_program))
-            print(
-                f"  HostInterface._build_programs: d2h device={self.d2h_mesh_core_coord.device_coord} "
-                f"core={self.d2h_mesh_core_coord.core_coord} uses_fabric={d2h_uses_fabric}"
-            )
-        print(f"  HostInterface._build_programs: {len(entries)} entries, same_device={same_device}")
         return entries
 
     def run(self):

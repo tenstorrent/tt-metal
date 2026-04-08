@@ -189,7 +189,6 @@ void kernel_main() {
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
-    uint32_t d2d_iter = 0;
     while (true) {
         socket_reserve_pages(sender_socket, 1);
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {

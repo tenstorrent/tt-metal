@@ -84,10 +84,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    uint32_t d2h_iter = 0;
     while (true) {
+        // Wait for space in D2H socket
         socket_reserve_pages(sender_socket, 1);
         if constexpr (loopback_mode) {
+            // Wait for data in CB with termination checks
             if (!cb_wait_for_pages_with_termination(upstream_interface_index, 1, termination_semaphore)) {
                 break;
             }
@@ -102,6 +103,7 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(upstream_interface_index, 1);
         } else {
+            // Wait for pages in receiver socket with timeout and termination checks
             if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 break;
             }

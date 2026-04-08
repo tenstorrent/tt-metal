@@ -190,12 +190,13 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
-    uint32_t h2d_iter = 0;
     while (true) {
+        // Wait for pages in H2D socket
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
         if constexpr (pull_from_host) {
+            // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
                 NOC_INDEX,
                 pcie_xy_enc,
@@ -228,6 +229,7 @@ void kernel_main() {
                 dst_addr);
         }
         socket_pop_pages(receiver_socket, 1);
+        // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
         invalidate_l1_cache();
     }

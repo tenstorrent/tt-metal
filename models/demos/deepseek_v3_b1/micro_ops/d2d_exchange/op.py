@@ -62,12 +62,6 @@ def _build_exchange_program(
     assert my_upstream_socket.get_active_cores()[0] == my_core_coord
     assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 
-    print(
-        f"  _build_exchange_program: core={my_core_coord} page_size={page_size} "
-        f"upstream_conn={my_upstream_socket.get_connection_config()[0]} "
-        f"downstream_conn={my_downstream_socket.get_connection_config()[0]}"
-    )
-
     upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
     downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
 
@@ -152,12 +146,6 @@ def _build_exchange_program(
                 program,
                 my_core_coord.core_coord,
             )
-            print(
-                f"  _build_exchange: fwd setup_fabric_connection idx={idx} "
-                f"src_node={my_fabric_node_id} dst_node={my_downstream_fabric_node_id} "
-                f"core={my_core_coord.core_coord} "
-                f"returned eth_ch={fwd_fabric_args[0]} args={list(fwd_fabric_args)}"
-            )
             rt_args_ref.extend(fwd_fabric_args)
 
     if use_fabric_on_receiver:
@@ -168,12 +156,6 @@ def _build_exchange_program(
                 idx,
                 program,
                 my_core_coord.core_coord,
-            )
-            print(
-                f"  _build_exchange: bwd setup_fabric_connection idx={idx} "
-                f"src_node={my_fabric_node_id} dst_node={my_upstream_fabric_node_id} "
-                f"core={my_core_coord.core_coord} "
-                f"returned eth_ch={bwd_fabric_args[0]} args={list(bwd_fabric_args)}"
             )
             rt_args_ref.extend(bwd_fabric_args)
 
@@ -442,7 +424,6 @@ class SocketInterface:
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])
-        print("running d2d exchange with multi-upstream support:")
         kernel_source = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
 
         # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
