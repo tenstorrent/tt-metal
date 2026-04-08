@@ -1,0 +1,8 @@
+﻿ttnn.prepare\_conv\_bias
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.prepare_conv_bias:
+
+.. autofunction:: ttnn.prepare_conv_bias
