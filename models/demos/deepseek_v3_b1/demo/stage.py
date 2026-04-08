@@ -59,31 +59,69 @@ class StageKind(ABC):
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
 
-class EmbeddingStage(StageKind):
-    """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
-
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            embedding_tensor=self._weights.embedding,
-        )
-
-
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
+
+
+class EmbeddingStage(StageKind):
+    """Stage 0: H2D + embedding lookup, forwards activation; loopback payload is configurable."""
+
+    def __init__(
+        self,
+        weights: DeepSeekV3EmbeddingLayerWeights,
+        *,
+        loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
+        initialize_loopback: bool = True,
+    ) -> None:
+        self._weights = weights
+        self._loopback_payload = loopback_payload
+        self._initialize_loopback = initialize_loopback
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        if not self._initialize_loopback:
+            # Last stage owns D2H; rank 0 has H2D + downstream only (see PipelineBlock no-loopback path).
+            return PipelineBlock(
+                mesh_device,
+                PIPELINE_CORE_COORD,
+                upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+                downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+                h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+                d2h_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                d2h_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+                embedding_tensor=self._weights.embedding,
+                initialize_loopback=False,
+            )
+        # Loopback entry + D2H must use the same page size (see PipelineBlock._init_first_stage).
+        # Token-sized: LMHead / sampling returns a token page to the host (default).
+        # Activation-sized: embed → passthrough chain returns an embedding row on loopback.
+        if self._loopback_payload == PassthroughPayload.ACTIVATION:
+            up_fifo = ACTIVATION_FIFO_SIZE
+            up_page = ACTIVATION_PAGE_SIZE_BYTES
+            d2h_fifo = ACTIVATION_FIFO_SIZE
+            d2h_page = ACTIVATION_PAGE_SIZE_BYTES
+        else:
+            up_fifo = TOKEN_FIFO_SIZE
+            up_page = TOKEN_PAGE_SIZE_BYTES
+            d2h_fifo = TOKEN_FIFO_SIZE
+            d2h_page = TOKEN_PAGE_SIZE_BYTES
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=up_fifo,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=up_page,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            d2h_socket_fifo_size=d2h_fifo,
+            d2h_socket_page_size=d2h_page,
+            embedding_tensor=self._weights.embedding,
+            initialize_loopback=True,
+        )
 
 
 class PassthroughStage(StageKind):
@@ -132,10 +170,12 @@ class LMHeadStage(StageKind):
         *,
         lm_head_fp32_dest_acc_en: bool = True,
         lm_head_persistent_mode: bool = True,
+        initialize_loopback: bool = True,
     ) -> None:
         self._weights = weights
         self._lm_head_fp32_dest_acc_en = lm_head_fp32_dest_acc_en
         self._lm_head_persistent_mode = lm_head_persistent_mode
+        self._initialize_loopback = initialize_loopback
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -148,6 +188,20 @@ class LMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
+        if not self._initialize_loopback:
+            return PipelineBlock(
+                mesh_device,
+                PIPELINE_CORE_COORD,
+                upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                downstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+                upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+                downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+                entry_node_downstream=lmhead_entry_core,
+                exit_node_upstream=lmhead_exit_core,
+                initialize_loopback=False,
+                d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
+                d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            )
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,

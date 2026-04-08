@@ -33,6 +33,36 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
     return config
 
 
+def create_passthrough_pipeline_configuration(
+    weight_provider: WeightProvider,
+    num_procs: int,
+    *,
+    payload: PassthroughPayload = PassthroughPayload.ACTIVATION,
+) -> PipelineConfiguration:
+    """N-stage pipeline: stage 0 is :class:`EmbeddingStage`; stages 1..N-1 are :class:`PassthroughStage`.
+
+    Default ``payload`` is :attr:`~PassthroughPayload.ACTIVATION` so D2D FIFO/page sizes match
+    :class:`EmbeddingStage` downstream (embedding rows). Use :attr:`~PassthroughPayload.TOKEN` only
+    when every stage before the passthrough chain emits token-sized pages (not this factory's
+    embedding-first layout).
+
+    Stage indices 0 .. num_procs-1 must match the distributed mesh count (e.g. 4, 16, 64).
+    """
+    if num_procs < 1:
+        raise ValueError(f"num_procs must be >= 1, got {num_procs}")
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            loopback_payload=PassthroughPayload.ACTIVATION,
+        )
+
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {0: stage_0}
+    for i in range(1, num_procs):
+        stage_factories[i] = lambda _d, p=payload: PassthroughStage(p)
+    return PipelineConfiguration(stage_factories)
+
+
 def create_single_galaxy_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -42,7 +72,7 @@ def create_single_galaxy_pipeline_configuration(
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device))
+        return EmbeddingStage(weight_provider.load_embedding(device), loopback_payload=None)
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
@@ -59,6 +89,66 @@ def create_single_galaxy_pipeline_configuration(
             3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
         }
     )
+
+
+def create_single_galaxy_deepseek_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id: int = 0,
+    moe_layer_id: int = 0,
+    initialize_loopback: bool = True,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy: Embed -> Dense -> MoE -> LMHead.
+
+    This is the decoder stack that :func:`create_single_galaxy_pipeline_configuration` approximates
+    with two token :class:`PassthroughStage` stages after LMHead. Here the two passthrough slots are
+    replaced by :class:`DenseDecoderStage` and :class:`MoEDecoderStage` **before** LMHead so every
+    D2D hop stays activation-sized until the final LMHead emits token-sized pages to loopback.
+    (Placing dense/MoE after LMHead would mismatch TOKEN vs activation socket handshakes.)
+
+    When ``initialize_loopback`` is False, the last stage exposes D2H to its host (no return path
+    to mesh 0); rank 0 only drives H2D.
+    """
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            initialize_loopback=initialize_loopback,
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=dense_layer_id, device=device),
+            layer_idx=dense_layer_id,
+        )
+
+    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+        return MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=moe_layer_id, device=device),
+            layer_idx=moe_layer_id,
+        )
+
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
+        return LMHeadStage(
+            weight_provider.load_lm_head(device),
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            initialize_loopback=initialize_loopback,
+        )
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: stage_1,
+            2: stage_2,
+            3: stage_3,
+        }
+    )
+
+
+create_single_galaxy_deepseek_pipeline = create_single_galaxy_deepseek_pipeline_configuration
 
 
 def create_single_pod_pipeline_configuration(
