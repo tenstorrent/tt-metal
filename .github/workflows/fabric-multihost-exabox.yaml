@@ -56,13 +56,12 @@ jobs:
           allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
           spec: |
-            allocationType: MGD
+            allocationType: Count
+            count: 4
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
               - exabox.tenstorrent.com/quad
-            mgd: |-
-              ${{ steps.mgd.outputs.mgd }}
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
@@ -212,6 +211,11 @@ jobs:
         timeout-minutes: 10
         run: |
             mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+
+      - name: Run System Health Check
+        timeout-minutes: 10
+        run: |
+            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
 
       - name: Run Fabric Test
         run: |
