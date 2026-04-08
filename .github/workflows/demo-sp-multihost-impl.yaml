@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
+      mgd: ${{ steps.extract-mgd.outputs.mgd }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -40,6 +41,16 @@ jobs:
             exit 1
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
+      - name: Extract MGD configuration from SKU
+        id: extract-mgd
+        run: |
+          python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" > /tmp/mgd_config.txt
+          {
+            echo "mgd<<EOF"
+            cat /tmp/mgd_config.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Verify test timeouts against budget
         run: |
@@ -101,17 +112,6 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Extract MGD configuration from SKU
-        id: mgd
-        run: |
-          pip3 install PyYAML
-          python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" > /tmp/mgd_config.txt
-          {
-            echo "mgd<<EOF"
-            cat /tmp/mgd_config.txt
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
@@ -126,7 +126,7 @@ jobs:
             topologyKeys:
               - exabox.tenstorrent.com/quad
             mgd: |-
-              ${{ steps.mgd.outputs.mgd }}
+              ${{ needs.load-test-matrix.outputs.mgd }}
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
@@ -201,7 +201,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgd: ${{ steps.mgd.outputs.mgd }}
+          mgd: ${{ needs.load-test-matrix.outputs.mgd }}
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
