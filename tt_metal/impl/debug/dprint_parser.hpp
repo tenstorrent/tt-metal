@@ -11,18 +11,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "device/device_impl.hpp"
-#include "tt_metal/llrt/tt_elffile.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
-#include "hostdev/device_print_structures.h"
 
 namespace tt::tt_metal {
 
@@ -60,12 +56,12 @@ private:
     std::string get_completed_line();
 };
 
+// Abstract interface for parsing DEVICE_PRINT format strings from ELF files.
+// Concrete implementations are templated on pointer size (4 or 8 bytes) to handle
+// 32-bit and 64-bit ELFs at compile time via DevicePrintStringInfo32/DevicePrintStringInfo64.
 class DevicePrintParser {
-    using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
-
 public:
-    DevicePrintParser(const DevicePrintParser&) = delete;
-    DevicePrintParser& operator=(const DevicePrintParser&) = delete;
+    virtual ~DevicePrintParser() = default;
 
     struct TileSliceDynamic {
         TileSliceHostDev<0> header;
@@ -96,81 +92,13 @@ public:
         std::vector<ArgumentValue> argument_values;
     };
 
+    // Factory: reads EI_CLASS from the ELF header and returns the correct 32-bit or 64-bit parser.
     static std::shared_ptr<DevicePrintParser> get_parser_for_elf(const std::string& elf_path);
-    std::string_view format_message(
-        uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
+
+    virtual std::string_view format_message(
+        uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) = 0;
 
 private:
-    DevicePrintParser(const std::string& elf_path);
-
-    // Enum debug info extracted from DWARF: maps enumerator integer values to their names.
-    struct EnumInfo {
-        std::string type_name;                                     // Fully-qualified enum type name from format string
-        std::vector<std::pair<int64_t, std::string>> enumerators;  // (value, name) pairs from DWARF
-    };
-
-    struct FormatPlaceholderInfo {
-        uint32_t arg_id;
-        char type_id;
-        std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
-        std::string fmt_format;        // The full format to be used in fmt::format, e.g. "{0:08x}"
-
-        // Enum-specific fields (populated when type_id marker is '/e' or '/E')
-        std::string_view enum_type_name;      // e.g. "test::deep::Enum1" (view into format string)
-        char enum_base_type_id = 0;           // e.g. 'I' for uint32_t
-        bool enum_is_flag = false;            // true for '/E' (flag/bitmask enum), false for '/e'
-        bool enum_use_full_name = false;      // true when '#' alternate form was specified
-        const EnumInfo* enum_info = nullptr;  // Points into DevicePrintParser::enum_info_cache_; null if no DWARF info
-    };
-
-    struct ParsedStringInfo {
-        std::string_view format_string;
-        std::string_view file;
-        uint32_t line = 0;
-        std::vector<std::string> plain_text_parts;  // The parts of the format string that are plain text, split by the
-                                                    // placeholders. Size is one more than the number of placeholders.
-        std::vector<FormatPlaceholderInfo> placeholders;
-        std::vector<char> argument_types;
-        uint32_t arguments_size = 0;
-    };
-
-    ParsedStringInfo* get_string_info(uint32_t info_id);
-
-    static std::size_t get_argument_size_from_type_id(char type_id);
-    static ArgumentValue read_argument_from_payload(
-        char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset);
-    static std::pair<std::vector<std::string>, std::vector<FormatPlaceholderInfo>> parse_format_string(
-        std::string_view format_str);
-    static std::optional<FormatPlaceholderInfo> parse_placeholder(std::string_view format_str, std::size_t& pos);
-    static void read_arguments_from_payload(
-        std::span<char> argument_types,
-        std::span<const std::byte> payload_bytes,
-        std::vector<ArgumentValue>& arguments);
-    std::string_view format_message(
-        ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
-
-    // Loads all enum type definitions from DWARF debug info in the ELF file.
-    void load_enum_info_from_dwarf();
-    // Look up (or lazily load) enum info by fully-qualified type name.
-    const EnumInfo* get_enum_info(std::string_view type_name);
-
-    std::string elf_path;
-    ll_api::ElfFile elf_file;
-    std::span<std::byte> format_strings_info_bytes;
-    uint64_t format_strings_info_address;
-    std::span<std::byte> format_strings_bytes;
-    uint64_t format_strings_address;
-    DevicePrintStringInfo* string_info_ptr = nullptr;
-    size_t string_info_size = 0;
-    std::vector<ParsedStringInfo> parsed_string_info;
-    // Enum DWARF info: maps fully-qualified type name -> EnumInfo
-    // Transparent hash/eq to allow lookup by string_view without allocating a std::string.
-    struct StringHash {
-        using is_transparent = void;
-        size_t operator()(std::string_view sv) const { return std::hash<std::string_view>{}(sv); }
-    };
-    std::unordered_map<std::string, EnumInfo, StringHash, std::equal_to<>> enum_info_cache_;
-    bool enum_info_loaded_ = false;
     static std::map<std::string, std::weak_ptr<DevicePrintParser>> parser_cache;
     friend struct DevicePrintParserDeleter;
 };
