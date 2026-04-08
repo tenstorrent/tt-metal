@@ -93,6 +93,10 @@ class DeepSeek(AbstractModuleBase):
         Returns:
             Logits [B, 1, S, vocab_size]
         """
+
+        if mask is None:
+            raise ValueError("Mask is required for DeepSeek model")
+
         x = self.tok_emb(tokens)
 
         for block in self.blocks:

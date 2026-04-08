@@ -1405,11 +1405,8 @@ def main():
         # Compute peak device TFLOPS for MFU calculation
         peak_tflops = 0.0
         if flops_per_token > 0:
-            try:
-                peak_tflops = get_device_peak_tflops_bf16()
-                print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
-            except Exception:
-                pass
+            peak_tflops = get_device_peak_tflops_bf16()
+            print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
 
         # Training loop
         start_time = time.time()
@@ -1490,6 +1487,11 @@ def main():
                         )
 
                     gradient_accumulator.reset()
+
+                    # Update MoE expert bias for load balancing (DeepSeek only)
+                    if model_config.model_type == "deepseek" and hasattr(model, "get_moe_layers"):
+                        for moe_layer in model.get_moe_layers():
+                            moe_layer.update_expert_bias()
 
                     # Print memory usage after first iteration
                     if args.track_memory and not is_everything_compiled:
