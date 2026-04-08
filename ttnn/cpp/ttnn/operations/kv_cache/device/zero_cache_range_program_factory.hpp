@@ -15,9 +15,9 @@ struct ZeroCacheRangeProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle writer_kernel_id = 0;
         std::vector<CoreCoord> cores;
-        uint32_t g1_numcores = 0;
-        uint32_t num_pages_per_core_group_1 = 0;
-        uint32_t num_pages_per_core_group_2 = 0;
+        // Per-core page assignments: cores[i] zeros pages [page_starts[i], page_ends[i])
+        std::vector<uint32_t> page_starts;
+        std::vector<uint32_t> page_ends;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

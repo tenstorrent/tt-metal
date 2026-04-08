@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <map>
+#include <set>
 
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -21,17 +22,16 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
     const auto& cache_tensor = tensor_args.cache;
     const auto start_page = operation_attributes.start_page;
     const auto end_page = operation_attributes.end_page;
-    const uint32_t total_pages = end_page - start_page;
 
     Program program{};
 
     auto* device = cache_tensor.device();
     auto* dst_buffer = cache_tensor.buffer();
     const uint32_t aligned_page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    const auto arch = device->arch();
 
     // Determine NOC max burst size based on architecture
     uint32_t noc_max_burst_size;
-    const auto arch = device->arch();
     if (arch == tt::ARCH::BLACKHOLE) {
         noc_max_burst_size = 16384;
     } else if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -40,17 +40,61 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
         TT_THROW("Unsupported architecture for zero cache range: {}", arch);
     }
 
-    // Distribute work across cores
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const auto noc = tt::tt_metal::detail::preferred_noc_for_dram_write(arch);
 
-    uint32_t num_cores, num_pages_per_core_group_1, num_pages_per_core_group_2;
-    CoreRangeSet all_cores, core_group_1, core_group_2;
-    bool row_major = true;
+    // Get optimal core-to-DRAM-bank mapping
+    const auto num_dram_banks = static_cast<uint32_t>(device->num_dram_channels());
+    const auto optimal_cores = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 
-    std::tie(num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2) =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_pages, row_major);
+    // Compute pages per shard from the ND shard spec
+    const auto& nd_shard_spec = cache_tensor.memory_config().nd_shard_spec().value();
+    const auto& shard_shape = nd_shard_spec.shard_shape;
+    uint32_t shard_volume = 1;
+    for (uint32_t i = 0; i < shard_shape.rank(); i++) {
+        shard_volume *= shard_shape[i];
+    }
+    const uint32_t pages_per_shard = shard_volume / tt::constants::TILE_HW;
+
+    // Determine which shards need zeroing and group by DRAM bank
+    const uint32_t first_shard = start_page / pages_per_shard;
+    const uint32_t last_shard = (end_page + pages_per_shard - 1) / pages_per_shard;
+
+    // Map: bank_id -> list of (page_start, page_end) for contiguous shard ranges on that bank
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> bank_page_ranges;
+    for (uint32_t shard = first_shard; shard < last_shard; shard++) {
+        uint32_t bank_id = shard % num_dram_banks;
+        uint32_t shard_page_start = shard * pages_per_shard;
+        uint32_t shard_page_end = shard_page_start + pages_per_shard;
+
+        // Clamp to the requested range
+        shard_page_start = std::max(shard_page_start, start_page);
+        shard_page_end = std::min(shard_page_end, end_page);
+
+        if (bank_page_ranges.find(bank_id) == bank_page_ranges.end()) {
+            bank_page_ranges[bank_id] = {shard_page_start, shard_page_end};
+        } else {
+            // Extend range (pages for same bank may not be contiguous in global page space,
+            // but the kernel iterates page-by-page so it handles gaps via TensorAccessor)
+            bank_page_ranges[bank_id].first = std::min(bank_page_ranges[bank_id].first, shard_page_start);
+            bank_page_ranges[bank_id].second = std::max(bank_page_ranges[bank_id].second, shard_page_end);
+        }
+    }
+
+    // Build core list and page assignments - one optimal core per active bank
+    std::vector<CoreCoord> cores;
+    std::vector<uint32_t> page_starts;
+    std::vector<uint32_t> page_ends;
+    std::set<CoreRange> core_ranges;
+
+    for (const auto& [bank_id, range] : bank_page_ranges) {
+        const auto& core = optimal_cores[bank_id];
+        cores.push_back(core);
+        page_starts.push_back(range.first);
+        page_ends.push_back(range.second);
+        core_ranges.insert(CoreRange(core));
+    }
+
+    CoreRangeSet all_cores(core_ranges);
 
     // Create CB for zero buffer
     uint32_t cb_zero_id = 0;
@@ -66,38 +110,25 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
-    // Create kernel
+    // Create kernel on optimal cores only
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/zero_cache_writer.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(arch),
-            .compile_args = compile_time_args});
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc, .compile_args = compile_time_args});
 
     // Set runtime args per core
-    uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
-
-    for (uint32_t i = 0, pages_written = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores.at(i);
-        uint32_t num_pages_per_core = (i < g1_numcores) ? num_pages_per_core_group_1 : num_pages_per_core_group_2;
-
-        uint32_t core_page_start = start_page + pages_written;
-        uint32_t core_page_end = core_page_start + num_pages_per_core;
-
+    for (uint32_t i = 0; i < cores.size(); i++) {
         tt::tt_metal::SetRuntimeArgs(
             program,
             writer_kernel_id,
-            core,
+            cores[i],
             {
                 dst_buffer->address(),
-                core_page_start,
-                core_page_end,
+                page_starts[i],
+                page_ends[i],
             });
-
-        pages_written += num_pages_per_core;
     }
 
     return cached_program_t{
@@ -105,9 +136,8 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
         shared_variables_t{
             .writer_kernel_id = writer_kernel_id,
             .cores = cores,
-            .g1_numcores = g1_numcores,
-            .num_pages_per_core_group_1 = num_pages_per_core_group_1,
-            .num_pages_per_core_group_2 = num_pages_per_core_group_2,
+            .page_starts = page_starts,
+            .page_ends = page_ends,
         }};
 }
 
@@ -119,26 +149,62 @@ void ZeroCacheRangeProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
-    const auto g1_numcores = cached_program.shared_variables.g1_numcores;
-    const auto num_pages_per_core_group_1 = cached_program.shared_variables.num_pages_per_core_group_1;
-    const auto num_pages_per_core_group_2 = cached_program.shared_variables.num_pages_per_core_group_2;
+    auto& page_starts = cached_program.shared_variables.page_starts;
+    auto& page_ends = cached_program.shared_variables.page_ends;
 
-    const auto start_page = operation_attributes.start_page;
     auto* dst_buffer = tensor_args.cache.buffer();
 
-    for (uint32_t i = 0, pages_written = 0; i < cores.size(); i++) {
-        const CoreCoord& core = cores.at(i);
-        uint32_t num_pages_per_core = (i < g1_numcores) ? num_pages_per_core_group_1 : num_pages_per_core_group_2;
+    // Recompute page assignments from the new page range
+    const auto start_page = operation_attributes.start_page;
+    const auto end_page = operation_attributes.end_page;
+    const auto& nd_shard_spec = tensor_args.cache.memory_config().nd_shard_spec().value();
+    const auto& shard_shape = nd_shard_spec.shard_shape;
+    uint32_t shard_volume = 1;
+    for (uint32_t i = 0; i < shard_shape.rank(); i++) {
+        shard_volume *= shard_shape[i];
+    }
+    const uint32_t pages_per_shard = shard_volume / tt::constants::TILE_HW;
+    const auto num_dram_banks = static_cast<uint32_t>(tensor_args.cache.device()->num_dram_channels());
 
-        uint32_t core_page_start = start_page + pages_written;
-        uint32_t core_page_end = core_page_start + num_pages_per_core;
+    const uint32_t first_shard = start_page / pages_per_shard;
+    const uint32_t last_shard = (end_page + pages_per_shard - 1) / pages_per_shard;
 
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> bank_page_ranges;
+    for (uint32_t shard = first_shard; shard < last_shard; shard++) {
+        uint32_t bank_id = shard % num_dram_banks;
+        uint32_t shard_page_start = std::max(shard * pages_per_shard, start_page);
+        uint32_t shard_page_end = std::min(shard * pages_per_shard + pages_per_shard, end_page);
+
+        if (bank_page_ranges.find(bank_id) == bank_page_ranges.end()) {
+            bank_page_ranges[bank_id] = {shard_page_start, shard_page_end};
+        } else {
+            bank_page_ranges[bank_id].first = std::min(bank_page_ranges[bank_id].first, shard_page_start);
+            bank_page_ranges[bank_id].second = std::max(bank_page_ranges[bank_id].second, shard_page_end);
+        }
+    }
+
+    uint32_t i = 0;
+    for (const auto& [bank_id, range] : bank_page_ranges) {
+        if (i < cores.size()) {
+            page_starts[i] = range.first;
+            page_ends[i] = range.second;
+
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
+            runtime_args[0] = dst_buffer->address();
+            runtime_args[1] = page_starts[i];
+            runtime_args[2] = page_ends[i];
+        }
+        i++;
+    }
+
+    // Zero out remaining cores if fewer banks needed this time
+    for (; i < cores.size(); i++) {
+        page_starts[i] = 0;
+        page_ends[i] = 0;
+        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
         runtime_args[0] = dst_buffer->address();
-        runtime_args[1] = core_page_start;
-        runtime_args[2] = core_page_end;
-
-        pages_written += num_pages_per_core;
+        runtime_args[1] = 0;
+        runtime_args[2] = 0;
     }
 }
 

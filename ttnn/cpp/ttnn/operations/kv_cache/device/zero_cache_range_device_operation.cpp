@@ -14,9 +14,8 @@ void ZeroCacheRangeOperation::validate_on_program_cache_miss(
     TT_FATAL(cache_tensor.buffer() != nullptr, "Cache tensor must be allocated in a buffer on device!");
     TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor must be in TILE layout!");
     TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
-        "Cache tensor memory layout must be INTERLEAVED or ND_SHARDED but got {}",
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
+        "Cache tensor memory layout must be ND_SHARDED but got {}",
         cache_tensor.memory_config().memory_layout());
     TT_FATAL(
         cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
