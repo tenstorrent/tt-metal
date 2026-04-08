@@ -168,6 +168,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             shared_variables.program_artifacts.num_workers_per_direction,
             shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
             shared_variables.program_artifacts.num_cores_per_link,
+            shared_variables.program_artifacts.normalized_dim,
             shared_variables.barrier_semaphore,
             shared_variables.multidevice_semaphores,
             tensor_args.input_tensor,

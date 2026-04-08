@@ -71,16 +71,12 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // opposite_core_x (unused by dim0 kernel)
-    arg_idx++;  // opposite_core_y (unused by dim0 kernel)
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // start_pages_read_in_row (unused by dim0 kernel)
-    arg_idx++;  // start_row_offset (unused by dim 0 kernel)
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 

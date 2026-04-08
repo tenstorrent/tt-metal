@@ -37,15 +37,11 @@ void kernel_main() {
     // Load the input tensor spec
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    arg_idx++;  // output_tensor_address (unused by dim0 kernel)
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // out2_ready_sem (unused by dim0 kernel)
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // start_pages_read_in_row (unused by dim0 kernel)
-    arg_idx++;  // start_row_offset (unused by dim0 kernel)
 
     constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
