@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -39,7 +39,7 @@ def random_weights(config_only):
     """
     config = config_only
 
-    torch.manual_seed(42)
+    torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
 
     # Use proper initialization scale from config (typically 0.02)
     std = config.initializer_range
@@ -87,8 +87,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -96,8 +96,12 @@ def random_weights(config_only):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
     ],
+    ids=["line", "ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -116,6 +120,7 @@ def test_mla(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    device_params,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -137,11 +142,15 @@ def test_mla(
     else:
         config, weights = request.getfixturevalue("random_weights")
 
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+
     production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
+
     if scale_down_sl:
         seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
 
@@ -170,6 +179,41 @@ def test_mla(
 
     # Create TT MLA
     logger.info("Creating TT MLA...")
+
+    # hack in num_layers into batch size, so they are contiguous in memory
+    num_layers = 1
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    seq_len_local = seq_len // mesh_shape[sp_axis]
+    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+
+    BH_NUM_DRAM_BANKS = 8
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    grid = ttnn.CoreRangeSet(core_ranges)
+
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32  # this is a predefined constant
+
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+
+    tt_kvpe_cache = ttnn.from_torch(
+        torch_kvpe_cache,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     mla_tt = ttMLA(
         config,
         weights,
@@ -179,6 +223,7 @@ def test_mla(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=is_balanced,
+        topology=topology,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -216,6 +261,9 @@ def test_mla(
             logger.info(f"✓ Loaded cached reference results")
             logger.info(f"  Output shape: {ref_output.shape}")
         else:
+            assert not (
+                (is_ci_env or is_ci_v2_env) and not scale_down_sl
+            ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
             # Create position IDs
             position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
@@ -254,22 +302,30 @@ def test_mla(
     if is_balanced:
         tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
 
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
     tt_hidden_states = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     tt_output = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
+        kvpe_cache=tt_kvpe_cache,
     )
+
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
 
     if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
-            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape)
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
 
         if is_balanced:
@@ -284,26 +340,40 @@ def test_mla(
 
         # Read back KVPE cache from device
         # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
-        tt_kvpe_cache = ttnn.to_torch(
-            mla_tt.kvpe_cache,
+        tt_kvpe_cache_torch = ttnn.to_torch(
+            tt_kvpe_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
-        tt_kvpe_cache = tt_kvpe_cache[:, :1, :, :]
+        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:, :1, :, :]
+
+        logger.info("Starting synchronize call")
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
 
         if is_balanced:
-            tt_kvpe_cache = reverse_reorder_tensor_chunks(tt_kvpe_cache, chunk_order, seq_dim=2)
+            tt_kvpe_cache_torch = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch, chunk_order, seq_dim=2)
 
         # Check PCC separately for KV (latent) and PE (rope) parts
         kv_lora_rank = config.kv_lora_rank
         _, kv_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache[:, :, :, :kv_lora_rank], 0.99
+            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache_torch[:, :, :, :kv_lora_rank], 0.99
         )
         logger.info(f"KVPE cache KV part PCC is {kv_pcc_message}")
         _, pe_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache[:, :, :, kv_lora_rank:], 0.99
+            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
     else:
+        logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")

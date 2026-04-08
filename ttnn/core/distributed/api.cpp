@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,18 +73,15 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     }
-    if (is_device_tensor(tensor)) {
+    if (is_device_tensor(tensor) && tensor.is_allocated()) {
         const auto& device_storage = tensor.device_storage();
-        if (const auto& mesh_buffer = device_storage.get_mesh_buffer_leak_ownership(); mesh_buffer != nullptr) {
-            std::vector<ttnn::Tensor> tensors;
-            tensors.reserve(device_storage.coords.size());
-            for (const auto& coord : device_storage.coords) {
-                DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
-            }
-            return tensors;
+        std::vector<ttnn::Tensor> tensors;
+        tensors.reserve(device_storage.get_coords().size());
+        for (const auto& coord : device_storage.get_coords()) {
+            DeviceStorage shard_storage(device_storage, {coord});
+            tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
         }
-        return {tensor};
+        return tensors;
     }
     return {tensor};
 }
@@ -112,38 +109,33 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {
+    // Validations
     TT_FATAL(!tensor_shards.empty(), "At least one tensor shard must be provided");
-    const auto& reference_shard = tensor_shards.at(0);
-    for (const auto& shard : tensor_shards) {
-        TT_FATAL(shard.storage_type() == StorageType::DEVICE, "All tensor shards must be on device");
-        TT_FATAL(
-            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
-    }
-
-    auto mesh_buffer = reference_shard.device_storage().get_mesh_buffer_leak_ownership();
+    const auto& reference_shard = tensor_shards.front();
     TT_FATAL(
-        mesh_buffer != nullptr,
-        "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
-    std::vector<MeshCoordinate> coords;
-    for (const auto& shard : tensor_shards) {
-        const auto& shard_storage = shard.device_storage();
-        TT_FATAL(
-            shard_storage.get_mesh_buffer_leak_ownership() == mesh_buffer,
-            "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
-            "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
-        for (const auto& coord : shard_storage.coords) {
-            coords.push_back(coord);
-        }
-    }
-    std::sort(coords.begin(), coords.end());
-    auto duplicate =
-        std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
-    TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
+        std::all_of(
+            tensor_shards.begin(),
+            tensor_shards.end(),
+            [](const auto& shard) { return shard.storage_type() == StorageType::DEVICE; }),
+        "All tensor shards must be on device");
+    TT_FATAL(
+        std::all_of(
+            tensor_shards.begin(),
+            tensor_shards.end(),
+            [&](const auto& shard) { return shard.tensor_spec() == reference_shard.tensor_spec(); }),
+        "All tensor shards must have the same spec");
 
+    // Combine the storages
+    std::vector<std::reference_wrapper<const DeviceStorage>> device_storages;
+    device_storages.reserve(tensor_shards.size());
+    for (const auto& shard : tensor_shards) {
+        device_storages.push_back(std::cref(shard.device_storage()));
+    }
+
+    auto combined_storage = DeviceStorage::combine_device_storages(device_storages);
     TensorTopology topology =
         TensorTopology::create_sharded_tensor_topology(MeshShape(tensor_shards.size()), shard_dim);
-    return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), std::move(topology));
+    return Tensor(std::move(combined_storage), reference_shard.tensor_spec(), std::move(topology));
 }
 
 }  // namespace ttnn::distributed

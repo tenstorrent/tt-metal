@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include <cstdint>
 
 void kernel_main() {
@@ -23,7 +23,7 @@ void kernel_main() {
     // circular buffers are created with the same tile size as the DRAM
     // buffers. (This is most of the cases)
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
-    // DPRINT_DATA0(DPRINT << "tile_size_bytes " <<  tile_size_bytes << ENDL());
+    // DEVICE_PRINT_DATA0("tile_size_bytes {}\n", tile_size_bytes);
     //  Create address generators for the input buffers. This is much faster
     //  then doing plain DRAM reads.
     //  Setting the page size to be tile_size_bytes works because we set it up
@@ -56,9 +56,9 @@ void kernel_main() {
         // NOTE: Since circular buffers are backed by SRAM, we can actually
         // access them by casting the address to a pointer. This is not helpful
         // in most cases as the CPU is quite slow compared to the tensor/simd
-        // engines. But useful for debugging. uint16_t* ptr =
-        // (uint16_t*)cb_in0_addr; DPRINT << "cb_in0_addr: " << ptr << " " <<
-        // *ptr;
+        // engines. But useful for debugging.
+        // uint16_t* ptr = (uint16_t*)cb_in0_addr;
+        // DEVICE_PRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
         cb_push_back(cb_in0, 1);

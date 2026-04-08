@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -197,6 +197,7 @@ from ttnn._ttnn.hd_socket import (
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    DumpTensorMode,
     uint8,
     uint16,
     int32,
@@ -224,7 +225,9 @@ from ttnn.types import (
     CoreRange,
     CoreCoord,
     corerange_to_cores,
+    get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,

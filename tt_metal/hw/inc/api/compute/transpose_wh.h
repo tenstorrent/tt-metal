@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,9 @@
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_transpose_dest_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -32,26 +34,49 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
 
+#ifndef ARCH_QUASAR
     if (is_int32) {
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
+    } else {
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
+    }
+
+    if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+#else
+    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    UNPACK((llk_unpack_hw_configure(icb)));
+    UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+#endif
 #endif
 
+#ifndef ARCH_QUASAR
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+#else
+    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_init(ocb)));
+#endif
 }
 
 /**
@@ -61,10 +86,13 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t src_format = get_operand_src_format(icb);
-    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    if (is_int32) {
+#ifndef ARCH_QUASAR
+    if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
@@ -73,6 +101,11 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
+#else
+    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+#endif
 
 #endif
 }
@@ -97,10 +130,13 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
 // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t src_format = get_operand_src_format(icb);
-    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    if (is_int32) {
+#ifndef ARCH_QUASAR
+    if (enable_unpack_to_dest) {
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
@@ -110,6 +146,11 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
     }
+#else
+    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    UNPACK((llk_unpack_A(icb, itile)));
+    MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
+#endif
 #endif
 }
 

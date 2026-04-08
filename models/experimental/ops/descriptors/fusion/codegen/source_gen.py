@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@ import ttnn
 from models.experimental.ops.descriptors.fusion.cb_allocator import PhaseInfo
 from models.experimental.ops.descriptors.fusion.common import MultiBarrierSpec
 from models.experimental.ops.descriptors.fusion.codegen.cpp_parser import (
-    extract_kernel_body,
     inline_local_includes,
     collect_includes,
     collect_defines,
@@ -44,7 +43,7 @@ _ARRAY_INCLUDE = "#include <array>"
 def _spdx_header() -> List[str]:
     """Return SPDX license header lines."""
     return [
-        f"// SPDX-FileCopyrightText: \u00a9 {datetime.date.today().year} Tenstorrent AI ULC",
+        f"// SPDX-FileCopyrightText: \u00a9 {datetime.date.today().year} Tenstorrent USA, Inc.",
         "//",
         "// SPDX-License-Identifier: Apache-2.0",
     ]
@@ -81,118 +80,9 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
     )
 
 
-_KERNEL_MAIN_SEARCH_RE = re.compile(r"\b(?:ALWI\s+)?void\s+kernel_main\s*\(")
-_SKIP_LINE_PREFIXES = ("#include", "#define", "#pragma", "#undef")
-_SKIP_COMMENT_SUBSTRINGS = ("SPDX-FileCopyrightText", "SPDX-License-Identifier")
-
-
-def _extract_pre_main_text(source: str) -> str:
-    """Extract pre-main code from source, excluding preprocessor directives.
-
-    Returns everything before ``kernel_main()`` that is not a preprocessor
-    directive line (``#include``, ``#define``, ``#pragma``, ``#undef``).
-    Bare comment-only lines (just ``//``) are also stripped.
-    """
-    match = _KERNEL_MAIN_SEARCH_RE.search(source)
-    pre_main_text = source[: match.start()] if match else source
-
-    lines = []
-    for line in pre_main_text.split("\n"):
-        stripped = line.strip()
-        if any(stripped.startswith(p) for p in _SKIP_LINE_PREFIXES):
-            continue
-        if any(sub in stripped for sub in _SKIP_COMMENT_SUBSTRINGS):
-            continue
-        # Skip bare comment lines (just "//" with no content)
-        if stripped == "//":
-            continue
-        lines.append(line)
-
-    # Collapse consecutive blank lines into a single blank line
-    result = "\n".join(lines).strip()
-    result = re.sub(r"\n{3,}", "\n\n", result)
-    return result
-
-
-def _dedent_ignoring_column_zero(text: str) -> str:
-    """Dedent text ignoring preprocessor directives and comment lines at column 0."""
-    lines = text.split("\n")
-
-    def _is_non_code(stripped: str) -> bool:
-        """Return True for lines that should not contribute to min indent."""
-        # Preprocessor directives, comments, and block-comment continuations
-        return stripped.startswith(("#", "//", "/*", "*"))
-
-    # Find minimum indent of code lines
-    min_indent = None
-    for line in lines:
-        stripped = line.lstrip()
-        if not stripped or _is_non_code(stripped):
-            continue
-        indent = len(line) - len(stripped)
-        if min_indent is None or indent < min_indent:
-            min_indent = indent
-
-    if not min_indent:
-        return text
-
-    # Strip min_indent spaces from indented lines, leave others untouched
-    result = []
-    for line in lines:
-        if not line.strip():
-            result.append(line)
-        else:
-            indent = len(line) - len(line.lstrip())
-            if indent >= min_indent:
-                result.append(line[min_indent:])
-            else:
-                result.append(line)
-    return "\n".join(result)
-
-
-def _extract_phase_pre_main(
-    sources_with_indices: List[Tuple[int, str]],
-    phase_headers: Dict[int, List[Tuple[str, str]]],
-) -> Tuple[List[str], Dict[int, str]]:
-    """Extract pre-main text: header content -> file scope, original source -> phase scope."""
-    # File scope: deduplicated header content by resolved path
-    header_path_seen: Set[str] = set()
-    file_scope_blocks: List[str] = []
-    for phase_idx, _ in sources_with_indices:
-        for resolved_path, content in phase_headers.get(phase_idx, []):
-            if resolved_path not in header_path_seen:
-                header_path_seen.add(resolved_path)
-                content_stripped = content.strip()
-                if content_stripped:
-                    file_scope_blocks.append(content_stripped)
-
-    # Phase scope: original source pre-main minus preprocessor directives
-    phase_pre_main: Dict[int, str] = {}
-    for phase_idx, source in sources_with_indices:
-        phase_pre_main[phase_idx] = _extract_pre_main_text(source)
-
-    return file_scope_blocks, phase_pre_main
-
-
 # =============================================================================
 # Source Transformations for Phase N>0
 # =============================================================================
-
-
-def _prefix_named_args_in_source(source: str, phase_idx: int) -> str:
-    """Replace get_named_compile_time_arg_val("X") with phase-prefixed version."""
-    if phase_idx == 0:
-        return source
-
-    def replace_named_arg(match):
-        name = match.group(1)
-        return f'get_named_compile_time_arg_val("phase_{phase_idx}_{name}")'
-
-    return re.sub(
-        r'get_named_compile_time_arg_val\("([^"]+)"\)',
-        replace_named_arg,
-        source,
-    )
 
 
 def _offset_compile_time_args_in_source(source: str, phase_idx: int, ct_arg_offset: int) -> str:
@@ -295,94 +185,6 @@ def _emit_common_rt_arg_undef() -> List[str]:
     return ["#undef get_common_arg_val", "#undef get_common_arg_addr"]
 
 
-def _transform_phase_source(
-    source: str,
-    phase_idx: int,
-    ct_arg_offset: int = 0,
-) -> str:
-    """Apply compile-time arg transformations to a phase's source.
-
-    Transforms applied:
-      1. Named CT arg prefixing (``get_named_compile_time_arg_val("X")``
-         -> ``get_named_compile_time_arg_val("phase_N_X")``).
-      2. Positional CT arg offsetting (``get_compile_time_arg_val(N)``
-         -> ``get_compile_time_arg_val(N + offset)``).
-
-    Runtime arg offsetting is handled by ``#define``/``#undef`` redirect
-    of ``get_arg_val`` (see ``_emit_rt_arg_define``).  Name isolation
-    is handled by C++ namespace wrapping — no prefixing needed.
-    """
-    source = _prefix_named_args_in_source(source, phase_idx)
-    source = _offset_compile_time_args_in_source(source, phase_idx, ct_arg_offset)
-    return source
-
-
-def _generate_phase_namespace(
-    phase_idx: int,
-    pre_main: str,
-    kernel_source: str,
-    defines: List[Tuple[str, str]],
-    ct_arg_offset: int,
-    phase_name: str = "",
-) -> List[str]:
-    """Generate ``#define`` -> ``namespace phase_N { pre_main + void run() { body } }`` -> ``#undef``.
-
-    Extracts the original ``kernel_main()`` body into ``run()`` and applies
-    compile-time arg transformations (positional offsetting + named prefixing).
-    """
-    ns_name = f"phase_{phase_idx}"
-    lines: List[str] = []
-
-    label = f"Phase {phase_idx}: {phase_name}" if phase_name else f"Phase {phase_idx}"
-    lines.append("// " + "=" * 76)
-    lines.append(f"// {label}")
-    lines.append("// " + "=" * 76)
-
-    # Per-phase defines (outside namespace — preprocessor is namespace-unaware)
-    if defines:
-        lines.extend(_emit_define_lines(defines))
-
-    # RT arg redirect (all phases, including phase 0)
-    lines.extend(_emit_rt_arg_define(phase_idx))
-
-    # Open namespace
-    lines.append(f"namespace {ns_name} {{")
-    lines.append("")
-
-    # Pre-main code (transformed for CT arg offsets + named arg prefixes)
-    if pre_main.strip():
-        transformed_pre_main = _transform_phase_source(pre_main, phase_idx, ct_arg_offset)
-        lines.append(_dedent_ignoring_column_zero(transformed_pre_main).strip())
-        lines.append("")
-
-    # Transform the kernel body source (CT arg offsets + named arg prefixes)
-    body = extract_kernel_body(kernel_source)
-    transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
-    dedented = _dedent_ignoring_column_zero(transformed)
-
-    lines.append("__attribute__((noinline)) void run() {")
-    for line in dedented.split("\n"):
-        if line.strip():
-            lines.append(f"    {line}")
-        else:
-            lines.append("")
-    lines.append("}")
-
-    # Close namespace
-    lines.append("")
-    lines.append(f"}} // namespace {ns_name}")
-
-    # Undef RT arg redirect
-    lines.extend(_emit_rt_arg_undef())
-
-    # Undef per-phase defines
-    if defines:
-        lines.extend(_emit_undef_lines(defines))
-
-    lines.append("")
-    return lines
-
-
 # =============================================================================
 # Preprocessor-Based Phase Generation
 # =============================================================================
@@ -433,22 +235,6 @@ def _clean_phase_source(source: str) -> str:
     """Remove SPDX comment blocks and collapse consecutive blank lines."""
     source = _SPDX_BLOCK_RE.sub("", source)
     return re.sub(r"\n{3,}", "\n\n", source).strip()
-
-
-def _offset_tensor_accessor_in_source(source: str, ct_arg_offset: int) -> str:
-    """Offset ``TensorAccessorArgs<N>`` template parameters.
-
-    ``TensorAccessorArgs``'s header expands ``get_compile_time_arg_val``
-    at include time (before our phase-scoped ``#define`` redirects), so
-    the template parameter must be offset directly via regex.
-    """
-    if ct_arg_offset == 0:
-        return source
-
-    def _offset(match: re.Match) -> str:
-        return f"TensorAccessorArgs<{int(match.group(1)) + ct_arg_offset}>"
-
-    return re.sub(r"TensorAccessorArgs<(\d+)>", _offset, source)
 
 
 def _generate_phase_block(

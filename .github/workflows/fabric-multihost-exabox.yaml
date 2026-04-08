@@ -2,7 +2,7 @@ name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    - cron: "0 9 * * 1-5" # Runs weekdays at 10:00 AM GMT+1 (9:00 UTC)
+    - cron: "0 7 * * 1-5" # Runs weekdays at 8:00 AM GMT+1 (7:00 UTC/9:00 CEST)
   workflow_dispatch:
 
 run-name: Fabric Test on a BH Quad
@@ -54,12 +54,13 @@ jobs:
         uses: ./.github/actions/ttop-create-allocation
         with:
           allocationName: ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
           spec: |
             allocationType: MGD
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
-              - exabox.tenstorrent.com/quad-id
+              - exabox.tenstorrent.com/quad
             mgd: |-
               ${{ steps.mgd.outputs.mgd }}
 
@@ -68,6 +69,7 @@ jobs:
         id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
 
   reset:
     name: Reset cards
@@ -86,13 +88,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
           environmentName:  ci-${{ github.run_id }}-reset
           allocationName:  ci-${{ github.run_id }}-metal
-          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          allocationNamespace: ttop-ci
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
 
       # We use setup-tt-run just to setup MPI, MGD can be dummy
       - name: Setup tt-run
@@ -115,13 +128,14 @@ jobs:
         timeout-minutes: 10
         run: |
           mpirun --tag-output --pernode \
-            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
+            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
 
       - name: Delete environment
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-reset
+          namespace: ttop-ci
 
   run:
     name: Run test
@@ -142,13 +156,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
           environmentName:  ci-${{ github.run_id }}-metal
           allocationName:  ci-${{ github.run_id }}-metal
-          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          allocationNamespace: ttop-ci
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
           sharedVolumeEnabled: 'true'
 
       - name: Setup tt-run
@@ -169,7 +194,7 @@ jobs:
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: ${{ needs.wheel-artifact.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: /ci/artifacts
 
       - name: Unpack artifacts & install
@@ -188,10 +213,10 @@ jobs:
         run: |
             mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
 
-      - name: Run Fabric Test
+      - name: Run System Health Check
+        timeout-minutes: 10
         run: |
-          tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
+            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
 
       - name: Run Pipeline Test
         timeout-minutes: 30
@@ -210,6 +235,12 @@ jobs:
             --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
             /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
 
+      - name: Run Fabric Test
+        timeout-minutes: 20
+        run: |
+          tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
+            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+
   cleanup:
     name: Cleanup
     needs: [run, reset, create-allocation]
@@ -225,14 +256,17 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
 
       # Redundantly try to drop reset env - reset job might have failed
       - name: Delete reset environment
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-reset
+          namespace: ttop-ci
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation
         with:
           allocationName:  ci-${{ github.run_id }}-metal
+          namespace: ttop-ci

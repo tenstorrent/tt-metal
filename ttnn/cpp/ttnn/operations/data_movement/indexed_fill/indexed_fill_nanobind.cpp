@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,14 +35,13 @@ void bind_indexed_fill(nb::module_& mod) {
     ttnn::bind_function<"indexed_fill">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::indexed_fill,
-            nb::arg("batch_id").noconvert(),
-            nb::arg("input_tensor_a").noconvert(),
-            nb::arg("input_tensor_b").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dim") = 0));
+        &ttnn::indexed_fill,
+        nb::arg("batch_id").noconvert(),
+        nb::arg("input_tensor_a").noconvert(),
+        nb::arg("input_tensor_b").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dim") = 0);
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,6 +60,24 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
     }
 }
 
+int64_t get_group_norm_cores_across_channel(
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    const ttnn::CoreGrid& core_grid,
+    const std::optional<tt::tt_metal::ShardOrientation>& shard_orientation) {
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::TensorMemoryLayout;
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (shard_orientation == ShardOrientation::ROW_MAJOR) {
+            return static_cast<int64_t>(core_grid.x);
+        }
+        return static_cast<int64_t>(core_grid.y);
+    }
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        return 1;
+    }
+    return static_cast<int64_t>(core_grid.x * core_grid.y);
+}
+
 }  // namespace
 
 namespace ttnn::operations::normalization {
@@ -68,7 +86,7 @@ ttnn::Tensor get_mask_tensor(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& input_mask,
     const std::optional<ttnn::Tensor>& negative_mask,
-    std::optional<CoreGrid> core_grid,
+    const CoreGrid& core_grid,
     const int num_groups) {
     ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
     if (!input_mask.has_value() and !negative_mask.has_value()) {
@@ -76,25 +94,22 @@ ttnn::Tensor get_mask_tensor(
         int64_t num_channel = input_tensor.padded_shape()[-1];
         int64_t num_cores_across_channel;
         if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
-            auto mem_layout = input_tensor.memory_config().memory_layout();
-            if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-                num_cores_across_channel = 1;
-            } else if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED && core_grid.has_value()) {
-                auto shard_spec = input_tensor.memory_config().shard_spec();
-                bool is_row_major = shard_spec.has_value() && shard_spec->orientation == ShardOrientation::ROW_MAJOR;
-                num_cores_across_channel = is_row_major ? core_grid.value().x : core_grid.value().y;
-            } else {
-                num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
+            const auto mem_layout = input_tensor.memory_config().memory_layout();
+            const auto shard_spec = input_tensor.memory_config().shard_spec();
+            std::optional<ShardOrientation> shard_orientation = std::nullopt;
+            if (shard_spec.has_value()) {
+                shard_orientation = shard_spec->orientation;
             }
+            num_cores_across_channel = get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
         } else {
             uint32_t num_virtual_cols =
-                compute_num_virtual_cols(core_grid.value().x, num_groups, static_cast<uint32_t>(num_channel));
+                compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
             TT_FATAL(
                 num_virtual_cols > 0,
                 "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
                 "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
                 "and num_groups % nvc == 0.",
-                core_grid.value().x,
+                core_grid.x,
                 num_groups,
                 num_channel);
             num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
@@ -151,10 +166,6 @@ Tensor group_norm(
     }
 
     TT_FATAL(
-        core_grid.has_value(),
-        "Automatic grid size determination is not supported. Please specify the grid size explicitly.");
-
-    TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
@@ -202,6 +213,39 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
+    if (!core_grid.has_value()) {
+        if (input_tensor.is_sharded()) {
+            const auto& shard_spec_opt = input_tensor.shard_spec();
+            TT_FATAL(
+                shard_spec_opt.has_value(),
+                "group_norm: Sharded input must have a shard spec when core_grid is not provided.");
+            const auto mem_layout = input_tensor.memory_config().memory_layout();
+            const bool is_height_sharded = mem_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+            const bool is_row_major = is_height_sharded || (shard_spec_opt->orientation == ShardOrientation::ROW_MAJOR);
+            const auto gn_sharded =
+                ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
+                    input_tensor.device()->compute_with_storage_grid_size(),
+                    input_padded_shape[3],
+                    num_groups,
+                    nhw,
+                    is_height_sharded,
+                    is_row_major);
+            core_grid = gn_sharded.core_grid;
+        } else {
+            const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
+            auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
+                dev_grid.x, dev_grid.y, input_padded_shape[3], num_groups, nhw);
+            TT_FATAL(
+                dram_grid.has_value(),
+                "group_norm: Could not determine a valid DRAM core grid for channels={}, num_groups={}, nhw={}. "
+                "Specify core_grid explicitly or adjust configuration.",
+                input_padded_shape[3],
+                num_groups,
+                nhw);
+            core_grid = dram_grid.value();
+        }
+    }
+
     // For non-sharded DRAM tensors, validate that the requested core grid is not too
     // large for the input spatial dimensions. The constraint is Ht >= num_virtual_rows,
     // where num_virtual_rows = (grid_x / num_virtual_cols) * grid_y and Ht = NHW / TILE_SIZE.
@@ -213,8 +257,8 @@ Tensor group_norm(
     }
 
     // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask =
-        operations::normalization::get_mask_tensor(input_tensor, input_mask, negative_mask, core_grid, num_groups);
+    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
+        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups);
 
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {

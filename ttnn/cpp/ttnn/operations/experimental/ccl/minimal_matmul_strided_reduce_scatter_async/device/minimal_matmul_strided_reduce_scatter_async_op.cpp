@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,8 +101,11 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             ta_shape[-2],
             ta_shape[-1]);
         TT_FATAL(
-            tb_shape[-2] == 1 && tb_shape[-1] == N_rs,
-            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}], got [{}, {}]",
+            (tb_shape[-2] == 1 || tb_shape[-2] == M) && tb_shape[-1] == N_rs,
+            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or full [M={}, N/ring_size={}], got "
+            "[{}, {}]",
+            N_rs,
+            M,
             N_rs,
             tb_shape[-2],
             tb_shape[-1]);

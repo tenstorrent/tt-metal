@@ -1,0 +1,65 @@
+repos:
+- repo: local
+  hooks:
+    - id: fix-cstdint
+      name: fix std::uint*_t, convert uint to std::uint32_t, and add cstdint include
+      entry: python3 infra/fix_cstdint.py
+      language: system
+      args: ["--fix", "--quiet"]
+      files: \.(cpp|cc|h|hpp|py)$
+      exclude: tensix\.h$
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v19.1.7
+  hooks:
+  - id: clang-format
+    args: ["-style=file"]
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+    -  id: autoflake
+       args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+- repo: https://github.com/PyCQA/isort
+  rev: 6.1.0
+  hooks:
+    - id: isort
+      language: python
+      args: ["--settings-path=pyproject.toml"]
+- repo: https://github.com/psf/black-pre-commit-mirror
+  rev: 25.9.0
+  hooks:
+    - id: black
+      language_version: python3
+      args: ["--target-version", "py310"]
+- repo: https://github.com/PyCQA/pylint
+  rev: v3.0.0  # Use the latest version
+  hooks:
+    - id: pylint
+      args: [--disable=all, --enable=wildcard-import]
+- repo: https://github.com/adrienverge/yamllint
+  rev: v1.35.1
+  hooks:
+  - id: yamllint
+    exclude: ^(?!\.github/).* # Only include files in .github/
+- repo: local
+  hooks:
+    - id: validate-copyright-headers
+      name: validate copyright headers
+      entry: python3 infra/validate_copyright.py
+      language: system
+      args: ["--quiet", "--fix"]
+      files: \.(cpp|cc|h|hpp|py|ld)$
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-added-large-files
+      args: ["--maxkb=500"]
+    - id: check-merge-conflict
+    - id: check-executables-have-shebangs
+    - id: check-docstring-first
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.4.1
+  hooks:
+    - id: codespell
+      args: ["-I", ".codespellignore", "-w"]

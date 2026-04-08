@@ -1,0 +1,489 @@
+name: "[internal] ttnn sweep validation impl"
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        required: true
+        type: string
+      scope-targets:
+        required: true
+        type: string
+      models:
+        required: true
+        type: string
+      trace-ids:
+        required: true
+        type: string
+      caller-id:
+        required: false
+        type: string
+      allow-partial-hash-changes:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: Ubuntu 22.04
+      enable-lto: false
+
+  prepare-validation-inputs:
+    name: Prepare validation inputs
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    outputs:
+      master-json-artifact-name: ${{ steps.set-artifact-names.outputs.master-json-artifact-name }}
+      preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Display validation request
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
+          MODELS: ${{ inputs.models }}
+          TRACE_IDS: ${{ inputs.trace-ids }}
+          CALLER_ID: ${{ inputs.caller-id }}
+          ALLOW_PARTIAL_HASH_CHANGES: ${{ inputs.allow-partial-hash-changes }}
+        run: |
+          echo "========================================"
+          echo " Sweep Validation"
+          echo "========================================"
+          echo "  Branch:        ${GITHUB_REF_NAME}"
+          echo "  Registry:      ${MANIFEST_PATH}"
+          echo "  Scope target:  ${SCOPE_TARGET}"
+          echo "  Models:        ${MODELS}"
+          echo "  Trace IDs:     ${TRACE_IDS}"
+          echo "  Allow partial: ${ALLOW_PARTIAL_HASH_CHANGES}"
+          if [ -n "${CALLER_ID}" ]; then
+            echo "  Caller ID:     ${CALLER_ID}"
+          fi
+          echo "========================================"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml psycopg2-binary tqdm
+
+      - name: Set artifact names
+        id: set-artifact-names
+        run: |
+          echo "master-json-artifact-name=ttnn-operations-master-json" >> "$GITHUB_OUTPUT"
+          echo "preflight-artifact-name=validation-preflight" >> "$GITHUB_OUTPUT"
+
+      - name: Generate JSON from database via trace selection registry
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            "$MANIFEST_PATH" \
+            model_tracer/traced_operations/ttnn_operations_master.json
+
+      - name: Run config hash preflight
+        run: |
+          python3 model_tracer/config_hash_preflight.py \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            ${{ inputs.allow-partial-hash-changes && '--allow-partial' || '' }} \
+            --report validation_artifacts/config_hash_preflight.md
+
+      - name: Publish preflight to summary
+        run: |
+          if [[ -f validation_artifacts/config_hash_preflight.md ]]; then
+            cat validation_artifacts/config_hash_preflight.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload master JSON artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ttnn-operations-master-json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+      - name: Upload preflight artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: validation-preflight
+          path: validation_artifacts/config_hash_preflight.md
+          retention-days: 1
+
+  generate-sweeps:
+    name: Generate validation sweeps
+    needs: [build-artifact, prepare-validation-inputs]
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Download master JSON artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
+          path: /work/model_tracer/traced_operations
+
+      # Sweep generation here differs from ttnn-run-sweeps.yaml, where the sweep mode
+      # is either "model traced" or "lead models"—that workflow runs one sweep mode per job
+      # and uploads only one vectors_export/ artifact. In this workflow, inputs.scope-targets
+      # can be "all", so both model_traced and lead_models passes may run in a single job.
+      # sweeps_parameter_generator writes only to vectors_export/, so after each pass, its
+      # output is copied to validation_vectors/<scope>/ for use in compute_validation_sweep_matrix.py
+      # (--vectors-root expects those subdirs) and for producing per-scope artifacts
+      # (sweeps-vectors-model_traced vs lead_models). We always pass --master-trace to ensure
+      # generated vectors match ttnn_operations_master.json.
+      - name: Generate sweep vectors
+        env:
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
+        run: |
+          EXPORT_DIR="tests/sweep_framework/vectors_export"
+          SCOPED_VECTORS_DIR="tests/sweep_framework/validation_vectors"
+
+          rm -rf "$EXPORT_DIR" "$SCOPED_VECTORS_DIR"
+          mkdir -p "$EXPORT_DIR" "$SCOPED_VECTORS_DIR"
+
+          generate_scope_vectors() {
+            local scope_name="$1"
+            shift
+
+            rm -rf "$EXPORT_DIR"
+            mkdir -p "$EXPORT_DIR"
+
+            python3 tests/sweep_framework/sweeps_parameter_generator.py "$@"
+
+            mkdir -p "$SCOPED_VECTORS_DIR/$scope_name"
+            cp -a "$EXPORT_DIR"/. "$SCOPED_VECTORS_DIR/$scope_name"/
+          }
+
+          if [[ "${SCOPE_TARGET}" == "model_traced" || "${SCOPE_TARGET}" == "all" ]]; then
+            generate_scope_vectors \
+              model_traced \
+              --model-traced all \
+              --suite-name model_traced \
+              --group-by hw \
+              --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
+              --tag ci-validate-model-traced
+          fi
+
+          if [[ "${SCOPE_TARGET}" == "lead_models" || "${SCOPE_TARGET}" == "all" ]]; then
+            generate_scope_vectors \
+              lead_models \
+              --model-traced lead \
+              --suite-name model_traced \
+              --group-by hw \
+              --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
+              --tag ci-validate-lead-models
+          fi
+
+      - name: Upload model traced sweep vectors
+        if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: sweeps-vectors-model_traced
+          path: /work/tests/sweep_framework/validation_vectors/model_traced/
+          retention-days: 1
+
+      - name: Upload lead models sweep vectors
+        if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: sweeps-vectors-lead_models
+          path: /work/tests/sweep_framework/validation_vectors/lead_models/
+          retention-days: 1
+
+  compute-sweep-matrix:
+    name: Compute validation sweep matrix
+    # Validation stays hardware-grouped, but routing decisions come from the shared
+    # CI policy helpers in matrix_runner_config.py rather than workflow-local logic.
+    needs: [prepare-validation-inputs, generate-sweeps]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Download master JSON artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
+          path: /tmp/validation-master-json
+
+      - name: Download model traced sweep vectors
+        if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: sweeps-vectors-model_traced
+          path: /tmp/validation-vectors/model_traced
+
+      - name: Download lead models sweep vectors
+        if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: sweeps-vectors-lead_models
+          path: /tmp/validation-vectors/lead_models
+
+      - name: Compute execution matrix
+        id: set-matrix
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+          MASTER_JSON_PATH: /tmp/validation-master-json/ttnn_operations_master.json
+          VECTORS_ROOT: /tmp/validation-vectors
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
+        run: |
+          matrix_json=$(
+            python3 tests/sweep_framework/framework/compute_validation_sweep_matrix.py \
+              --manifest-path "$MANIFEST_PATH" \
+              --master-json-path "$MASTER_JSON_PATH" \
+              --vectors-root "$VECTORS_ROOT" \
+              --scope-target "$SCOPE_TARGET"
+          )
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+
+      - name: Show execution matrix
+        run: |
+          echo "::group::Validation execution matrix"
+          jq . tests/sweep_framework/framework/validation_matrix.json
+          echo "::endgroup::"
+
+  run-sweeps-with-tracer:
+    name: ${{ matrix.batch_display }}
+    needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.compute-sweep-matrix.outputs.matrix).include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
+        TEST_GROUP_NAME: ${{ matrix.test_group_name }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+        LEAD_MODELS_RUN: ${{ matrix.validation_scope == 'lead_models' && '1' || '0' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Download sweep vectors
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ matrix.vectors_artifact_name }}
+          path: /work/tests/sweep_framework/vectors_export
+
+      - name: Run sweeps with tracer
+        run: |
+          mkdir -p /work/tests/sweep_framework/results_export
+          mkdir -p /work/model_tracer/traced_operations
+          # Keep hardware-batch context in a sidecar file; the actual sweep trace JSON
+          # is produced by generic_ops_tracer.py and should remain in tracer format.
+          cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}_metadata.json
+          {
+            "validation_scope": "${{ matrix.validation_scope }}",
+            "trace_ids": ${{ toJSON(matrix.trace_ids) }},
+            "hardware_group": "${{ matrix.hardware_group }}",
+            "module_selector": "${{ matrix.module_selector }}",
+            "suite_name": "${{ matrix.suite_name }}",
+            "runner_label": "${{ matrix.runner_label }}",
+            "arch": "${{ matrix.arch }}"
+          }
+          EOF
+
+          python3 model_tracer/generic_ops_tracer.py \
+            tests/sweep_framework/sweeps_runner.py \
+            -o /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json \
+            -- \
+            --module-name "${{ matrix.module_selector }}" \
+            --suite-name "${{ matrix.suite_name }}" \
+            --vector-source vectors_export \
+            --result-dest results_export \
+            --main-proc-verbose
+
+      - name: Upload sweep traces
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: sweep-traces-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
+          path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json
+          retention-days: 7
+
+      - name: Upload sweep results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: sweeps-results-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 7
+
+  analyze-and-report:
+    name: Analyze validation results
+    needs: [prepare-validation-inputs, run-sweeps-with-tracer]
+    if: always() && needs.run-sweeps-with-tracer.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download master JSON artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
+          path: model_tracer/traced_operations
+
+      - name: Download sweep traces
+        uses: actions/download-artifact@v5
+        with:
+          pattern: sweep-traces-*
+          path: validation_traces
+          merge-multiple: true
+
+      - name: Download sweep results
+        uses: actions/download-artifact@v5
+        with:
+          pattern: sweeps-results-*
+          path: validation_results
+          merge-multiple: true
+
+      - name: Validate sweep traces
+        id: validate-traces
+        run: |
+          SWEEP_TRACES_DIR="validation_traces"
+
+          shopt -s nullglob
+          sweep_trace_files=("$SWEEP_TRACES_DIR"/sweep_trace_*.json)
+          if [[ ${#sweep_trace_files[@]} -eq 0 ]]; then
+            echo "ERROR: No sweep trace JSON files found in $SWEEP_TRACES_DIR" >&2
+            echo "validation_exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found ${#sweep_trace_files[@]} sweep trace file(s)"
+
+          set +e
+          python3 tests/sweep_framework/validate_sweep_trace.py \
+            --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
+            --sweep-trace "${sweep_trace_files[@]}" \
+            --output-report validation_summary.md
+          validation_exit_code=$?
+          set -e
+
+          echo "validation_exit_code=$validation_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Publish validation summary
+        if: always()
+        run: |
+          if [[ -f validation_summary.md ]]; then
+            cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat <<'EOF' > validation_summary.md
+          # Sweep Validation Summary
+
+          Validation did not produce a report file.
+          EOF
+            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          # Sweep Validation Summary
+
+          Validation did not produce a report file.
+          EOF
+          fi
+
+      - name: Fail job on validation mismatches
+        if: always() && steps.validate-traces.outputs.validation_exit_code != '0'
+        run: |
+          echo "::error::Sweep trace validation failed (exit code ${{ steps.validate-traces.outputs.validation_exit_code }})."
+          echo ""
+          echo "This means one or more of the following:"
+          echo "  - Sweep trace configs have argument diffs against the master trace"
+          echo "  - Coverage fell below the required threshold"
+          echo "  - No sweep trace files were found in the validation_traces directory"
+          echo ""
+          echo "Review the validation summary in the job summary tab or download the"
+          echo "validation-summary artifact for the full report."
+          exit 1
+
+      - name: Upload validation summary
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: validation-summary
+          path: validation_summary.md
+          retention-days: 7

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,15 +49,13 @@ void pack_first_op_scalars(
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
             break;
         case UnaryOpType::LOGIT: {
-            float value1 = *op.get_param_if<float>(0);
-            float value2 = 1.0f - value1;
-            packed_scalar1 = pack_scalar_runtime_arg_impl(value1, input_dtype);
-            packed_scalar2 = pack_scalar_runtime_arg_impl(value2, input_dtype);
-            if (value1 > 0.5f) {
-                const char* data_format = (input_dtype == DataType::FLOAT32) ? "Float32" : "Float16_b";
-                unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
-                unary_defines["CLAMP"] = "clamp_tile";
-            } else if (value1 >= 0.0f) {
+            const auto eps = *op.get_param_if<float>(0);
+            if (eps >= 0.0f) {
+                // Ensure correct clamp bounds [min(eps, 1-eps), max(eps, 1-eps)]
+                const auto lo = std::min(eps, 1.0f - eps);
+                const auto hi = std::max(eps, 1.0f - eps);
+                packed_scalar1 = pack_scalar_runtime_arg_impl(lo, input_dtype);
+                packed_scalar2 = pack_scalar_runtime_arg_impl(hi, input_dtype);
                 unary_defines["CLAMP"] = "clamp_tile";
             }
             break;
@@ -143,19 +141,38 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_hw = tile_height * tile_width;
 
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t out_num_tiles = rm_interleaved ? output.buffer()->num_pages() : output.physical_volume() / tile_hw;
+
+    const auto input_df = datatype_to_dataformat_converter(input.dtype());
+    const auto output_df = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t input_tile_bytes = tile_size(input_df);
+    const uint32_t output_tile_bytes = tile_size(output_df);
+
+    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.buffer()->page_size()) : 0;
+    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.buffer()->page_size()) : 0;
+    const uint32_t chunks_per_row = rm_interleaved ? (input_page_bytes + input_tile_bytes - 1) / input_tile_bytes : 1;
+    const uint32_t input_chunk_size = input_tile_bytes;
+    const uint32_t input_last_chunk_size =
+        rm_interleaved ? input_page_bytes - ((chunks_per_row - 1) * input_tile_bytes) : input_tile_bytes;
+    const uint32_t output_chunk_size = output_tile_bytes;
+    const uint32_t output_last_chunk_size =
+        rm_interleaved ? output_page_bytes - ((chunks_per_row - 1) * output_tile_bytes) : output_tile_bytes;
+
+    const uint32_t total_rows = rm_interleaved ? output.buffer()->num_pages() : 0;
+    uint32_t rows_per_tile = 1;
+    if (rm_interleaved && input_page_bytes > 0 && input_page_bytes < input_tile_bytes) {
+        const uint32_t input_element_size = datum_size(input_df);
+        const uint32_t row_width_elements = input_page_bytes / input_element_size;
+        const uint32_t aligned_page_size = static_cast<uint32_t>(input.buffer()->aligned_page_size());
+        if (input_page_bytes == aligned_page_size && row_width_elements > 0) {
+            rows_per_tile = tile_hw / row_width_elements;
+        }
+    }
+
+    const uint32_t out_num_tiles =
+        rm_interleaved ? (total_rows + rows_per_tile - 1) / rows_per_tile : output.physical_volume() / tile_hw;
     uint32_t out_shard_height{}, out_shard_width{}, num_shards_per_width{};
 
-    const auto [oD, oN, oC, oHt, oWt] = [&]() -> std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> {
-        const auto& shape = output.padded_shape();
-        const auto& tile = output.tensor_spec().tile();
-        return {
-            shape.rank() >= 5 ? shape[-5] : 1,
-            shape[-4],
-            shape[-3],
-            shape[-2] / tile.get_height(),
-            shape[-1] / tile.get_width()};
-    }();
+    const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
 
     if (has_sharding) {
         core_group_1 = grid;
@@ -289,20 +306,47 @@ void set_or_update_runtime_arguments(
             } else if (core_group_2.contains(core)) {
                 npc = num_tiles_per_core_group_2;
             } else {
-                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 3>{0});
-                handle_args(program, writer_kernel_id, core, std::array<uint32_t, 3>{0});
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 8>{0});
+                handle_args(program, writer_kernel_id, core, std::array<uint32_t, 8>{0});
                 handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
                 continue;
             }
 
-            std::array reader_runtime_args = {input.buffer()->address(), npc, start_tile_id};
-            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+            if (rm_interleaved) {
+                std::array reader_runtime_args = {
+                    input.buffer()->address(),
+                    npc,
+                    start_tile_id,
+                    chunks_per_row,
+                    input_chunk_size,
+                    input_last_chunk_size,
+                    rows_per_tile,
+                    total_rows};
+                handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-            std::array writer_runtime_args = {output.buffer()->address(), npc, start_tile_id};
-            handle_args(program, writer_kernel_id, core, writer_runtime_args);
+                std::array writer_runtime_args = {
+                    output.buffer()->address(),
+                    npc,
+                    start_tile_id,
+                    chunks_per_row,
+                    output_chunk_size,
+                    output_last_chunk_size,
+                    rows_per_tile,
+                    total_rows};
+                handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {npc, packed_scalar1, packed_scalar2};
-            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+                std::array compute_runtime_args = {npc * chunks_per_row, packed_scalar1, packed_scalar2};
+                handle_args(program, compute_kernel_id, core, compute_runtime_args);
+            } else {
+                std::array reader_runtime_args = {input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u};
+                handle_args(program, reader_kernel_id, core, reader_runtime_args);
+
+                std::array writer_runtime_args = {output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u};
+                handle_args(program, writer_kernel_id, core, writer_runtime_args);
+
+                std::array compute_runtime_args = {npc, packed_scalar1, packed_scalar2};
+                handle_args(program, compute_kernel_id, core, compute_runtime_args);
+            }
 
             start_tile_id += npc;
         }
@@ -344,21 +388,11 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
 
-    // For sharded ROW_MAJOR: use tile-sized CB pages and pack shard bytes into tile-sized chunks.
-    // For interleaved ROW_MAJOR: use row-sized pages.
+    // For ROW_MAJOR interleaved: use tile_size CB pages and group/chunk rows.
+    // For sharded ROW_MAJOR or TILE layout: CB page is always tile_size.
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t input_cb_page_size = rm_interleaved ? src_buffer->page_size() : single_tile_size;
-    const uint32_t output_cb_page_size = rm_interleaved ? dst_buffer->page_size() : single_tile_size_output;
-
-    // TODO: Support wide ROW_MAJOR interleaved tensors (#40894)
-    if (rm_interleaved) {
-        TT_FATAL(
-            input_cb_page_size <= single_tile_size,
-            "UnaryNg: ROW_MAJOR interleaved page size ({} bytes) exceeds tile size ({} bytes). "
-            "Input tensor row is too wide for the current circular buffer allocation.",
-            input_cb_page_size,
-            single_tile_size);
-    }
+    const uint32_t input_cb_page_size = single_tile_size;
+    const uint32_t output_cb_page_size = single_tile_size_output;
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
@@ -392,8 +426,7 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
         unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const bool math_approx_mode =
-        std::all_of(ops_chain.begin(), ops_chain.end(), [](const auto& u) { return get_op_approx_mode(u.type()); });
+    const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
@@ -433,6 +466,7 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     // --- Reader Kernel ---
     std::map<std::string, std::string> reader_defines;
     reader_defines["SRC_SHARDED"] = src_sharded ? "1" : "0";
+    reader_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
@@ -449,6 +483,7 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     // --- Writer Kernel ---
     std::map<std::string, std::string> writer_defines;
     writer_defines["DST_SHARDED"] = dst_sharded ? "1" : "0";
+    writer_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
