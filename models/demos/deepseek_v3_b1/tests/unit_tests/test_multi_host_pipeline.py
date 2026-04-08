@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,53 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _blitz_mesh_coord_tuple(coord) -> tuple:
+    """Normalize MeshCoordinate from BlitzDecodePipelineStage for equality checks."""
+    n = int(coord.dims())
+    return tuple(int(coord[i]) for i in range(n))
+
+
+def assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs):
+    """
+    Inter-mesh Blitz stages must pair distinct logical devices for ingress vs egress on each mesh.
+    (Mirrors C++ control-plane exit-node pairing: identical entry/exit fabric nodes break setup_fabric_connection.)
+    """
+    assert (
+        len(pipeline_config) == num_procs + 1
+    ), f"expected {num_procs + 1} pipeline stages (procs + loopback), got {len(pipeline_config)}"
+    for i, stage in enumerate(pipeline_config):
+        assert stage.stage_index == i, f"stage_index mismatch at list position {i}: {stage.stage_index}"
+        entry_t = _blitz_mesh_coord_tuple(stage.entry_node_coord)
+        exit_t = _blitz_mesh_coord_tuple(stage.exit_node_coord)
+        assert entry_t != exit_t, (
+            f"Blitz stage {i}: entry and exit mesh coordinates must differ "
+            f"(same coord implies same fabric node id / fabric src==dst TT_FATAL). "
+            f"entry={entry_t} exit={exit_t}"
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
+    """Lightweight check: generate_blitz_decode_pipeline pairs distinct entry/exit chips per stage."""
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
 
 @pytest.mark.parametrize(
@@ -63,9 +110,9 @@ def create_fabric_router_config(max_payload_size):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -75,10 +122,6 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     my_mesh_id = mesh_device.get_system_mesh_id()
 
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    # Number of pipeline stages is equal to the number of processes + 1 for the loopback stage
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -252,9 +295,9 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -272,9 +315,6 @@ def test_multi_host_loopback_pipeline_with_embedding(
 
     my_mesh_id = mesh_device.get_system_mesh_id()
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -462,8 +502,6 @@ def test_multi_host_loopback_pipeline_with_embedding(
 def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -569,8 +607,6 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
 def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 

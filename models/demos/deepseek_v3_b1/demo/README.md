@@ -39,6 +39,8 @@ export HOSTSP=bh-glx-d03u08:4,bh-glx-d03u02:4,bh-glx-d04u02:4,bh-glx-d04u08:4,bh
 
 See `source.sh` in the repo root for more host configurations.
 
+Launcher reference: [tt-run README](../../../../ttnn/ttnn/distributed/README_ttrun.md) (**auto allocation** with `--mesh-graph-descriptor` + `--hosts` vs **legacy** `--rank-binding` + rankfile in `--mpi-args`). The commands below use **legacy** mode with pre-generated rank bindings and rankfiles from the Blitz pipeline configs.
+
 ## Single galaxy demo
 
 ```bash

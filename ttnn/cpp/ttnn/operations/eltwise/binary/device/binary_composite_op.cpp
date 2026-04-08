@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_composite_op.hpp"
+#include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
@@ -24,6 +24,54 @@
 namespace ttnn {
 
 using namespace operations;
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+template <binary::BinaryOpType Op, typename Rhs>
+Tensor invoke_bitwise(
+    const Tensor& input_tensor_a,
+    const Rhs& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (not(use_legacy
+                ? *use_legacy
+                : binary::is_legacy_only(
+                      input_tensor_a, rhs, memory_config, optional_output_tensor, lhs_activations, rhs_activations))) {
+        return ttnn::detail::invoke_binary_ng(
+            input_tensor_a,
+            rhs,
+            Op,
+            std::nullopt,
+            memory_config,
+            optional_output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            use_legacy,
+            std::nullopt,
+            sub_core_grids);
+    }
+
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        rhs,
+        Op,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        {},
+        {},
+        {},
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids);
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -157,45 +205,17 @@ Tensor maximum(
 }
 
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
-    Tensor result(input_a);
-    {
-        Tensor atan_input =
-            ttnn::multiply(input_b, ttnn::reciprocal(input_a, output_mem_config), std::nullopt, output_mem_config);
-        result = ttnn::atan(atan_input, output_mem_config);
-    }
-    Tensor res(result);
-    {
-        Tensor ia_gtz = ttnn::gtz(input_a, output_mem_config);
-        Tensor ia_ltz = ttnn::ltz(input_a, output_mem_config);
-        Tensor ib_ltz = ttnn::ltz(input_b, output_mem_config);
-
-        Tensor altz_bgte = ttnn::logical_and(ia_ltz, ttnn::ge(input_b, 0.0), std::nullopt, output_mem_config);
-        Tensor altz_bltz = ttnn::logical_and(ia_ltz, ib_ltz, std::nullopt, output_mem_config);
-
-        Tensor a_eqz = ttnn::eqz(input_a, output_mem_config);
-        Tensor b_gtz = ttnn::gtz(input_b, output_mem_config);
-        Tensor b_eqz = ttnn::eqz(input_b, output_mem_config);
-
-        Tensor az_bltz = ttnn::logical_and(a_eqz, ib_ltz, std::nullopt, output_mem_config);
-        Tensor az_bgtz = ttnn::logical_and(a_eqz, b_gtz, std::nullopt, output_mem_config);
-        Tensor az_bz = ttnn::logical_and(a_eqz, b_eqz, std::nullopt, output_mem_config);
-        float pi_2 = M_PI_2;
-        res = ttnn::where(
-            ia_gtz,
-            result,
-            ttnn::where(
-                altz_bgte,
-                ttnn::add(result, M_PI, std::nullopt, output_mem_config),
-                ttnn::where(
-                    altz_bltz,
-                    ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(az_bltz, -pi_2, ttnn::where(az_bgtz, pi_2, 0.f, output_mem_config), output_mem_config),
-                    output_mem_config),
-                output_mem_config),
-            output_mem_config);
-    }
-    return res;
+    return ttnn::detail::invoke_binary_ng(
+        input_b,
+        input_a,
+        binary::BinaryOpType::ATAN2,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 Tensor div(
@@ -1014,42 +1034,15 @@ Tensor bitwise_and(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::BITWISE_AND,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    // Legacy-only path: force use_legacy=true to avoid recursive re-entry into ttnn::bitwise_and.
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_AND>(
         input_tensor_a,
         input_b,
-        binary::BinaryOpType::BITWISE_AND,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        true,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1064,41 +1057,15 @@ Tensor bitwise_or(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_tensor_b,
-            binary::BinaryOpType::BITWISE_OR,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
         input_tensor_a,
         input_tensor_b,
-        binary::BinaryOpType::BITWISE_OR,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1112,45 +1079,18 @@ Tensor bitwise_or(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::BITWISE_OR,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
         input_tensor_a,
         input_b,
-        binary::BinaryOpType::BITWISE_OR,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        true,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
-// Bitwise XOR
 Tensor bitwise_xor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1161,41 +1101,15 @@ Tensor bitwise_xor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_tensor_b,
-            binary::BinaryOpType::BITWISE_XOR,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
         input_tensor_a,
         input_tensor_b,
-        binary::BinaryOpType::BITWISE_XOR,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1209,45 +1123,18 @@ Tensor bitwise_xor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::BITWISE_XOR,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
         input_tensor_a,
         input_b,
-        binary::BinaryOpType::BITWISE_XOR,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        true,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
-// Bitwise Left Shift
 Tensor bitwise_left_shift(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1258,41 +1145,15 @@ Tensor bitwise_left_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_tensor_b,
-            binary::BinaryOpType::LEFT_SHIFT,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
         input_tensor_a,
         input_tensor_b,
-        binary::BinaryOpType::LEFT_SHIFT,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1306,45 +1167,18 @@ Tensor bitwise_left_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::LEFT_SHIFT,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
         input_tensor_a,
         input_b,
-        binary::BinaryOpType::LEFT_SHIFT,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        true,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
-// Bitwise Right Shift
 Tensor bitwise_right_shift(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1355,41 +1189,15 @@ Tensor bitwise_right_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_tensor_b,
-            binary::BinaryOpType::RIGHT_SHIFT,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
         input_tensor_a,
         input_tensor_b,
-        binary::BinaryOpType::RIGHT_SHIFT,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1403,41 +1211,15 @@ Tensor bitwise_right_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::RIGHT_SHIFT,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            std::nullopt,
-            sub_core_grids);
-    }
-
-    return ttnn::detail::invoke_binary_ng(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
         input_tensor_a,
         input_b,
-        binary::BinaryOpType::RIGHT_SHIFT,
-        std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        true,
-        std::nullopt,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         sub_core_grids);
 }
 
@@ -1514,9 +1296,9 @@ Tensor bias_gelu(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::detail::invoke_binary_ng(
@@ -1540,9 +1322,9 @@ Tensor bias_gelu(
     const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<bool>& /*use_legacy*/,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
     return ttnn::gelu(
@@ -1558,9 +1340,9 @@ Tensor bias_gelu(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         scalar,

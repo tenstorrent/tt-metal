@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 
 #include "moe_compute_device_operation_types.hpp"
 #include "moe_compute_program_factory.hpp"
+
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -44,7 +46,13 @@ std::vector<Tensor> moe_compute(
     uint32_t layer_id,
     uint32_t output_height_shard_dim,
     uint32_t output_width_shard_dim,
-    const std::optional<uint32_t>& cluster_axis);
+    const std::optional<uint32_t>& cluster_axis,
+    const std::optional<tt::tt_fabric::Topology>& topology,
+    const std::optional<uint32_t>& num_links,
+    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -170,6 +170,100 @@ def test_rand_different_from_to_values(device):
     device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+def test_rand_program_cache_with_mesh_mapper(mesh_device):
+    """
+    Exercise the program cache across replicated and sharded ttnn.rand calls
+    that share the same per-device shape.  Because mesh_dim_is_sharded only
+    affects runtime args (seed offset) and override_runtime_arguments handles
+    it correctly, the two configurations should share a single cache entry
+    while still producing correct output:
+
+      - replicated (no mapper) → identical data on every device
+      - sharded (with mapper)  → distinct data per shard device
+    """
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+
+    mesh_device.enable_program_cache()
+
+    seed = 42
+    shard_dim = 0
+    per_device_rows = 256
+    cols = 256
+    shard_shape = (per_device_rows, cols)
+    full_shape = (per_device_rows * num_devices, cols)
+    dtype = ttnn.float32
+    mesh_shape = tuple(mesh_device.shape)
+    placements = _shard_placements(mesh_shape, shard_dim)
+
+    # --- Call 1: no mesh_mapper (replicated) ---
+    t_rep = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=seed)
+    entries_after_rep = mesh_device.num_program_cache_entries()
+
+    # --- Call 2: with mesh_mapper, shard shape == shard_shape (cache hit) ---
+    t_shard = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} (same per-device shape), "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Call 3: repeat sharded call — still a cache hit ---
+    t_shard2 = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} after repeated sharded call, "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Call 4: back to replicated — still a cache hit ---
+    t_rep2 = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=seed)
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} after switching back to replicated, "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Correctness: replicated calls produce identical data on all devices ---
+    for label, tensor in [("rep1", t_rep), ("rep2", t_rep2)]:
+        shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+        for i in range(1, len(shards)):
+            assert torch.equal(
+                shards[0], shards[i]
+            ), f"{label}: device 0 and device {i} should be identical (replicated)"
+
+    # --- Correctness: sharded calls produce distinct data per device ---
+    for label, tensor in [("shard1", t_shard), ("shard2", t_shard2)]:
+        shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+        for i in range(1, len(shards)):
+            assert not torch.equal(shards[0], shards[i]), f"{label}: device 0 and device {i} should differ (sharded)"
+
+    # --- Correctness: repeated calls with the same seed are deterministic ---
+    shard1_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(t_shard)]
+    shard2_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(t_shard2)]
+    for i in range(len(shard1_data)):
+        assert torch.equal(
+            shard1_data[i], shard2_data[i]
+        ), f"Device {i}: two sharded calls with the same seed should be deterministic"
+
+    mesh_device.disable_and_clear_program_cache()
+
+
 def test_rand_invalid_args(device):
     """
     Passing invalid args should raise TypeError.
@@ -198,3 +292,235 @@ def test_rand_invalid_args(device):
     with pytest.raises(TypeError):
         # expected  ttnn.DataType type
         ttnn.rand([2, 2], device=device, dtype="ttnn.bfloat16")
+
+
+# ---------------------------------------------------------------------------
+# Multi-device tests (mesh_mapper)
+# ---------------------------------------------------------------------------
+
+
+def _shard_placements(mesh_shape, shard_dim):
+    """Build a placements list that shards `shard_dim` on the non-trivial mesh axis."""
+    return [
+        ttnn.PlacementShard(shard_dim) if mesh_shape[i] > 1 else ttnn.PlacementReplicate()
+        for i in range(len(mesh_shape))
+    ]
+
+
+def _replicate_placements(mesh_shape):
+    return [ttnn.PlacementReplicate() for _ in range(len(mesh_shape))]
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+def test_rand_mesh_shard(mesh_device):
+    """
+    Shard a random tensor across devices along dim 0, then verify:
+      - mesh_mapper produces the right per-device shard shapes
+      - unique_per_device seeding gives each device a distinct sequence
+      - composed result is uniformly distributed
+    """
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+
+    seed = 42
+    shard_dim = 0
+    per_device_rows = 256
+    cols = 256
+    full_shape = (per_device_rows * num_devices, cols)
+    dtype = ttnn.float32
+    mesh_shape = tuple(mesh_device.shape)
+
+    sharded_tensor = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(_shard_placements(mesh_shape, shard_dim)),
+    )
+
+    composed = ttnn.to_torch(
+        sharded_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
+    ).float()
+
+    assert tuple(composed.shape) == full_shape, f"Expected {full_shape}, got {tuple(composed.shape)}"
+    assert not torch.isnan(composed).any(), "Composed tensor contains NaN values"
+    assert check_uniform_distribution(composed), "Composed tensor is not uniformly distributed"
+
+    shards = torch.chunk(composed, num_devices, dim=shard_dim)
+    for i in range(1, len(shards)):
+        assert not torch.equal(
+            shards[0], shards[i]
+        ), f"Shard 0 and shard {i} are identical — unique_per_device seeding did not work"
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+def test_rand_mesh_replicate(mesh_device):
+    """
+    Replicate a random tensor across devices with a fixed seed, then verify
+    that every device holds the same data.
+    """
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+
+    seed = 42
+    shape = (256, 256)
+    dtype = ttnn.float32
+    mesh_shape = tuple(mesh_device.shape)
+
+    replicated_tensor = ttnn.rand(
+        shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(_replicate_placements(mesh_shape)),
+    )
+
+    device_tensors = ttnn.get_device_tensors(replicated_tensor)
+    shards = [ttnn.to_torch(t).float() for t in device_tensors]
+
+    for i in range(1, len(shards)):
+        assert torch.equal(
+            shards[0], shards[i]
+        ), f"Replicated shard 0 and shard {i} differ — replicate seeding is broken"
+
+    assert not torch.isnan(shards[0]).any(), "Replicated tensor contains NaN values"
+    assert check_uniform_distribution(shards[0]), "Replicated tensor is not uniformly distributed"
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+def test_rand_mesh_shard_matches_single_device(mesh_device):
+    """
+    Verify that each shard of a multi-device sharded ttnn.rand matches a
+    replicated ttnn.rand run with the equivalent per-device seed.
+
+    The kernel seeds core `i` on device at linear index `d` as:
+        core_seed = user_seed + i + d * num_active_cores
+    where num_active_cores = min(compute_grid_total, num_tiles).
+
+    For each device d we run a replicated (no mesh_mapper) ttnn.rand with
+    seed = user_seed + d * num_active_cores, then compare device d's copy
+    against the corresponding shard from the sharded run.
+    """
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+
+    seed = 100
+    shard_dim = 0
+    per_device_rows = 256
+    cols = 256
+    full_shape = (per_device_rows * num_devices, cols)
+    shard_shape = (per_device_rows, cols)
+    dtype = ttnn.float32
+    mesh_shape = tuple(mesh_device.shape)
+
+    sharded_tensor = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(_shard_placements(mesh_shape, shard_dim)),
+    )
+    shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_tensor)]
+
+    # num_active_cores mirrors split_work_to_cores: min(grid_total, num_tiles)
+    TILE_HW = 32 * 32
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_tiles = (per_device_rows * cols) // TILE_HW
+    num_active_cores = min(grid.x * grid.y, num_tiles)
+
+    for d in range(num_devices):
+        device_seed = seed + d * num_active_cores
+
+        # Replicated rand — every device gets the same data; pick device d's copy
+        reference_tensor = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=device_seed)
+        reference = ttnn.to_torch(ttnn.get_device_tensors(reference_tensor)[d]).float()
+
+        assert tuple(shards[d].shape) == shard_shape, f"Shard {d}: expected {shard_shape}, got {tuple(shards[d].shape)}"
+        assert torch.equal(shards[d], reference), (
+            f"Shard {d} does not match replicated rand with seed={device_seed} " f"(offset {d * num_active_cores})"
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, shard_mesh_dim",
+    [
+        pytest.param((2, 2), 0, id="2x2_shard_dim0"),
+        pytest.param((2, 2), 1, id="2x2_shard_dim1"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_rand_mesh_2d_shard_and_replicate(mesh_device, shard_mesh_dim):
+    """
+    On a 2D mesh, shard along one mesh dimension and replicate along the other.
+    Verify:
+      - Devices along the replicate axis hold identical data.
+      - Devices along the shard axis hold distinct data.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    rows, cols = mesh_shape
+    if rows * cols < 4:
+        pytest.skip("Need at least 4 devices for a 2x2 mesh")
+
+    seed = 77
+    shard_dim = 0
+    per_shard_rows = 256
+    num_shards = mesh_shape[shard_mesh_dim]
+    full_shape = (per_shard_rows * num_shards, 256)
+    dtype = ttnn.float32
+
+    placements = [
+        ttnn.PlacementShard(shard_dim) if i == shard_mesh_dim else ttnn.PlacementReplicate()
+        for i in range(len(mesh_shape))
+    ]
+
+    sharded_tensor = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+
+    device_tensors = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_tensor)]
+
+    replicate_mesh_dim = 1 - shard_mesh_dim
+
+    for r in range(rows):
+        for c in range(cols):
+            idx = r * cols + c
+            coord = (r, c)
+
+            # Check replicas: devices differing only on the replicate axis must match.
+            if coord[replicate_mesh_dim] > 0:
+                replica_coord = list(coord)
+                replica_coord[replicate_mesh_dim] = 0
+                replica_idx = replica_coord[0] * cols + replica_coord[1]
+                assert torch.equal(device_tensors[idx], device_tensors[replica_idx]), (
+                    f"Device {coord} should be a replica of device {tuple(replica_coord)} " f"but data differs"
+                )
+
+            # Check shards: devices differing on the shard axis must differ.
+            if coord[shard_mesh_dim] > 0:
+                shard_neighbor = list(coord)
+                shard_neighbor[shard_mesh_dim] = 0
+                neighbor_idx = shard_neighbor[0] * cols + shard_neighbor[1]
+                assert not torch.equal(device_tensors[idx], device_tensors[neighbor_idx]), (
+                    f"Device {coord} and device {tuple(shard_neighbor)} are on different "
+                    f"shards but hold identical data"
+                )

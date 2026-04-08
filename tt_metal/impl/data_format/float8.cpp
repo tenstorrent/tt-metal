@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <tt_stl/assert.hpp>
 
 namespace {
 
@@ -121,6 +122,7 @@ std::vector<float8_e4m3> unpack_uint32_vec_into_float8_e4m3_vec(const std::vecto
 
 std::vector<uint32_t> create_random_vector_of_float8_e4m3(
     size_t num_bytes, int rand_max_float, int seed, float offset) {
+    TT_FATAL(num_bytes % 4 == 0, "num_bytes must be divisible by 4, got {}", num_bytes);
     std::mt19937 rng(seed);
     std::uniform_real_distribution<float> dist(0, rand_max_float);
 

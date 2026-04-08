@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # These patterns are matched against the source path in traced operations
 # to identify which vectors belong to lead model workloads.
 #
-# Source of truth: model_tracer/sweep_manifest.yaml (targets with scope: lead_models)
+# Source of truth: model_tracer/trace_selection_registry.yaml (targets with scope: lead_models)
 # This list is derived from the manifest at import time.
 # Fallback to hardcoded list if manifest is unavailable (e.g., in CI without checkout).
 #
@@ -30,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 
 def _load_lead_models_from_manifest():
-    """Derive LEAD_MODELS patterns from sweep_manifest.yaml lead_models targets."""
+    """Derive LEAD_MODELS patterns from trace_selection_registry.yaml lead_models targets."""
     try:
         import yaml
 
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        manifest_path = os.path.join(repo_root, "model_tracer", "sweep_manifest.yaml")
+        manifest_path = os.path.join(repo_root, "model_tracer", "trace_selection_registry.yaml")
         if os.path.exists(manifest_path):
             with open(manifest_path) as f:
                 data = yaml.safe_load(f) or {}
