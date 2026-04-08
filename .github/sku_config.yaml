@@ -206,7 +206,8 @@ skus:
 
   bh_sp1:
     runs_on:
-      - exabox-multihost-with-nfs
+      group: exabox
+      labels: exabox-multihost-with-nfs
     mgd: |
       mesh_descriptors {
         name: "M0"
