@@ -17,12 +17,12 @@ python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
     model_tracer/traced_operations/ttnn_operations_master.json
 
-# 3. Promote the trace in the manifest (edit model_tracer/sweep_manifest.yaml)
+# 3. Promote the trace in the trace selection registry (edit model_tracer/trace_selection_registry.yaml)
 #    Change status: draft → active, add to the appropriate targets group
 
 # 4. Reconstruct configs for testing
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-    model_tracer/sweep_manifest.yaml \
+    model_tracer/trace_selection_registry.yaml \
     model_tracer/traced_operations/ttnn_operations_master.json
 ```
 
@@ -78,14 +78,14 @@ On load the tool:
 - Creates a `trace_run` row capturing `trace_uid`, hardware, and tt-metal SHA
 - Stores canonical counts in `trace_run_configuration_model`
 - Refreshes derived aggregates in `trace_run_config`, `ttnn_configuration_model`, and `trace_run_model`
-- **Auto-appends a `draft` entry** to `model_tracer/sweep_manifest.yaml`
+- **Auto-appends a `draft` entry** to `model_tracer/trace_selection_registry.yaml`
 
 Example output:
 ```
 ✅ Loaded 623 configurations (47 new, 576 pre-existing), 623 model links
 Trace run created: trace_run_id=42
 DB totals after load: 8012 configs, 542 trace_run_config links, 23 models
-Appended 1 draft entries to manifest registry (model_tracer/sweep_manifest.yaml)
+Appended 1 draft entries to manifest registry (model_tracer/trace_selection_registry.yaml)
 ```
 
 With `--dry-run`, the transaction is rolled back and the summary shows what the DB would look like after commit. No manifest entry is written.
@@ -114,7 +114,7 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
 The loader appends the trace as `status: draft`. Review and promote it to `active`, then add it to the appropriate `targets` group with the exact `model_name` values:
 
 ```yaml
-# model_tracer/sweep_manifest.yaml
+# model_tracer/trace_selection_registry.yaml
 targets:
   lead_models:
     - model: deepseek_v3
@@ -143,18 +143,18 @@ Traces left as `draft` are invisible to model resolution. They can still be used
 ```bash
 # Reconstruct all targets into the default path (auto-discovered by MasterConfigLoader)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-    model_tracer/sweep_manifest.yaml \
+    model_tracer/trace_selection_registry.yaml \
     model_tracer/traced_operations/ttnn_operations_master.json
 
 # Reconstruct a specific scope (model_traced or lead_models)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-    model_tracer/sweep_manifest.yaml \
+    model_tracer/trace_selection_registry.yaml \
     model_tracer/traced_operations/ttnn_operations_master.json \
     model_traced
 
 # Dry-run: see which trace IDs will be used without hitting the DB
 python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
-    model_tracer/sweep_manifest.yaml model_traced
+    model_tracer/trace_selection_registry.yaml model_traced
 
 # Reconstruct a single specific trace (all models in that trace)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace 35 output.json
@@ -175,9 +175,9 @@ The reconstructed JSON is in the same format as the tracer output and can be fed
 
 ---
 
-## Sweep Manifest
+## Trace Selection Registry
 
-File: `model_tracer/sweep_manifest.yaml`
+File: `model_tracer/trace_selection_registry.yaml`
 
 The manifest controls which configs are included when reconstructing. It has two sections: **targets** (what to reconstruct) and **registry** (log of all known traces).
 
@@ -260,7 +260,7 @@ registry:
 
 ## CI Integration
 
-The sweep manifest drives two scheduled CI run types in `.github/workflows/ttnn-run-sweeps.yaml`:
+The trace selection registry drives two scheduled CI run types in `.github/workflows/ttnn-run-sweeps.yaml`:
 
 ### How it works
 
@@ -486,7 +486,7 @@ The global `--schema <name>` flag can appear anywhere on the command line and ap
 | File | Purpose |
 |---|---|
 | `model_tracer/generic_ops_tracer.py` | Trace models, produce master JSON |
-| `model_tracer/sweep_manifest.yaml` | Targets + trace registry (source of truth for CI) |
+| `model_tracer/trace_selection_registry.yaml` | Targets + trace registry (source of truth for CI) |
 | `model_tracer/destructively_create_ttnn_ops_schema_v6.sql` | `ttnn_ops_v6` schema DDL |
 | `tests/sweep_framework/load_ttnn_ops_data_v2.py` | Load, reconstruct, manifest resolution |
 | `tests/sweep_framework/framework/constants.py` | `LEAD_MODELS` — derived from manifest at import time |
