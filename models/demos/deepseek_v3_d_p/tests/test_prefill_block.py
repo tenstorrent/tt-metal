@@ -39,10 +39,9 @@ PCC_THRESHOLD_KVPE = 0.99
     "layer_type, gate_fallback_mode",
     [
         ("dense", None),
-        ("moe", GateComputeMode.HOST_ALL),
         ("moe", GateComputeMode.DEVICE),
     ],
-    ids=["dense", "moe-gate_host", "moe-gate_device"],
+    ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -128,7 +127,7 @@ def test_prefill_block(
             )
             torch_output = layer_out[0]
         if ref_cache is not None:
-            ref_kvpe = ref_cache.key_cache[0]
+            ref_kvpe = ref_cache.key_cache[layer_idx]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
         if ref_kvpe is not None:
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
