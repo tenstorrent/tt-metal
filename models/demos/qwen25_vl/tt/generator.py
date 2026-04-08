@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
+import math
 
 import torch
 from loguru import logger
@@ -250,11 +251,25 @@ class Generator(WarmupForwardMixin):
                     max_chunk_tokens = MAX_BATCHED_PREFILL_SEQ_LEN
                 chunk_size = min(chunk_size, max(1, max_chunk_tokens // batch_seq_len))
 
-                # The attention W_o matmul reshapes to [1, total_seq//1024, 1024, -1]
-                # which requires total_seq = chunk_size * batch_seq_len to be a
-                # multiple of 1024.  Ensure this by capping to at most 1024 total.
+                # Both the attention and MLP reshape the fused batch sequence
+                # dimension for large matmuls:
+                #   attention: [1, seq//1024, 1024, -1]    when seq > 1024
+                #   MLP:       [1, seq//cutoff, cutoff, -1] when seq >= cutoff
+                # Both require total_seq to be divisible by their tile size.
+                cutoff = self.model_args.prefill_len_cutoff
                 if batch_seq_len < 1024:
-                    chunk_size = min(chunk_size, 1024 // batch_seq_len)
+                    total = chunk_size * batch_seq_len
+                    if total > 1024:
+                        align = 1024 // math.gcd(batch_seq_len, 1024)
+                        chunk_size = (chunk_size // align) * align
+                        if chunk_size == 0:
+                            chunk_size = 1024 // batch_seq_len
+                    total = chunk_size * batch_seq_len
+                    if total >= cutoff and total % cutoff != 0:
+                        align = cutoff // math.gcd(batch_seq_len, cutoff)
+                        chunk_size = (chunk_size // align) * align
+                        if chunk_size == 0:
+                            chunk_size = 1
 
                 for chunk_start in range(0, group_size, chunk_size):
                     chunk_end = min(chunk_start + chunk_size, group_size)
@@ -271,7 +286,9 @@ class Generator(WarmupForwardMixin):
                     )
                     output_logits[abs_start:abs_end] = chunk_logits
         else:
-            use_trace = enable_trace and page_table is not None
+            use_trace = (
+                enable_trace and page_table is not None and batch_seq_len <= self.model_args.max_prefill_chunk_size
+            )
             total_tokens = batch_seq_len * batch
             if batch > 1:
                 logger.info(
