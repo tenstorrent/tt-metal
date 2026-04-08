@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.yolov11l.common import YOLOV11_L1_SMALL_SIZE
+from models.demos.yolov11l.common import yolov11_l1_small_size_for_res, yolov11_trace_region_size_e2e_for_res
 from models.demos.yolov11l.runner.performant_runner import YOLOv11PerformantRunner
 
 
@@ -64,13 +64,21 @@ def run_yolov11_inference(
     "resolution",
     [
         (640, 640),
+        (1280, 1280),
     ],
+    ids=["640", "1280"],
 )
 @pytest.mark.models_performance_bare_metal
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
+            "trace_region_size": yolov11_trace_region_size_e2e_for_res(1280, 1280),
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 def test_e2e_performant(
@@ -100,13 +108,21 @@ def test_e2e_performant(
     "resolution",
     [
         (640, 640),
+        (1280, 1280),
     ],
+    ids=["640", "1280"],
 )
 @pytest.mark.models_performance_bare_metal
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
+            "trace_region_size": 23887872,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 def test_e2e_performant_dp(
