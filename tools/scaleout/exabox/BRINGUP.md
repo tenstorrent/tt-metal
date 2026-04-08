@@ -277,7 +277,8 @@ Which tests to run depends on whether the pod is new or previously validated:
 2. Run **single-pod fabric tests** to verify coordinated workloads across the mesh - see [Fabric Tests](./README.md#fabric-tests)
 
 **Existing pod with new inter-pod cabling** (pod already tested/used):
-- Skip dispatch and single-pod fabric tests. Instead, run **multi-pod fabric tests** (documentation coming soon in the top-level README).
+
+- Skip dispatch and single-pod fabric tests. Instead, run **multi-pod fabric tests** using `--num-meshes` and `--mesh-graph-desc-path` - see [Multi-Pod Fabric Tests](./README.md#multi-pod-4-meshes-x-4-hosts--16-hosts).
 
 ## Troubleshooting
 
