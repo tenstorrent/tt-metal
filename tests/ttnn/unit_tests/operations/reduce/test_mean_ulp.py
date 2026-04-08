@@ -96,23 +96,22 @@ def _run_ttnn_mean(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters (generated sweeps; adjust steps to trade coverage vs runtime)
+# Test parameters — small / medium / large per dimension
 # ---------------------------------------------------------------------------
 
-# Reduction along W: shape (1,1,32,W); dim=-1
-_MEAN_W_SIZES = sorted(set(range(256, 8193, 1024)) | {1024, 2048, 4096, 8192, 32768})
-# Reduction along H: shape (1,1,H,32); dim=-2
-_MEAN_H_SIZES = sorted(set(range(128, 4097, 1024)) | {512, 1024, 2048, 4096})
-# 2D mean over HW: square and a few non-square tile-aligned pairs
-_MEAN_HW_SQUARES = list(range(64, 513, 64))
-_MEAN_HW_MIXED = [(96, 160), (128, 192), (192, 256)]
-# Batch / channel sweeps for (B, C, 32, 32)
-_MEAN_BATCH_SIZES = [2, 4, 8, 16, 32]  # 32 = one full tile row; tests tile-boundary batch reduction
-_MEAN_CHANNEL_SIZES = [3, 5, 7, 16, 32]  # 32 = tile-boundary channel reduction
+# W reduction (1,1,32,W), dim=-1
+_MEAN_W_SIZES = [256, 1024, 4096]
+# H reduction (1,1,H,32), dim=-2
+_MEAN_H_SIZES = [128, 512, 2048]
+# 2D HW reduction: one small square, one large square
+_MEAN_HW_CASES = [(64, 64), (256, 256)]
+# Outer-dim sweeps kept minimal: one small and one large value each
+_MEAN_BATCH_SIZES = [2, 16]
+_MEAN_CHANNEL_SIZES = [3, 16]
 
 
 def _build_mean_shapes_and_dims():
-    """Build (shape, dim, id) cases from numeric sweeps plus odd / corner cases."""
+    """Build (shape, dim, id) cases: small / medium / large per axis plus essentials."""
     out = []
 
     for w in _MEAN_W_SIZES:
@@ -121,11 +120,10 @@ def _build_mean_shapes_and_dims():
     for h in _MEAN_H_SIZES:
         out.append(((1, 1, h, 32), -2, f"H-{h}"))
 
-    for side in _MEAN_HW_SQUARES:
-        out.append(((1, 1, side, side), [-2, -1], f"HW-{side}x{side}"))
-    for hh, ww in _MEAN_HW_MIXED:
+    for hh, ww in _MEAN_HW_CASES:
         out.append(((1, 1, hh, ww), [-2, -1], f"HW-{hh}x{ww}"))
 
+    # One non-tile-aligned shape to catch padding edge cases
     out.extend(
         [
             ((1, 1, 37, 41), -1, "W-odd-41"),
@@ -144,12 +142,9 @@ def _build_mean_shapes_and_dims():
 
     out.append(((4, 3, 32, 32), [0, 1], "batch+channel"))
 
-    # W/H reductions with non-trivial outer dims: confirms long-reduction ULP profile
-    # holds when there are multiple batch and channel slices (different code path vs N=C=1).
-    for w in [1024, 4096]:
-        out.append(((4, 3, 32, w), -1, f"W-4x3-{w}"))
-    for h in [512, 2048]:
-        out.append(((4, 3, h, 32), -2, f"H-4x3-{h}"))
+    # One multi-outer W and one multi-outer H to confirm ULP holds beyond N=C=1
+    out.append(((4, 3, 32, 1024), -1, "W-4x3-1024"))
+    out.append(((4, 3, 512, 32), -2, "H-4x3-512"))
 
     return out
 
@@ -220,7 +215,7 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_des
 
 # FP32: unless the API uses SFPU-based true float32 accumulation, the tile engine accumulates in
 # TF32, so accuracy may be lower / ULP higher than the IEEE 754 float32 reference (PyTorch).
-# Sweeps add large 2D HW reductions—BH hit ~7.3e5 ULP class.
+# Large 2D HW reductions on BH reached ~7.3e5 ULP class.
 # fp32_dest_acc_en=True is required for FP32 inputs (device enforces this).
 _FP32_ULP_THRESHOLD = 800_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001

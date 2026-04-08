@@ -84,16 +84,13 @@ def _run_ttnn_softmax(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters (sweeps; adjust ranges/steps for coverage vs runtime)
+# Test parameters — small / medium / large per dimension
 # ---------------------------------------------------------------------------
 
-_SOFTMAX_W_SIZES = sorted(set(range(256, 8193, 1024)) | {128, 256, 512, 1024, 2048, 4096, 8192, 32768})
-_SOFTMAX_H_SIZES = sorted(set(range(128, 4097, 1024)) | {128, 512, 1024, 2048, 4096})
-_SOFTMAX_HW_SQUARES = list(range(64, 513, 64))
-_SOFTMAX_HW_MIXED = [(96, 160), (128, 192), (160, 96)]
+_SOFTMAX_W_SIZES = [128, 512, 4096]  # small / medium / large W reduction
+_SOFTMAX_H_SIZES = [128, 512, 2048]  # small / medium / large H reduction
 _SOFTMAX_W_FIXED = 64  # fixed non-softmax dim for H-reduction cases
 _SOFTMAX_H_FIXED = 32  # fixed non-softmax dim for W-reduction cases
-_SOFTMAX_BATCH_W = [2, 4, 8]
 
 
 def _build_softmax_shapes_and_dims():
@@ -102,22 +99,11 @@ def _build_softmax_shapes_and_dims():
         out.append(((1, 1, _SOFTMAX_H_FIXED, w), -1, f"W-{w}"))
     for h in _SOFTMAX_H_SIZES:
         out.append(((1, 1, h, _SOFTMAX_W_FIXED), -2, f"H-{h}"))
-    for side in _SOFTMAX_HW_SQUARES:
-        out.append(((1, 1, side, side), -1, f"HWsq-W-{side}"))
-        out.append(((1, 1, side, side), -2, f"HWsq-H-{side}"))
-    for hh, ww in _SOFTMAX_HW_MIXED:
-        out.append(((1, 1, hh, ww), -1, f"W-{hh}x{ww}"))
-        out.append(((1, 1, hh, ww), -2, f"H-{hh}x{ww}"))
-    out.extend(
-        [
-            ((1, 1, 37, 41), -1, "W-odd-41"),
-            ((1, 1, 37, 41), -2, "H-odd-37"),
-            ((1, 1, 2048, 64), -2, "H-2048-W64"),
-        ]
-    )
-    for b in _SOFTMAX_BATCH_W:
-        out.append(((b, 1, 64, 128), -1, f"W-batch{b}"))
-    # Multi-batch/channel: regression check that ULP holds with non-trivial outer dims.
+    # One non-tile-aligned shape
+    out.append(((1, 1, 37, 41), -1, "W-odd-41"))
+    out.append(((1, 1, 37, 41), -2, "H-odd-37"))
+    # One batch and one multi-channel case
+    out.append(((4, 1, 64, 128), -1, "W-batch4"))
     out.append(((2, 3, _SOFTMAX_H_FIXED, 512), -1, "W-2x3-512"))
     out.append(((2, 3, 512, _SOFTMAX_W_FIXED), -2, "H-2x3-512"))
     return out

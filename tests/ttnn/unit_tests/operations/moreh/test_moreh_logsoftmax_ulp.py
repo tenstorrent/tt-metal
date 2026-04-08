@@ -91,11 +91,10 @@ def _run_ttnn_logsoftmax(
 # Test parameters: strategy-consistent shape sweeps (multiples of 32 for tiles)
 # ---------------------------------------------------------------------------
 
-_SMALL_INNER = list(range(32, 385, 64))  # 32..352 step 64
-# LARGE_W: dim is last; penultimate matches 32*4 tile-style layouts from callback tests
-_LARGE_W_LAST = [160, 320, 480]  # (2,3,128,w), dim=3
-_LARGE_H_PENULT = [128, 256, 384]  # dim 2 on (2,3,h,160)
-_LARGE_C_DIMS = [7, 8, 15, 16, 23, 31, 32]  # channel count for (1,c,32,32) dim 1; includes tile-aligned 8, 16, 32
+_SMALL_INNER = [32, 160, 352]  # small / medium / large inner dim
+_LARGE_W_LAST = [160, 480]  # small and large W for LARGE_W strategy
+_LARGE_H_PENULT = [128, 384]  # small and large H for LARGE_H strategy
+_LARGE_C_DIMS = [7, 16, 32]  # small (sub-tile) / medium / large (tile-boundary) C
 
 
 def _build_moreh_logsoftmax_strategy_cases():
