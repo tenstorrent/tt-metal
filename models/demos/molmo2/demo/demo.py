@@ -426,6 +426,7 @@ class Molmo2Generator:
 
         # Create valid mask: [1, 1, B*N_out*K_pool, 1]
         valid_mask = valid.reshape(1, 1, -1, 1).float()
+        logger.info(f"valid_mask: {valid_mask.shape}")
 
         # 3. Convert remaining tensors to TTNN (embedded_ttnn already on device)
 
@@ -437,6 +438,7 @@ class Molmo2Generator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
+        logger.info(f"idx_ttnn: {idx_ttnn.shape}")
 
         valid_mask_ttnn = ttnn.from_torch(
             valid_mask,
@@ -446,7 +448,7 @@ class Molmo2Generator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
-
+        logger.info(f"valid_mask_ttnn: {valid_mask_ttnn.shape}")
         valid_token_ttnn = ttnn.from_torch(
             valid_token.flatten().float(),  # Must convert bool to float before bfloat16
             device=self.mesh_device,
@@ -455,7 +457,7 @@ class Molmo2Generator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
-
+        logger.info(f"valid_token_ttnn: {valid_token_ttnn.shape}")
         return {
             "embedded": embedded_ttnn,
             "idx": idx_ttnn,
@@ -475,11 +477,13 @@ class Molmo2Generator:
         k_pool: int = 4,
         pool_dim: int = 2304,
         batch_size: int = 1,
+        num_crops: int = 1,
     ) -> dict:
         """Allocate tensors for vision trace."""
-        # Input: embedded patches
+        # Input: embedded patches (video: batch_size * num_crops * patches_per_frame)
+        vit_seq = batch_size * num_crops * num_patches
         trace_embedded = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
+            ttnn.Shape([1, 1, vit_seq, hidden_dim]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             self.mesh_device,
@@ -537,6 +541,7 @@ class Molmo2Generator:
             n_out=trace_tensors["n_out"],
             k_pool=trace_tensors["k_pool"],
             batch_size=trace_tensors["batch_size"],
+            num_crops=trace_tensors.get("num_crops", 1),
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -814,14 +819,16 @@ class Molmo2Generator:
         n_out: int = 169,
         k_pool: int = 4,
         batch_size: int = 1,
+        num_crops: int = 1,
     ) -> dict:
         """Allocate all tensors needed for unified vision + prefill trace.
 
         This includes input_ids so embed_tokens can be called inside the trace.
         """
-        # Vision inputs
+        # Vision inputs (video: batch_size * num_crops patch grids)
+        vit_seq = batch_size * num_crops * num_patches
         trace_embedded = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * num_patches, vit_hidden_dim]),
+            ttnn.Shape([1, 1, vit_seq, vit_hidden_dim]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             self.mesh_device,
@@ -898,6 +905,7 @@ class Molmo2Generator:
             "n_out": n_out,
             "k_pool": k_pool,
             "batch_size": batch_size,
+            "num_crops": num_crops,
             # Text inputs (for embed_tokens inside trace)
             "input_ids": trace_input_ids,
             "selector_matrix": trace_selector_matrix,
@@ -946,6 +954,7 @@ class Molmo2Generator:
             n_out=trace_tensors["n_out"],
             k_pool=trace_tensors["k_pool"],
             batch_size=trace_tensors["batch_size"],
+            num_crops=trace_tensors.get("num_crops", 1),
         )
         # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
 
@@ -1013,10 +1022,17 @@ class Molmo2Generator:
 
         # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
         vit = self.model.vision_backbone.image_vit
+        patch_features = vit.patch_size * vit.patch_size * 3
         embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
+        if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+            num_crops_unified = int(pixel_values.shape[0])
+        elif pixel_values.dim() == 4:
+            num_crops_unified = int(pixel_values.shape[0])
+        else:
+            num_crops_unified = 1
 
         valid = pooled_patches_idx >= 0
         valid_token = torch.any(valid, dim=-1)
@@ -1098,6 +1114,7 @@ class Molmo2Generator:
             "n_out": n_out,
             "k_pool": k_pool,
             "batch_size": batch_size,
+            "num_crops": num_crops_unified,
             # Text inputs (embed_tokens called inside trace)
             "input_ids": input_ids_ttnn,
             "selector_matrix": selector_ttnn,
@@ -1201,6 +1218,7 @@ class Molmo2Generator:
                 n_out=inputs["n_out"],
                 k_pool=inputs["k_pool"],
                 batch_size=inputs["batch_size"],
+                num_crops=inputs.get("num_crops", 1),
             )
 
             # Step 2: Text embeddings (compile embed_tokens)
@@ -1256,6 +1274,7 @@ class Molmo2Generator:
                 n_out=inputs["n_out"],
                 k_pool=inputs["k_pool"],
                 batch_size=inputs["batch_size"],
+                num_crops=inputs.get("num_crops", 1),
             )
 
             # Copy initial data to trace tensors
@@ -1745,6 +1764,7 @@ class Molmo2Generator:
                     n_out=vision_inputs["n_out"],
                     k_pool=vision_inputs["k_pool"],
                     batch_size=vision_inputs["batch_size"],
+                    num_crops=vision_inputs.get("num_crops", 1),
                 )
                 ttnn.synchronize_device(self.mesh_device)
                 timing["vision_compile_ms"] = (time.perf_counter() - warmup_start) * 1000
@@ -2177,7 +2197,6 @@ class Molmo2Generator:
 
         # Tokenize input
         input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
-
         # pooled_patches_idx shape: [n_frames, N_out, K_pool] -- no unsqueeze needed
         pooled_patches_idx = video_inputs["image_token_pooling"]  # [n_frames, N_out, K_pool]
         pixel_values = video_inputs["pixel_values"]  # [n_frames, 3, H, W]

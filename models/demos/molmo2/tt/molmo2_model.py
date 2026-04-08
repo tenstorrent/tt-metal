@@ -227,6 +227,13 @@ class Molmo2Model(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
+        if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+            num_crops_nv = int(pixel_values.shape[0])
+        elif pixel_values.dim() == 4:
+            num_crops_nv = int(pixel_values.shape[0])
+        else:
+            num_crops_nv = batch_size
+
         visual_embeddings = self.vision_backbone.forward_ttnn(
             images_embedded=embedded_ttnn,
             pooled_patches_idx_ttnn=idx_ttnn,
@@ -235,6 +242,7 @@ class Molmo2Model(LightweightModule):
             n_out=n_out,
             k_pool=k_pool,
             batch_size=batch_size,
+            num_crops=num_crops_nv,
         )
 
         # Debug: check visual embeddings values
@@ -364,6 +372,7 @@ class Molmo2Model(LightweightModule):
                 n_out=n_out,
                 k_pool=k_pool,
                 batch_size=chunk_size,
+                num_crops=chunk_size,
             )
 
             # Move to CPU for concatenation (then back to device)

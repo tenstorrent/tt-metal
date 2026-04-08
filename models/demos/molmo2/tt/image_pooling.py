@@ -28,6 +28,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+# Chunk along batch_seq (e.g. B×N_out after ViT) so QKᵀ and P@V matmuls stay bounded in DRAM.
+_ATTN_BATCH_SEQ_CHUNK = 512
+
 
 class ImagePooling(LightweightModule):
     """
@@ -257,9 +260,10 @@ class ImagePooling(LightweightModule):
                 SDPA sees -inf on padded keys (matches default SDPA k-chunk alignment).
 
         Returns:
-            Pooled features of shape [1, 1, num_queries, hidden_dim]
+            Pooled features of shape [1, batch_seq, num_queries, hidden_dim]
         """
         num_queries = query.shape[-2]
+        batch_seq = query.shape[1]
         pool_size = key_value.shape[-2]
         padded_pool_size = math.ceil(pool_size / self.tile_size) * self.tile_size
         pool_pad = padded_pool_size - pool_size
@@ -298,113 +302,122 @@ class ImagePooling(LightweightModule):
             ttnn.deallocate(mask_pad)
             mask_was_padded = True
 
-        # Q projection
-        q = ttnn.linear(
-            query,
-            self.wq,
-            bias=self.bq,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
-        )
+        # Q/K/V linear + MH reshape/typecast are done per batch_seq chunk only. Doing them on the
+        # full batch then typecast doubles activation size (~905MB) and OOMs on long video.
+        #
+        # Merge per-chunk `wo` with ttnn.concat only: works under vision mesh trace (recorded ops).
+        # experimental.slice_write / extra host writes are not used. synchronize_device each step
+        # helps reclaim DRAM between concats on long batch_seq (fragmentation).
+        padded_hidden = self.num_heads * self.padded_head_dim
+        nh = self.num_heads
+        ph = self.padded_head_dim
+        mask_batch = attn_mask_to_use.shape[0] if attn_mask is not None else 0
+        in_dim = query.shape[-1]
+        pooled_acc = None
 
-        # K projection
-        k = ttnn.linear(
-            kv_for_linear,
-            self.wk,
-            bias=self.bk,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
-        )
+        for s in range(0, batch_seq, _ATTN_BATCH_SEQ_CHUNK):
+            e = min(s + _ATTN_BATCH_SEQ_CHUNK, batch_seq)
+            chunk_bs = e - s
 
-        # V projection
-        v = ttnn.linear(
-            kv_for_linear,
-            self.wv,
-            bias=self.bv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
-        )
+            query_slice = ttnn.slice(query, (0, s, 0, 0), (1, e, num_queries, in_dim))
+            kv_slice = ttnn.slice(kv_for_linear, (0, s, 0, 0), (1, e, attn_kv_len, in_dim))
+
+            q_h = ttnn.linear(
+                query_slice,
+                self.wq,
+                bias=self.bq,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=matmul_output_memory_config,
+            )
+            ttnn.deallocate(query_slice)
+            q_h = ttnn.reshape(q_h, [chunk_bs, num_queries, nh, ph])
+            q_h = ttnn.permute(q_h, (0, 2, 1, 3))
+            q_h = ttnn.typecast(q_h, dtype=ttnn.bfloat16)
+
+            k_h = ttnn.linear(
+                kv_slice,
+                self.wk,
+                bias=self.bk,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=matmul_output_memory_config,
+            )
+            k_h = ttnn.reshape(k_h, [chunk_bs, attn_kv_len, nh, ph])
+            k_h = ttnn.permute(k_h, (0, 2, 1, 3))
+            k_h = ttnn.typecast(k_h, dtype=ttnn.bfloat16)
+
+            v_h = ttnn.linear(
+                kv_slice,
+                self.wv,
+                bias=self.bv,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=matmul_output_memory_config,
+            )
+            ttnn.deallocate(kv_slice)
+
+            v_h = ttnn.reshape(v_h, [chunk_bs, attn_kv_len, nh, ph])
+            v_h = ttnn.permute(v_h, (0, 2, 1, 3))
+            v_h = ttnn.typecast(v_h, dtype=ttnn.bfloat16)
+
+            k_t = ttnn.permute(k_h, (0, 1, 3, 2))
+            attn_weights = ttnn.matmul(
+                q_h,
+                k_t,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            ttnn.deallocate(k_t)
+            ttnn.deallocate(q_h)
+            ttnn.deallocate(k_h)
+
+            attn_weights = ttnn.mul(attn_weights, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            if attn_mask is not None:
+                if mask_batch == batch_seq:
+                    mask_chunk = ttnn.slice(
+                        attn_mask_to_use,
+                        (s, 0, 0, 0),
+                        (e, attn_mask_to_use.shape[1], attn_mask_to_use.shape[2], attn_mask_to_use.shape[3]),
+                    )
+                else:
+                    mask_chunk = attn_mask_to_use
+                attn_weights = ttnn.add(attn_weights, mask_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_weights)
+
+            out_c = ttnn.matmul(
+                attn_probs,
+                v_h,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            ttnn.deallocate(attn_probs)
+            ttnn.deallocate(v_h)
+
+            attn_for_wo = ttnn.permute(out_c, (0, 2, 1, 3))
+            ttnn.deallocate(out_c)
+            attn_for_wo = ttnn.reshape(attn_for_wo, [1, chunk_bs, num_queries, padded_hidden])
+            chunk_proj = ttnn.linear(
+                attn_for_wo,
+                self.wo,
+                bias=self.bo,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=matmul_output_memory_config,
+            )
+            ttnn.deallocate(attn_for_wo)
+
+            if pooled_acc is None:
+                pooled_acc = chunk_proj
+            else:
+                nxt = ttnn.concat([pooled_acc, chunk_proj], dim=1)
+                ttnn.deallocate(pooled_acc)
+                ttnn.deallocate(chunk_proj)
+                pooled_acc = nxt
+
+        if mask_was_padded:
+            ttnn.deallocate(attn_mask_to_use)
 
         if deallocate_kv_padded:
             ttnn.deallocate(kv_for_linear)
 
-        # Reshape Q, K, V for multi-head attention
-        # Note: Using ttnn ops for head splitting
-
-        # For cross-attention, we need special handling
-        # Get batch dimensions from input tensors
-        batch_seq = query.shape[1]  # B*N_out from vision_backbone
-        padded_hidden = self.num_heads * self.padded_head_dim
-
-        # Q: [1, batch_seq, num_queries, padded_hidden] -> [batch_seq, num_heads, num_queries, head_dim]
-        # K/V: sequence length is attn_kv_len (padded to tile alignment when using attn_mask)
-
-        q = ttnn.reshape(q, [batch_seq, num_queries, self.num_heads, self.padded_head_dim])
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        q = ttnn.typecast(q, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
-
-        k = ttnn.reshape(k, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        k = ttnn.typecast(k, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
-
-        v = ttnn.reshape(v, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
-        v = ttnn.permute(v, (0, 2, 1, 3))
-        v = ttnn.typecast(v, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
-
-        # Use manual attention computation to handle mask correctly
-        # (TTNN SDPA has issues with additive masks in cross-attention)
-
-        # Q @ K^T -> [batch_seq, num_heads, num_queries, pool_size]
-        k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, num_heads, head_dim, pool_size]
-        attn_weights = ttnn.matmul(
-            q,
-            k_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        ttnn.deallocate(k_t)
-
-        # Scale
-        attn_weights = ttnn.mul(attn_weights, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
-        if attn_mask is not None:
-            # Expand mask from [batch_seq, 1, 1, attn_kv_len] to [batch_seq, num_heads, num_queries, attn_kv_len]
-            # Broadcasting should handle this automatically
-            attn_weights = ttnn.add(attn_weights, attn_mask_to_use, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if mask_was_padded:
-                ttnn.deallocate(attn_mask_to_use)
-
-        # Softmax
-        attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(attn_weights)
-
-        # Attention output: attn_probs @ V -> [batch_seq, num_heads, num_queries, head_dim]
-        attn_output = ttnn.matmul(
-            attn_probs,
-            v,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        ttnn.deallocate(attn_probs)
-
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-
-        # Reshape back: [batch_seq, num_heads, num_queries, head_dim] -> [1, batch_seq, num_queries, hidden_dim]
-        attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.num_heads * self.padded_head_dim])
-
-        # Output projection
-        output = ttnn.linear(
-            attn_output,
-            self.wo,
-            bias=self.bo,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
-        )
-
-        ttnn.deallocate(attn_output)
-
-        return output
+        return pooled_acc

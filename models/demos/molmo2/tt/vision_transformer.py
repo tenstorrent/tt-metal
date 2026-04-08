@@ -250,6 +250,10 @@ class VisionTransformer(LightweightModule):
         patches_w = width // self.patch_size
         num_patches = patches_h * patches_w
 
+        from loguru import logger
+
+        logger.info(f"patch_embedding start")
+
         # CPU: unfold + permute -- pure data layout reorganization, no arithmetic
         x = pixel_values.unfold(2, self.patch_size, self.patch_size)
         x = x.unfold(3, self.patch_size, self.patch_size)
@@ -291,6 +295,7 @@ class VisionTransformer(LightweightModule):
             embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(pos_tiled)
 
+        logger.info(f"patch_embedding finished")
         return embedded
 
     def patch_embed_from_patches_ttnn(self, patches: torch.Tensor) -> ttnn.Tensor:

@@ -9,7 +9,9 @@ Combines the Vision Transformer encoder with the image pooling and projector
 to produce visual embeddings ready for the language model.
 
 Pipeline:
-    1. ViT encoder: images -> multi-scale hidden states (layers 18, 24)
+    1. ViT encoder: images -> multi-scale hidden states (layers 18, 24).
+       Long video: optional frame chunking (env ``MOLMO2_VIT_ENCODE_FRAMES_CHUNK``; default ``0``).
+       Set e.g. ``8`` to chunk; each slice is materialized before ViT for SDPA stability.
     2. Concat features on hidden dim: [B*T, N, 1152] x 2 -> [B, T*N, 2304]
     3. Gather features using pooled_patches_idx
     4. Cross-attention pooling: [B*N_out, K_pool, 2304] -> [B, N_out, 1152]
@@ -17,7 +19,8 @@ Pipeline:
     6. Filter by valid_token mask: [valid_tokens, 4096]
 """
 
-from typing import Tuple
+import os
+from typing import List, Optional, Tuple
 
 import torch
 
@@ -26,6 +29,33 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.image_pooling import ImagePooling
 from models.demos.molmo2.tt.image_projector import ImageProjector
 from models.demos.molmo2.tt.vision_transformer import VisionTransformer
+
+
+def _vit_encode_frames_chunk_from_env() -> int:
+    """Max frames per ViT forward in encode_image; 0 disables chunking (single forward).
+
+    Default 0: one ViT over the full sequence (matches pre-chunking behavior). Set to e.g. 8
+    to cap peak memory on long video; chunks are materialized after ``ttnn.slice`` for stability.
+    """
+    v = os.environ.get("MOLMO2_VIT_ENCODE_FRAMES_CHUNK", "16")
+    try:
+        c = int(v)
+    except ValueError:
+        return 0
+    return max(0, c)
+
+
+def _concat_tensors_dim2_device(chunks: List[ttnn.Tensor]) -> ttnn.Tensor:
+    """Concatenate on sequence dim (2) on device; pairwise merge to limit peak DRAM."""
+    if len(chunks) == 1:
+        return chunks[0]
+    out = chunks[0]
+    for i in range(1, len(chunks)):
+        nxt = ttnn.concat([out, chunks[i]], dim=2)
+        ttnn.deallocate(out)
+        ttnn.deallocate(chunks[i])
+        out = nxt
+    return out
 
 
 class VisionBackbone(LightweightModule):
@@ -141,6 +171,84 @@ class VisionBackbone(LightweightModule):
     # Class-level request counter for debugging
     _encode_image_request_count = 0
 
+    def _effective_num_crops_for_embedded(self, seq_len: int, num_crops: int) -> int:
+        """
+        Resolve how many frame/crop repeats are packed along the sequence axis.
+
+        If num_crops > 1, it is trusted and seq_len must divide evenly.
+        If num_crops == 1 and seq_len is a multiple of the ViT patch count (e.g. 729),
+        infer a multi-frame / multi-crop video layout (seq_len // num_patches).
+        """
+        if num_crops > 1:
+            if seq_len % num_crops != 0:
+                raise ValueError(f"images_embedded seq_len {seq_len} not divisible by num_crops {num_crops}")
+            return num_crops
+        npp = self.image_vit.num_patches
+        if seq_len > npp and npp > 0 and seq_len % npp == 0:
+            t = seq_len // npp
+            return t if t > 1 else 1
+        return 1
+
+    def _vit_embedded_to_multi_scale_features(
+        self,
+        x: ttnn.Tensor,
+        matmul_output_memory_config,
+        request_num: int,
+        logger,
+        seq_token_range: Optional[Tuple[int, int]] = None,
+    ) -> ttnn.Tensor:
+        """Single ViT forward on embedded patches; returns [1,1,S,pool_dim].
+
+        If ``seq_token_range`` is ``(t0, t1)`` (half-open token indices on dim 2), run ViT only on
+        that slice. The subrange is materialized here (``slice`` + ``to_memory_config``) so encode
+        callers can pass the full ``images_embedded`` without building a separate sliced tensor.
+        """
+        x_in = x
+        deallocate_x_in = False
+        if seq_token_range is not None:
+            t0, t1 = seq_token_range
+            seq_full = int(x.shape[2])
+            hidden_dim = int(x.shape[3])
+            if t0 != 0 or t1 != seq_full:
+                # Materialize: sliced TILE tensors can share parent storage / padding metadata that
+                # breaks or hangs scaled_dot_product_attention in VisionAttention.
+                x_in = ttnn.to_memory_config(
+                    ttnn.slice(x, (0, 0, t0, 0), (1, 1, t1, hidden_dim)),
+                    matmul_output_memory_config,
+                )
+                deallocate_x_in = True
+
+        vit_input_shape = list(x_in.shape)
+        hidden_states = self.image_vit.forward(
+            x_in,
+            return_all_hidden_states=True,
+            matmul_output_memory_config=matmul_output_memory_config,
+        )
+        if deallocate_x_in:
+            ttnn.deallocate(x_in)
+        logger.info(
+            f"encode_image REQUEST #{request_num}: ViT forward complete, "
+            f"{len(hidden_states)} hidden states, ViT input shape={vit_input_shape}"
+        )
+
+        used_indices = set(self.feature_layers)
+        features = []
+        for layer_idx in self.feature_layers:
+            features.append(hidden_states[layer_idx])
+            logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
+
+        deallocated_count = 0
+        for i, hs in enumerate(hidden_states):
+            if i not in used_indices:
+                ttnn.deallocate(hs)
+                deallocated_count += 1
+        logger.info(f"encode_image REQUEST #{request_num}: Deallocated {deallocated_count} unused hidden states")
+
+        image_features = ttnn.concat(features, dim=-1)
+        for f in features:
+            ttnn.deallocate(f)
+        return image_features
+
     def encode_image(
         self,
         images_embedded: ttnn.Tensor,
@@ -151,63 +259,64 @@ class VisionBackbone(LightweightModule):
         Encode images through ViT and extract multi-scale features.
 
         Args:
-            images_embedded: Embedded image patches [B*T, N, hidden_dim]
+            images_embedded: Embedded image patches [1, 1, T*N, hidden_dim]
                              after patch embedding and positional embedding
-            num_crops: Number of crops per image (T)
+            num_crops: Number of crops / frames (T) packed along the sequence axis. If 1 and
+                the sequence length is a multiple of ``num_patches`` (729 for 378/14), T is inferred.
 
         Returns:
-            Concatenated multi-scale features [B, T*N, pool_input_dim]
+            Concatenated multi-scale features [1, 1, T*N, pool_input_dim]
+
+        Long videos: set env ``MOLMO2_VIT_ENCODE_FRAMES_CHUNK`` (default 8) to run multiple ViT
+        forwards over frame groups and ``ttnn.concat`` the results on device along dim 2.
+        Use ``0`` to force a single forward (original behavior).
         """
         from loguru import logger
 
-        # Track request count for debugging
         VisionBackbone._encode_image_request_count += 1
         request_num = VisionBackbone._encode_image_request_count
-        logger.info(f"encode_image REQUEST #{request_num}: Starting ViT forward...")
+        seq_len = int(images_embedded.shape[2])
+        eff_crops = self._effective_num_crops_for_embedded(seq_len, num_crops)
+        tokens_per_crop = seq_len // eff_crops
+        chunk_frames = _vit_encode_frames_chunk_from_env()
+
+        logger.info(f"encode_image REQUEST #{request_num}: Starting ViT encode...")
         logger.info(f"  images_embedded shape: {list(images_embedded.shape)}")
-
-        # Run through ViT and collect all hidden states
-        hidden_states = self.image_vit.forward(
-            images_embedded,
-            return_all_hidden_states=True,
-            matmul_output_memory_config=matmul_output_memory_config,
-        )
-
         logger.info(
-            f"encode_image REQUEST #{request_num}: ViT forward complete, got {len(hidden_states)} hidden states"
+            f"  effective_crops={eff_crops}, tokens_per_crop={tokens_per_crop}, "
+            f"MOLMO2_VIT_ENCODE_FRAMES_CHUNK={chunk_frames}"
         )
 
-        logger.info(
-            f"encode_image REQUEST #{request_num}: ViT forward complete, got {len(hidden_states)} hidden states"
-        )
-
-        # Extract features from specified layers and concat
-        features = []
-        used_indices = set(self.feature_layers)
-        for layer_idx in self.feature_layers:
-            features.append(hidden_states[layer_idx])
-            logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
-
-        # CRITICAL: Deallocate unused hidden states to prevent memory leak
-        # For video with 8 frames, each hidden state is ~27MB, 25 layers = ~670MB total
-        # Only using 2 layers means 23 layers (~620MB) would be leaked per request!
-        deallocated_count = 0
-        for i, hs in enumerate(hidden_states):
-            if i not in used_indices:
-                ttnn.deallocate(hs)
-                deallocated_count += 1
-        logger.info(f"encode_image REQUEST #{request_num}: Deallocated {deallocated_count} unused hidden states")
-
-        # Concatenate on hidden dimension
-        # Each feature is [1, 1, B*T*N, hidden_dim]
-        image_features = ttnn.concat(features, dim=-1)
-
-        # NOTE: Do NOT deallocate features here - ttnn.concat may return a view that references inputs
-        # The deallocation of unused hidden states above is sufficient for memory management
-        logger.info(f"encode_image REQUEST #{request_num}: Concat complete (keeping feature tensors)")
+        if chunk_frames == 0 or eff_crops <= chunk_frames:
+            image_features = self._vit_embedded_to_multi_scale_features(
+                images_embedded,
+                matmul_output_memory_config,
+                request_num,
+                logger,
+            )
+        else:
+            out_chunks: List[ttnn.Tensor] = []
+            for f0 in range(0, eff_crops, chunk_frames):
+                f1 = min(f0 + chunk_frames, eff_crops)
+                t0, t1 = f0 * tokens_per_crop, f1 * tokens_per_crop
+                logger.info(
+                    f"encode_image REQUEST #{request_num}: ViT chunk frames [{f0}, {f1}) "
+                    f"-> token slice [{t0}, {t1}) (slice+materialize inside ViT helper)"
+                )
+                c_out = self._vit_embedded_to_multi_scale_features(
+                    images_embedded,
+                    matmul_output_memory_config,
+                    request_num,
+                    logger,
+                    seq_token_range=(t0, t1),
+                )
+                out_chunks.append(c_out)
+            image_features = _concat_tensors_dim2_device(out_chunks)
+            logger.info(
+                f"encode_image REQUEST #{request_num}: Concatenated {len(out_chunks)} " f"device chunks on dim=2"
+            )
 
         logger.info(f"encode_image REQUEST #{request_num}: Complete, output shape: {list(image_features.shape)}")
-
         return image_features
 
     def encode_image_from_pixels(
@@ -454,6 +563,7 @@ class VisionBackbone(LightweightModule):
         n_out: int,
         k_pool: int,
         batch_size: int = 1,
+        num_crops: int = 1,
     ) -> ttnn.Tensor:
         """
         Full forward pass using TTNN ops (traceable).
@@ -468,6 +578,7 @@ class VisionBackbone(LightweightModule):
             n_out: Number of output positions
             k_pool: Pooling kernel size
             batch_size: Batch size (default 1)
+            num_crops: Frames or crops T along the sequence axis (default 1; infer when seq is T*729)
 
         Returns:
             Visual embeddings [1, 1, B*N_out, output_dim]
@@ -477,18 +588,20 @@ class VisionBackbone(LightweightModule):
         _vit_el = images_embedded.shape[2] * images_embedded.shape[3]
         vit_matmul_config = ttnn.L1_MEMORY_CONFIG if _vit_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
 
-        # 1. Encode image through ViT
+        # 1. Encode image through ViT (optional frame chunking via MOLMO2_VIT_ENCODE_FRAMES_CHUNK)
         image_features = self.encode_image(
             images_embedded,
+            num_crops=num_crops,
             matmul_output_memory_config=vit_matmul_config,
         )
         # image_features: [1, 1, B*T*N, pool_dim]
 
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
-        image_features_2d = ttnn.reshape(image_features, [-1, image_features.shape[-1]])
-
-        # Convert to ROW_MAJOR for embedding lookup (embedding table must be ROW_MAJOR)
-        image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
+        image_features_2d = ttnn.to_layout(
+            ttnn.reshape(image_features, [-1, image_features.shape[-1]]),
+            ttnn.ROW_MAJOR_LAYOUT,
+        )
+        ttnn.deallocate(image_features)
 
         # 2. Gather features using ttnn.embedding
         # pooled_patches_idx_ttnn: [1, B*N_out*K_pool] contains indices into B*T*N
@@ -499,12 +612,11 @@ class VisionBackbone(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # gathered: [1, B*N_out*K_pool, pool_dim]
-        # Free ViT output immediately to reduce memory pressure for subsequent matmuls
-        ttnn.deallocate(image_features)
 
         # Reshape to [1, 1, B*N_out*K_pool, pool_dim] for masking
         pool_dim = image_features_2d.shape[-1]
         gathered = ttnn.reshape(gathered, [1, 1, batch_size * n_out * k_pool, pool_dim])
+        ttnn.deallocate(image_features_2d)
 
         # 3. Apply valid mask (zero out invalid positions)
         # valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1]
@@ -512,6 +624,7 @@ class VisionBackbone(LightweightModule):
 
         # Reshape to [1, B*N_out, K_pool, pool_dim]
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
+        ttnn.deallocate(gathered)
 
         # 4. Compute query (mean of valid features per output position)
         # Sum along K_pool dimension
@@ -551,7 +664,6 @@ class VisionBackbone(LightweightModule):
 
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
-        ttnn.deallocate(gathered)
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
