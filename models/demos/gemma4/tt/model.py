@@ -204,25 +204,31 @@ class Gemma4Model:
                     self.per_layer_embed_scale = pli_size**0.5
 
                     # Device-side PLI weights for on-device decode (trace-compatible)
+                    # Shard the large embedding on dim=-1 across TP devices to halve per-device DRAM
+                    tp = mesh_config.tp if mesh_config else 1
+                    pli_col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else replicate
                     self.pli_embed_weight_tt = ttnn.as_tensor(
                         state_dict[pli_embed_key],
                         device=mesh_device,
                         dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=replicate,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, "pli_embed_tokens_per_layer"),
+                        mesh_mapper=pli_col_mapper,
+                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_embed_tokens_per_layer_tp{tp}"),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
+                    self.pli_tp = tp  # Track TP for all-gather after embedding lookup
+                    # Projection weight also sharded on output dim (column-parallel)
                     pli_proj_w = state_dict[pli_proj_key].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
                     self.pli_proj_weight_tt = ttnn.as_tensor(
                         pli_proj_w,
                         device=mesh_device,
                         dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=replicate,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, "pli_model_projection"),
+                        mesh_mapper=pli_col_mapper,
+                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_model_projection_tp{tp}"),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
+                    # Norm weight is small — replicate
                     pli_norm_w = state_dict[pli_norm_key].reshape(1, 1, -1, ttnn.TILE_SIZE)
                     self.pli_norm_weight_tt = ttnn.as_tensor(
                         pli_norm_w,
@@ -353,18 +359,40 @@ class Gemma4Model:
 
         pli_size = self.hidden_size_per_layer_input
         n_layers = len(self.layers)
-        full_n_layers_pli = self.pli_embed_weight_tt.shape[-1] // pli_size
+        tp = getattr(self, "pli_tp", 1)
 
-        # 1. Per-layer token embedding: [1, 1, full_n_layers * pli_size]
+        # Infer full_n_layers from weight shape (accounting for TP sharding)
+        local_out_dim = self.pli_embed_weight_tt.shape[-1]
+        full_out_dim = local_out_dim * tp
+        full_n_layers_pli = full_out_dim // pli_size
+
+        # 1. Per-layer token embedding (column-parallel sharded if TP > 1)
         pli_embed = ttnn.embedding(tokens_tt, self.pli_embed_weight_tt, layout=ttnn.TILE_LAYOUT)
         pli_embed = ttnn.mul(pli_embed, self.per_layer_embed_scale)
 
-        # 2. Projection from main embeddings: [1, 1, 1, full_n_layers * pli_size]
+        # 2. Projection from main embeddings (column-parallel sharded if TP > 1)
         pli_proj = ttnn.linear(input_embeds_tt, self.pli_proj_weight_tt)
         pli_proj = ttnn.mul(pli_proj, self.per_layer_model_projection_scale)
 
-        # Match shapes: pli_embed is 3D [1, 1, full*pli] → 4D
+        # Match shapes: pli_embed is 3D [1, 1, local_out] → 4D
         pli_embed = ttnn.unsqueeze_to_4D(pli_embed)
+
+        # All-gather if TP > 1 to reconstruct full output dim
+        if tp > 1:
+            pli_embed = ttnn.all_gather(
+                pli_embed,
+                num_links=1,
+                dim=-1,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=self.mesh_config.tp_axis,
+            )
+            pli_proj = ttnn.all_gather(
+                pli_proj,
+                num_links=1,
+                dim=-1,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=self.mesh_config.tp_axis,
+            )
 
         # 3. Reshape to [1, 1, full_n_layers, pli_size] for per-vector RMSNorm
         pli_proj = ttnn.reshape(pli_proj, (1, 1, full_n_layers_pli, pli_size))
