@@ -515,13 +515,28 @@ def test_demo_single_layer(device, model_path):
 
 
 def test_demo_full_model(device, model_path):
-    """Full model demo — requires sufficient DRAM for all layers."""
+    """Full model demo on single device (no PLI on-device — uses CPU fallback)."""
     prompts = ["Explain quantum computing in simple terms"]
     results = run_generation(
         mesh_device=device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=64,
+    )
+    assert len(results) == 1
+    logger.info(f"Full model output: {results[0]}")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_demo_full_model_n300(mesh_device, model_path):
+    """Full model demo on N300 (TP=2) — PLI on-device, decode tracing."""
+    prompts = ["Explain quantum computing in simple terms"]
+    results = run_generation(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        prompts=prompts,
+        max_new_tokens=64,
+        max_seq_len=512,
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")

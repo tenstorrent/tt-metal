@@ -207,10 +207,11 @@ class Gemma4Model:
                     # Shard the large embedding on dim=-1 across TP devices to halve per-device DRAM
                     tp = mesh_config.tp if mesh_config else 1
                     pli_col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else replicate
+                    # Use bfloat8_b for the large PLI embedding to reduce per-device DRAM
                     self.pli_embed_weight_tt = ttnn.as_tensor(
                         state_dict[pli_embed_key],
                         device=mesh_device,
-                        dtype=dtype,
+                        dtype=ttnn.bfloat8_b,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=pli_col_mapper,
                         cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_embed_tokens_per_layer_tp{tp}"),
