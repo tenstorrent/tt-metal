@@ -14,6 +14,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize_api.h"
 #include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
@@ -107,7 +108,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
         std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
             output_id, 0 /* output_tile_index */);
 
-        _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+        _llk_pack_(tile_index, l1_tile_index);
     }
 }
 
