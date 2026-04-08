@@ -134,7 +134,7 @@ def get_conv_configs(
     act_block_w_div = 1
     return (
         ttnn.Conv2dConfig(
-            weights_dtype=conv1d_config.weights_dtype,
+            weights_dtype=ttnn.bfloat8_b,
             # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             output_layout=conv1d_config.output_layout,
             # deallocate_activation=conv1d_config.deallocate_activation,
@@ -153,9 +153,10 @@ def get_conv_configs(
         slice_config,
         ttnn.init_device_compute_kernel_config(
             device.arch(),
-            # math_fidelity=conv1d_config.math_fidelity,
-            # fp32_dest_acc_en=conv1d_config.fp32_dest_acc_en,
-            # packer_l1_acc=conv1d_config.packer_l1_acc,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         ),
     )
 
