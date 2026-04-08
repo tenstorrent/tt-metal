@@ -1,12 +1,16 @@
 # LLK Helper Agent Flow
 
-Each phase produces a self-contained markdown artifact interpretable by a downstream agent without shared context. Human checkpoints gate design and test-coverage decisions. Validation failures re-enter Phase 3.
+Each phase produces a self-contained markdown artifact interpretable by a downstream agent without shared context. Human checkpoints gate design and test-coverage decisions. Include the current git commit hash in artifacts for staleness detection across sessions.
+
+**Mode discipline**: Phases 0-4 are analysis only (no file edits, no commands). Phase 5 implements. Phase 6 is read-only.
+
+**Priority**: Correctness > performance > simplicity.
 
 ```
  [Phase 0] Prior Work Detection -----> resume at appropriate phase
  [Phase 1] Research
  [Phase 2] Verification
- [Phase 3] Design Options  <--------- validation failures re-enter here
+ [Phase 3] Design Options  <--------- failure taxonomy routes here
          ** HUMAN CHECKPOINT 1 **
  [Phase 4] Test Design
          ** HUMAN CHECKPOINT 2 **
@@ -38,7 +42,9 @@ Enumerate all target operations, group by functional similarity, locate source f
 
 Analyze each group across: device behavior, host integration, usage patterns / call sites, encapsulation boundary, CB management, existing helpers.
 
-**Artifact**: `investigation.md` -- per-group analysis with file:line references.
+Every factual claim gets a unique ID (C-001, C-002...) with file:line anchor and a 1-2 line excerpt. This **Claim Ledger** is the interface Phase 2 verifies against.
+
+**Artifact**: `investigation.md` -- per-group analysis as a Claim Ledger.
 
 ---
 
@@ -46,9 +52,11 @@ Analyze each group across: device behavior, host integration, usage patterns / c
 
 **Agents**: 1 fresh Explore agent (separate from Phase 1 to avoid confirmation bias).
 
-Check every factual claim in `investigation.md` against source code. Classify as **CONFIRMED** / **INCORRECT** / **UNVERIFIABLE**. INCORRECT findings are highest value -- they change the design.
+Verify every Claim Ledger entry against source code. Classify each as **CONFIRMED** / **INCORRECT** (with correction + evidence) / **UNVERIFIABLE**. Prioritize falsification over confirmation. INCORRECT findings are highest value -- they change the design.
 
-**Artifact**: `verification.md` -- annotated investigation with claim statuses and corrections.
+End with summary counts and the top corrections by impact.
+
+**Artifact**: `verification.md` -- annotated Claim Ledger with statuses, corrections, and summary.
 
 ---
 
@@ -110,13 +118,13 @@ Present test design and **stop**. Human reviews coverage, existing test migratio
 
 **5a**: Write tests from `test_design.md`.
 
-**5b**: Run raw LLK baseline on device. FAIL/HANG = **BLOCKER**, return to Phase 3.
+**5b**: Run raw LLK baseline on device. FAIL/HANG = **BLOCKER**.
 
 **5c**: Implement helper per approved design.
 
 **5d**: Run helper tests. FAIL (raw passed) = implementation bug, fix and re-run 5d.
 
-**5e**: Run full parameter matrix. Observed failure (raw works, helper doesn't) = **BLOCKER**, return to Phase 3. Unobserved failure (both fail) = record as UNSUPPORTED.
+**5e**: Run full parameter matrix. Observed failure (raw works, helper doesn't) = **BLOCKER**. Unobserved failure (both fail) = record as UNSUPPORTED.
 
 **5f**: Migrate existing tests from Phase 4 audit. Run all tests (new + migrated) together. FAIL = fix and re-run 5f.
 
@@ -124,7 +132,16 @@ Present test design and **stop**. Human reviews coverage, existing test migratio
 
 **5h**: Migrate Tier 1 call sites. Re-run all tests to confirm no regression.
 
-Rank fix approaches by: correctness, then performance, then simplicity.
+### Failure taxonomy
+
+Not all failures are design failures. On any BLOCKER, classify the root cause before looping back:
+
+| Root Cause | Route To |
+|------------|----------|
+| Design flaw | Phase 3 |
+| Research gap (investigation was wrong) | Phase 1/2 |
+| Test harness bug | Fix in Phase 5 |
+| Environment issue | Escalate to human |
 
 **Artifact**: `validation_log.md`
 
@@ -134,7 +151,7 @@ Rank fix approaches by: correctness, then performance, then simplicity.
 
 **Agents**: 1 general-purpose (sonnet).
 
-**Artifact**: `report.md` -- summary, validation results, migration status (Tier 1 + existing tests), open items (Tier 2/3, unsupported combos).
+**Artifact**: `report.md` -- quickstart (how to run tests + benchmarks), API contract synopsis, validation results, migration status (Tier 1 + existing tests), open items (Tier 2/3, unsupported combos).
 
 ---
 
