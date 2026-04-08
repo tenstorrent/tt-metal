@@ -266,8 +266,6 @@ private:
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
-    void deallocate_impl(bool force);
 };
 
 Tensor set_tensor_id(const Tensor& tensor);
