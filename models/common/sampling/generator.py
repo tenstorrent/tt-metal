@@ -196,6 +196,10 @@ class SamplingGenerator:
             self.reset_sampling_params(formatted_params)
 
         if reset_batch:
+            # Sync seed RNG state with post-condense slot layout.
+            seed = getattr(formatted_params, "seed", None)
+            if seed is not None:
+                self.seed_manager.sync_seeds(seed)
             self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
 
@@ -569,6 +573,42 @@ class SeedManager:
             )
         else:
             self._seed_mapper = None
+
+    def sync_seeds(self, current_seeds):
+        """Reindex RNG state to match the current seed layout.
+
+        After ``InputBatch.condense()`` moves requests between batch slots,
+        the host-side RNG objects must follow.  This method compares the
+        incoming *current_seeds* list (post-condense positions) with the
+        internal ``self.seeds`` and moves RNG objects accordingly.
+
+        Safe to call on every decode step — it is a no-op when nothing moved.
+        """
+        if not self._seed_active:
+            return
+
+        # Map seed value → old slot (only for non-None seeds).
+        old_seed_to_slot: dict[int, int] = {}
+        for slot, seed in enumerate(self.seeds):
+            if seed is not None:
+                old_seed_to_slot.setdefault(seed, slot)
+
+        moves: list[tuple[int, int]] = []
+        for new_slot, new_seed in enumerate(current_seeds):
+            if new_seed is None or new_seed == self.seeds[new_slot]:
+                continue
+            old_slot = old_seed_to_slot.get(new_seed)
+            if old_slot is not None and old_slot != new_slot:
+                moves.append((old_slot, new_slot))
+
+        if not moves:
+            return
+        for old_slot, new_slot in moves:
+            self.seeds[new_slot] = self.seeds[old_slot]
+            self.rngs[new_slot] = self.rngs[old_slot]
+            self.seeds[old_slot] = None
+            self.rngs[old_slot] = random.Random(secrets.randbits(64))
+        self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
