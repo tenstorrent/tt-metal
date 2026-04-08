@@ -145,6 +145,7 @@ void test_operation_infrastructure() {
     Op::tensor_args_t tensor_args{.input = input_tensor, .output_tensor = std::nullopt};
     auto program_hash = Op::compute_program_hash(op_args, tensor_args);
     auto program_hash_repeat = Op::compute_program_hash(op_args, tensor_args);
+    TT_FATAL(program_hash != 0, "compute_program_hash returned 0 — likely a bug");
     TT_FATAL(
         program_hash == program_hash_repeat,
         "UnaryNgDeviceOperation::compute_program_hash must be deterministic ({} vs {})",
