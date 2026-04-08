@@ -284,6 +284,27 @@ def main():
                 "Please choose one L1 bank per run."
             )
 
+        # Reject BH-only groups on non-BH architectures
+        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
+        requested_groups = {group.lower() for group in options.perf_counter_groups}
+        requested_bh_only = sorted(requested_groups & bh_only_groups)
+        if requested_bh_only:
+            declared_arch = next(
+                (
+                    os.environ.get(env_var)
+                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
+                    if os.environ.get(env_var)
+                ),
+                None,
+            )
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
+            if not is_blackhole:
+                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+                raise ValueError(
+                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
+                    f"but device arch is {arch_desc}. Set a Blackhole arch declaration before enabling these groups."
+                )
+
         if bitfield > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
