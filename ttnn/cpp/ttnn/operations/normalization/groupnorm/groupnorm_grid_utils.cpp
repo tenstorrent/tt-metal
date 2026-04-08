@@ -41,6 +41,8 @@ GroupNormShardedConfigAndGridSize determine_expected_group_norm_sharded_config_a
     using tt::tt_metal::ShardSpec;
     using tt::tt_metal::TensorMemoryLayout;
 
+    TT_FATAL(num_groups > 0, "num_groups needs to be greater than 0");
+    TT_FATAL(num_channels > 0, "num_channels needs to be greater than 0");
     TT_FATAL(
         num_channels % static_cast<uint32_t>(num_groups) == 0,
         "group_norm: num_channels ({}) must be divisible by num_groups ({}).",
