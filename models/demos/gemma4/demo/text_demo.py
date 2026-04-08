@@ -24,6 +24,7 @@ import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def run_generation(
@@ -32,6 +33,8 @@ def run_generation(
     prompts,
     max_new_tokens=32,
     num_layers=None,
+    max_seq_len=4096,
+    page_params=None,
 ):
     """
     Run text generation with Gemma4.
@@ -42,6 +45,8 @@ def run_generation(
         prompts: List of prompt strings
         max_new_tokens: Number of tokens to generate per prompt
         num_layers: Override layer count (for quick testing)
+        max_seq_len: Maximum sequence length (determines KV cache size)
+        page_params: Paged attention params dict with "page_block_size" and "page_max_num_blocks"
 
     Returns:
         List of generated text strings
@@ -60,22 +65,44 @@ def run_generation(
     logger.info(f"Tokenizer loaded from {model_path}")
     profiler.end("loading_inputs")
 
+    # Paged attention config
+    if page_params is None:
+        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
+    paged_attention_config = PagedAttentionConfig(
+        block_size=page_params["page_block_size"],
+        max_num_blocks=page_params["page_max_num_blocks"],
+    )
+
+    # Create page table (identity mapping for single-user)
+    page_table = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
+        batch_size, paged_attention_config.max_num_blocks
+    )
+
     # Create model
-    max_seq_len = 128  # Keep very small for initial testing
     logger.info(f"Creating model with {num_layers or 'all'} layers, max_seq_len={max_seq_len}...")
     t0 = time.time()
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device=mesh_device,
-        max_batch_size=1,
+        max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         model_path=model_path,
         create_kv_cache=True,
+        paged_attention_config=paged_attention_config,
     )
     logger.info(f"Model created in {time.time() - t0:.1f}s")
 
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
+    # Page table on device
+    page_table_tt = ttnn.from_torch(
+        page_table,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=replicate,
+    )
 
     generated_texts = []
 
@@ -83,8 +110,16 @@ def run_generation(
         logger.info(f"\n{'='*60}")
         logger.info(f"Prompt {prompt_idx}: {prompt}")
 
-        # Tokenize
-        input_ids = tokenizer.encode(prompt, return_tensors="pt").squeeze(0)  # [seq_len]
+        # Tokenize using chat template for instruct models
+        if tokenizer.chat_template:
+            messages = [{"role": "user", "content": prompt}]
+            chat_result = tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
+            )
+            input_ids = chat_result["input_ids"].squeeze(0)  # [seq_len]
+        else:
+            input_ids = tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
+
         prompt_len = input_ids.shape[0]
         # Pad to tile alignment for prefill
         padded_len = ((prompt_len + 31) // 32) * 32
@@ -130,7 +165,7 @@ def run_generation(
         try:
             logits = model.ttnn_prefill_forward(
                 embeds,
-                page_table=None,
+                page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
                 get_last_token=get_last_token,
                 input_ids_torch=input_ids_padded.unsqueeze(0),
@@ -200,6 +235,7 @@ def run_generation(
                 token_tt,
                 current_pos=position_tt,
                 kv_cache=tt_kv_cache,
+                page_table=page_table_tt,
                 input_ids_torch=token_tensor,
             )
 
@@ -390,7 +426,7 @@ def test_demo_single_layer(device, model_path):
 
 def test_demo_full_model(device, model_path):
     """Full model demo — requires sufficient DRAM for all layers."""
-    prompts = ["Explain quantum computing in simple terms:"]
+    prompts = ["Explain quantum computing in simple terms"]
     results = run_generation(
         mesh_device=device,
         model_path=model_path,
