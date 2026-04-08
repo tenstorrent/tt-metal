@@ -4,7 +4,6 @@
 
 #pragma once
 #include <cstdint>
-#include <vector>
 
 // Metal specific overrides -- No support for partial tiles so hard-code to fixed 32x32 sizes
 inline uint32_t get_output_id(uint32_t output) { return (output); }
