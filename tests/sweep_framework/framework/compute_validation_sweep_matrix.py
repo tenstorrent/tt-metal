@@ -22,7 +22,12 @@ import yaml
 
 from compute_sweep_matrix import chunk_modules
 from constants import format_hardware_suffix, parse_hardware_suffix, strip_grouping_suffix
-from matrix_runner_config import GENERATION_MANIFEST_FILENAME, get_runner_config, get_test_group_name_for_hardware_group
+from matrix_runner_config import (
+    GENERATION_MANIFEST_FILENAME,
+    get_lead_models_test_group_name_for_hardware_group,
+    get_runner_config,
+    get_test_group_name_for_hardware_group,
+)
 
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/validation_matrix.json"
@@ -150,7 +155,10 @@ def compute_validation_matrix(
             continue
 
         hardware_label = _get_hardware_display_label(hardware_group)
-        test_group_name = get_test_group_name_for_hardware_group(hardware_group)
+        if validation_scope == "lead_models":
+            test_group_name = get_lead_models_test_group_name_for_hardware_group(hardware_group)
+        else:
+            test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
         runner_batches = chunk_modules(base_modules, batch_size)
         total_batches = len(runner_batches)
