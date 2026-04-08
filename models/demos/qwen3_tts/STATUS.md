@@ -69,10 +69,26 @@ Reference Audio (.wav)
 | **Speech Tokenizer Decoder** | CPU (PyTorch) | ✅ Done | ConvNext (too large for L1) |
 
 ### TTNN Optimizations
-- ✅ KV Cache (O(n²) → O(n))
-- ✅ Trace capture (eliminates kernel dispatch overhead)
-- ✅ Program cache enabled
-- ✅ Pre-computed RoPE tables
+
+| Optimization | Status | Notes |
+|--------------|--------|-------|
+| **KV Cache** | ✅ Done | Talker (28 layers) + CodePredictor (5 layers), O(n²) → O(n) |
+| **Trace Capture** | ✅ Done | Talker decode + CP prefill + 14 CP decode traces |
+| **Program Cache** | ✅ Done | `device.enable_program_cache()` |
+| **Pre-computed RoPE** | ✅ Done | Tables computed once at init, O(1) slice per step |
+| **Prefill Bucketing** | ✅ Done | 9 buckets for variable-length ICL sequences |
+| **2CQ Streaming** | ✅ Done | Async token transfer + parallel CPU decode (`generator_2cq.py`) |
+| **Tokenizer** | ✅ Done | HuggingFace `AutoTokenizer` integration |
+| **Weight Caching** | ✅ Done | Weights cached on first run for faster startup |
+| **Paged Attention** | ❌ Not implemented | Standard KV cache only |
+| **Continuous Batching** | ❌ Not implemented | Batch size = 1 only |
+| **Tensor Parallel (N300)** | 🔧 WIP | See `tt/qwen3_tts_mesh.py` |
+
+### Trace Architecture
+The demo pre-captures traces on startup for zero compile/dispatch overhead during inference:
+- **Talker decode trace** (1): Single token decode through 28 layers
+- **CP prefill trace** (1): 2-token prefill (past_hidden + code0)
+- **CP decode traces** (14): One trace per code position (each with baked-in LM head)
 
 ## Benchmark: CPU vs TTNN
 
@@ -181,15 +197,45 @@ models/demos/qwen3_tts/
 │   ├── attention.py              # GQA attention with KV cache
 │   ├── decoder_layer.py          # Transformer decoder layer
 │   ├── speaker_encoder.py        # ECAPA-TDNN speaker encoder
-│   └── rope.py                   # Rotary position embeddings
+│   ├── rope.py                   # Rotary position embeddings
+│   ├── kv_cache.py               # KV cache allocation/management
+│   └── generator_2cq.py          # 2CQ streaming generator
 └── tests/
     ├── test_voice_clone_tts.py   # E2E voice cloning tests
     ├── test_ttnn_blocks.py       # Component PCC tests
     └── ...
 ```
 
+## Tests
+
+```bash
+# Component PCC tests
+pytest models/demos/qwen3_tts/tests/test_ttnn_blocks.py -v
+
+# Layer-by-layer PCC tests
+pytest models/demos/qwen3_tts/tests/test_layer_pcc.py -v
+
+# End-to-end voice cloning tests
+pytest models/demos/qwen3_tts/tests/test_voice_clone_tts.py -v
+
+# Audio quality tests (trace vs no-trace vs CPU)
+pytest models/demos/qwen3_tts/tests/test_ttnn_audio_quality.py -v
+```
+
+### PCC Results (TTNN vs PyTorch Reference)
+
+| Component | PCC | Notes |
+|-----------|-----|-------|
+| RMSNorm | 0.999985 | Exact match |
+| MLP (SwiGLU) | 0.999976 | Exact match |
+| Attention (single layer) | 0.996 | QK-norm + fused QKV |
+| DecoderLayer | 0.973 | Pre-norm transformer block |
+| Talker (28 layers) | 0.978 | ~0.001 PCC drop per layer |
+
 ## Known Limitations
 
-1. **Speech Tokenizer Encoder/Decoder on CPU** - Conv layers too large for L1 SRAM
+1. **Speech Tokenizer Encoder/Decoder on CPU** - Conv layers too large for L1 SRAM (would need 2.3MB, max L1 is 1.5MB)
 2. **Single device only** - N300 tensor parallel support is WIP (see `tt/qwen3_tts_mesh.py`)
 3. **Reference audio bleeding** - ICL models briefly echo reference; use `--trim-frames` or `--auto-trim-bleed`
+4. **Batch size = 1 only** - No continuous batching or multi-user support
+5. **Greedy decoding degrades** - Long text with `--greedy` causes repetition loops; use sampling (default)
