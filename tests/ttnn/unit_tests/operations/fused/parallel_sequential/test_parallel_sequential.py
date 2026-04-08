@@ -16,6 +16,7 @@ Integration tests for Sequential/Parallel kernel fusion.
   - Cross-op compilation (10 kernel pairs)
 """
 
+import functools
 import os
 import re
 
@@ -25,6 +26,49 @@ import ttnn
 
 
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+
+
+def stress_test_program_cache(fn):
+    """Decorator (#41622): run test 3x to exercise both program cache paths.
+
+    Run 1: normal (program cache miss — builds and caches the program).
+    Run 2: program cache enabled (hit — C++ patches the cached Program via
+            override_runtime_arguments with fresh tensor addresses).
+    Run 3: program cache disabled (miss — Program{descriptor} is reconstructed
+            from the cached descriptor with stale addresses, exercising
+            patch_stale_descriptor).
+
+    The fusion build cache persists across all runs (same device), so runs 2-3
+    hit it with stale CBDescriptor.buffer pointers and runtime arg addresses.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Run 1: normal (program cache miss — builds and caches)
+        fn(*args, **kwargs)
+
+        device = kwargs.get("device")
+        if device is None:
+            for arg in args:
+                if hasattr(arg, "disable_and_clear_program_cache"):
+                    device = arg
+                    break
+        if device is None:
+            return
+
+        # Runs 2-3: program cache hits (C++ patches cached Program)
+        for _ in range(2):
+            fn(*args, **kwargs)
+
+        # Runs 4-5: program cache misses (Program rebuilt from stale descriptor)
+        device.disable_and_clear_program_cache()
+        try:
+            for _ in range(2):
+                fn(*args, **kwargs)
+        finally:
+            device.enable_program_cache()
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +172,7 @@ def make_multi_norm_tensors(device):
 class TestInfrastructure:
     """Build-time infrastructure tests (CB extraction, source structure, named args)."""
 
+    @stress_test_program_cache
     def test_cb_extraction(self, device):
         """extract_cb_info on LN descriptor, check c_0/c_16."""
         from models.experimental.ops.descriptors.fusion import extract_cb_info
@@ -142,6 +187,7 @@ class TestInfrastructure:
         assert 0 in cb_info, "Should have input CB (c_0)"
         assert 16 in cb_info, "Should have output CB (c_16)"
 
+    @stress_test_program_cache
     def test_fused_source_structure(self, device):
         """2-phase LN->LN: verify phase namespaces and barrier code in fused source."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -162,6 +208,7 @@ class TestInfrastructure:
         # At least one kernel should have both phases
         assert False, "No kernel contained both phase_0 and phase_1 namespaces"
 
+    @stress_test_program_cache
     def test_named_args_phase_prefix(self, device):
         """2-phase fused: verify phase_1_ prefix on named CT args."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -199,6 +246,7 @@ class TestSequentialExecution:
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_phases", [2, 3, 4])
+    @stress_test_program_cache
     def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -232,6 +280,7 @@ class TestSequentialExecution:
         check_pcc(golden, out, pcc=0.97, label=f"{num_phases}-phase chain")
 
     @pytest.mark.parametrize("core_x", [3, 5, 7])
+    @stress_test_program_cache
     def test_chain_on_nonzero_core(self, device, core_x):
         """2-phase LN->RMS on non-origin single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -266,6 +315,7 @@ class TestSequentialExecution:
             pytest.param((1, 1, 0, 0), id="2D_2x2"),
         ],
     )
+    @stress_test_program_cache
     def test_multicore_chain(self, device, grid):
         """2-phase LN->RMS on multi-core grid (row or 2D)."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -296,6 +346,7 @@ class TestSequentialExecution:
         golden = torch_rms_norm(torch_layer_norm(torch_input.float(), torch_w.float()), torch_w.float())
         check_pcc(golden, out, label="multicore chain")
 
+    @stress_test_program_cache
     def test_repeated_execution(self, device):
         """Same fused op launched 3x — verify no stale state."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -317,6 +368,7 @@ class TestSequentialExecution:
             fused.run()
             check_pcc(golden, rms2.output_tensors[0], label=f"run {i}")
 
+    @stress_test_program_cache
     def test_single_op_passthrough(self, device):
         """Single op in Sequential — verify pass-through."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -348,6 +400,7 @@ class TestShardedExecution:
             pytest.param("width", id="width"),
         ],
     )
+    @stress_test_program_cache
     def test_sharded_chain(self, device, shard_type):
         """2-phase LN->RMS with block or width sharding."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -396,6 +449,7 @@ class TestShardedExecution:
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
+    @stress_test_program_cache
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -447,6 +501,7 @@ class TestShardedExecution:
         check_pcc(golden, out, label="sharded 3-phase")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
+    @stress_test_program_cache
     def test_sharded_with_bias_residual(self, device):
         """LN(bias+residual)->RMS block-sharded, single-stage."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -530,6 +585,7 @@ class TestMatmulFusion:
             fp32_dest_acc_en=fp32,
         )
 
+    @stress_test_program_cache
     def test_matmul_standalone(self, device):
         """Single matmul via descriptor API."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
@@ -552,6 +608,7 @@ class TestMatmulFusion:
             pytest.param("ln_mm", id="ln_mm"),
         ],
     )
+    @stress_test_program_cache
     def test_matmul_norm_chain(self, device, ordering):
         """All matmul+norm orderings on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -623,6 +680,7 @@ class TestMatmulFusion:
 
         check_pcc(g, out, pcc=0.97, label=ordering)
 
+    @stress_test_program_cache
     def test_multicore_matmul_chain(self, device):
         """RMS->MM->RMS on 4x2 grid (8 cores)."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -655,6 +713,7 @@ class TestMatmulFusion:
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
+    @stress_test_program_cache
     def test_matmul_followed_by_n_rms(self, device, num_rms):
         """MM then N consecutive RMS norms."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -691,6 +750,7 @@ class TestMatmulFusion:
             g = torch_rms_norm(g, torch_w.float())
         check_pcc(g, out, pcc=0.97, label=f"MM->{num_rms}xRMS")
 
+    @stress_test_program_cache
     def test_fp32_mismatch_error(self, device):
         """MM(fp32=off) + LN(fp32=on) should raise."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -731,6 +791,7 @@ class TestMatmulFusion:
 class TestBranchingTopology:
     """Branching (tree) topology tests, including slice ops."""
 
+    @stress_test_program_cache
     def test_two_branch_split(self, device):
         """Stem(8c) -> 2 branches(4c each)."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -754,6 +815,7 @@ class TestBranchingTopology:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_three_way_split_with_slice(self, device):
         """Stem RMS(6c) -> 3 branches(2c each), using slice in one branch.
 
@@ -790,6 +852,7 @@ class TestBranchingTopology:
         check_pcc(g_stem[:, :, :, :64], branch_b.output_tensors[0], pcc=0.97, label="B (slice)")
         check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_c.output_tensors[0], pcc=0.97, label="C (RMS)")
 
+    @stress_test_program_cache
     def test_nested_split_with_slice(self, device):
         """Stem -> Parallel(Sequential(A, Parallel(A1, A2_slice)), B).
 
@@ -833,6 +896,7 @@ class TestBranchingTopology:
         check_pcc(g_a[:, :, :, :64], a2_slice.output_tensors[0], pcc=0.97, label="A2 (slice)")
         check_pcc(torch_rms_norm(g_stem, ws[3].float()), b.output_tensors[0], pcc=0.97, label="B (RMS)")
 
+    @stress_test_program_cache
     def test_symmetric_binary_tree(self, device):
         """Stem -> 2 mid -> 4 leaves.
 
@@ -881,6 +945,7 @@ class TestBranchingTopology:
             check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
+    @stress_test_program_cache
     def test_asymmetric_deep_left(self, device):
         """Deep left + shallow right.
 
@@ -926,6 +991,7 @@ class TestBranchingTopology:
         for i, label in enumerate(["LL(deep)", "LR", "Right"]):
             check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
+    @stress_test_program_cache
     def test_overlapping_branches_error(self, device):
         """Overlapping branch core ranges should raise ValueError."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -956,6 +1022,7 @@ class TestParallelExecution:
     """Independent parallel execution tests."""
 
     @pytest.mark.parametrize("n_chains", [2, 4])
+    @stress_test_program_cache
     def test_parallel_chains(self, device, n_chains):
         """N independent fused LN->RMS chains on separate single cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -993,6 +1060,7 @@ class TestParallelExecution:
             check_pcc(golden, rms_tails[i].output_tensors[0], label=f"chain {i}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
+    @stress_test_program_cache
     def test_matmul_plus_fused_chain(self, device):
         """Matmul + 3-phase norm chain on disjoint cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1035,6 +1103,7 @@ class TestParallelExecution:
         golden = torch_layer_norm(g, t["torch_weights"][2].float(), t["torch_biases"][1].float())
         check_pcc(golden, ln2.output_tensors[0], label="3-phase chain")
 
+    @stress_test_program_cache
     def test_two_disjoint_trees_parallel(self, device):
         """Two independent branching trees launched in parallel on disjoint cores.
 
@@ -1090,6 +1159,7 @@ class TestParallelExecution:
         check_pcc(torch_rms_norm(g_stem_b, torch_w.float()), b_left.output_tensors[0], pcc=0.97, label="tree_b RMS")
         check_pcc(g_stem_b[:, :, :, :64], b_right.output_tensors[0], pcc=0.97, label="tree_b slice")
 
+    @stress_test_program_cache
     def test_full_grid_stress(self, device):
         """7 items on full 8x8 grid: matmuls, chains, tree, single op.
 
@@ -1246,6 +1316,7 @@ class TestParallelExecution:
 class TestSequentialParallelAPI:
     """API surface tests for Sequential/Parallel."""
 
+    @stress_test_program_cache
     def test_sequential_inline(self, device):
         """Sequential(rms, rms).run()."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1265,6 +1336,7 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, out, pcc=0.99, label="inline")
 
+    @stress_test_program_cache
     def test_sequential_add_method(self, device):
         """s.add(op) matches inline construction."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1285,6 +1357,7 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, out, pcc=0.99, label="add method")
 
+    @stress_test_program_cache
     def test_sequential_branching(self, device):
         """Sequential(stem, Parallel(a, b)).run() — API-level branching."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -1431,6 +1504,7 @@ class TestCrossOpCompilation:
             pytest.param(("matmul", "layernorm", "batchnorm", "untilize"), id="4phase_max"),
         ],
     )
+    @stress_test_program_cache
     def test_cross_op_compilation(self, device, pair):
         """Parametrized cross-op compilation test."""
         phases = []
@@ -1449,6 +1523,7 @@ class TestCrossOpCompilation:
 class TestDocExample:
     """Integration test matching the example in op_fusion.md."""
 
+    @stress_test_program_cache
     def test_matmul_slice_ln_rms_tree(self, device):
         """Doc-example: matmul -> Parallel(slice->Parallel(matmul, LN), slice->RMS).
 
@@ -1543,6 +1618,7 @@ class TestDocExample:
 class TestDeepSeekV3:
     """DeepSeek V3 MLA block patterns using Parallel fusion."""
 
+    @stress_test_program_cache
     def test_q_kv_rms_norm(self, device):
         """Parallel Q/KV RMS norms from the DeepSeek V3 MLA block.
 
@@ -1640,6 +1716,7 @@ class TestDeepSeekV3:
             label="KV norm",
         )
 
+    @stress_test_program_cache
     def test_q_kv_rms_norm_program_cache_disabled(self, device):
         """Regression test for gh#41622: Parallel.run() crashes when program cache is disabled.
 
@@ -1744,6 +1821,7 @@ class TestAsymmetricBarrier:
     if the arrive threshold or sync mode dispatch is wrong.
     """
 
+    @stress_test_program_cache
     def test_narrow_stem_wide_branches(self, device):
         """Narrow stem (2 cores) → wide branches (4+4 cores).
 
@@ -1774,6 +1852,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_single_core_stem_wide_branches(self, device):
         """Extreme asymmetry: 1-core stem → 4+4 core branches.
 
@@ -1799,6 +1878,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_narrow_wide_repeated_execution(self, device):
         """Narrow→wide with repeated execution to catch stale semaphores.
 
@@ -1837,6 +1917,7 @@ class TestAsymmetricBarrier:
                 label=f"branch B run {run}",
             )
 
+    @stress_test_program_cache
     def test_multi_level_narrow_wide(self, device):
         """Narrow stem → mid-width → wide leaves.  Different arrive counts at each transition.
 
@@ -1892,6 +1973,7 @@ class TestAsymmetricBarrier:
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
             check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
+    @stress_test_program_cache
     def test_narrow_deep_left_wide_right(self, device):
         """Narrow stem with asymmetric depth AND width.
 
@@ -1936,6 +2018,7 @@ class TestAsymmetricBarrier:
         )
         check_pcc(torch_rms_norm(g_stem, ws[3].float()), out_right, label="wide right")
 
+    @stress_test_program_cache
     def test_narrow_wide_with_slice(self, device):
         """Narrow stem → wide branches with slice op in one branch.
 
@@ -1972,6 +2055,7 @@ class TestAsymmetricBarrier:
         check_pcc(g_stem[:, :, :, :64], out_a, pcc=0.97, label="A (slice)")
         check_pcc(torch_rms_norm(g_stem, torch_w1.float()), out_b, label="B (RMS)")
 
+    @stress_test_program_cache
     def test_fully_disjoint_parent_children(self, device):
         """Fully disjoint: parent {0,1} → children {2-3, 4-7}.
 
@@ -2001,6 +2085,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_partial_disjoint_one_core_exits(self, device):
         """Partial disjoint: parent {0,1} → child {1-7}.
 
@@ -2029,6 +2114,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_disjoint_repeated_execution(self, device):
         """Fully disjoint with repeated execution to catch stale semaphores."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
