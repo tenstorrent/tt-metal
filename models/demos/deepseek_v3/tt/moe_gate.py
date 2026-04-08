@@ -68,6 +68,8 @@ class MoEGate(AbstractModule):
         input_output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
         )
+        with torch.no_grad():
+            score_correction_bias -= torch.median(score_correction_bias) - 0.5
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
@@ -83,7 +85,9 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    torch.nn.functional.pad(score_correction_bias.reshape(1, 16, 16), (0,16,0,16,0,0), "constant", 0)
+                    torch.nn.functional.pad(
+                        score_correction_bias.reshape(1, 16, 16), (0, 16, 0, 16, 0, 0), "constant", 0
+                    )
                     .transpose(1, 2)
                     .repeat(num_device_cores, 1, 1),
                     shard_dims=(None, None),
