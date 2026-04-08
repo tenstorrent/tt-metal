@@ -29,8 +29,8 @@ inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
     else
     {
         // f = (0.044715*x^3 + x)
-        result = (in * in) * (in * sfpi::s2vFloat16b(0.044715f)) + in;
-        result *= sfpi::s2vFloat16b(0.79788f);
+        result = (in * in) * (in * sfpi::sFloat16b(0.044715f)) + in;
+        result *= sfpi::sFloat16b(0.79788f);
     }
 
     return result;
@@ -165,7 +165,7 @@ inline void _calculate_gelu_derivative_()
             sfpi::vFloat exp = _calculate_exponential_body_<false>(neg_half_sq_in);
 
             // exp = exp * 1/sqrt(2*pi)
-            sfpi::vFloat partial = exp * in * sfpi::s2vFloat16b(0.3989423F);
+            sfpi::vFloat partial = exp * in * sfpi::sFloat16b(0.3989423F);
 
             sfpi::vFloat result = _calculate_gelu_core_<true>(in);
 
