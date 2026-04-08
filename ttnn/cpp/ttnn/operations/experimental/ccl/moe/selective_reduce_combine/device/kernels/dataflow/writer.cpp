@@ -119,8 +119,6 @@ void kernel_main() {
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
-
-    // constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
@@ -154,8 +152,6 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    // constexpr uint32_t num_local_experts = experts / num_devices;
-    // constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
 
     constexpr uint8_t Num_Directions = 4;
