@@ -29,7 +29,7 @@ class UnsafeAllocationTracker:
 
     _tracebacks: ClassVar[dict[int, str]] = {}
 
-    _env_tracebacks: ClassVar[bool] = os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") is not None
+    _env_tracebacks: ClassVar[bool] = os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") == "1"
 
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
