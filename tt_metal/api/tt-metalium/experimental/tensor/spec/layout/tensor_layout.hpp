@@ -13,6 +13,9 @@
 
 namespace tt::tt_metal {
 
+std::optional<std::string> check_shard_spec(
+    const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
+
 class IDevice;
 
 using Strides = std::vector<size_t>;
@@ -30,8 +33,7 @@ public:
 
     // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
     // constructor
-    [[deprecated("Use of Padded Shape is deprecated")]]
-    static TensorLayout fromPaddedShape(
+    [[deprecated("Use of Padded Shape is deprecated")]] static TensorLayout fromPaddedShape(
         DataType dtype,
         const PageConfig& page_config,
         const MemoryConfig& memory_config,
@@ -58,8 +60,10 @@ public:
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
-    [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
-    tt::tt_metal::Shape compute_padded_shape(const tt::tt_metal::Shape& shape) const;
+    [[deprecated(
+        "Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]] tt::
+        tt_metal::Shape
+        compute_padded_shape(const tt::tt_metal::Shape& shape) const;
 
     // Flattens input shape into height and width
     // - Height is accumulated over all dims except last

@@ -9,6 +9,10 @@
 
 namespace tt::tt_metal {
 
+class TensorSpec;
+std::optional<std::string> check_memory_config_with_tensor_shape(
+    const TensorLayout& tensor_layout, const Shape& logical_shape);
+
 class TensorSpec final {
 public:
     TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout);

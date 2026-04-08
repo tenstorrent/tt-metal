@@ -126,6 +126,25 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+std::optional<std::string> check_shard_spec(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
+    if (memory_config.is_sharded() && layout == Layout::TILE) {
+        const auto& tile_shape = tile.get_tile_shape();
+        if (memory_config.shard_spec().has_value()) {
+            const auto& physical_shard_shape = Shape2D(memory_config.shard_spec().value().shape);
+            if (!(physical_shard_shape.height() % tile_shape[0] == 0 &&
+                  physical_shard_shape.width() % tile_shape[1] == 0)) {
+                return fmt::format("Physical shard shape {} must be tile {} sized!", physical_shard_shape, tile_shape);
+            }
+        } else {
+            const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
+            if (!(shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0)) {
+                return fmt::format("Physical shard shape {} must be tile {} sized!", shard_shape, tile_shape);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
