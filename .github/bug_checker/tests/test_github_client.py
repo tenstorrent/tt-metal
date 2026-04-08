@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for diff_line_numbers, diff_file_paths, _truncate_diff, and check_prerequisites."""
 
 from unittest.mock import patch

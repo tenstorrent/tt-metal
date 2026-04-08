@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for rule loading and targeting."""
 
 from bug_checker.rules import Rule, load_manifest, load_rules, select_rules

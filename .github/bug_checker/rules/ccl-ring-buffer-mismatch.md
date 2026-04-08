@@ -71,7 +71,7 @@ uint32_t ct_args[] = { ..., num_buffers, ... };
 
 ```cpp
 // GOOD: same size for addresses and semaphores
-TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
+TT_FATAL(local_buffer_addresses.size() == local_semaphore_addresses.size());
 builder.add_sender_channel(worker_semaphore, local_buffer_addresses, local_semaphore_addresses);
 ```
 

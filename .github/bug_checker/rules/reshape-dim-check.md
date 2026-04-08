@@ -55,7 +55,7 @@ if (input.padded_shape().volume() == output_shape.volume()) {  // wrong comparis
 
 ```cpp
 // GOOD: volumes match
-TT_ASSERT(output_shape.volume() == input.logical_volume());
+TT_FATAL(output_shape.volume() == input.logical_volume());
 auto result = ttnn::reshape(input, output_shape);
 ```
 

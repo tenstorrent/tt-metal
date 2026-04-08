@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for LLM tool-use parsing (does not call the API)."""
 
 from bug_checker.llm import LLMSession
