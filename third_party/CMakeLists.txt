@@ -28,12 +28,7 @@ endif()
 # xxHash : https://github.com/Cyan4973/xxHash
 ############################################################################################################################
 
-CPMAddPackage(
-    NAME xxHash
-    GITHUB_REPOSITORY Cyan4973/xxHash
-    GIT_TAG v0.8.2
-    DOWNLOAD_ONLY YES
-)
+CPMAddPackage(NAME xxHash GITHUB_REPOSITORY Cyan4973/xxHash GIT_TAG v0.8.2 DOWNLOAD_ONLY YES)
 if(xxHash_ADDED)
     add_library(xxHash INTERFACE)
     add_library(xxHash::xxHash ALIAS xxHash)
@@ -170,9 +165,11 @@ if(reflect_ADDED)
         reflect
         INTERFACE
             FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${reflect_SOURCE_DIR}
-            FILES ${reflect_SOURCE_DIR}/reflect
+                TYPE HEADERS
+                BASE_DIRS
+                    ${reflect_SOURCE_DIR}
+                FILES
+                    ${reflect_SOURCE_DIR}/reflect
     )
 endif()
 
