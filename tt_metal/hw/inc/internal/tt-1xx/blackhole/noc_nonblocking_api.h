@@ -27,6 +27,9 @@ constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_DRISC)
+constexpr std::underlying_type_t<DramProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<DramProcessorTypes>>(DramProcessorTypes::DM0);
 #elif defined(COMPILE_FOR_TRISC)
 // TRISC is not a data movement processor. This is just so it compiles
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =

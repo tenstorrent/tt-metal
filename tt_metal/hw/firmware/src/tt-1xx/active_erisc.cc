@@ -325,7 +325,7 @@ int __attribute__((noinline)) main(void) {
             if (enables & (1u << index)) {
                 WAYPOINT("R");
 
-                flush_erisc_icache();
+                manually_flush_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
                 uint32_t kernel_lma =
