@@ -216,6 +216,4 @@ private:
     // End experimental features
 };
 
-using Storage = std::variant<HostStorage, DeviceStorage>;
-
 }  // namespace tt::tt_metal
