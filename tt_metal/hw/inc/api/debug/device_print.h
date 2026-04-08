@@ -29,6 +29,21 @@
 // Start of the .device_print_strings_info section, which represents list of DevicePrintStringInfo structures.
 extern char __device_print_strings_info_start[];
 
+// Wrapper for compile-time strings stored in the .device_print_strings ELF section.
+// The host-side parser can resolve the pointer back to the string content via the ELF.
+struct ct_string {
+    const char* ptr;
+};
+
+// Stores a string literal in the .device_print_strings ELF section and returns a ct_string
+// that DEVICE_PRINT can serialize. The host parser resolves the address to read the string.
+#define CTSTR(literal)                                                                                              \
+    ([&]() -> ct_string {                                                                                           \
+        static const char allocated_ct_string[] __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
+            literal;                                                                                                \
+        return ct_string{allocated_ct_string};                                                                      \
+    }())
+
 struct bf4_t {
     union {
         struct {
@@ -805,6 +820,22 @@ struct device_print_type<const char*> {
                 reinterpret_cast<uint64_t>(argument);
         } else {
             static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
+        }
+    }
+};
+
+// Compile-time strings (CTSTR) — serialized as pointer, same type char 's' as const char*.
+// The host parser distinguishes by checking if the address falls within .device_print_strings.
+template <>
+struct device_print_type<ct_string> {
+    static constexpr device_print_type_info value = {'s', sizeof(const char*)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
+        if constexpr (sizeof(const char*) == 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
+                reinterpret_cast<uint32_t>(argument.ptr);
+        } else if constexpr (sizeof(const char*) == 8) {
+            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
+                reinterpret_cast<uint64_t>(argument.ptr);
         }
     }
 };
