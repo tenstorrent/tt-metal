@@ -5,14 +5,23 @@
 """
 ULP-based accuracy characterization for ttnn.layer_norm (issue #33749).
 
-BF16 golden: torch.nn.functional.layer_norm on BF16 tensors (same dtype as device).
+BF16 golden: torch.nn.functional.layer_norm on BF16 input (same dtype as device).
+  PyTorch promotes BF16 internally for the reduction, so this already reflects
+  FP32-accumulated arithmetic—matching the best-practice reference.
 
-FP32 golden: torch.nn.functional.layer_norm in float32.
+FP32 golden: torch.nn.functional.layer_norm on FP32 input.
+  Differences vs hardware reflect tile-local vs fully sequential ordering.
+
+BF16 tests parametrize fp32_dest_acc_en=[False, True] to document the accuracy
+cost of BF16-only accumulation and verify the recommended FP32-acc path.
+Separate ULP and ATOL thresholds apply to each mode (tighter for fp32_acc=True).
+
+FP32 tests use fp32_dest_acc_en=True only (device enforces this for FP32 inputs).
 
 ULP is measured in the output dtype.  Near-zero golden elements use a scaled
 absolute tolerance (same pattern as test_mean_ulp).
 
-Loguru logs at INFO per parametrized case (same pattern as other ``tests/ttnn`` tests).
+Metrics logged with loguru at INFO per parametrized case.
 """
 
 import pytest

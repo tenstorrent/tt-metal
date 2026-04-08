@@ -5,33 +5,22 @@
 """
 ULP-based accuracy characterization for ttnn.operations.moreh.logsoftmax (issue #33744).
 
-Golden: torch.nn.functional.log_softmax(..., dim=...).
+BF16 golden: F.log_softmax(bf16_input.float(), dim=...).to(torch.bfloat16)
+  Promotes to FP32 for the reduction, then casts back to BF16 -- matching the
+  FP32-accumulated reference convention used across these ULP tests.
 
-BF16 reference (recommended for comparing device BF16 output):
-  F.log_softmax(bf16_input.float(), dim=...).to(torch.bfloat16)
-  - Softmax reduction uses FP32 on the host, then the result is cast to BF16.
-  - This isolates BF16 storage/rounding on the input from the numerics of the
-    log-softmax reduction (analogous to the FP32-accumulated mean golden).
+FP32 golden: F.log_softmax(fp32_input, dim=...)
+  Same nominal precision as a full FP32 device path; differences vs hardware
+  reflect operation ordering (tile-local vs fully sequential).
 
-Alternative BF16-in-BF16 golden would be F.log_softmax(bf16_input, dim=...) with
-PyTorch computing internally in wider precision for some steps; the float-input
-form above is explicit and matches the “wider intermediate” intent.
-
-FP32 reference:
-  F.log_softmax(fp32_input, dim=...)
-  - Same nominal precision as a full FP32 device path; differences vs hardware
-    mainly reflect operation ordering (tile-local vs fully sequential).
-
-Device requirement: FLOAT32 inputs require fp32_dest_acc_en=True in the compute
-kernel config; the FP32 ULP tests only exercise that supported combination.
+FP32 inputs require fp32_dest_acc_en=True in the compute kernel config;
+the FP32 ULP tests only exercise that supported combination.
 
 ULP is measured in the output dtype (BF16 or FP32).  Elements where
 |golden| is very small relative to the tensor's dynamic range are excluded
-from ULP (where the metric breaks down due to division by a tiny ULP
-quantum) and validated with a scaled absolute-tolerance check instead.
+from ULP and validated with a scaled absolute-tolerance check instead.
 
-Metrics are logged with loguru at INFO for every parametrized case (pass or fail),
-consistent with other tests under ``tests/ttnn`` (default sink: stderr).
+Metrics logged with loguru at INFO per parametrized case.
 """
 
 import pytest

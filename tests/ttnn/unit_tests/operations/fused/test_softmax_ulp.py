@@ -41,11 +41,7 @@ from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 
 def _make_softmax_compute_kernel_config(device, fp32_dest_acc_en: bool):
-    """
-    Prefer arch-aware kernel config (matches test_softmax_accuracy).  Some
-    bindings or architectures may not accept all kwargs; fall back to
-    Wormhole-style config like test_utils.get_compute_kernel_options.
-    """
+    """Arch-aware compute kernel config (same pattern as test_mean_ulp)."""
     try:
         return ttnn.init_device_compute_kernel_config(
             device.arch(),
