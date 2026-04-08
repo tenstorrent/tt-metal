@@ -41,18 +41,6 @@ class Qwen35GatedAttention:
                 cache_file_name=weight_cache_path / f"{prefix}.{name}" if weight_cache_path else None,
             )
 
-        def load_1d(name):
-            """Load 1D param (norm weight) — TILE_LAYOUT on device."""
-            t = state_dict[f"{prefix}.{name}"]
-            return ttnn.as_tensor(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=weight_cache_path / f"{prefix}.{name}" if weight_cache_path else None,
-            )
-
         def load_norm_1d(name):
             """Load 1D norm weight with +1 offset for zero-centered RMSNorm fused path."""
             t = state_dict[f"{prefix}.{name}"] + 1.0
@@ -92,7 +80,6 @@ class Qwen35GatedAttention:
         self.kv_cache_value = None
         self.cache_pos = 0
         self.use_preallocated_cache = False
-        self.use_paged_cache_trace = False
         # Paged attention state (for vLLM integration)
         self.paged_kv_cache_key = None
         self.paged_kv_cache_value = None
@@ -125,21 +112,6 @@ class Qwen35GatedAttention:
         )
         self.trace_new_v_buf = ttnn.from_torch(
             torch.zeros(batch_size, self.num_kv_heads, 1, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # Padded buffers for update_cache (needs dim[-2]=32)
-        self.trace_new_k_padded = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, 32, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        self.trace_new_v_padded = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, 32, self.head_dim, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
