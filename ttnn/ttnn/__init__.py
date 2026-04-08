@@ -153,8 +153,7 @@ from ttnn._ttnn.operations.debug import (
 )
 
 _TRACE_ALLOC_TRACKING = (
-    os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") is not None
-    or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") is not None
+    os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") == "1" or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") == "1"
 )
 
 
