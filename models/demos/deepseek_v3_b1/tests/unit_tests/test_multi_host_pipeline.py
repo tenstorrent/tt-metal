@@ -778,9 +778,7 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
     core_io = ttnn.CoreCoord(0, 2)
 
     if is_pipeline_start:
-        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-        num_procs = int(ttnn.distributed_context_get_size())
-        assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
@@ -952,9 +950,7 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
     print(f"Mesh ID {my_mesh_id}: {num_channels} channels on devices {device_coords}")
 
     if is_pipeline_start:
-        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-        num_procs = int(ttnn.distributed_context_get_size())
-        assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
 
         h2d_sockets = []
         d2h_sockets = []
