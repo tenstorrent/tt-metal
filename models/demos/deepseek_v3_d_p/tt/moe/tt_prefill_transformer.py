@@ -59,8 +59,10 @@ class TtPrefillTransformer(LightweightModule):
         is_balanced: bool = False,
         capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
-        activations_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_weights_dtype=ttnn.bfloat16,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat16,
         weight_cache_path: Optional[Path] = None,
     ):
         super().__init__()
@@ -97,8 +99,10 @@ class TtPrefillTransformer(LightweightModule):
                 is_balanced=is_balanced,
                 capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
-                activations_dtype=activations_dtype,
-                weights_dtype=weights_dtype,
+                routed_expert_activations_dtype=routed_expert_activations_dtype,
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
+                shared_expert_activations_dtype=shared_expert_activations_dtype,
+                shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
             )
             self.layers.append(layer)
