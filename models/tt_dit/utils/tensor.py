@@ -320,6 +320,17 @@ def fast_device_to_host(
     logical_shape = list(host_tensors[0].shape)
     shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
 
+    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None),
+    # the tensor must be replicated along that axis (size 1), otherwise we'd
+    # silently drop shards.
+    for axis in range(len(concat_dims)):
+        if concat_dims[axis] is None and mesh_shape[axis] > 1:
+            msg = (
+                f"concat_dims[{axis}] is None (no gather) but mesh_shape[{axis}]={mesh_shape[axis]} > 1. "
+                f"This would drop shards. Either gather along this axis or ensure the tensor is replicated."
+            )
+            raise ValueError(msg)
+
     # Reassemble from 2D mesh.  Devices are in row-major order by mesh
     # coordinate (r, c) where axis 0 varies across rows and axis 1 across cols.
     if concat_dims[0] is not None and concat_dims[1] is not None:
