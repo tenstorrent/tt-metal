@@ -225,8 +225,12 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                             allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
                         res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
                         TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
-                        TT_ASSERT(i > 0, "Failed to allocate binary region on first program");
-                        binary_sync_idx = merge_syncs(binary_sync_idx, i - 1);
+                        TT_ASSERT(
+                            !subdevice_launch_window.empty(),
+                            "Failed to allocate binary region on first program on sub-device");
+                        auto last_subdevice_idx = static_cast<uint32_t>(subdevice_launch_window.back());
+                        binary_sync_idx = merge_syncs(binary_sync_idx, last_subdevice_idx);
+                        nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, last_subdevice_idx);
                     } else {
                         binary_sync_idx = merge_syncs(res.first, binary_sync_idx);
                     }
