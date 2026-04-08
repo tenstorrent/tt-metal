@@ -301,8 +301,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tt-model",
         default="yolov8s",
-        choices=["yolov8s", "yolov8x"],
-        help="TT model variant. Both use 640x640 internal letterbox (see models/demos/yolov8s|yolov8x).",
+        choices=["yolov8s", "yolov8x", "yolov8l"],
+        help="TT model variant. yolov8s/yolov8x: 640×640 letterbox (demos/yolov8s|yolov8x). "
+        "yolov8l: 640×640 TT letterbox (YOLOV8L_INPUT_* in models/demos/yolov8l/common.py; SAHI slice size is separate).",
     )
     parser.add_argument(
         "--tt-device-id",
@@ -314,13 +315,15 @@ def parse_args() -> argparse.Namespace:
         "--tt-l1-small-size",
         type=int,
         default=24576,
-        help="TT device l1_small_size (YOLOv8s/YOLOv8x demos default 24576).",
+        help="TT device l1_small_size (default 24576 for yolov8s/x; for --tt-model yolov8l, 24576 is auto-replaced "
+        "with the scaled value from models/demos/yolov8l/common.py unless you set this explicitly).",
     )
     parser.add_argument(
         "--tt-trace-region-size",
         type=int,
         default=6434816,
-        help="TT device trace_region_size (YOLOv8s demo uses 6434816; override if your device requires it).",
+        help="TT device trace_region_size (default 6434816 for yolov8s/x; for yolov8l, auto-scaled from "
+        "yolov8l/common.py unless set explicitly).",
     )
     parser.add_argument(
         "--tt-mesh-shape",
@@ -492,10 +495,20 @@ def run_prediction(detection_model, image_path: str):
     return result, elapsed, timing.to_summary_dict()
 
 
-class TTYoloBackend:
-    """Tenstorrent YOLO runner. Ultralytics YOLOv8s/YOLOv8x are trained for 640 imgsz; TT demos match that."""
+def _apply_tt_model_device_defaults(args: argparse.Namespace) -> None:
+    """Scale L1/trace defaults for yolov8l (1280²) when user left 640-model defaults."""
+    if args.backend != "tt" or args.tt_model != "yolov8l":
+        return
+    from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, YOLOV8L_TRACE_REGION_SIZE_E2E
 
-    _TT_INPUT_RES = (640, 640)
+    if args.tt_l1_small_size == 24576:
+        args.tt_l1_small_size = YOLOV8L_L1_SMALL_SIZE
+    if args.tt_trace_region_size == 6434816:
+        args.tt_trace_region_size = YOLOV8L_TRACE_REGION_SIZE_E2E
+
+
+class TTYoloBackend:
+    """Tenstorrent YOLO runner. YOLOv8s/x TT path uses 640² letterbox; YOLOv8l uses 1280² (models/demos/yolov8l)."""
 
     def __init__(self, args):
         import ttnn
@@ -504,6 +517,13 @@ class TTYoloBackend:
 
         self.ttnn = ttnn
         self.tt_model_name = args.tt_model
+        if args.tt_model == "yolov8l":
+            from models.demos.yolov8l.common import YOLOV8L_INPUT_H, YOLOV8L_INPUT_W
+            from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
+
+            self._TT_INPUT_RES = (YOLOV8L_INPUT_H, YOLOV8L_INPUT_W)
+        else:
+            self._TT_INPUT_RES = (640, 640)
 
         n_par = getattr(args, "tt_slice_parallel_devices", None)
         if n_par is not None:
@@ -539,6 +559,14 @@ class TTYoloBackend:
                 inputs_mesh_mapper=inputs_mesh_mapper,
                 weights_mesh_mapper=weights_mesh_mapper,
                 outputs_mesh_composer=output_mesh_composer,
+            )
+        elif args.tt_model == "yolov8l":
+            self.runner = YOLOv8lPerformantRunner(
+                self.device,
+                device_batch_size=batch_size,
+                mesh_mapper=inputs_mesh_mapper,
+                mesh_composer=output_mesh_composer,
+                weights_mesh_mapper=weights_mesh_mapper,
             )
         else:
             raise ValueError(f"Unsupported --tt-model: {args.tt_model}")
@@ -641,7 +669,7 @@ class TTYoloBackend:
 
     def infer_bgr_images_distinct(self, images_bgr: list, image_id: str):
         """
-        One 640×640 (letterboxed) input per mesh device; batch dim is sharded so each chip runs a different slice.
+        One letterboxed input per mesh device (640² for yolov8s/x, 1280² for yolov8l); batch dim is sharded per slice.
         """
         if len(images_bgr) != self.num_devices:
             raise ValueError(f"Expected {self.num_devices} images, got {len(images_bgr)}")
@@ -808,7 +836,8 @@ def run_tt_sliced_prediction(
     full_shape = [slice_result.original_image_height, slice_result.original_image_width]
     use_distinct_slice_batch = tt_backend.slice_parallel_devices is not None
     parallel = tt_backend.num_devices if use_distinct_slice_batch else 1
-    black_bgr = np.zeros((TTYoloBackend._TT_INPUT_RES[1], TTYoloBackend._TT_INPUT_RES[0], 3), dtype=np.uint8)
+    in_res = tt_backend._TT_INPUT_RES
+    black_bgr = np.zeros((in_res[1], in_res[0], 3), dtype=np.uint8)
 
     host_preprocess_sec = 0.0
     device_inference_sec = 0.0
@@ -1133,6 +1162,7 @@ def resize_images_for_processing(
 
 def main():
     args = parse_args()
+    _apply_tt_model_device_defaults(args)
     if args.tt_slice_parallel_mesh_shape is not None and args.tt_slice_parallel_devices is None:
         raise ValueError("--tt-slice-parallel-mesh-shape requires --tt-slice-parallel-devices N")
 
@@ -1169,8 +1199,9 @@ def main():
                 "If the cause mentions arc core timeout or Ethernet flush, reset the board (e.g. `tt-smi -r`) "
                 "after an unclean exit, or pass an explicit mesh, e.g. `--tt-mesh-shape 1 8`. "
                 "Otherwise this may be an API/runtime mismatch: run "
-                "`pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640` "
-                "or `pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640`."
+                "`pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640`, "
+                "`models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640`, or "
+                "`models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_1280` for yolov8l."
             ) from e
 
     processing_images = images

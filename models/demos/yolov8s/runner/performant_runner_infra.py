@@ -60,22 +60,32 @@ class YOLOv8sPerformanceRunnerInfra:
             # exit("Unsupported device")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        n, c, h, w = torch_input_tensor.shape
+        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
+        global_n, c, h, w = torch_input_tensor.shape
+        if global_n % self.num_devices != 0:
+            raise ValueError(
+                f"Input batch {global_n} must be divisible by mesh device count {self.num_devices} "
+                "(from_host_shards requires one host shard per device)."
+            )
+        per_device_n = global_n // self.num_devices
         if c < min_channels:
             c = min_channels
         elif c % min_channels != 0:
             c = ((c // min_channels) + 1) * min_channels
-        n = n // self.num_devices if n // self.num_devices != 0 else n
+        n = per_device_n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        shard_tensors = [
+            torch_input_tensor[i * per_device_n : (i + 1) * per_device_n].contiguous() for i in range(self.num_devices)
+        ]
+        # Shards must be host tensors; from_host_shards builds the mesh host view (H2D happens later).
         tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in shard_tensors],
+            device.shape,
         )
         return tt_inputs_host, input_mem_config
 

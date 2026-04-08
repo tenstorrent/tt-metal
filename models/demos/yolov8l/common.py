@@ -8,6 +8,11 @@ import torch
 from ultralytics import YOLO
 
 YOLOV8L_L1_SMALL_SIZE = 24576
+# Performant trace+2CQ (matches models/demos/yolov8l/tests/perf/test_e2e_performant.py and demo).
+YOLOV8L_TRACE_REGION_SIZE_E2E = 6434816
+# TT letterbox for runner/infra (same as performant_runner_infra input 640×640).
+YOLOV8L_INPUT_H = 640
+YOLOV8L_INPUT_W = 640
 
 
 def load_torch_model(model_location_generator=None):

@@ -84,23 +84,38 @@ class YOLOv8sPerformantRunner:
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
 
-    def _execute_yolov8s_trace_2cqs_inference(self, tt_inputs_host=None):
-        tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
+    def prepare_host_input(self, torch_input_tensor):
+        """Build host-side sharded input (no device transfer)."""
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        return tt_inputs_host
+
+    def push_host_input_to_device_dram(self, tt_inputs_host):
+        """Host → device DRAM copy (CQ 1) and wait until CQ 0 may consume it."""
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
+
+    def execute_reshard_and_trace(self):
+        """DRAM → L1 reshard, run captured trace on CQ 0; blocking trace + mesh-wide device sync."""
         # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
 
-        ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=True)
+        ttnn.synchronize_device(self.device)
 
         return self.runner_infra.output_tensor
 
+    def _execute_yolov8s_trace_2cqs_inference(self, tt_inputs_host=None):
+        tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
+        self.push_host_input_to_device_dram(tt_inputs_host)
+        return self.execute_reshard_and_trace()
+
     def run(self, torch_input_tensor):
-        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        tt_inputs_host = self.prepare_host_input(torch_input_tensor)
         return self._execute_yolov8s_trace_2cqs_inference(tt_inputs_host)
 
     def release(self):
+        ttnn.synchronize_device(self.device)
         ttnn.release_trace(self.device, self.tid)

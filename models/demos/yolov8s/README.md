@@ -19,6 +19,12 @@ pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_y
 ```
 
 ### Model performant running with Trace+2CQ
+
+**Implementation (two equivalent stacks):**
+
+1. **`YOLOv8sPerformantRunner`** (`runner/performant_runner.py`) — hand-rolled **CQ0/CQ1 events + `begin_trace_capture` / `execute_trace`**, same pattern as `run_yolov8s_trace_2cqs_inference` in `runner/yolov8s_performant.py`. Used by **`yolo_eval/yolo_dp_mesh_infer.py`** on Galaxy DP meshes.
+2. **`models.tt_cnn.tt.pipeline`** — **`PipelineConfig(use_trace=True, num_command_queues=2)`** → **`MultiCQTracedModelOverlappedInputExecutor`**, same abstraction as ResNet50 in `resnet50_performant.run_resnet50_trace_2cqs_inference`. Entry point: **`run_yolov8s_trace_2cqs_tt_cnn_pipeline_inference`** in `runner/yolov8s_performant.py`, tested by **`test_run_yolov8s_trace_2cqs_tt_cnn_pipeline_inference`**.
+
 #### Single Device (BS=1):
 - end-2-end perf is `215` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
@@ -29,6 +35,17 @@ pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 - end-2-end perf is `368` FPS
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
+```
+
+#### Galaxy-class mesh (DP=32, explicit 8×4):
+- Uses **`mesh_device` parametrized to `(8, 4)`** and **`YOLOv8sPerformantRunner`** (Trace+2CQ). Skips automatically if the machine has fewer than 32 devices.
+```
+pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_galaxy_8x4
+```
+
+#### ResNet-style tt_cnn pipeline (single device smoke):
+```
+pytest --disable-warnings models/demos/yolov8s/tests/perf/test_yolov8s_performant.py::test_run_yolov8s_trace_2cqs_tt_cnn_pipeline_inference
 ```
 
 ### Demo
