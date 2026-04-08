@@ -55,10 +55,10 @@ from models.experimental.ops.descriptors.fusion.common import (
 # =============================================================================
 
 # Fused ``ProgramDescriptor`` + metadata, keyed by fusion cache key (collision-free tuple).
-# No IO tensor objects are stored.  ``CBDescriptor.buffer`` pointers on the cached
-# descriptor may go stale between launches, but ``cb_io_tensor_map`` ensures they
-# are always refreshed from live IO tensors before any C++ code dereferences them
-# (see ``patchable_generic_op`` nanobind).
+# No IO tensor objects are stored.  The cached descriptor's buffer addresses and
+# pointers may go stale between launches; ``address_slots`` (an opaque C++ object)
+# ensures they are always refreshed from live IO tensors before any C++ code
+# dereferences them (see ``patchable_generic_op`` / ``patch_stale_descriptor``).
 _BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 
@@ -69,10 +69,11 @@ class _CacheEntry:
     Contains everything needed to reconstruct a :class:`FusedOp` on cache hit
     without re-running codegen/merge.  No tensor references are held.
 
-    ``CBDescriptor.buffer`` pointers on the cached descriptor may become stale
-    after the original tensors are deallocated.  ``cb_io_tensor_map`` records
-    which CB index maps to which IO tensor position so that
-    ``patchable_generic_op`` can refresh them from live tensors before dispatch.
+    The cached ``ProgramDescriptor`` may have stale buffer addresses (CB buffer
+    pointers and runtime arg values) after the original tensors are freed.
+    ``address_slots`` (opaque C++ ``AddressSlots``) records every descriptor
+    position that references an IO tensor so ``patchable_generic_op`` can
+    refresh them from live tensors before dispatch.
     """
 
     cached_descriptor: Any  # ProgramDescriptor — dispatched via patchable_generic_op on hit
@@ -82,11 +83,10 @@ class _CacheEntry:
     output_sources: Optional[Tuple[Tuple[int, int], ...]]
     # len(merged input_tensors) after identity dedupe; prealloc on cache hit (no tensor refs).
     merged_input_len: Optional[int] = None
-    # (cb_idx, io_tensor_idx) pairs: which merged CB gets its buffer from which
-    # position in the merged IO tensor list.  Computed once at build time (when
-    # buffer pointers are still valid), then passed to patchable_generic_op at
-    # each launch to refresh stale CBDescriptor.buffer pointers.
-    cb_io_tensor_map: Tuple[Tuple[int, int], ...] = ()
+    # Opaque C++ AddressSlots — maps every stale descriptor position (CB buffer
+    # pointers, runtime args, common args) to an IO tensor index.  Computed once
+    # at build time via compute_address_slots, passed to patchable_generic_op.
+    address_slots: Any = None
 
 
 def _flatten_ops(items) -> List[OpDescriptor]:
@@ -209,29 +209,22 @@ def _coerce_mutable_io_opdescriptor(op: OpDescriptor) -> OpDescriptor:
     return OpDescriptor(op.descriptor, ins, outs)
 
 
-def _compute_cb_io_tensor_map(desc, io_tensors) -> Tuple[Tuple[int, int], ...]:
-    """Match CB buffer addresses to IO tensor buffer addresses.
+def _compute_address_slots(desc, io_tensors):
+    """Compute the full address-slot mapping (opaque C++ ``AddressSlots``).
 
-    Called once at build time when buffer pointers are still valid.
-    Delegates to the C++ ``compute_cb_io_tensor_map`` (same address-matching
-    logic as ``discover_address_slots`` in the program factory).
-    Returns ``((cb_idx, io_tensor_idx), ...)`` — empty if no CBs have buffers.
+    Called once at build time when buffer pointers and runtime arg addresses
+    are still valid.  Uses the same address-matching logic as
+    ``discover_address_slots`` in the program factory.
     """
-    return tuple(ttnn._ttnn.operations.experimental.compute_cb_io_tensor_map(desc, io_tensors))
+    return ttnn._ttnn.operations.experimental.compute_address_slots(desc, io_tensors)
 
 
-def _cache_build_result(
-    fused_op: "FusedOp",
-    ops: List[OpDescriptor],
-    output_source_map,
-    cb_io_tensor_map: Tuple[Tuple[int, int], ...],
-) -> _CacheEntry:
+def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_source_map, address_slots) -> _CacheEntry:
     """Record a slim cache entry from a freshly-built FusedOp (no tensor refs).
 
-    ``cb_io_tensor_map`` must be pre-computed (while buffer pointers are valid)
-    and already set on *fused_op*.  The map is stored in the cache entry so
-    that ``patchable_generic_op`` can refresh stale ``CBDescriptor.buffer``
-    pointers from live IO tensors before any C++ code dereferences them.
+    ``address_slots`` must be pre-computed (while addresses are valid) and
+    already set on *fused_op*.  Stored in the cache so ``patchable_generic_op``
+    can refresh all stale addresses from live IO tensors before dispatch.
     """
     # Memoize the descriptor hash so patchable_generic_op skips the full
     # kernel/CB/semaphore walk on every launch (O(1) instead of O(descriptor)).
@@ -255,7 +248,7 @@ def _cache_build_result(
         kernel_labels=fused_op.kernel_labels,
         output_sources=output_sources,
         merged_input_len=len(fused_op.input_tensors),
-        cb_io_tensor_map=cb_io_tensor_map,
+        address_slots=address_slots,
     )
 
 
@@ -306,7 +299,7 @@ def _fused_op_from_cache_entry(entry: _CacheEntry, ops: List) -> "FusedOp":
         kernel_labels=entry.kernel_labels,
         rebind_output_sources=entry.output_sources,
         branch_ops=tuple(ops),
-        cb_io_tensor_map=entry.cb_io_tensor_map,
+        address_slots=entry.address_slots,
     )
 
 
@@ -411,7 +404,7 @@ class FusedOp:
         "kernel_labels",
         "_rebind_output_sources",
         "_branch_ops",
-        "_cb_io_tensor_map",
+        "_address_slots",
     )
 
     def __init__(
@@ -422,7 +415,7 @@ class FusedOp:
         *,
         rebind_output_sources: Optional[Tuple[Tuple[int, int], ...]] = None,
         branch_ops: Optional[Tuple[Any, ...]] = None,
-        cb_io_tensor_map: Tuple[Tuple[int, int], ...] = (),
+        address_slots: Any = None,
     ):
         self.op = op
         self.semaphores = semaphores
@@ -432,7 +425,7 @@ class FusedOp:
             rebind_output_sources = None
         self._rebind_output_sources = rebind_output_sources
         self._branch_ops = branch_ops
-        self._cb_io_tensor_map = cb_io_tensor_map
+        self._address_slots = address_slots
 
     @property
     def descriptor(self):
@@ -463,7 +456,7 @@ class FusedOp:
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor, self._cb_io_tensor_map)
+        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor, self._address_slots)
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:
@@ -623,8 +616,6 @@ class Sequential:
 
         r = self._build_internal(device)
         rebind_src = _make_rebind_output_sources(ops, r.output_source_map)
-        io_tensors = list(r.input_tensors) + list(r.output_tensors)
-        cb_map = _compute_cb_io_tensor_map(r.descriptor, io_tensors)
         fused = FusedOp(
             op=_coerce_mutable_io_opdescriptor(
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
@@ -633,10 +624,14 @@ class Sequential:
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
             branch_ops=tuple(ops),
-            cb_io_tensor_map=cb_map,
         )
+        # Compute address_slots AFTER refresh_merged_io so the IO tensor
+        # ordering matches what launch() will see (single source of truth).
+        fused.refresh_merged_io(list(ops))
+        io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
+        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, cb_map)
+        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, fused._address_slots)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -732,8 +727,6 @@ class Parallel:
 
         r = self._build_internal(device)
         rebind_src = _make_rebind_output_sources(ops, r.output_source_map)
-        io_tensors = list(r.input_tensors) + list(r.output_tensors)
-        cb_map = _compute_cb_io_tensor_map(r.descriptor, io_tensors)
         fused = FusedOp(
             op=_coerce_mutable_io_opdescriptor(
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
@@ -742,10 +735,14 @@ class Parallel:
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
             branch_ops=tuple(ops),
-            cb_io_tensor_map=cb_map,
         )
+        # Compute address_slots AFTER refresh_merged_io so the IO tensor
+        # ordering matches what launch() will see (single source of truth).
+        fused.refresh_merged_io(list(ops))
+        io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
+        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, cb_map)
+        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, fused._address_slots)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
