@@ -542,7 +542,7 @@ def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
     if state_dict is None:
         pytest.skip("Failed to load state dict. Check model path and weights.")
 
-    num_layers = getattr(request, "param", 6)
+    num_layers = request.node.callspec.params.get("num_layers", 1)
     first_k_dense = hf_config.first_k_dense_replace  # 3
     n_routed = hf_config.n_routed_experts  # 256
 
