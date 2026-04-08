@@ -177,7 +177,7 @@ TEST_F(GramPolynomialTest, BgPlusCgSquared_4096x4096) {
     check_tile(ref, dev, "4096 bG+cG²[2,5]", max_scale);
 }
 
-TEST_F(GramPolynomialTest, NIGHTLY_BgPlusCgSquared_8192x8192) {
+TEST_F(GramPolynomialTest, BgPlusCgSquared_8192x8192) {
     auto G = make_random_tensor(8192);
     constexpr float b = -4.775f;
     constexpr float c = 2.0315f;

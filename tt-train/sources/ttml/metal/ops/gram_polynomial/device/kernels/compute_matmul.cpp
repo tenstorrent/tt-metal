@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Matmul compute kernel — runs on TRISC (all 3 TRISC processors).
+// Matmul compute kernel for gram_polynomial: bG + cG²
 // Computes M_block x N_block output blocks for the Mpc×Mpc gram matmul.
-// Output streamed per (m_sub, n_sub) block:
-//   REDUCE_SENDER/TRANSPOSE: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5 to partner
-//   REDUCE_ACCUMULATOR: matmul → c_2, add own c_2(FP32) + partner's c_5(BF16) → c_6
+// The kernel computes G² + (b/c)*G. Host applies c scaling after: c*(G²+(b/c)*G) = cG²+bG.
+// bG pre-fill: before matmul, copies (b/c)*G[m,n] into matching DST positions from c_0.
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -18,11 +17,7 @@
 #include "api/compute/transpose_wh.h"
 
 // M_block x N_block matmul with K-outer layout.
-// bG pre-fill: before matmul, copies (b/c)*G[m,n] into matching DST positions from c_0.
-// Each core has stride-2 K-columns (even for lower, odd for upper). For output column n_global,
-// G[m, n_global] appears in c_0 at the K-block where k_col == n_global.
-// kb: current K-block index, n_global_base: global column start for this (m_sub, n_sub) block,
-// parity: 0 for even K-cols (lower/diag), 1 for odd (upper), b_over_c: scalar bits.
+// bG pre-fill: copies (b/c)*G[m,n] into DST for matching output columns.
 void matmul_blocks(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -34,13 +29,13 @@ void matmul_blocks(
     uint32_t subblock_w,
     uint32_t current_M,
     uint32_t current_N,
-    uint32_t kb = 0,
-    uint32_t n_global_base = 0,
-    uint32_t parity = 0,
-    uint32_t b_over_c = 0) {
+    uint32_t kb,
+    uint32_t n_global_base,
+    uint32_t parity,
+    uint32_t b_over_c) {
     uint32_t last_sh = subblock_h, last_sw = subblock_w;
 
-    // K-column range for this K-block
+    // K-column range for this K-block (stride-2: even or odd columns)
     uint32_t k_col_start = kb * K_block_tiles * 2 + parity;
     uint32_t k_col_end = k_col_start + K_block_tiles * 2;
 
@@ -69,10 +64,8 @@ void matmul_blocks(
                         continue;
                     if (n_global < k_col_start || n_global >= k_col_end)
                         continue;
-                    // This column matches — pre-fill all rows in this subblock
                     if (!any_match) {
                         copy_tile_to_dst_init_short(in0_cb);
-                        binop_with_scalar_tile_init();
                         any_match = true;
                     }
                     uint32_t k_within = (n_global - k_col_start) / 2;
@@ -84,7 +77,6 @@ void matmul_blocks(
                     }
                 }
                 if (any_match) {
-                    // Re-init matmul after copy/sfpu changed pipeline config
                     mm_block_init_short(in0_cb, in1_cb, true, current_sw, current_sh, 1);
                     last_sh = current_sh;
                     last_sw = current_sw;
@@ -152,11 +144,8 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
 }
 
 #ifdef REDUCE_ACCUMULATOR
-// Add c * own_partial + c * partner_partial, pack to output.
-// Both partials are unscaled; c is applied to the sum: result = c * (own + partner).
-// Implementation: add_tiles produces (own + partner) in DST, then mul_unary_tile scales by c.
-void add_reduce_block(
-    uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols, uint32_t c_scalar) {
+// Add own_partial + partner_partial, pack to output.
+void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols) {
     add_tiles_init(own_cb, recv_cb);
     reconfig_data_format(own_cb, recv_cb);
     pack_reconfig_data_format(out_cb);
@@ -167,7 +156,6 @@ void add_reduce_block(
         for (uint32_t n = 0; n < N_cols; n++) {
             acquire_dst();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
-            mul_unary_tile(0, c_scalar);
             pack_tile(0, out_cb);
             release_dst();
             tile_id++;
@@ -178,14 +166,10 @@ void add_reduce_block(
 
 #ifdef MIRROR_OUTPUT
 // Add own_cb + recv_cb, transpose via c_7 staging, pack to mirror_cb (col by col).
-// Produces N_cols columns of M_rows tiles each (matching DM mirror write pattern).
-// src_stride: column stride in source CBs (= M_block for row-major c_2).
-// Note: transpose_wh_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
 void add_transpose_block(
     uint32_t own_cb, uint32_t recv_cb, uint32_t mirror_cb, uint32_t M_rows, uint32_t N_cols, uint32_t src_stride) {
     constexpr uint32_t staging_cb = tt::CBIndex::c_7;
     for (uint32_t n = 0; n < N_cols; n++) {
-        // Phase 1: batch add M_rows tiles for column n into staging
         add_tiles_init(own_cb, recv_cb);
         reconfig_data_format(own_cb, recv_cb);
         pack_reconfig_data_format(staging_cb);
@@ -199,7 +183,6 @@ void add_transpose_block(
         }
         cb_push_back(staging_cb, M_rows);
 
-        // Phase 2: transpose all M_rows tiles from staging to mirror
         cb_wait_front(staging_cb, M_rows);
         cb_reserve_back(mirror_cb, M_rows);
         transpose_wh_init(staging_cb, mirror_cb);
@@ -227,8 +210,7 @@ void kernel_main() {
     constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
     constexpr uint32_t N_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
-    constexpr uint32_t b_over_c_bits = get_compile_time_arg_val(8);  // float (b/c) as uint32_t bits
-    constexpr uint32_t c_bits = get_compile_time_arg_val(9);         // float c as uint32_t bits
+    constexpr uint32_t b_over_c_bits = get_compile_time_arg_val(8);
     constexpr uint32_t K_num_blocks = K_half / K_block_tiles;
     constexpr uint32_t tiles_per_in0_block = K_block_tiles * M_block;
     constexpr uint32_t tiles_per_in1_block = K_block_tiles * N_block;
@@ -249,6 +231,8 @@ void kernel_main() {
 
     mm_init(in0_cb, in1_cb, intermed_cb);
     mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
+    if (b_over_c_bits != 0)
+        binop_with_scalar_tile_init();
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(intermed_cb);
 
@@ -266,11 +250,10 @@ void kernel_main() {
                 cb_wait_front(in0_cb, tiles_per_in0_block);
                 cb_wait_front(in1_cb, tiles_per_in1_block);
 
-                // Compute parity for bG stride-2 column matching
 #ifdef REDUCE_ACCUMULATOR
-                constexpr uint32_t bg_parity = 1;  // upper cores: odd K-columns
+                constexpr uint32_t bg_parity = 1;
 #else
-                constexpr uint32_t bg_parity = 0;  // lower/diagonal cores: even K-columns
+                constexpr uint32_t bg_parity = 0;
 #endif
                 uint32_t n_global_base = N_global_offset + N_start;
 
@@ -290,31 +273,27 @@ void kernel_main() {
                     bg_parity,
                     b_over_c_bits);
 
+                cb_pop_front(in0_cb, tiles_per_in0_block);
+                cb_pop_front(in1_cb, tiles_per_in1_block);
+
                 if (kb == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
-
-                cb_pop_front(in0_cb, tiles_per_in0_block);
-                cb_pop_front(in1_cb, tiles_per_in1_block);
             }
 
             cb_push_back(intermed_cb, intermed_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-            // Pack or reduce immediately after each (m_sub, n_sub) block
 #ifndef REDUCE_ACCUMULATOR
-            // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner (unscaled)
             cb_reserve_back(out_cb, intermed_tiles);
             cb_wait_front(intermed_cb, intermed_tiles);
             pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N);
             cb_pop_front(intermed_cb, intermed_tiles);
             cb_push_back(out_cb, intermed_tiles);
 #else
-            // REDUCE_ACCUMULATOR: c * (c_2 + c_5) → c_6
             cb_wait_front(intermed_cb, intermed_tiles);
             cb_wait_front(reduce_cb, intermed_tiles);
-            binop_with_scalar_tile_init();
-            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N, c_bits);
+            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N);
 #ifdef MIRROR_OUTPUT
             add_transpose_block(intermed_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, current_N, current_M_block);
 #endif
@@ -322,7 +301,6 @@ void kernel_main() {
             cb_pop_front(reduce_cb, intermed_tiles);
 #endif
 
-            // Re-init matmul pipeline after copy/pack changed data formats
             if (n_sub + 1 < num_n_blocks) {
                 mm_init(in0_cb, in1_cb, intermed_cb);
                 mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
@@ -331,7 +309,6 @@ void kernel_main() {
             }
         }
 
-        // Re-init matmul pipeline for next m_sub
         if (m_sub + 1 < num_m_blocks) {
             mm_init(in0_cb, in1_cb, intermed_cb);
             mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);

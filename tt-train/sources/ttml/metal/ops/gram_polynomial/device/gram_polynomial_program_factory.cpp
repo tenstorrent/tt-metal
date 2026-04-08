@@ -488,8 +488,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
                  subblock_h,
                  N_block,
                  num_n_blocks,
-                 std::bit_cast<uint32_t>(attrs.c != 0.0f ? attrs.b / attrs.c : 0.0f),
-                 std::bit_cast<uint32_t>(attrs.c)},
+                 std::bit_cast<uint32_t>(attrs.c != 0.0f ? attrs.b / attrs.c : 0.0f)},
             .defines = defines};
     };
 
