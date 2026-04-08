@@ -212,6 +212,18 @@ YAML_DIR="tests/tt_metal/tt_metal/perf_microbenchmark/routing"
 mkdir -p "${PKG_ROOT}/${YAML_DIR}"
 cp "${REPO_ROOT}/${YAML_DIR}/"*.yaml "${PKG_ROOT}/${YAML_DIR}/"
 
+# --- Copy multihost rank binding configs ---
+echo "==> Copying multihost rank binding configurations..."
+RANK_BINDING_DIR="tests/tt_metal/distributed/config"
+mkdir -p "${PKG_ROOT}/${RANK_BINDING_DIR}"
+cp "${REPO_ROOT}/${RANK_BINDING_DIR}/"*_rank_bindings.yaml "${PKG_ROOT}/${RANK_BINDING_DIR}/"
+
+# --- Copy tt-run launcher (for multihost MPI tests) ---
+echo "==> Copying tt-run launcher..."
+TTRUN_DIR="ttnn/ttnn/distributed"
+mkdir -p "${PKG_ROOT}/${TTRUN_DIR}"
+cp "${REPO_ROOT}/${TTRUN_DIR}/ttrun.py" "${PKG_ROOT}/${TTRUN_DIR}/"
+
 # --- Optionally bundle SFPI ---
 if [[ "$BUNDLE_SFPI" -eq 1 ]]; then
     echo "==> Bundling SFPI toolchain..."
@@ -291,11 +303,32 @@ Prerequisites on target machine:
   - Tenstorrent device drivers loaded
   - Compatible Linux (same distro/version as build machine recommended)
 
-Quick start:
+Single-host quick start:
   ./run_test.sh --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
 
 Run a different binary:
   ./run_test.sh --binary test_tt_fabric_mux_bandwidth
+
+Multihost tests:
+  Multihost tests use MPI to launch processes across multiple machines.
+
+  Prerequisites (all hosts):
+    - Package extracted to the same path (or on a shared NFS mount)
+    - OpenMPI installed (mpirun / mpirun-ulfm)
+    - Python 3.8+ with: pip install click pyyaml pydantic loguru
+    - Passwordless SSH between hosts
+
+  Using tt-run (included in package):
+    export TT_METAL_HOME=$(pwd)
+    export TT_METAL_RUNTIME_ROOT=$(pwd)
+    export LD_LIBRARY_PATH=$(pwd)/lib
+    python3 ttnn/ttnn/distributed/ttrun.py \
+      --rank-binding tests/tt_metal/distributed/config/32x4_quad_bh_galaxy_rank_bindings.yaml \
+      --mpi-args "--bind-to none --host host1,host2,host3,host4 --tag-output" \
+      ./bin/test_tt_fabric \
+      --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+
+  Rank binding configs are in: tests/tt_metal/distributed/config/
 
 Environment variables:
   TT_METAL_RUNTIME_ROOT  - Set automatically by run_test.sh to package root
