@@ -187,7 +187,7 @@ inline void read_block_to_cb(
 }
 
 /**
- * @brief Read one column block of row-major input data from DRAM into cb_id_in_rm.
+ * @brief Read one column block of row-major input data from DRAM into a CB.
  *
  * Reads `num_valid_rows` rows, each of width `block.size() * tile_stride_bytes` bytes, starting
  * at column `block.start() * tile_stride_bytes` within each row. Rows are written into L1
@@ -196,7 +196,8 @@ inline void read_block_to_cb(
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void read_row_major_block_to_cb(
-    const uint32_t cb_id_in_rm,
+    experimental::Noc& noc,
+    experimental::CircularBuffer& cb,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -205,21 +206,27 @@ inline void read_row_major_block_to_cb(
     const Block& block) {
     const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
     const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
-    cb_reserve_back(cb_id_in_rm, block.full_block_size());
+    cb.reserve_back(block.full_block_size());
 
-    uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
     for (uint32_t row = 0; row < num_valid_rows; ++row) {
-        const uint64_t noc_addr = get_noc_addr(curr_tile_row * TILE_H + row, src_a) + col_byte_offset;
-        noc_async_read(noc_addr, l1_ptr, row_read_bytes);
-        l1_ptr += rm_row_stride_bytes;
+        noc.async_read(
+            src_a,
+            cb,
+            row_read_bytes,
+            {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
+            {.offset_bytes = row * rm_row_stride_bytes});
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in_rm, block.full_block_size());
+    noc.async_read_barrier();
+    cb.push_back(block.full_block_size());
 }
 
+/**
+ * @brief Write one column block of row-major output data from a CB to DRAM.
+ */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void write_row_major_block_from_cb(
-    const uint32_t cb_id_out_rm,
+    experimental::Noc& noc,
+    experimental::CircularBuffer& cb,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -228,8 +235,7 @@ inline void write_row_major_block_from_cb(
     const Block& block) {
     // Compute produces block_size tiles (full_block_size) in cb_out_rm; the last block
     // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
-    cb_wait_front(cb_id_out_rm, block.full_block_size());
-    const uint32_t l1_base = get_read_ptr(cb_id_out_rm);
+    cb.wait_front(block.full_block_size());
 
     // Column byte offset in the output row where this block starts.
     const uint32_t col_byte_offset = block.start() * tile_width_bytes;
@@ -237,24 +243,28 @@ inline void write_row_major_block_from_cb(
     const uint32_t valid_bytes = block.size() * tile_width_bytes;
 
     for (uint32_t r = 0; r < num_valid_rows; r++) {
-        const uint32_t l1_src = l1_base + r * block_row_stride_bytes;
-        const uint64_t noc_dst = get_noc_addr(abs_row_base + r, dst_a) + col_byte_offset;
-        noc_async_write(l1_src, noc_dst, valid_bytes);
+        noc.async_write(
+            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb),
+            dst_a,
+            valid_bytes,
+            {.offset_bytes = r * block_row_stride_bytes},
+            {.page_id = abs_row_base + r, .offset_bytes = col_byte_offset});
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_id_out_rm, block.full_block_size());
+    noc.async_write_barrier();
+    cb.pop_front(block.full_block_size());
 }
 
 /**
- * @brief Push all column blocks of one tile-row of row-major input data into cb_id_in_rm.
+ * @brief Push all column blocks of one tile-row of row-major input data into a CB.
  *
  * Iterates over all blocks (via `generic::blocks(Wt, block_size)`) and reads each block from DRAM
- * into cb_id_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
+ * into the CB. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
 inline void push_row_major_blocks_to_cb(
-    const uint32_t cb_id_in_rm,
+    experimental::Noc& noc,
+    experimental::CircularBuffer& cb,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,
@@ -278,17 +288,19 @@ inline void push_row_major_blocks_to_cb(
         const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
         const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
 
-        cb_reserve_back(cb_id_in_rm, block.full_block_size());
+        cb.reserve_back(block.full_block_size());
 
-        uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
         for (uint32_t row = 0; row < num_valid_rows; ++row) {
-            const uint64_t noc_addr = get_noc_addr(curr_tile_row * TILE_H + row, src_a) + col_byte_offset;
-            noc_async_read(noc_addr, l1_ptr, row_read_bytes);
-            l1_ptr += rm_row_stride_bytes;
+            noc.async_read(
+                src_a,
+                cb,
+                row_read_bytes,
+                {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
+                {.offset_bytes = row * rm_row_stride_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        cb_push_back(cb_id_in_rm, block.full_block_size());
+        cb.push_back(block.full_block_size());
     }
 }
 

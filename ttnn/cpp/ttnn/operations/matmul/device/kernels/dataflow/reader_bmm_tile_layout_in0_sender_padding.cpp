@@ -156,7 +156,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 

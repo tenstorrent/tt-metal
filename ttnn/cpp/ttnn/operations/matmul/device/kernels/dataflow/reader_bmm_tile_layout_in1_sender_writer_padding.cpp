@@ -245,7 +245,7 @@ void kernel_main() {
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
@@ -290,14 +290,18 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
+                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in1_tensor_addr);
-
+                            uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            uint32_t shard_base_addr = in1_tensor_addr;
                             if (i == 0) {
-                                in1_base_addr += dram_tensor_start_offset;
+                                shard_base_addr += dram_tensor_start_offset;
                             }
-                            noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_single_tile_size_bytes, vc);
+                            noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                                dram_bank,
+                                in1_single_tile_size_bytes,
+                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                vc);
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = cb_in1.get_write_ptr() + l1_write_addr_in1_offset;
@@ -309,8 +313,15 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc_async_read_one_packet_with_state<true, true>(
-                                        in1_base_addr + l1_read_addr_in1_temp, l1_write_addr_in1_temp, vc);
+                                    noc.async_read_with_state<
+                                        experimental::Noc::VcSelection::CUSTOM,
+                                        NOC_MAX_BURST_SIZE>(
+                                        dram_bank,
+                                        experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
+                                        in1_single_tile_size_bytes,
+                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {},
+                                        vc);
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
                                     l1_write_addr_in1_temp += in1_single_tile_size_bytes;
                                 }
@@ -476,18 +487,22 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
+                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> bias_dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in3_tensor_addr);
-
+                            uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            uint32_t bias_shard_base_addr = in3_tensor_addr;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
                                 // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                in3_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                 bias_single_tile_size_bytes;
+                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                        bias_single_tile_size_bytes;
                             }
 
-                            noc_async_read_one_packet_set_state<true>(in3_base_addr, bias_single_tile_size_bytes, vc);
+                            noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                                bias_dram_bank,
+                                bias_single_tile_size_bytes,
+                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                vc);
 
                             uint32_t l1_read_addr_in3 = 0;
                             l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
@@ -498,8 +513,13 @@ void kernel_main() {
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc_async_read_one_packet_with_state<true, true>(
-                                    in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+                                noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                                    bias_dram_bank,
+                                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_in3),
+                                    bias_single_tile_size_bytes,
+                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {},
+                                    vc);
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;

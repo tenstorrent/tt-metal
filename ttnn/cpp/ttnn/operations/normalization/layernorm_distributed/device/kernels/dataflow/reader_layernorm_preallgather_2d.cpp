@@ -11,6 +11,12 @@
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/tensor.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
@@ -35,16 +41,17 @@ void kernel_main() {
     const uint32_t onetile = 1;
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));  // semaphore for reducer
+    constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_cores_to_wait = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
-
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_inp_buf(cb_inp);
+    experimental::CircularBuffer cb_out_buf(cb_out);
+    experimental::CircularBuffer cb_x2_merge_buf(cb_x2_merge);
+    experimental::Semaphore<> reducer_sem(reducer_semaphore_id);
 
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(8);
@@ -59,41 +66,50 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_reserve_back(cb_inp, blk);
-            uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
+            cb_inp_buf.reserve_back(blk);
 
             for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
-                inp_wr_ptr += src0_tile_bytes;
+                noc.async_read(
+                    src_a,
+                    cb_inp_buf,
+                    src0_tile_bytes,
+                    {.page_id = inp_tile_idx},
+                    {.offset_bytes = r * src0_tile_bytes});
                 inp_tile_idx++;
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
-            cb_push_back(cb_inp, blk);
+            cb_inp_buf.push_back(blk);
 
         }  // wt loop
 
     }  // ncht loop
 
     // wait on cb_out and then write to merge core over noc
-    cb_wait_front(cb_out, onetile);
+    cb_out_buf.wait_front(onetile);
 
     uint32_t o_write_size = BF16_TILE_BYTES;
     uint32_t worker_offset = o_write_size * y;
-    uint64_t output_write_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_write_ptr(cb_x2_merge)) + worker_offset;
 
-    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, onetile);
+    experimental::UnicastEndpoint reduce_ep;
+    noc.async_write(
+        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
+        reduce_ep,
+        o_write_size,
+        {.offset_bytes = 0},
+        {.noc_x = reduce_core_noc_x,
+         .noc_y = reduce_core_noc_y,
+         .addr = cb_x2_merge_buf.get_write_ptr() + worker_offset});
+    noc.async_write_barrier();
+    cb_out_buf.pop_front(onetile);
 
     // increase semaphore
-    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-    noc_async_atomic_barrier();
+    reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
+    noc.async_atomic_barrier();
 
     if (is_merge_core) {
-        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, num_cores_to_wait);
-        cb_push_back(cb_x2_merge, num_cores_to_wait);
-        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        reducer_sem.wait(num_cores_to_wait);
+        cb_x2_merge_buf.push_back(num_cores_to_wait);
+        reducer_sem.set(0);
     }
 }

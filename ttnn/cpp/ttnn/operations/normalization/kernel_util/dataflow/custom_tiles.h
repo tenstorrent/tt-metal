@@ -13,6 +13,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 namespace norm::kernel_util::dataflow {
 
@@ -31,23 +35,32 @@ FORCE_INLINE void generate_partial_reduce_scaler(
     const uint32_t num_cols,
     const uint32_t tile_height = 32,
     const uint32_t tile_width = 32) {
-    cb_reserve_back(cb_id, 1);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id);
+
+    cb.reserve_back(1);
 
     const uint16_t scaler_uint16 = scaler >> 16;
 
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
     static_assert(num_zeros_reads > 0, "num_zeros_reads must be greater than 0");
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
+    uint32_t write_addr = cb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
 
-    // Fill tile with zeros
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    // Fill tile with zeros via state-based reads from the local L1 zeros region
+    experimental::UnicastEndpoint self;
+    noc.set_async_read_state<experimental::Noc::VcSelection::DEFAULT, NOC_MAX_BURST_SIZE>(
+        self, MEM_ZEROS_SIZE, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = MEM_ZEROS_BASE});
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc.async_read_with_state<experimental::Noc::VcSelection::DEFAULT, NOC_MAX_BURST_SIZE>(
+            self,
+            experimental::CoreLocalMem<uint32_t>(write_addr),
+            MEM_ZEROS_SIZE,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = MEM_ZEROS_BASE},
+            {});
         write_addr += MEM_ZEROS_SIZE;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // Iterate over first two faces (top two) then
     // second two faces (bottom two)
@@ -71,7 +84,7 @@ FORCE_INLINE void generate_partial_reduce_scaler(
         }
     }
 
-    cb_push_back(cb_id, 1);
+    cb.push_back(1);
 }
 
 }  // namespace norm::kernel_util::dataflow
