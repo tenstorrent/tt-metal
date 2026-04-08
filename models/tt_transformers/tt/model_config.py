@@ -1106,11 +1106,21 @@ class ModelArgs:
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
+        if not to_warmup_seq_lens:
+            # e.g. max_seq_len is below every standard warmup length after filtering
+            m = self.max_seq_len
+            assert m >= 1, "max_seq_len must be positive for prefill warmup"
+            to_warmup_seq_lens = [m]
+
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # RoPE / prefill buffers are allocated for this instance's max_seq_len; do not
+        # warm up at longer lengths (e.g. demos with max_seq_len=256 vs table [128, 1024]).
+        to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
 
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
         if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
@@ -1118,8 +1128,6 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
-        if self.base_model_name == "Mistral-Small-3.1-24B":
-            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
     # =========================================================================
@@ -1161,6 +1169,22 @@ class ModelArgs:
             return ttnn.DRAM_MEMORY_CONFIG
         else:
             raise ValueError(f"Invalid mode: {mode}")
+
+    def use_short_seq_l1_prefill(self, seq_len: int = None):
+        """Enable aggressive L1 prefill for short-seq single-user N150 runs."""
+        force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
+        if force_dram:
+            enabled = False
+        elif self.is_galaxy or self.device_name != "N150" or self.max_batch_size != 1:
+            enabled = False
+        else:
+            effective_seq_len = self.max_seq_len if seq_len is None else seq_len
+            enabled = effective_seq_len <= 512
+        return enabled
+
+    def get_prefill_activation_mem_config(self, seq_len: int = None):
+        """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
+        return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
 
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
@@ -1321,7 +1345,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1341,7 +1365,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1440,7 +1464,7 @@ class ModelArgs:
                     ttnn.ShardSpec(full_grid, [32, nearest_32(56)], ttnn.ShardOrientation.ROW_MAJOR),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1552,7 +1576,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1637,7 +1661,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1666,7 +1690,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1707,7 +1731,7 @@ class ModelArgs:
                 else:
                     return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1776,7 +1800,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1810,7 +1834,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1947,7 +1971,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1975,7 +1999,7 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2003,7 +2027,7 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2330,6 +2354,8 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-0.6B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-4B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2523,15 +2549,28 @@ class ModelArgs:
 
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
-        # input goes to DRAM
-        xs_1BSH = ttnn.from_torch(
-            x_1BSH,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        prefill_memcfg = self.get_prefill_activation_mem_config(seq_len=x_bsh.shape[1])
+        try:
+            xs_1BSH = ttnn.from_torch(
+                x_1BSH,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=prefill_memcfg,
+                mesh_mapper=mesh_mapper,
+            )
+        except RuntimeError as e:
+            if prefill_memcfg == ttnn.DRAM_MEMORY_CONFIG:
+                raise
+            logger.warning(f"Prefill residual tensor allocation in L1 failed; falling back to DRAM. Reason: {e}")
+            xs_1BSH = ttnn.from_torch(
+                x_1BSH,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
         return xs_1BSH
 
     def _get_text_prefix(self):
