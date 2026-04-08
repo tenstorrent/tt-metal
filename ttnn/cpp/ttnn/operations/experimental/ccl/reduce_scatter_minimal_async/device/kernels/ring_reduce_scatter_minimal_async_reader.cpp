@@ -195,7 +195,7 @@ void kernel_main() {
                         tiles_to_read = std::min(tiles_remaining, tile_granularity);
                     }
 
-                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks)) {
+                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
                         tiles_read += tiles_to_read;
                         for (uint32_t k = 0; k < tiles_to_read; ++k) {
