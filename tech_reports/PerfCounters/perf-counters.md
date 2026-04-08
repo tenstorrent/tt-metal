@@ -12,8 +12,6 @@ Each Tensix core contains hardware performance counters organized into five bank
 
 The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides three values per event: **req_cnt** (cycles the event signal was high), **grant_cnt** (cycles the grant/ready signal was high), and **ref_cnt** (total elapsed cycles). From these raw values, the profiler computes derived metrics like utilization (`req_cnt / ref_cnt`), backpressure (`(req_cnt - grant_cnt) / req_cnt`), and cross-bank ratios that combine counters from different banks.
 
-Ethernet (ERISC) cores contain L1 performance counter hardware, but the MMIO readback path is hardwired to 0 in both WH and BH RTL (`i_l1_perf_cnt_out(64'h0)` in `tt_eth_core.sv`). ERISC perf counters are currently disabled in software.
-
 ## How It Works
 
 1. **Kernel starts**: TRISC1 calls `start_perf_counter()` which writes the start bit to all enabled counter banks. All counters begin accumulating from zero.
@@ -43,7 +41,6 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | | Wormhole | Blackhole |
 |---|---|---|
 | Tensix raw counters | 155 (3 RTL-dead filtered) | 207 (15 RTL-dead filtered) |
-| ERISC raw counters | disabled (MMIO readback = 0) | disabled (MMIO readback = 0) |
 | Derived metrics | 59 | 59 |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 3 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), and `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH). The TDMA_UNPACK grant bank 0 (counter_sel 256) measures 4-HF-cycle instructions on WH (vs math-not-blocked-by-src on BH). Grant banks 4-6 (counter_sels 260-262) map to srcB/srcA write-port and overwrite signals in a different order than BH. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).

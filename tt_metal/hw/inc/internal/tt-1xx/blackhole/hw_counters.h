@@ -66,7 +66,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
      {PerfCounterType::PACK_BANK7_GRANT, 274}}};
 constexpr size_t NUM_PACK_COUNTERS = 16;
 
-// L1 bank 0 counters (Tensix only — ERISC disabled: MMIO readback hardwired to 0 in RTL)
+// Tensix L1 bank 0 counters
 // Tensix L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1: BH has unified packer
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
