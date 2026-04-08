@@ -140,7 +140,6 @@ void kernel_main() {
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
-            bool k_block_iter_odd = false;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -179,10 +178,10 @@ void kernel_main() {
                 if constexpr (is_injector_core) {
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
-                    uint32_t k_left_tiles =
-                        k_block_iter_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                    uint32_t k_right_tiles = k_block_iter_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
-                    k_block_iter_odd = !k_block_iter_odd;
+                    uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
+                    bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
+                    uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                     compute_actual_k_block(
                         k_block_iter,
                         K_num_blocks,
