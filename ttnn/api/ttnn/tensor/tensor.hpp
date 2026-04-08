@@ -17,7 +17,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_attributes.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -37,14 +36,10 @@ public:
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
-    // Shared pointer to all attributes associated with this tensor
-    // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
-
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    [[nodiscard]] explicit Tensor() = default;
+    [[nodiscard]] explicit Tensor();
     [[nodiscard]] Tensor(const Tensor& other);
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(const Tensor& other);
@@ -232,11 +227,13 @@ public:
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
     const DeviceStorage& device_storage() const&;
+    DeviceStorage& device_storage() &;
     const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
     const HostStorage& host_storage() const&;
+    HostStorage& host_storage() &;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated HostTensor.
@@ -263,7 +260,7 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const { return std::forward_as_tuple(tensor_attributes->get_storage(), tensor_spec()); }
+    auto attribute_values() const { return std::forward_as_tuple(storage_, tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 
@@ -273,6 +270,9 @@ public:
     static std::uint64_t next_tensor_id();
 
 private:
+    using Storage = std::variant<HostStorage, DeviceStorage>;
+    Storage storage_;
+
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
