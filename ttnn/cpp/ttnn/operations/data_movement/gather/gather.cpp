@@ -153,7 +153,7 @@ namespace ttnn {
 
 Tensor gather(
     const Tensor& input_tensor,
-    const int8_t dim,
+    int8_t dim,
     const Tensor& input_index_tensor,
     const bool sparse_grad,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
@@ -175,19 +175,27 @@ Tensor gather(
         return input_index_tensor;
     }
 
-    const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
+    // Normalize negative dimension to positive index with bounds check
+    const int8_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
+    TT_FATAL(
+        normalized_dim >= 0 && normalized_dim < static_cast<int8_t>(input_tensor_rank),
+        "gather: dim {} is out of range for tensor rank {}",
+        dim,
+        input_tensor_rank);
+
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
-    const bool input_index_tensor_is_dim_last_idx = (dim == -1 || dim == index_tensor_rank - 1);
+    const bool input_index_tensor_is_dim_last_idx = (normalized_dim == index_tensor_rank - 1);
     const bool index_tensor_is_rank_le_4d = index_tensor_rank <= 4;
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
     Tensor padded_index_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
-        input_index_tensor, dim, input_index_tensor_is_dim_last_idx, index_tensor_is_rank_le_4d, true);
+        input_index_tensor, normalized_dim, input_index_tensor_is_dim_last_idx, index_tensor_is_rank_le_4d, true);
 
     Tensor padded_input_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
         input_tensor,
-        dim,
+        normalized_dim,
         input_tensor_is_dim_last_idx,
         input_tensor_is_rank_le_4d,
         false,
@@ -197,13 +205,13 @@ Tensor gather(
     if (optional_output_tensor.has_value()) {
         auto& output_tensor = optional_output_tensor.value();
         output_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
-            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+            output_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
         optional_output_tensor_value = output_tensor;
     }
 
     Tensor gather_tensor = ttnn::prim::gather(
         padded_input_tensor,
-        dim,
+        normalized_dim,
         padded_index_tensor,
         sparse_grad,
         memory_config_value,
@@ -211,7 +219,11 @@ Tensor gather(
         sub_core_grids);
 
     return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
-        input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);
+        input_index_tensor,
+        gather_tensor,
+        normalized_dim,
+        input_index_tensor_is_dim_last_idx,
+        original_index_tensor_lshape);
 }
 
 }  // namespace ttnn
