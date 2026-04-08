@@ -5,8 +5,6 @@
 #pragma once
 
 #include <string>
-#include <tuple>
-
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::rotate {
@@ -92,21 +90,10 @@ struct RotateDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
-rotate_build_operation_args(
-    const Tensor& input,
-    float angle,
-    const std::optional<std::tuple<float, float>>& center,
-    float fill,
-    bool expand,
-    const std::string& interpolation_mode,
-    const std::optional<MemoryConfig>& memory_config);
-
 }  // namespace ttnn::operations::rotate
 
 namespace ttnn::prim {
-
-Tensor rotate(
+ttnn::Tensor rotate(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -114,5 +101,4 @@ Tensor rotate(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config);
-
 }  // namespace ttnn::prim

@@ -45,6 +45,12 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
+
+    experimental::CB in_cb(in_cb_id);
+    experimental::CB clear_cb(clear_value_cb_id);
+    experimental::Noc noc;
+    experimental::UnicastEndpoint self_ep;
+
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
@@ -53,14 +59,14 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
 
-        uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-        cb_reserve_back(in_cb_id, 1);
+        in_cb.reserve_back(1);
+        uint32_t write_offset = 0;
         uint32_t processed_sticks = 0;
         // page zeroing is only necessary for tiled block output format so that scale is not affected by
         // junk/padding data
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page<in_cb_id>(get_write_ptr(in_cb_id));
+                zero_out_page<in_cb_id>(noc, in_cb);
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -68,22 +74,27 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
+                noc.async_read(
+                    self_ep,
+                    in_cb,
+                    read_bytes * w_multiple,
+                    experimental::local_addr(read_offset),
+                    {.offset_bytes = write_offset});
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += read_bytes * w_multiple;
+                    write_offset += read_bytes * w_multiple;
                 } else {
-                    in_l1_write_addr += max_write_inc * w_multiple;
+                    write_offset += max_write_inc * w_multiple;
                 }
                 processed_sticks += w_multiple;
                 if constexpr (is_large_kernel) {
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {
-                        noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        in_l1_write_addr = get_write_ptr(in_cb_id);
+                        noc.async_read_barrier();
+                        in_cb.push_back(1);
+                        in_cb.reserve_back(1);
+                        write_offset = 0;
                         // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
                         // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
                         // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
@@ -94,8 +105,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
-                                clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                                    get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                                clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
                             }
                         }
                     }
@@ -124,8 +134,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             }
         }
         if constexpr (!is_large_kernel) {
-            noc_async_read_barrier();
-            cb_push_back(in_cb_id, 1);
+            noc.async_read_barrier();
+            in_cb.push_back(1);
         }
     }
 }
@@ -183,7 +193,6 @@ void kernel_main() {
     constexpr uint32_t reader_tensor_args_index = 55;
 
     constexpr bool use_split_reader = split_reader;
-    constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -205,18 +214,25 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    experimental::CB clear_value_cb(clear_value_cb_id);
+    experimental::CB in_scalar_cb(in_scalar_cb_id);
+    experimental::CB in_shard_cb(in_shard_cb_id);
+    experimental::CB reader_indices_cb(in_reader_indices_cb_id);
+    experimental::CB config_cb(config_cb_id);
+
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb) {
         if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
+            fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            clear_value_cb.push_back(1);
         }
         if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
+            clear_value_cb.wait_front(1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(
+                experimental::Noc(), experimental::CB(in_cb_id), clear_value_cb);
         }
     }
 
@@ -225,25 +241,25 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
-        cb_push_back(in_scalar_cb_id_0, 1);
+        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+        in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
 
-    const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             load_config_tensor_if_in_dram<
                 reader_dram_addr,
                 reader_page_size,
                 reader_tensor_args_index,
-                in_reader_indices_cb_id>(core_nhw_index);
+                in_reader_indices_cb_id>(experimental::Noc(), reader_indices_cb, core_nhw_index);
 
         } else {
-            cb_wait_front(in_reader_indices_cb_id, 1);
+            reader_indices_cb.wait_front(1);
         }
     }
-    uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
+    uint32_t reader_indices_l1_addr = reader_indices_cb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 
@@ -257,7 +273,7 @@ void kernel_main() {
     uint32_t scalar_end;
     uint32_t counter = reader_id;
     if constexpr (!one_scalar_per_core) {
-        uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+        uint32_t config_l1_addr = config_cb.get_read_ptr();
         if constexpr (config_in_dram) {
             if (reader_id == 0) {
                 constexpr uint32_t config_tensor_args_index =
@@ -266,9 +282,9 @@ void kernel_main() {
                     config_dram_addr,
                     config_page_size,
                     config_tensor_args_index,
-                    config_cb_id>(core_nhw_index);
+                    config_cb_id>(experimental::Noc(), config_cb, core_nhw_index);
             } else {
-                cb_wait_front(config_cb_id, 1);
+                config_cb.wait_front(1);
             }
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
@@ -298,7 +314,8 @@ void kernel_main() {
                     in_scalar_cb_id,
                     reader_nindices,
                     use_split_reader,
-                    multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+                    multi_buffering_factor>(
+                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
             read_kernel_with_top_left_index<
                 in_nblocks_c,
