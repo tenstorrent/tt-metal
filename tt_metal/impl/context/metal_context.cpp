@@ -533,12 +533,8 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
-}
-
-const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
+    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(get_core_type_from_config(dispatch_core_config_))];
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map before initializing it.");
     return *mem_map;
 }
 

@@ -19,7 +19,7 @@
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
-// #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
@@ -91,6 +91,10 @@ const DispatchQueryManager& FDKernel::get_dispatch_query_manager_ref() const {
 uint32_t FDKernel::get_max_num_eth_cores() const {
     TT_ASSERT(static_cast<bool>(get_max_num_eth_cores_), "Max num eth cores accessor not set");
     return get_max_num_eth_cores_();
+}
+
+const DispatchMemMap& FDKernel::get_dispatch_mem_map() const {
+    return descriptor_.metal_context().dispatch_mem_map();
 }
 
 FDKernel* FDKernel::Generate(

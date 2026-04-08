@@ -139,11 +139,12 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
             ? dispatch_core_manager.dispatcher_d_core(chip_id, channel, cq_id)
             : dispatch_core_manager.dispatcher_core(chip_id, channel, cq_id);
 
-    // Get the L1 address where dispatch progress counter is stored
     CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+
+    // Get the L1 address where dispatch progress counter is stored
     uint32_t dev_dispatch_progress_ptr =
         MetalContext::instance()
-            .dispatch_mem_map(dispatch_core_type)
+            .dispatch_mem_map()
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
 
     // read_core expects TRANSLATED (virtual) coordinates
