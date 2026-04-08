@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
+    DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     OverlappedTensor,
     prepare_attention_weights,
@@ -37,6 +38,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_q_ab_kv_a_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
@@ -243,7 +245,7 @@ class CacheWeightProvider:
         return prepare_lm_head_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        """Load MoE layer from tensor cache; routed experts use fast dispatch, rest uses slow dispatch."""
+        """Load MoE layer from tensor cache; FD-safe weights use fast dispatch, rest uses slow dispatch."""
         t_load = time.perf_counter()
         cache_config = self._cache_config(device)
         setup_s = time.perf_counter() - t_load
@@ -263,6 +265,15 @@ class CacheWeightProvider:
                 cache_config=cache_config,
             )
             routed_prepare_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            q_ab = prepare_q_ab_kv_a_weights(
+                device,
+                self._state_dict,
+                layer_id,
+                move_to_device=True,
+                cache_config=cache_config,
+            )
+            q_ab_prepare_s = time.perf_counter() - t0
             t_before_teardown = time.perf_counter()
         t_after_with = time.perf_counter()
         fd_teardown_s = t_after_with - t_before_teardown
@@ -272,6 +283,7 @@ class CacheWeightProvider:
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: setup (cache_config) {setup_s:.3f}s")
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: fast_dispatch initialize {fd_init_s:.3f}s")
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_routed_expert_weights {routed_prepare_s:.3f}s")
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_q_ab_kv_a_weights (FD) {q_ab_prepare_s:.3f}s")
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: fast_dispatch terminate {fd_teardown_s:.3f}s")
 
         t0 = time.perf_counter()
@@ -282,9 +294,10 @@ class CacheWeightProvider:
             is_moe=True,
             move_to_device=True,
             cache_config=cache_config,
+            preloaded_q_ab=q_ab,
         )
         attn_s = time.perf_counter() - t0
-        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_attention_weights {attn_s:.3f}s")
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_attention_weights (SD) {attn_s:.3f}s")
         t0 = time.perf_counter()
         shared = prepare_shared_expert_weights(
             device,
@@ -298,7 +311,7 @@ class CacheWeightProvider:
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_shared_expert_weights {shared_s:.3f}s")
 
         total_s = time.perf_counter() - t_load
-        sum_parts = setup_s + fd_init_s + routed_prepare_s + fd_teardown_s + attn_s + shared_s
+        sum_parts = setup_s + fd_init_s + routed_prepare_s + q_ab_prepare_s + fd_teardown_s + attn_s + shared_s
         overhead_s = total_s - sum_parts
         logger.info(
             f"CacheWeightProvider MoE layer {layer_id}: load_moe_layer total {total_s:.3f}s "
@@ -329,12 +342,78 @@ class CacheWeightProvider:
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(
+        """Load dense layer; FD-safe weights (routed experts, q_ab_kv_a) use fast dispatch."""
+        t_load = time.perf_counter()
+        cache_config = self._cache_config(device)
+
+        with ttnn.device.setup_fast_dispatch(device):
+            t0 = time.perf_counter()
+            routed = prepare_routed_expert_weights(
+                device,
+                self._state_dict,
+                layer_id,
+                is_moe=False,
+                move_to_device=True,
+                cache_config=cache_config,
+            )
+            routed_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            q_ab = prepare_q_ab_kv_a_weights(
+                device,
+                self._state_dict,
+                layer_id,
+                move_to_device=True,
+                cache_config=cache_config,
+            )
+            q_ab_s = time.perf_counter() - t0
+
+        ttnn.enable_asynchronous_slow_dispatch(device)
+
+        t0 = time.perf_counter()
+        attn = prepare_attention_weights(
             device,
             self._state_dict,
             layer_id,
+            is_moe=False,
             move_to_device=True,
-            cache_config=self._cache_config(device),
+            cache_config=cache_config,
+            preloaded_q_ab=q_ab,
+        )
+        attn_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        shared = prepare_shared_expert_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            is_moe=False,
+            move_to_device=True,
+            cache_config=cache_config,
+        )
+        shared_s = time.perf_counter() - t0
+
+        assert isinstance(routed, DenseRoutedExpertWeights)
+        total_s = time.perf_counter() - t_load
+        logger.info(
+            f"CacheWeightProvider dense layer {layer_id}: total {total_s:.3f}s "
+            f"(routed FD {routed_s:.3f}s, q_ab FD {q_ab_s:.3f}s, attn SD {attn_s:.3f}s, shared SD {shared_s:.3f}s)"
+        )
+        return DeepSeekV3DenseLayerWeights(
+            q_a_proj=attn.q_a_proj,
+            q_b_proj=attn.q_b_proj,
+            kv_a_proj=attn.kv_a_proj,
+            o_proj=attn.o_proj,
+            attn_norm=attn.attn_norm,
+            q_norm=attn.q_norm,
+            kv_norm=attn.kv_norm,
+            ffn_norm=attn.ffn_norm,
+            kv_b1_proj=attn.kv_b1_proj,
+            kv_b2_proj=attn.kv_b2_proj,
+            shared_gate_proj=shared.shared_gate_proj,
+            shared_up_proj=shared.shared_up_proj,
+            shared_down_proj=shared.shared_down_proj,
+            routed_gate_proj=routed.routed_gate_proj,
+            routed_up_proj=routed.routed_up_proj,
+            routed_down_proj=routed.routed_down_proj,
         )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:

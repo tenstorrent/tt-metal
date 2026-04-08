@@ -629,38 +629,32 @@ def create_gate_indices_tensor(
     )
 
 
-def prepare_attention_weights(
+def prepare_q_ab_kv_a_weights(
     device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
-    is_moe: bool,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
-) -> AttentionWeights:
-    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
+) -> dict[str, OverlappedTensor]:
+    """Prepare the q_ab_kv_a fusion group for one layer.
+
+    This fusion group uses cores (0,0)-(11,7) + (0,8)-(8,9) and does NOT
+    touch column 12, making it safe for fast dispatch loading.
+
+    Returns:
+        Dict with keys ``q_a_proj``, ``q_b_proj``, ``kv_a_proj``.
+    """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     mla_tp, _ = _tp_factors(device)
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
 
-    logger.debug(
-        "Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)",
-        layer_idx,
-    )
-    t0 = time.perf_counter()
-
     q_a_key = _key(layer_idx, "self_attn.q_a_proj.weight")
     q_b_key = _key(layer_idx, "self_attn.q_b_proj.weight")
     kv_a_key = _key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")
-    kv_b_key = _key(layer_idx, "self_attn.kv_b_proj.weight")
-    o_proj_key = _key(layer_idx, "self_attn.o_proj.weight")
-    attn_norm_key = _key(layer_idx, "input_layernorm.weight")
-    q_norm_key = _key(layer_idx, "self_attn.q_a_layernorm.weight")
-    kv_norm_key = _key(layer_idx, "self_attn.kv_a_layernorm.weight")
-    ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
-    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def _preprocess(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         q_a = t[q_a_key].T.contiguous()
         q_b = deinterleave_q_b_proj(t[q_b_key])
         kv_a = t[kv_a_key].T.contiguous()
@@ -675,14 +669,64 @@ def prepare_attention_weights(
     q_ab_views = cache_config.cache.get_or_create(
         q_ab_fp,
         device,
-        preprocess=_preprocess_q_ab_kv_a,
+        preprocess=_preprocess,
         raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
     )
     if not isinstance(q_ab_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
-    q_a_proj = q_ab_views["q_a_proj"]
-    q_b_proj = q_ab_views["q_b_proj"]
-    kv_a_proj = q_ab_views["kv_a_proj"]
+    return q_ab_views
+
+
+def prepare_attention_weights(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    *,
+    is_moe: bool,
+    move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
+    preloaded_q_ab: dict[str, OverlappedTensor] | None = None,
+) -> AttentionWeights:
+    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms).
+
+    Args:
+        preloaded_q_ab: If provided, skip loading the q_ab_kv_a fusion group and use
+            these pre-loaded views instead.  Useful when q_ab_kv_a was already loaded
+            in a fast dispatch context.
+    """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+    mla_tp, _ = _tp_factors(device)
+    mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
+
+    logger.debug(
+        "Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)",
+        layer_idx,
+    )
+    t0 = time.perf_counter()
+
+    if preloaded_q_ab is not None:
+        q_a_proj = preloaded_q_ab["q_a_proj"]
+        q_b_proj = preloaded_q_ab["q_b_proj"]
+        kv_a_proj = preloaded_q_ab["kv_a_proj"]
+    else:
+        q_ab_views = prepare_q_ab_kv_a_weights(
+            device,
+            state_dict,
+            layer_idx,
+            move_to_device=move_to_device,
+            cache_config=cache_config,
+        )
+        q_a_proj = q_ab_views["q_a_proj"]
+        q_b_proj = q_ab_views["q_b_proj"]
+        kv_a_proj = q_ab_views["kv_a_proj"]
+
+    kv_b_key = _key(layer_idx, "self_attn.kv_b_proj.weight")
+    o_proj_key = _key(layer_idx, "self_attn.o_proj.weight")
+    attn_norm_key = _key(layer_idx, "input_layernorm.weight")
+    q_norm_key = _key(layer_idx, "self_attn.q_a_layernorm.weight")
+    kv_norm_key = _key(layer_idx, "self_attn.kv_a_layernorm.weight")
+    ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
