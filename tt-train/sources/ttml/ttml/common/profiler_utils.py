@@ -8,9 +8,9 @@ Usage (model-level, with backward tracking)::
 
     from ttml.common.profiler_utils import profiler_marker
 
-    x = profiler_marker(x, "[START] [Motif] after tok_emb")
-    # Emits "[FWD] [START] [Motif] after tok_emb" during forward
-    # Emits "[BWD] [START] [Motif] after tok_emb" during backward
+    x = profiler_marker(x, "[START] [Llama] after tok_emb")
+    # Emits "[FWD] [START] [Llama] after tok_emb" during forward
+    # Emits "[BWD] [START] [Llama] after tok_emb" during backward
 
 Usage (training-loop, forward-only)::
 
