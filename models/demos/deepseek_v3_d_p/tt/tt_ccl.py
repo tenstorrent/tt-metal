@@ -7,7 +7,7 @@ import ttnn
 
 # NOTE: This file is forked from models/common/modules/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
-#       One row is taken for the CCL communication of the op
+#       One col is taken for the CCL communication of the op
 
 # =============================================================================
 # CCL tuning defaults - shared across all TTTv2 modules

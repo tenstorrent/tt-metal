@@ -151,11 +151,6 @@ def test_mla(
 
     mesh_shape = list(mesh_device.shape)
 
-    # NOTE: We want to keep TP=4
-    if mesh_shape[tp_axis] != 4:
-        sp_axis = 1
-        tp_axis = 0
-
     if scale_down_sl:
         seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
 

@@ -24,7 +24,7 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
-        topology=ttnn.FabricConfig.FABRIC_1D,
+        topology=ttnn.Topology.Linear,
     ):
         self.config = config
         self.mesh_device = mesh_device
@@ -89,6 +89,7 @@ class ttMLA:
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.tp_factor = mesh_device.shape[self.tp_axis]
+        self.sp_factor = mesh_device.shape[self.sp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ccl_topology = topology
@@ -321,11 +322,7 @@ class ttMLA:
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor) -> ttnn.Tensor:
-        mesh_size = self.mesh_device.shape
-        sp_factor = mesh_size[0]
-        tp_factor = mesh_size[1]
-
-        num_heads_local = self.num_heads // tp_factor
+        num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
         # q_projection
@@ -487,7 +484,7 @@ class ttMLA:
             persistent_output_buffer_k=self.persistent_k_output_buffer,
             persistent_output_buffer_v=self.persistent_v_output_buffer,
             joint_strategy="rear",
-            logical_n=seq_len_local * sp_factor,
+            logical_n=seq_len_local * self.sp_factor,
             program_config=self._get_sdpa_program_config(seq_len_local),
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
