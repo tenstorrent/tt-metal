@@ -227,6 +227,8 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         PYTHONHASHSEED: 0
+        OPENBLAS_NUM_THREADS: 1
+        OMP_NUM_THREADS: 1
     defaults:
       run:
         shell: bash
