@@ -81,6 +81,8 @@ def create_torch_bias(L, N):
     torch_bias = torch.load("/work/scores_correction_bias.pt")
     torch_bias = torch_bias.to(torch.bfloat16)
     torch_bias = torch_bias.reshape(L, N)
+    with torch.no_grad():
+        torch_bias -= torch.median(torch_bias) - 0.5
     # torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
     return torch_bias
 
@@ -372,7 +374,6 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
 
     if check_accuracy:
         with torch.no_grad():
-            breakpoint()
             # Reference calculation to match TT output shape (2*M, N) = (E*M, N)
             # Use first 2*M rows of input (one copy of the original replicated input)
             torch_input_ref = torch_input[:, 0, ...]
@@ -442,7 +443,6 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
             torch_layer_indices = torch_top8_indices[layer_id, :, :]
             tt_layer_output = tt_to_torch_outputs[C * layer_id + column_id, :, :]
             tt_values, tt_indices = prepare_output_tensor(tt_layer_output, ring2cores)
-            breakpoint()
             layer_metrics = get_accuracy_metrics(torch_layer_values, tt_values)
             all_accuracy_metrics[layer_id] = layer_metrics
 
