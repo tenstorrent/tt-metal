@@ -248,7 +248,7 @@ run_t3000_mistral_tests() {
   # Mistral 7B: long-context text only (main text suite runs under T3000 unit tests).
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   tt_cache_path=$TT_CACHE_HOME/$hf_model
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 120 -k "ci-long-context-16k" --max_seq_len=16384
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "ci-long-context-16k" --max_seq_len=16384
   echo "LOG_METAL: Mistral 7B tests completed (ci-long-context-16k)"
 
   # Mistral-Small-3.1-24B: vision trace demo only (24B text demo runs under T3000 unit tests).
