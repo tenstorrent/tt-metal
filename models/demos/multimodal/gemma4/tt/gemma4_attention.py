@@ -38,8 +38,18 @@ class Gemma4Attention(Attention):
             result = ttnn.to_memory_config(result, orig_mem)
         return result
 
-    def forward(self, x, current_pos, rot_mats=None, user_id=0, mode=Mode.DECODE,
-                page_table=None, chunk_page_table=None, chunk_start_idx=None, kv_cache=None):
+    def forward(
+        self,
+        x,
+        current_pos,
+        rot_mats=None,
+        user_id=0,
+        mode=Mode.DECODE,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        kv_cache=None,
+    ):
         # Save originals for ALL patchable ops
         orig_create_qkv = ttnn.experimental.nlp_create_qkv_heads
         orig_create_qkv_dec = ttnn.experimental.nlp_create_qkv_heads_decode
@@ -65,8 +75,10 @@ class Gemma4Attention(Attention):
 
         # head_dim>256 decode: no-op cache update + manual SDPA from prefilled cache
         if mode == Mode.DECODE and self.head_dim > 256:
+
             def noop_cache(cache, inp, update_idxs_tensor=None, page_table=None):
                 pass  # Skip cache update (L1 clash with head_dim>256)
+
             def noop_fused(keys, k, values, v, update_idxs_tensor=None, page_table=None):
                 pass
 
@@ -89,9 +101,14 @@ class Gemma4Attention(Attention):
                 cur_pos = int(pos_host[0].item())
                 if _mask_cache[0] != cur_pos or _mask_cache[1] is None:
                     mask = torch.zeros(1, 1, 1, max_seq, dtype=torch.bfloat16)
-                    mask[:, :, :, cur_pos + 1:] = -65504.0
-                    _mask_cache[1] = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                        device=attn_self.mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(attn_self.mesh_device))
+                    mask[:, :, :, cur_pos + 1 :] = -65504.0
+                    _mask_cache[1] = ttnn.from_torch(
+                        mask,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=attn_self.mesh_device,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(attn_self.mesh_device),
+                    )
                     _mask_cache[0] = cur_pos
                 scores = ttnn.add(scores, _mask_cache[1])
                 scores = ttnn.softmax(scores, dim=-1)
@@ -110,8 +127,9 @@ class Gemma4Attention(Attention):
                 ttnn.transformer.paged_scaled_dot_product_attention_decode = lambda q, *a, **kw: ttnn.clone(q)
 
         try:
-            return super().forward(x, current_pos, rot_mats, user_id, mode,
-                                   page_table, chunk_page_table, chunk_start_idx, kv_cache)
+            return super().forward(
+                x, current_pos, rot_mats, user_id, mode, page_table, chunk_page_table, chunk_start_idx, kv_cache
+            )
         finally:
             ttnn.experimental.nlp_create_qkv_heads = orig_create_qkv
             ttnn.experimental.nlp_create_qkv_heads_decode = orig_create_qkv_dec

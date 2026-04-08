@@ -3,15 +3,16 @@
 
 """Test loading the full Gemma 4 31B IT model on TT device and running a simple decode step."""
 
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def test_full_model():
@@ -20,8 +21,8 @@ def test_full_model():
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
 
     try:
-        from models.demos.multimodal.gemma4.tt.model_config import ModelArgs
         from models.demos.multimodal.gemma4.tt.gemma4_model import Gemma4Transformer
+        from models.demos.multimodal.gemma4.tt.model_config import ModelArgs
 
         # For initial bring-up, test with limited layers (skip full attention layers for now)
         # Full attention layers have head_dim=512 which exceeds RoPE kernel limit of 256
@@ -103,6 +104,7 @@ def test_full_model():
     except Exception as e:
         logger.error(f"FAILED: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         ttnn.close_mesh_device(mesh_device)

@@ -6,8 +6,8 @@ Quick test to verify Gemma 4 weight loading and config parsing work correctly.
 Run without TT device - CPU only.
 """
 
-import sys
 import os
+import sys
 
 # Add tt-metal to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 def test_config_parsing():
     """Test that we can parse the Gemma 4 config correctly."""
     from transformers import AutoConfig
-    import json
 
     config = AutoConfig.from_pretrained("google/gemma-4-31B-it").to_dict()
     text_config = config.get("text_config", config)
@@ -58,7 +57,6 @@ def test_config_parsing():
 def test_weight_shapes():
     """Test that weight shapes match expected architecture."""
     import safetensors.torch
-    import torch
 
     snapshot = "/home/ttuser/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/419b2efe421994fdfd3394e621983d4cc511cd4f"
 
@@ -98,11 +96,12 @@ def test_weight_shapes():
 
 def test_key_mapping():
     """Test the HF to meta key conversion for Gemma 4."""
-    from models.tt_transformers.tt.load_checkpoints import (
-        standardize_hf_keys_multimodal,
-        convert_hf_to_meta_no_qkv_permute,
-    )
     import torch
+
+    from models.tt_transformers.tt.load_checkpoints import (
+        convert_hf_to_meta_no_qkv_permute,
+        standardize_hf_keys_multimodal,
+    )
 
     # Create a minimal fake state dict to test key mapping
     fake_sd = {

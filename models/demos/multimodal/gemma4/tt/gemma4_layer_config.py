@@ -40,9 +40,7 @@ class Gemma4LayerConfig:
         # Recompute derived values
         cluster_width = base_args.cluster_shape[1]
         n_local_kv = nkv // cluster_width
-        overrides["min_kv_prefill_shard_seqlen"] = (
-            (ttnn.TILE_SIZE * 8 * 8) / n_local_kv if n_local_kv > 0 else 0
-        )
+        overrides["min_kv_prefill_shard_seqlen"] = (ttnn.TILE_SIZE * 8 * 8) / n_local_kv if n_local_kv > 0 else 0
 
     def __getattr__(self, name):
         overrides = object.__getattribute__(self, "_overrides")

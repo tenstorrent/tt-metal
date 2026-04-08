@@ -3,14 +3,15 @@
 
 """Test loading a single Gemma 4 decoder layer on TT device."""
 
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def test_single_layer(layer_idx=0):
@@ -51,8 +52,8 @@ def test_single_layer(layer_idx=0):
 
         # Try creating the decoder block
         from models.demos.multimodal.gemma4.tt.gemma4_decoder import Gemma4TransformerBlock
-        from models.tt_transformers.tt.rope import RotarySetup
         from models.tt_transformers.tt.ccl import TT_CCL
+        from models.tt_transformers.tt.rope import RotarySetup
 
         tt_ccl = TT_CCL(mesh_device)
 
@@ -91,6 +92,7 @@ def test_single_layer(layer_idx=0):
     except Exception as e:
         logger.error(f"FAILED: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         ttnn.close_mesh_device(mesh_device)
@@ -99,6 +101,7 @@ def test_single_layer(layer_idx=0):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, default=0, help="Layer index to test")
     args = parser.parse_args()

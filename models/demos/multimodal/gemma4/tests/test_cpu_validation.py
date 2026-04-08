@@ -6,15 +6,16 @@ Validate Gemma 4 TT implementation against CPU reference (HuggingFace).
 Compares logits output for the same input prompt.
 """
 
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def compute_pcc(ref, test):
@@ -44,9 +45,7 @@ def get_cpu_reference_logits(prompt, model_name="google/gemma-4-31B-it"):
     logger.info("Loading CPU reference model...")
     t0 = time.time()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = Gemma4ForConditionalGeneration.from_pretrained(
-        model_name, torch_dtype=torch.bfloat16
-    )
+    model = Gemma4ForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.bfloat16)
     model.eval()
     t1 = time.time()
     logger.info(f"CPU model loaded in {t1-t0:.1f}s")
@@ -76,7 +75,9 @@ def get_tt_logits(prompt, model_args, mesh_device, model, tokenizer):
 
     last_token_idx = seq_len - 1
     tt_inputs, rot_mats_global, rot_mats_local, _, _ = model.prepare_inputs_prefill(
-        padded_tokens, start_pos=0, last_token_idx=last_token_idx,
+        padded_tokens,
+        start_pos=0,
+        last_token_idx=last_token_idx,
     )
 
     get_last = (last_token_idx // 32) * 32
@@ -104,7 +105,9 @@ def test_cpu_validation():
     cpu_last_logits = cpu_logits[0, -1, :]
     del cpu_model  # Free memory
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    import gc; gc.collect()
+    import gc
+
+    gc.collect()
 
     # Step 2: Get TT implementation output
     logger.info("Opening TT mesh device...")
@@ -112,17 +115,23 @@ def test_cpu_validation():
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
 
     try:
-        from models.demos.multimodal.gemma4.tt.model_config import ModelArgs
         from models.demos.multimodal.gemma4.tt.gemma4_model import Gemma4Transformer
+        from models.demos.multimodal.gemma4.tt.model_config import ModelArgs
 
         model_args = ModelArgs(
-            mesh_device=mesh_device, instruct=True, max_batch_size=1, max_seq_len=2048,
+            mesh_device=mesh_device,
+            instruct=True,
+            max_batch_size=1,
+            max_seq_len=2048,
         )
 
         state_dict = model_args.load_state_dict()
         model = Gemma4Transformer(
-            args=model_args, dtype=ttnn.bfloat16, mesh_device=mesh_device,
-            state_dict=state_dict, weight_cache_path=model_args.weight_cache_path(ttnn.bfloat16),
+            args=model_args,
+            dtype=ttnn.bfloat16,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat16),
         )
 
         tt_logits = get_tt_logits(prompt, model_args, mesh_device, model, tokenizer)
@@ -131,7 +140,7 @@ def test_cpu_validation():
         # Compare top-k tokens
         k = 10
         cpu_topk = torch.topk(cpu_last_logits, k)
-        tt_topk = torch.topk(tt_logits[:cpu_last_logits.shape[0]], k)
+        tt_topk = torch.topk(tt_logits[: cpu_last_logits.shape[0]], k)
 
         logger.info(f"\nTop-{k} comparison:")
         logger.info(f"{'Rank':<6} {'CPU Token':<12} {'TT Token':<12} {'CPU Logit':<12} {'TT Logit':<12} {'Match'}")
@@ -142,7 +151,9 @@ def test_cpu_validation():
             match = "✓" if cpu_tok == tt_tok else "✗"
             if cpu_tok == tt_tok:
                 matches += 1
-            logger.info(f"{i+1:<6} {cpu_tok:<12} {tt_tok:<12} {cpu_topk.values[i].item():<12.4f} {tt_topk.values[i].item():<12.4f} {match}")
+            logger.info(
+                f"{i+1:<6} {cpu_tok:<12} {tt_tok:<12} {cpu_topk.values[i].item():<12.4f} {tt_topk.values[i].item():<12.4f} {match}"
+            )
 
         # Compute PCC on full logits
         min_vocab = min(cpu_last_logits.shape[0], tt_logits.shape[0])
