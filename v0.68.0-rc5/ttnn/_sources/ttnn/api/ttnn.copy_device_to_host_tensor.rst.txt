@@ -1,0 +1,8 @@
+﻿ttnn.copy\_device\_to\_host\_tensor
+===================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.copy_device_to_host_tensor:
+
+.. autooperation:: ttnn.copy_device_to_host_tensor
