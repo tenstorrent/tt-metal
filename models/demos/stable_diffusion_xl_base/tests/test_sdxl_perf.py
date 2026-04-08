@@ -140,12 +140,12 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 13_112_562,
-        "blackhole": 7_089_747,
+        "wormhole": 6_556_281,
+        "blackhole": 3_544_873,
     },
     "clip_encoder_2": {
-        "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 29_182_499,
+        "wormhole": 31_795_881,
+        "blackhole": 14_591_249,
     },
 }
 

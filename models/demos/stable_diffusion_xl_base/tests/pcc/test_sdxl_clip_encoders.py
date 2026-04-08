@@ -138,9 +138,6 @@ def test_clip_encoder(
     )
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
-    logger.info("compiling text encoder...")
-    tt_clip(tt_tokens, mesh_device)
-
     logger.info("executing text encoder...")
     start_time = time.time()
 
