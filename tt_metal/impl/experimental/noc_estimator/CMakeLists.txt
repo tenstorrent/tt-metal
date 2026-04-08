@@ -14,4 +14,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal/impl
 )
 
+target_compile_definitions(tt_metal_noc_estimator PRIVATE NOC_ESTIMATOR_ROOT_DIR="${PROJECT_SOURCE_DIR}")
+
 target_link_libraries(tt_metal_noc_estimator PRIVATE yaml-cpp::yaml-cpp)

@@ -23,7 +23,6 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
         YAML::Node root = YAML::LoadFile(yaml_path);
 
         result.transaction_sizes = root["transaction_sizes"].as<std::vector<uint32_t>>();
-        std::cout << "Loading YAML with " << result.transaction_sizes.size() << " transaction sizes\n";
 
         const YAML::Node& entries = root["entries"];
         for (const auto& entry : entries) {
@@ -45,8 +44,6 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
 
             result.entries[key] = latency_data;
         }
-
-        std::cout << "Loaded " << result.entries.size() << " entries from YAML\n";
 
     } catch (const YAML::Exception& e) {
         std::cerr << "Error loading YAML file: " << e.what() << std::endl;

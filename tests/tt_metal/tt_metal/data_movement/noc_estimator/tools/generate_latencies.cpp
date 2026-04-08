@@ -11,6 +11,7 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
+namespace ne = tt::tt_metal::experimental::noc_estimator;
 
 std::vector<std::string> find_all_csvs(const std::string& data_dir) {
     std::vector<std::string> csv_paths;
@@ -29,10 +30,10 @@ std::vector<std::string> find_all_csvs(const std::string& data_dir) {
 }
 
 bool generate_yaml_from_csvs(const std::vector<std::string>& csv_paths, const std::string& output_path) {
-    std::vector<tt::tt_metal::experimental::noc_estimator::offline::DataPoint> all_points;
+    std::vector<ne::offline::DataPoint> all_points;
 
     for (const auto& path : csv_paths) {
-        tt::tt_metal::experimental::noc_estimator::offline::CsvReader reader;
+        ne::offline::CsvReader reader;
         if (!reader.load_csv(path)) {
             std::cerr << "Failed to load " << path << std::endl;
             continue;
@@ -48,18 +49,16 @@ bool generate_yaml_from_csvs(const std::vector<std::string>& csv_paths, const st
         return false;
     }
 
-    auto groups = tt::tt_metal::experimental::noc_estimator::offline::group_by_parameters(all_points);
+    auto groups = ne::offline::group_by_parameters(all_points);
     std::cout << "\nExtracting latencies for " << groups.size() << " groups...\n";
 
-    std::
-        map<tt::tt_metal::experimental::noc_estimator::GroupKey, tt::tt_metal::experimental::noc_estimator::LatencyData>
-            entries;
+    std::map<ne::GroupKey, ne::LatencyData> entries;
     for (const auto& [key, points] : groups) {
-        auto latency_data = tt::tt_metal::experimental::noc_estimator::offline::extract_latencies(points);
+        auto latency_data = ne::offline::extract_latencies(points);
         entries[key] = latency_data;
     }
 
-    if (!tt::tt_metal::experimental::noc_estimator::offline::save_latency_data_to_yaml(entries, output_path)) {
+    if (!ne::offline::save_latency_data_to_yaml(entries, output_path)) {
         return false;
     }
 

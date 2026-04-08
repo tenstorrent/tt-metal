@@ -32,7 +32,7 @@ enum class NocPattern {
 };
 
 // Standard transaction sizes (stored once in YAML header)
-const std::vector<uint32_t> STANDARD_TRANSACTION_SIZES = {
+inline const std::vector<uint32_t> STANDARD_TRANSACTION_SIZES = {
     64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
 
 struct LatencyData {

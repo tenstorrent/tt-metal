@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
 #include "yaml_loader.hpp"
 #include "interpolation.hpp"
+#include <filesystem>
 #include <map>
 #include <iostream>
 #include <mutex>
@@ -13,8 +14,7 @@
 
 namespace tt::tt_metal::experimental::noc_estimator {
 
-static constexpr const char* DEFAULT_YAML_PATH =
-    "tt_metal/impl/experimental/noc_estimator/latencies/noc_latencies.yaml";
+static constexpr const char* YAML_PATH_SUFFIX = "tt_metal/impl/experimental/noc_estimator/latencies/noc_latencies.yaml";
 
 static std::map<GroupKey, LatencyData> g_entries;
 static std::vector<uint32_t> g_transaction_sizes;
@@ -32,9 +32,9 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
 
     // Auto-initialize on first call
     std::call_once(g_init_once, []() {
-        std::cout << "Auto-initializing from default YAML: " << DEFAULT_YAML_PATH << "\n";
-        if (!initialize_from_yaml(DEFAULT_YAML_PATH)) {
-            throw std::runtime_error("Failed to auto-load latency data. Generate YAML first.");
+        std::string yaml_path = (std::filesystem::path(NOC_ESTIMATOR_ROOT_DIR) / YAML_PATH_SUFFIX).string();
+        if (!initialize_from_yaml(yaml_path)) {
+            throw std::runtime_error("Failed to auto-load latency data from: " + yaml_path + ". Generate YAML first.");
         }
     });
 
