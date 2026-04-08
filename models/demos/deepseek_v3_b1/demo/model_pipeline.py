@@ -170,7 +170,7 @@ class ModelPipeline:
         assert self.model is not None
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        generated_tokens: list[list[int]] = [[] for _ in range(2)]
+        generated_tokens: list[list[int]] = [[] for _ in range(4)]
         verified_spec_tokens: list[int] = []
         unverified_spec_tokens: list[int] = []
 
@@ -186,7 +186,7 @@ class ModelPipeline:
 
         tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
 
-        for slot_id in range(2):
+        for slot_id in range(4):
             # --- Prefill --------------------------------------------------------
             prefill_results = self.prefill_forward(prompt_token_ids[slot_id], slot_id)
 
@@ -207,20 +207,20 @@ class ModelPipeline:
             signal_to_exit = False
             while len(generated_tokens[slot_id]) < max_new_tokens:
                 iteration += 1
-                print("\n\n")
-                print(
-                    f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
-                )
+                # print("\n\n")
+                # print(
+                #     f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+                # )
 
                 result = pending.popleft() if pending else self.model.read_result()
 
-                print("Got MD from Device: ")
-                print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-                print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-                print(
-                    f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
-                )
-                print(f"Slot ID: {result.slot_id}")
+                # print("Got MD from Device: ")
+                # print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+                # print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+                # print(
+                #     f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
+                # )
+                # print(f"Slot ID: {result.slot_id}")
 
                 if not unverified_spec_tokens and not verified_spec_tokens:
                     unverified_spec_tokens.append(result.token_1)
@@ -234,7 +234,7 @@ class ModelPipeline:
                             verified_spec_tokens.append(unverified_spec_tokens.pop())
                             emit(result.token_0, slot_id)
                             base_accept += 1
-                            print("Base Accept")
+                            # print("Base Accept")
                             num_emits += 1
                             signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                             continue
@@ -244,7 +244,7 @@ class ModelPipeline:
                             unverified_spec_tokens.append(result.token_1)
                             emit(result.token_0, slot_id)
                             base_reject += 1
-                            print("Base Reject")
+                            # print("Base Reject")
                             num_emits += 1
                             signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                     if result.token_0_type == TokenType.SPEC:
@@ -259,12 +259,12 @@ class ModelPipeline:
                             emit(result.token_0, slot_id)
                             spec_accept += 1
                             num_emits += 1
-                            print("Spec Accept")
+                            # print("Spec Accept")
                         else:
                             if signal_to_exit:
                                 break
                             spec_reject += 1
-                            print("Spec Reject")
+                            # print("Spec Reject")
                             continue
 
                 if signal_to_exit:
@@ -277,15 +277,16 @@ class ModelPipeline:
                     result.token_0_pos,
                     result.token_1,
                     result.token_1_pos,
+                    slot_id,
                 )
             logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
 
-        end_time = time.time()
-        print(f"Time taken: {end_time - start_time} seconds")
-        print(f"Tokens per second: {num_emits / (end_time - start_time)}")
-        print(
-            f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
-        )
+            end_time = time.time()
+            print(f"Time taken for user {slot_id}: {end_time - start_time} seconds")
+            print(f"Tokens per second for user {slot_id}: {num_emits / (end_time - start_time)}")
+            print(
+                f"Spec decode stats for user {slot_id}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            )
 
         return generated_tokens if return_generated_tokens else None
 

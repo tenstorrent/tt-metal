@@ -38,11 +38,11 @@ def open_mesh_device():
     my_rank = int(ttnn.distributed_context_get_rank())
 
     worker_l1_size = 1431568
-    if my_rank == 14:
+    if my_rank == 62:
         worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
-        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "3000000"
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "300000000"
     num_procs = int(ttnn.distributed_context_get_size())
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
@@ -66,6 +66,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prompt-2", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)"
+    )
+    parser.add_argument(
+        "--prompt-3", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)"
+    )
+    parser.add_argument(
+        "--prompt-4", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)"
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -189,7 +195,7 @@ def run_demo(
                 return_generated_tokens=True,
             )
             assert generated_tokens is not None
-            for slot_id in range(2):
+            for slot_id in range(4):
                 generated_text = tokenizer.decode(generated_tokens[slot_id], skip_special_tokens=True)
                 logger.info("Output ({} tokens): {}", len(generated_tokens[slot_id]), generated_text)
 
@@ -212,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     run_demo(
-        prompts=[args.prompt_1, args.prompt_2],
+        prompts=[args.prompt_1, args.prompt_2, args.prompt_3, args.prompt_4],
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         weights_mode=args.weights,
