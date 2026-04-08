@@ -56,6 +56,52 @@ class TrainerCallback:
         pass
 
 
+class GradientSyncCallback(TrainerCallback):
+    """Synchronize gradients across distributed devices before optimizer step.
+
+    All-reduces gradients along axes where parameters are replicated (DDP/CP).
+    No-op on single device.
+    """
+
+    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+
+
+class MemoryTrackingCallback(TrainerCallback):
+    """Track DRAM/L1 memory usage during the first training step.
+
+    Captures memory snapshots at model creation, optimizer creation,
+    and after the first complete iteration, then prints a report.
+    """
+
+    def __init__(self) -> None:
+        self._guard = None
+        self._done = False
+
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        self._guard = MemoryUsageTracker.begin_capture()
+        MemoryUsageTracker.snapshot("TRAIN_BEGIN")
+
+    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
+        if not self._done:
+            MemoryUsageTracker.snapshot("BEFORE_OPTIMIZER_STEP")
+
+    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
+        if self._done:
+            return
+        self._done = True
+        MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+        print("\n" + "=" * 70)
+        print("MEMORY USAGE REPORT (First Step)")
+        print("=" * 70)
+        MemoryUsageTracker.print_memory_usage()
+        MemoryUsageTracker.clear()
+        if self._guard is not None:
+            self._guard.release()
+            self._guard = None
+        print("=" * 70 + "\n")
+
+
 @dataclass
 class SFTConfig:
     """Configuration for :class:`SFTTrainer`.
@@ -98,7 +144,6 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
-    track_memory: bool = False
 
 
 class SFTTrainer:
@@ -203,11 +248,6 @@ class SFTTrainer:
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
 
-        # Match train_nanogpt / C++: begin_capture → MODEL_CREATION snapshot → optimizer →
-        # OPTIMIZER_CREATION snapshot. (Model may already exist; first segment can be ~empty.)
-        self._memory_guard = MemoryUsageTracker.begin_capture() if config.track_memory else None
-        if config.track_memory:
-            MemoryUsageTracker.snapshot("MODEL_CREATION")
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         self._attention_mask = attention_mask
@@ -241,13 +281,6 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
-        # Memory tracking state (capture started in __init__ for optimizer creation)
-        is_first_step = True
-
-        def memory_snapshot(name: str) -> None:
-            if is_first_step and cfg.track_memory:
-                MemoryUsageTracker.snapshot(name)
-
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
         for _ in bar:
             self._optimizer.zero_grad()
@@ -257,26 +290,13 @@ class SFTTrainer:
                 batch = _next_batch()
                 loss = self._compute_loss(batch)
 
-                if micro_step == 0:
-                    memory_snapshot("FORWARD_PASS")
-
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
-
-                if micro_step == 0:
-                    memory_snapshot("LOSS_COMPUTATION")
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
 
-                if micro_step == 0:
-                    memory_snapshot("BACKWARD_PASS")
-
                 ttml.autograd.AutoContext.get_instance().reset_graph()
-
-            # Synchronize gradients: all-reduce along axes where params
-            # are replicated (DDP/CP).  No-op on single device.
-            ttml.core.distributed.synchronize_gradients(self.model.parameters())
 
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
@@ -290,23 +310,8 @@ class SFTTrainer:
             self._optimizer.set_lr(self._lr_schedule(self.step))
             self._optimizer.step()
             lr = float(self._optimizer.get_lr())
-            if self.step == 0:
-                memory_snapshot("OPTIMIZER_STEP")
 
             self.step += 1
-
-            # Print memory report after first step
-            if is_first_step:
-                is_first_step = False
-                if cfg.track_memory:
-                    MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
-                    print("\n" + "=" * 70)
-                    print("MEMORY USAGE REPORT (First Step)")
-                    print("=" * 70)
-                    MemoryUsageTracker.print_memory_usage()
-                    MemoryUsageTracker.clear()
-                    self._memory_guard.release()
-                    print("=" * 70 + "\n")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
@@ -343,9 +348,6 @@ class SFTTrainer:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _sync_gradients(self) -> None:
-        ttml.core.distributed.synchronize_gradients(self.model.parameters())
 
     def _compute_loss(self, batch: Batch):
         """Forward pass + loss computation.
@@ -433,8 +435,6 @@ class SFTTrainer:
                 {"type": "AdamW", "lr": self.config.learning_rate},
                 self.model.parameters(),
             )
-        if self.config.track_memory:
-            MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
         return result
 
     def _build_lr_schedule(self):

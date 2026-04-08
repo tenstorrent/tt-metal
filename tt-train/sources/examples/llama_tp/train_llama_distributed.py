@@ -34,7 +34,7 @@ from ttml.common.config import load_config, DeviceConfig
 from ttml.common.data import CharTokenizer
 
 # SFT Trainer infrastructure
-from ttml.trainers import SFTConfig, SFTTrainer
+from ttml.trainers import SFTConfig, SFTTrainer, GradientSyncCallback, MemoryTrackingCallback
 from ttml.datasets import Batch, InMemoryDataloader
 
 # Distributed
@@ -44,34 +44,6 @@ from ttml.distributed.debug import DispatchTraceCallback
 
 
 # Memory profiling
-MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
-
-
-def print_memory_stats(label: str):
-    """Print DRAM and L1 memory usage for a named snapshot.
-
-    Note: Each snapshot shows memory for that SEGMENT only (since last snapshot).
-    - peak: peak memory during this segment
-    - total_allocations: memory allocated during this segment
-    - total_deallocations: memory freed during this segment
-    - net change: allocations - deallocations (memory retained)
-    """
-    try:
-        dram = MemoryUsageTracker.get_dram_usage(label)
-
-        MB = 1024 * 1024
-        alloc_mb = dram.total_allocations / MB
-        dealloc_mb = dram.total_deallocations / MB
-        net_mb = alloc_mb - dealloc_mb
-        peak_mb = dram.peak / MB
-
-        print(
-            f"   [{label}] DRAM: alloc={alloc_mb:.1f} MB, dealloc={dealloc_mb:.1f} MB, "
-            f"net={net_mb:+.1f} MB, segment_peak={peak_mb:.1f} MB"
-        )
-    except Exception as e:
-        print(f"   [{label}] Memory stats unavailable: {e}")
-
 
 # ---------------------------------------------------------------------------
 # Config parsing (reuses the NanoGPT approach for Llama-specific fields)
@@ -527,10 +499,6 @@ def main():
                 f"TP size ({tp_size}). Try a different mesh_shape or tp_axis."
             )
 
-    # Track model creation memory
-    if args.track_memory:
-        model_guard = MemoryUsageTracker.begin_capture()
-
     # Build model — ParallelizationPlan triggers lazy init + parallelization automatically.
     plan = None
     if tp_axis is not None or cp_axis is not None:
@@ -576,7 +544,6 @@ def main():
         max_grad_norm=clip_norm if use_clip else 0.0,
         log_interval=1,
         gradient_checkpointing=args.gradient_checkpointing,
-        track_memory=args.track_memory,
     )
 
     # Build optimizer config from yaml (use optimizer_cfg directly, with defaults)
@@ -589,6 +556,10 @@ def main():
 
     # Setup callbacks
     callbacks = []
+    if dp_size > 1 or cp_size > 1:
+        callbacks.append(GradientSyncCallback())
+    if args.track_memory:
+        callbacks.append(MemoryTrackingCallback())
     if args.debug_dispatch:
         callbacks.append(
             DispatchTraceCallback(
