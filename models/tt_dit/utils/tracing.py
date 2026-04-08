@@ -16,6 +16,7 @@ import ttnn
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import ClassVar
 
 _OMITTED = object()
 """Sentinel for omitted positional args — distinct from ``None``, which is a valid scalar input."""
@@ -38,7 +39,7 @@ class Tracer:
        overwrites previous results in place.
     """
 
-    _traces_live: int = 0
+    _traces_live: ClassVar[dict[int, int]] = {}
 
     def __init__(
         self,
@@ -61,6 +62,9 @@ class Tracer:
             prep_run: Whether to run the function once before capturing the trace.
             clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
+        if device.id() not in Tracer._traces_live:
+            Tracer._traces_live[device.id()] = 0
+
         self._function = function
         self._device = device
         self._prep_run = prep_run
@@ -147,7 +151,7 @@ class Tracer:
             # weights.
             self._function = None
 
-            Tracer._traces_live += 1
+            Tracer._traces_live[self._device.id()] += 1
             self._trace_id = trace_id
             self._outputs = outputs
         else:
@@ -189,13 +193,13 @@ class Tracer:
             self._args = ()
             self._kwargs = {}
             self._outputs = None
-            Tracer._traces_live -= 1
+            Tracer._traces_live[self._device.id()] -= 1
             ttnn.release_trace(self._device, trace_id)
 
     @staticmethod
-    def warn_if_live() -> None:
+    def warn_if_live(device: ttnn.MeshDevice) -> None:
         """Log a warning if there are any live traces that have not been released."""
-        if Tracer._traces_live > 0:
+        if Tracer._traces_live.get(device.id(), 0) > 0:
             frame = inspect.stack()[1]
             location = f"{frame.filename}:{frame.lineno} in {frame.function}"
             logger.warning(f"{Tracer._traces_live} live trace(s) at: {location}")

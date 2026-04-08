@@ -533,7 +533,7 @@ class RelativePositionEmbeddings(Module):
                 relative_attention_max_distance=self.config.relative_attention_max_distance,
             )
             r = ttnn.embedding(position_ids, self.weight.data, layout=ttnn.TILE_LAYOUT)
-            Tracer.warn_if_live()
+            Tracer.warn_if_live(self.mesh_device)
             self.relative_bias_cache = ttnn.unsqueeze(ttnn.permute(r, (2, 0, 1)), 0)
         return self.relative_bias_cache
 

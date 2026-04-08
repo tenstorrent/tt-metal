@@ -268,7 +268,7 @@ class Conv2d(Module):
 
         try:
             if self._prepared_weight is None:
-                Tracer.warn_if_live()
+                Tracer.warn_if_live(self.mesh_device)
 
             x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
                 input_tensor=x,

@@ -306,7 +306,7 @@ class DistributedLayerNorm(Module):
             core_range_set = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
             )
-            Tracer.warn_if_live()
+            Tracer.warn_if_live(mesh_device)
             self._recip_tensors[key] = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
 
         self.recip_tensor = self._recip_tensors[key]
