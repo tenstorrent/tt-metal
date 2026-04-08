@@ -158,13 +158,15 @@ def test_softmax_ulp_bf16_normal(device, shape, dim, desc, fp32_dest_acc_en, num
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en)
     actual = _run_ttnn_softmax(x, ttnn.bfloat16, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}"
     logger.info(
-        f"ttnn.softmax ULP (BF16, normal) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.softmax ULP (BF16, normal) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} normal fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}] {msg}"
@@ -186,13 +188,15 @@ def test_softmax_ulp_bf16_wide_uniform_h(device, shape, dim, desc, fp32_dest_acc
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en)
     actual = _run_ttnn_softmax(x, ttnn.bfloat16, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}"
     logger.info(
-        f"ttnn.softmax ULP (BF16, wide_uniform H) | {spec} | ulp {max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.softmax ULP (BF16, wide_uniform H) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} wide_uniform fp32_acc={fp32_dest_acc_en} numstab={numeric_stable}] {msg}"
@@ -222,13 +226,15 @@ def test_softmax_ulp_fp32_normal_fp32_acc_on(device, shape, dim, desc, numeric_s
     compute_kernel_config = _make_softmax_compute_kernel_config(device, fp32_dest_acc_en=True)
     actual = _run_ttnn_softmax(x, ttnn.float32, device, dim, compute_kernel_config, numeric_stable)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} shape={shape} dim={dim} numstab={numeric_stable}"
     logger.info(
-        f"ttnn.softmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.softmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} normal fp32_acc=True numstab={numeric_stable}] {msg}"

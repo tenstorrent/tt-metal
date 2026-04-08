@@ -165,13 +165,15 @@ def test_moreh_logsoftmax_ulp_bf16(device, shape, dim, strategy, desc, distribut
     golden = _golden_logsoftmax_bf16(x, dim=dim)
     actual = _run_ttnn_logsoftmax(x, ttnn.bfloat16, device, dim, strategy, fp32_dest_acc_en)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
         golden, actual, ulp_threshold, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} {strategy} {distribution} shape={shape} dim={dim} fp32_acc={fp32_dest_acc_en}"
     logger.info(
-        f"moreh.logsoftmax ULP (BF16) | {spec} | ulp {max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"moreh.logsoftmax ULP (BF16) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[BF16 {desc} {distribution} fp32_dest_acc_en={fp32_dest_acc_en}] {msg}"
@@ -204,13 +206,15 @@ def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribut
     golden = _golden_logsoftmax_fp32(x, dim=dim)
     actual = _run_ttnn_logsoftmax(x, ttnn.float32, device, dim, strategy, fp32_dest_acc_en=True)
 
-    passed, max_ulp, max_atol_err, atol_tol, msg = measure_ulp_with_near_zero_atol(
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
     spec = f"{desc} {strategy} {distribution} shape={shape} dim={dim}"
     logger.info(
-        f"moreh.logsoftmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp {max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"moreh.logsoftmax ULP (FP32, fp32_dest_acc_en=True) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_FP32_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} {distribution}] {msg}"

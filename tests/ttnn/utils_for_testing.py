@@ -262,7 +262,7 @@ def measure_ulp_with_near_zero_atol(
     near_zero_relative_fraction: float = 1e-2,
 ):
     """
-    Measure max ULP while handling near-zero expected values with scaled absolute tolerance.
+    Measure ULP distribution while handling near-zero expected values with scaled absolute tolerance.
 
     This helper is intended for reductions and normalization-style tests where
     cancellation commonly produces outputs near zero. Raw ULP becomes unstable in
@@ -271,7 +271,8 @@ def measure_ulp_with_near_zero_atol(
 
     Policy:
     - For elements with ``|expected| >= near_zero_relative_fraction * max(|expected|)``,
-      measure max ULP using ``models.common.utility_functions.ulp`` on the expected values.
+      measure ULP using ``compute_ulp`` on the expected values and report the full
+      distribution (mean, P95, P99, max) plus worst-case element details.
     - For smaller-magnitude elements, skip ULP and require absolute error
       ``<= near_zero_atol_fraction * max(|expected|)``.
 
@@ -281,7 +282,12 @@ def measure_ulp_with_near_zero_atol(
     characterization tests where reduction ordering can create tiny residuals.
 
     Returns:
-        tuple: ``(passed, max_ulp, max_atol_err, message)``
+        tuple: ``(passed, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats)``
+
+        ``ulp_stats`` is a dict with keys ``mean``, ``p95``, ``p99`` computed over
+        the normal (non-near-zero) elements, and ``worst`` with the formula string
+        ``|actual - golden| / ulp(golden) = max_ulp`` for the worst element.
+        All values are 0.0 / empty string when there are no normal elements.
     """
     expected_result = _normalize_tensor(expected_result)
     actual_result = _normalize_tensor(actual_result)
@@ -295,9 +301,10 @@ def measure_ulp_with_near_zero_atol(
 
     abs_expected = torch.abs(expected_result.float())
     expected_max = abs_expected.max().item()
+    _empty_stats = {"mean": 0.0, "p95": 0.0, "p99": 0.0, "worst": ""}
     if expected_max == 0:
         abs_err = torch.abs(actual_result.float()).max().item()
-        return abs_err == 0, 0.0, abs_err, 0.0, f"All-zero golden; max |actual|={abs_err:.6e}"
+        return abs_err == 0, 0.0, abs_err, 0.0, f"All-zero golden; max |actual|={abs_err:.6e}", _empty_stats
 
     dynamic_threshold = near_zero_relative_fraction * expected_max
     normal_mask = abs_expected >= dynamic_threshold
@@ -308,14 +315,23 @@ def measure_ulp_with_near_zero_atol(
 
     max_ulp = 0.0
     ulp_msg = ""
+    ulp_stats = _empty_stats.copy()
     if normal_mask.any():
         g = expected_result[normal_mask]
         a = actual_result[normal_mask]
         ulp_values = compute_ulp(g)
         ulp_diffs = torch.abs(a.float() - g.float()) / ulp_values.float()
         max_ulp = torch.max(ulp_diffs).item()
+        # Distribution statistics over all normal elements
+        n = ulp_diffs.numel()
+        ulp_stats["mean"] = ulp_diffs.mean().item()
+        ulp_stats["p95"] = ulp_diffs.quantile(0.95).item() if n >= 20 else max_ulp
+        ulp_stats["p99"] = ulp_diffs.quantile(0.99).item() if n >= 100 else max_ulp
+        worst = torch.argmax(ulp_diffs)
+        ulp_stats[
+            "worst"
+        ] = f"|{a[worst].item():.6e} - {g[worst].item():.6e}| / {ulp_values[worst].item():.6e} = {max_ulp:.4g}"
         if max_ulp > ulp_threshold:
-            worst = torch.argmax(ulp_diffs)
             ulp_msg = (
                 f"Max ULP: {max_ulp:.1f} "
                 f"(golden={g[worst].item()}, actual={a[worst].item()}, "
@@ -352,7 +368,7 @@ def measure_ulp_with_near_zero_atol(
     if not atol_ok:
         msg += f" | FAIL atol: {atol_msg}"
 
-    return ulp_ok and atol_ok, max_ulp, max_atol_err, scaled_atol, msg
+    return ulp_ok and atol_ok, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats
 
 
 def assert_equal(expected_pytorch_result, actual_pytorch_result):
