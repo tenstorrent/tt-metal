@@ -401,7 +401,6 @@ class PreSDPA:
             }
         )
 
-        kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
 
@@ -441,6 +440,7 @@ class PreSDPA:
         # KV Cache Branch grid configuration
         # DKV Matmul (9x2)
         dkv_matmul_weights_core_grid = dkv_matmul_weights_tensor.core_range_set
+        kv_cache_update_grid = dkv_matmul_weights_core_grid
 
         # Calculate per-core width in tiles for dkv matmul (from overlapped tensor shard spec)
         dkv_matmul_weights_shard_shape = dkv_matmul_weights_tensor.shard_shape
@@ -490,6 +490,10 @@ class PreSDPA:
         # Gather-reduce for matmul path reuses gather semaphore IDs
         gather_reduce_noc0_receiver_semaphore_addr = gather_noc0_receiver_semaphore_addr
         gather_reduce_noc1_receiver_semaphore_addr = gather_noc1_receiver_semaphore_addr
+
+        # NOPE mcast semaphore IDs (reuse gather semaphores since gather is done before this mcast)
+        nope_mcast_data_sender_semaphore_addr = gather_noc0_receiver_semaphore_addr
+        nope_mcast_data_receiver_semaphore_addr = gather_noc1_receiver_semaphore_addr
 
         # CreateQHeads 3-phase semaphore IDs (reuse existing IDs, safe since prior ops have completed)
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
@@ -969,6 +973,7 @@ class PreSDPA:
         # KV Cache Branch: RMSNorm
         # RMSNorm compute compile-time args (named args for TRISC)
         kv_rmsnorm_num_tiles = kv_numel // (16 * 32)  # 512 / 512 = 1 tile (16x32)
+        kv_rmsnorm_page_size = TILE_16x32.get_tile_size(data_format)
         kv_rmsnorm_brisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
@@ -1078,13 +1083,32 @@ class PreSDPA:
         device_chunk_size = flash_mla_program_config.device_chunk_size
         # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
         # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
+        # NOPE mcast: rmsnorm core -> knope grid
+        nope_mcast_knope_grid_range = dkv_gather_sender_grid.ranges()[0]
+
+        # Get NOC coordinates for NOPE mcast destination (knope grid)
+        nope_mcast_dest_start_core = device.worker_core_from_logical_core(nope_mcast_knope_grid_range.start)
+        nope_mcast_dest_end_core = device.worker_core_from_logical_core(nope_mcast_knope_grid_range.end)
+        nope_mcast_num_cores = nope_mcast_knope_grid_range.grid_size().x * nope_mcast_knope_grid_range.grid_size().y
+        nope_mcast_num_dests = nope_mcast_num_cores - 1
+
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
             ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+            ("nope_mcast_dest_noc_start_x", nope_mcast_dest_start_core.x),
+            ("nope_mcast_dest_noc_start_y", nope_mcast_dest_start_core.y),
+            ("nope_mcast_dest_noc_end_x", nope_mcast_dest_end_core.x),
+            ("nope_mcast_dest_noc_end_y", nope_mcast_dest_end_core.y),
+            ("nope_mcast_sender_semaphore_addr", nope_mcast_data_sender_semaphore_addr),
+            ("nope_mcast_receiver_semaphore_addr", nope_mcast_data_receiver_semaphore_addr),
+            ("nope_mcast_data_size_bytes", kv_rmsnorm_num_tiles * kv_rmsnorm_page_size),
+            ("nope_mcast_num_dests", nope_mcast_num_dests),
+            ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
+
         kv_cache_brisc_named_compile_time_args = [
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
@@ -1721,11 +1745,13 @@ class PreSDPA:
 
                 # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
                 # This CB is consumed before SDPA runs.
+                # Expand rmsnorm output CB to knope grid for NOPE mcast receive
                 kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     kv_rmsnorm_output_cb,
                     sdpa_out_interm_buffer_device,
                     address_offset=sdpa_out_interm_running_offset,
                     total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
+                    core_ranges=dkv_rmsnorm_grid.merge(dkv_gather_sender_grid),
                 )
                 kv_rmsnorm_output_cb_descriptor.format_descriptors = [
                     ttnn.CBFormatDescriptor(
@@ -1770,7 +1796,7 @@ class PreSDPA:
                 sdpa_out_interm_running_offset += krope_output_cb_descriptor.total_size
                 TILE_32x32 = ttnn.Tile((32, 32))
                 kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)
-                kv_cache_num_tiles = 16
+                kv_cache_num_tiles = 1  # Each knope/krope core handles 1 tile
                 kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=kv_cache_input_cb,
                     data_format=ttnn.bfloat8_b,
@@ -2222,7 +2248,21 @@ class PreSDPA:
                     ),
                 ]
 
+                knope_grid_width = nope_mcast_knope_grid_range.grid_size().x
                 per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="knope_core_index",
+                        core_values=[
+                            (
+                                ttnn.CoreCoord(x, y),
+                                (y - nope_mcast_knope_grid_range.start.y) * knope_grid_width
+                                + (x - nope_mcast_knope_grid_range.start.x),
+                            )
+                            for y in range(nope_mcast_knope_grid_range.start.y, nope_mcast_knope_grid_range.end.y + 1)
+                            for x in range(nope_mcast_knope_grid_range.start.x, nope_mcast_knope_grid_range.end.x + 1)
+                        ],
+                        other_value=0,
+                    ),
                     PerCoreCompileTimeDescriptor(
                         named_compile_time_arg="qrope_start_tile_offset",
                         core_values=qrope_start_tile_offset_core_values,
