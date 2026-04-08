@@ -340,6 +340,7 @@ class Molmo2Generator:
         self,
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
+        max_frames_per_chunk: int = 8,
     ) -> dict:
         """
         Prepare vision inputs for traced execution.
@@ -347,8 +348,10 @@ class Molmo2Generator:
         Converts all inputs to TTNN tensors so the forward can be fully traced.
 
         Args:
-            pixel_values: Raw pixel values [B, C, H, W]
+            pixel_values: Raw pixel values [B, C, H, W] or pre-unfolded [B, num_patches, 588]
             pooled_patches_idx: Patch indices [B, N_out, K_pool]
+            max_frames_per_chunk: When B exceeds this, patch-embed on device in chunks (same as
+                ``Molmo2Model._embed_image_chunked``) to cap peak DRAM.
 
         Returns:
             Dict with TTNN tensors and metadata for traced forward
@@ -364,15 +367,53 @@ class Molmo2Generator:
         # Detect input format:
         # - Pre-unfolded from vLLM: [num_crops, num_patches, 588] - 3D with last dim == 588
         # - Raw image format: [B, C, H, W] - 4D or 3D [C, H, W]
-        if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
-            # Pre-unfolded patch format from vLLM [num_crops, num_patches, 588]
-            embedded_ttnn = vit.patch_embed_from_patches_ttnn(pixel_values)
+        if batch_size > max_frames_per_chunk:
+            logger.info(
+                f"_prepare_vision_inputs_for_trace: patch-embedding {batch_size} frames in chunks "
+                f"of {max_frames_per_chunk} (avoid full-sequence DRAM)"
+            )
+            embedded_torch_parts: List[torch.Tensor] = []
+            for chunk_start in range(0, batch_size, max_frames_per_chunk):
+                chunk_pixels = pixel_values[chunk_start : chunk_start + max_frames_per_chunk]
+
+                if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+                    embedded_chunk = vit.patch_embed_from_patches_ttnn(chunk_pixels)
+                else:
+                    embedded_chunk = vit.patch_embed_ttnn(chunk_pixels)
+
+                if self.is_mesh_device:
+                    emb_t = ttnn.to_torch(
+                        embedded_chunk,
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+                    )[0]
+                else:
+                    emb_t = ttnn.to_torch(embedded_chunk)
+                ttnn.deallocate(embedded_chunk)
+                ttnn.synchronize_device(self.mesh_device)
+                # Mesh path can yield [1, L, 1, H]; device slice is [1, 1, L, H]. Normalize so
+                # torch.cat(..., dim=2) stacks tokens (varying L per chunk) not compare L on dim 1.
+                if emb_t.dim() == 3 and emb_t.shape[0] == 1:
+                    emb_t = emb_t.unsqueeze(1)
+                elif emb_t.dim() == 4 and emb_t.shape[2] == 1 and emb_t.shape[1] != 1:
+                    emb_t = emb_t.permute(0, 2, 1, 3).contiguous()
+                embedded_torch_parts.append(emb_t)
+
+            full_embedded_torch = torch.cat(embedded_torch_parts, dim=2)
+            embedded_ttnn = ttnn.from_torch(
+                full_embedded_torch,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
         else:
-            # Raw image format [B, C, H, W] or [C, H, W]
-            if pixel_values.dim() == 3:
-                # [C, H, W] -> [1, C, H, W]
-                pixel_values = pixel_values.unsqueeze(0)
-            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+            if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+                embedded_ttnn = vit.patch_embed_from_patches_ttnn(pixel_values)
+            else:
+                if pixel_values.dim() == 3:
+                    pixel_values = pixel_values.unsqueeze(0)
+                embedded_ttnn = vit.patch_embed_ttnn(pixel_values)
 
         # 2. Prepare indices for TTNN gather
         # Identify valid indices (>= 0) and clip negative to 0
