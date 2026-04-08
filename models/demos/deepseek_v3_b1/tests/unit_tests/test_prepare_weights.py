@@ -175,13 +175,13 @@ def _deallocate_attention_weights(attn: AttentionWeights) -> None:
     ):
         ot = getattr(attn, f, None)
         if ot is not None and hasattr(ot, "fused_tensor"):
-            fid = id(ot.fused_tensor)
+            fid = ot.fused_tensor.tensor_id
             if fid not in seen:
                 seen.add(fid)
                 ttnn.deallocate(ot.fused_tensor, force=True)
     gm = getattr(attn, "gate_mm", None)
     if gm is not None and hasattr(gm, "fused_tensor"):
-        fid = id(gm.fused_tensor)
+        fid = gm.fused_tensor.tensor_id
         if fid not in seen:
             ttnn.deallocate(gm.fused_tensor, force=True)
     gb = getattr(attn, "gate_bias", None)

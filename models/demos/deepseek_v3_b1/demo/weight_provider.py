@@ -375,7 +375,9 @@ class SyntheticWeightProvider:
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
-        return prepare_moe_layer_weights(device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        return prepare_moe_layer_weights(
+            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+        )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         sd = _build_synthetic_dense_state_dict(layer_id)
