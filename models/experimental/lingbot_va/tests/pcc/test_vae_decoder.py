@@ -19,11 +19,7 @@ import ttnn
 from diffusers import AutoencoderKLWan
 
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import (
-    mesh_shape_request_param,
-    vae_bcthw_to_torch,
-    vae_hw_parallel_config_for_mesh,
-)
+from models.experimental.lingbot_va.tt.utils import lingbot_vae_hw_parallel_config
 
 setup_checkpoint_root_for_tests()
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
@@ -31,7 +27,6 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache as tt_cache
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
-from models.tt_dit.utils.test import line_params
 
 os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
@@ -78,7 +73,7 @@ def decode_torch(vae, latents):
 def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     latents = _denormalize_latents_for_decode(vae, latents)
 
-    vae_parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
+    vae_parallel_config = lingbot_vae_hw_parallel_config()
 
     tt_vae = WanVAEDecoder(
         base_dim=vae.config.base_dim,
@@ -120,7 +115,7 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     tt_video_BCTHW, new_logical_h = tt_vae(tt_latents_BTHWC, logical_h)
     ttnn.synchronize_device(mesh_device)
 
-    video_torch = vae_bcthw_to_torch(tt_video_BCTHW, mesh_device, vae_parallel_config, ccl_manager)
+    video_torch = ttnn.to_torch(tt_video_BCTHW)
     video_torch = video_torch[:, :, :, :new_logical_h, :]
 
     ps = getattr(vae.config, "patch_size", None)
@@ -139,9 +134,9 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            mesh_shape_request_param(),
+            (1, 1),
             1,
-            line_params,
+            {},
             ttnn.Topology.Linear,
             id="lingbot_vae_decoder_pcc",
         ),

@@ -3,13 +3,7 @@
 
 """PCC: diffusers AutoencoderKLWan encoder vs TTNN WanVAEEncoder (reference VAE in fp32 on CPU for speed).
 
-Multi-device setup aligned with ``test_encoder_wan.py`` / ``models/tt_dit/tests/encoders/umt5/test_umt5.py``:
-
-- ``device_params`` with ``fabric_config=FABRIC_1D`` (``line_params``) for fabric-backed dispatch / CCL.
-- ``num_links`` passed into ``CCLManager`` (default ``1``).
-- ``mesh_device`` from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
-
-``vae_hw_parallel_config_for_mesh`` supplies H/W mesh axes for ``WanVAEEncoder`` (rows×cols on multi-chip meshes).
+Single-chip ``(1, 1)`` mesh; ``device_params`` is ``{}`` (no fabric with a 1×1 mesh).
 
 **Wall time:** ``pytestmark = pytest.mark.timeout(600)``.
 """
@@ -23,18 +17,13 @@ import ttnn
 from diffusers import AutoencoderKLWan
 
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import (
-    mesh_shape_request_param,
-    vae_bthwc_to_torch,
-    vae_hw_parallel_config_for_mesh,
-)
+from models.experimental.lingbot_va.tt.utils import lingbot_vae_hw_parallel_config
 
 setup_checkpoint_root_for_tests()
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height
-from models.tt_dit.utils.test import line_params
 
 os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
@@ -57,7 +46,7 @@ VIDEO_W = 320
 
 @pytest.fixture
 def vae_ccl_manager(mesh_device, num_links, topology):
-    """Fabric-backed CCL for VAE conv / halo paths on multi-device meshes."""
+    """CCL manager for VAE conv / halo paths (single-chip mesh)."""
     return CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
@@ -105,7 +94,7 @@ def encode_torch(vae, video):
 def encode_ttnn(vae, video, mesh_device, ccl_manager):
     video = _prepare_rgb_video_for_encode(vae, video)
 
-    parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
+    parallel_config = lingbot_vae_hw_parallel_config()
 
     tt_encoder = WanVAEEncoder(
         in_channels=video.shape[1],
@@ -138,7 +127,7 @@ def encode_ttnn(vae, video, mesh_device, ccl_manager):
     tt_out_BTHWC, out_logical_h = tt_encoder(tt_input, logical_h)
     ttnn.synchronize_device(mesh_device)
 
-    out = vae_bthwc_to_torch(tt_out_BTHWC, mesh_device, parallel_config, ccl_manager)
+    out = ttnn.to_torch(tt_out_BTHWC)
     out = conv_unpad_height(out, out_logical_h)
     return out.permute(0, 4, 1, 2, 3)
 
@@ -148,9 +137,9 @@ def encode_ttnn(vae, video, mesh_device, ccl_manager):
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            mesh_shape_request_param(),
+            (1, 1),
             1,
-            line_params,
+            {},
             ttnn.Topology.Linear,
             id="lingbot_vae_encoder_pcc",
         ),

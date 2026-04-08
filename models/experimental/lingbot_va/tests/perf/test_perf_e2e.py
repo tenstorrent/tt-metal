@@ -9,7 +9,6 @@ When True, the pipeline uses TTNN trace capture and a single ``WanTransformer3DM
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -26,7 +25,6 @@ if str(_tt_metal_root) not in sys.path:
 
 from models.experimental.lingbot_va.tests.demo.demo import build_infer_message
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 
 setup_checkpoint_root_for_tests()
 from models.experimental.lingbot_va.tests.perf.tt_lingbot_va_perf import TtLingbotVA
@@ -68,13 +66,6 @@ def _perf_csv_row_strings(
         "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu) if inference_time_cpu else "unknown",
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
-
-
-def _mesh_device_param_for_e2e() -> tuple[int, int] | int:
-    """Pytest ``mesh_device`` indirect param: one physical mesh when single-chip inference is requested."""
-    if os.environ.get("LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH", "").strip().lower() in ("1", "true", "yes"):
-        return (1, 1)
-    return mesh_shape_request_param()
 
 
 def _make_message():
@@ -125,7 +116,7 @@ def _host_input_tensor_for_pipeline(mesh_device):
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [_mesh_device_param_for_e2e()],
+    [(1, 1)],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -172,7 +163,7 @@ def test_perf_lingbot_va_e2e_2cq(
         use_trace=use_trace,
     )
 
-    # Must match models["mesh_device"] (same mesh when env opens (1,1); else (1,1) submesh inside multi-chip).
+    # Must match models["mesh_device"] from ``TtLingbotVA.prepare``.
     work_mesh = tt_model.models["mesh_device"]
     image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(work_mesh)
 

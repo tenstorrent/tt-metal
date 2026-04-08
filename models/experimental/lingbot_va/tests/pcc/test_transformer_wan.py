@@ -32,9 +32,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.cache import model_cache_dir
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.test import line_params
 
 setup_checkpoint_root_for_tests()
 
@@ -62,10 +60,11 @@ DEMO_PROMPT_SEQ_LEN = 512
 DEMO_ACTION_PER_FRAME = 16
 
 
-def _make_parallel_config(mesh_device, sp_axis, tp_axis):
+def _make_parallel_config() -> DiTParallelConfig:
+    """Single-device Lingbot-VA PCC (no tensor or sequence parallelism on mesh)."""
     return DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+        tensor_parallel=ParallelFactor(mesh_axis=1, factor=1),
+        sequence_parallel=ParallelFactor(mesh_axis=0, factor=1),
         cfg_parallel=None,
     )
 
@@ -186,77 +185,9 @@ def _ttnn_input(
 def _ttnn_output_to_torch_float(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
-    parallel_config: DiTParallelConfig,
-    *,
-    kind: str,
 ) -> torch.Tensor:
-    """Mesh tensor → float32 torch (full tensor) for PCC vs reference.
-
-    Lingbot TT forward ends with full-width activations per device (replicated mesh storage);
-    concatenating on the channel/feature dim would double counts (e.g. 48→96). When the
-    first shard already matches the reference width, read one device tensor (same pattern
-    as ``demo.py`` / ``mesh_utils.umt5_encoder_hidden_states_to_torch``). Otherwise use a
-    mesh composer to stitch TP shards.
-    """
-    if mesh_device.get_num_devices() <= 1:
-        return ttnn.to_torch(tt_tensor, dtype=torch.float32, device=mesh_device).contiguous()
-
-    shards = ttnn.get_device_tensors(tt_tensor)
-    s0 = shards[0]
-    if kind == "video":
-        full_width = OUT_CHANNELS
-        tp_local = int(s0.shape[1])
-        tp_tensor_dim = 1
-    else:
-        full_width = ACTION_DIM
-        tp_local = int(s0.shape[2])
-        tp_tensor_dim = 2
-
-    tp_factor = int(parallel_config.tensor_parallel.factor)
-    if tp_local == full_width:
-        return ttnn.to_torch(s0, dtype=torch.float32, device=mesh_device).contiguous()
-
-    mesh_shape = tuple(mesh_device.shape)
-    if len(mesh_shape) != 2:
-        composer = ttnn.concat_mesh_to_tensor_composer(mesh_device, tp_tensor_dim)
-        return ttnn.to_torch(tt_tensor, dtype=torch.float32, mesh_composer=composer).contiguous()
-
-    sp_axis = parallel_config.sequence_parallel.mesh_axis
-    tp_axis = parallel_config.tensor_parallel.mesh_axis
-    sp_factor = int(parallel_config.sequence_parallel.factor)
-    # If SP still shards the host-visible tensor (uncommon after postprocess AG), concat N/F.
-    sp_tensor_dim = 2 if kind == "video" else 1
-
-    axis_dims: list[int | None] = [None, None]
-    used: set[int] = set()
-    for mesh_ax in (0, 1):
-        if mesh_shape[mesh_ax] <= 1:
-            continue
-        if mesh_ax == tp_axis and tp_factor > 1:
-            axis_dims[mesh_ax] = tp_tensor_dim
-            used.add(tp_tensor_dim)
-        elif mesh_ax == sp_axis and sp_factor > 1:
-            axis_dims[mesh_ax] = sp_tensor_dim
-            used.add(sp_tensor_dim)
-
-    next_dim = 0
-    rank = 5 if kind == "video" else 3
-    for mesh_ax in (0, 1):
-        if axis_dims[mesh_ax] is None:
-            while next_dim in used and next_dim < rank:
-                next_dim += 1
-            axis_dims[mesh_ax] = next_dim
-            used.add(next_dim)
-            next_dim += 1
-
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[axis_dims[0], axis_dims[1]],
-            mesh_shape_override=ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
-        ),
-    )
-    return ttnn.to_torch(tt_tensor, dtype=torch.float32, mesh_composer=mesh_composer).contiguous()
+    """Single-device mesh: read back float32 torch tensor for PCC vs reference."""
+    return ttnn.to_torch(tt_tensor, dtype=torch.float32, device=mesh_device).contiguous()
 
 
 def _make_action_grid_id(
@@ -286,9 +217,9 @@ def _make_action_grid_id(
     ("mesh_device", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
-            mesh_shape_request_param(),
+            (1, 1),
             1,
-            line_params,
+            {},
             ttnn.Topology.Linear,
             False,
             id="lingbot_transformer_pcc",
@@ -316,14 +247,7 @@ def test_wan_transformer_model_video_and_action(
     if not LINGBOT_VA_CHECKPOINT.exists():
         pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
 
-    # Full mesh from the fixture: single-device runs use (1,1); multi-device (e.g. N300) use (1,2) etc.
-    _, cols = tuple(mesh_device.shape)
-    if mesh_device.get_num_devices() > 1 and cols > 1 and NUM_HEADS % cols != 0:
-        pytest.skip(
-            f"NUM_HEADS={NUM_HEADS} not divisible by tensor_parallel factor {cols} for mesh {mesh_device.shape}"
-        )
-
-    parallel_config = _make_parallel_config(mesh_device, sp_axis=0, tp_axis=1)
+    parallel_config = _make_parallel_config()
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
     torch_model = _load_torch_reference()
@@ -420,7 +344,7 @@ def test_wan_transformer_model_video_and_action(
             grid_id=grid_tt,
             action_mode=False,
         )
-        tt_video = _ttnn_output_to_torch_float(tt_video_t, mesh_device, parallel_config, kind="video")
+        tt_video = _ttnn_output_to_torch_float(tt_video_t, mesh_device)
     finally:
         ttnn.deallocate(spatial_tt)
         ttnn.deallocate(prompt_tt)
@@ -452,7 +376,7 @@ def test_wan_transformer_model_video_and_action(
             grid_id=grid_a_tt,
             action_mode=True,
         )
-        tt_action = _ttnn_output_to_torch_float(tt_action_t, mesh_device, parallel_config, kind="action")
+        tt_action = _ttnn_output_to_torch_float(tt_action_t, mesh_device)
     finally:
         ttnn.deallocate(spatial_a_tt)
         ttnn.deallocate(prompt_a_tt)

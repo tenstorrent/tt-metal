@@ -1,20 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: HuggingFace UMT5EncoderModel vs TT UMT5Encoder.
-
-Multi-device setup follows ``models/tt_dit/tests/encoders/umt5/test_umt5.py``:
-
-- ``device_params`` with ``fabric_config=FABRIC_1D`` (``line_params``) for fabric-backed dispatch.
-- ``num_links`` passed into ``CCLManager`` (default ``1``).
-- ``parallel_config_and_ccl_manager``: ``tensor_parallel.factor = mesh_device.shape[1]``,
-  ``mesh_axis=1`` (column TP).
-
-Mesh shape comes from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
-
-**Wall time:** ``pytestmark = pytest.mark.timeout(600)``. Shorten sequence with
-``LINGBOT_VA_UMT5_PCC_SEQ_LEN`` (e.g. ``128``).
-"""
+"""PCC: HuggingFace UMT5EncoderModel vs TT UMT5Encoder (single-device mesh ``(1, 1)`` only)."""
 
 import gc
 import os
@@ -26,21 +13,12 @@ import ttnn
 from transformers import UMT5EncoderModel
 
 from models.experimental.lingbot_va.tests.download_pretrained_weights import setup_checkpoint_root_for_tests
-from models.experimental.lingbot_va.tests.mesh_utils import (
-    mesh_num_devices,
-    mesh_shape_request_param,
-    umt5_encoder_hidden_states_to_torch,
-    umt5_mesh_mapper_for_text_inputs,
-    umt5_pad_input_ids_and_mask,
-    umt5_post_encoder_hidden_states,
-)
 
 setup_checkpoint_root_for_tests()
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.test import line_params
 
 os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
@@ -61,9 +39,10 @@ SEQ_LEN = int(os.environ.get("LINGBOT_VA_UMT5_PCC_SEQ_LEN", "512"))
 
 @pytest.fixture
 def parallel_config_and_ccl_manager(mesh_device, num_links, topology):
-    """Same TP/CCL construction as ``test_umt5.parallel_config_and_ccl_manager``."""
+    mesh_shape = tuple(mesh_device.shape)
+    assert mesh_shape[0] * mesh_shape[1] == 1, "Lingbot-VA UMT5 PCC expects a single-device mesh"
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
@@ -91,9 +70,9 @@ def hf_model():
     ("mesh_device", "num_links", "device_params", "topology"),
     [
         pytest.param(
-            mesh_shape_request_param(),
+            (1, 1),
             1,
-            line_params,
+            {},
             ttnn.Topology.Linear,
             id="lingbot_umt5_encoder_pcc",
         ),
@@ -110,13 +89,6 @@ def test_umt5_encoder_comparison(
     assert num_links >= 1
     assert topology == ttnn.Topology.Linear
     encoder_parallel_config, ccl_manager = parallel_config_and_ccl_manager
-    tp_factor = encoder_parallel_config.tensor_parallel.factor
-
-    if mesh_num_devices(mesh_device) > 1 and tp_factor > 1 and hf_model.config.num_heads % tp_factor != 0:
-        pytest.skip(
-            f"HF num_heads={hf_model.config.num_heads} not divisible by encoder TP factor {tp_factor} "
-            f"for mesh {mesh_device.shape}"
-        )
 
     text_weights = {k: v.cpu() for k, v in hf_model.state_dict().items()}
     torch.manual_seed(42)
@@ -156,20 +128,17 @@ def test_umt5_encoder_comparison(
     )
     tt_encoder.load_torch_state_dict(text_weights)
 
-    mesh_mapper = umt5_mesh_mapper_for_text_inputs(mesh_device, encoder_parallel_config)
-    input_ids_pad, attention_mask_pad, pad_n = umt5_pad_input_ids_and_mask(
-        input_ids, attention_mask, mesh_device, encoder_parallel_config
-    )
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     tt_input = ttnn.from_torch(
-        input_ids_pad,
+        input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=mesh_mapper,
     )
     tt_mask = ttnn.from_torch(
-        attention_mask_pad,
+        attention_mask,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -180,12 +149,9 @@ def test_umt5_encoder_comparison(
 
     tt_hidden = tt_encoder(tt_input, attention_mask=tt_mask)
     tt_last = tt_hidden[-1]
-    tt_out = umt5_post_encoder_hidden_states(ccl_manager, tt_last, tt_mask, mesh_device, encoder_parallel_config)
+    tt_out = tt_last * ttnn.unsqueeze(tt_mask, -1)
     ttnn.synchronize_device(mesh_device)
-    tt_embed = umt5_encoder_hidden_states_to_torch(tt_out).float()
-
-    if pad_n:
-        tt_embed = tt_embed[:BATCH_SIZE]
+    tt_embed = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
 
     while tt_embed.dim() > 3:
         tt_embed = tt_embed.squeeze(0)

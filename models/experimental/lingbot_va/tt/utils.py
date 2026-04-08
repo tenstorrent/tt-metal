@@ -34,10 +34,6 @@ from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_in_channels, c
 from models.experimental.lingbot_va.reference.transformer_wan import (
     WanTransformer3DModel as TorchWanTransformer3DModel,
 )
-from models.experimental.lingbot_va.tests.mesh_utils import (
-    vae_bcthw_to_torch,
-    vae_hw_parallel_config_for_mesh,
-)
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
 
@@ -65,6 +61,14 @@ def _safe_deallocate_tensor(tensor, label: str = "") -> None:
         ttnn.deallocate(tensor)
     except Exception as e:
         logger.warning("Failed to deallocate{}: {}", f" {label}" if label else "", e)
+
+
+def lingbot_vae_hw_parallel_config() -> VaeHWParallelConfig:
+    """Single-device Lingbot-VA VAE layout (no H/W sharding across mesh)."""
+    return VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
 
 
 def _local_path(p: str | os.PathLike) -> str:
@@ -777,7 +781,7 @@ def load_vae_decoder(
     state = {k: v.cpu() for k, v in vae_model.state_dict().items()}
     cfg = vae_model.config
     if parallel_config is None:
-        parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
+        parallel_config = lingbot_vae_hw_parallel_config()
     if ccl_manager is None:
         ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
@@ -812,7 +816,7 @@ class WanVAEDecoderWrapper:
         parallel_config: "VaeHWParallelConfig | None" = None,
     ):
         self.vae = vae_model
-        self.parallel_config = parallel_config or vae_hw_parallel_config_for_mesh(mesh_device)
+        self.parallel_config = parallel_config or lingbot_vae_hw_parallel_config()
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager or CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
         self.decoder = load_vae_decoder(
@@ -850,7 +854,7 @@ class WanVAEDecoderWrapper:
 
         ``latents`` must be a ``ttnn.Tensor`` on ``self.mesh_device`` (typically BCTHW bf16), same scale as
         reference ``vae.decode`` input after ``latents / latents_std + latents_mean``. Host readback uses
-        :func:`~models.experimental.lingbot_va.tests.mesh_utils.vae_bcthw_to_torch`; crop, patch unshuffle,
+        ``ttnn.to_torch``; crop, patch unshuffle,
         and clamp run on CPU ``torch`` tensors (same as reference).
         """
         tt_video_BCTHW = None
@@ -874,7 +878,7 @@ class WanVAEDecoderWrapper:
                 _safe_deallocate_tensor(prev, "decode ttnn pre H pad")
             tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
             ttnn.synchronize_device(self.mesh_device)
-            video_torch = vae_bcthw_to_torch(tt_video_BCTHW, self.mesh_device, self.parallel_config, self.ccl_manager)
+            video_torch = ttnn.to_torch(tt_video_BCTHW)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
             ps = getattr(self.vae.config, "patch_size", None)
             if ps and ps > 1:
@@ -889,15 +893,3 @@ class WanVAEDecoderWrapper:
             _safe_deallocate_tensor(tt_latents_BTHWC, "decode latents")
             _safe_deallocate_tensor(tt_video_BCTHW, "decode video")
             gc.collect()
-
-
-__all__ = [
-    "load_transformer",
-    "load_transformer_from_state_dict",
-    "load_text_encoder",
-    "load_vae_encoder",
-    "load_vae_decoder",
-    "patchify",
-    "WanVAEStreamingWrapper",
-    "WanVAEDecoderWrapper",
-]
