@@ -109,16 +109,29 @@ class CodePredictor(LightweightModule):
                 self.needs_projection = False
 
         # Codec embeddings (15 embedding tables, one per code group 1-15)
-        # These are stored as PyTorch tensors for embedding lookup
-        self.codec_embeddings = []
+        # Stored as both PyTorch tensors (for CPU fallback) and TTNN tensors (for on-device lookup)
+        self.codec_embeddings = []  # PyTorch tensors
+        self.codec_embeddings_tt = []  # TTNN tensors for on-device embedding
         for i in range(self.num_code_groups - 1):  # 15 embeddings for codes 1-15
             embed_key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
             if embed_key in state_dict:
                 embed_weight = state_dict[embed_key].float()  # [vocab_size, talker_hidden_size]
                 self.codec_embeddings.append(embed_weight)
+                # TTNN version for on-device embedding lookup
+                embed_tt = ttnn.as_tensor(
+                    embed_weight.unsqueeze(0).unsqueeze(0),
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=get_cache_name(f"codec_embedding_{i}") if weight_cache_path else None,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                )
+                self.codec_embeddings_tt.append(embed_tt)
             else:
                 print(f"  WARNING: Missing CodePredictor embedding {embed_key}")
                 self.codec_embeddings.append(None)
+                self.codec_embeddings_tt.append(None)
 
         # Decoder layers
         self.layers = []
@@ -167,7 +180,7 @@ class CodePredictor(LightweightModule):
 
     def get_codec_embedding(self, code_idx: int, token_ids: torch.Tensor) -> torch.Tensor:
         """
-        Get embedding for a specific codebook.
+        Get embedding for a specific codebook (CPU version).
 
         Args:
             code_idx: Codebook index (0-14 for codes 1-15)
@@ -180,6 +193,27 @@ class CodePredictor(LightweightModule):
             return torch.nn.functional.embedding(token_ids, self.codec_embeddings[code_idx])
         else:
             raise ValueError(f"Missing codec embedding for index {code_idx}")
+
+    def get_codec_embedding_tt(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Get embedding for a specific codebook (on-device version).
+
+        Args:
+            code_idx: Codebook index (0-14 for codes 1-15)
+            token_ids_tt: TTNN token IDs tensor
+
+        Returns:
+            TTNN embeddings tensor [batch, 1, seq_len, hidden_size]
+        """
+        if code_idx < len(self.codec_embeddings_tt) and self.codec_embeddings_tt[code_idx] is not None:
+            return ttnn.embedding(
+                token_ids_tt,
+                self.codec_embeddings_tt[code_idx],
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            raise ValueError(f"Missing TTNN codec embedding for index {code_idx}")
 
     def forward_single_step(
         self,
