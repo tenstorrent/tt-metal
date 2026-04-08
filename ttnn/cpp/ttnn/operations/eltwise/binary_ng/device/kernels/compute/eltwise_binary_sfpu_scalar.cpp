@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/quantization.h"
 #include "api/compute/xlogy.h"
+#include "api/compute/atan2.h"
 #include "api/compute/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

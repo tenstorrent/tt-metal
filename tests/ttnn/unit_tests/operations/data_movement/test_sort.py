@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,13 +33,19 @@ TILE_WIDTH = 32
         ([237], 0, False),
     ],
 )
-def test_sort_standard(shape, dim, descending, device):
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
 
-    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
     ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
@@ -51,10 +57,11 @@ def test_sort_standard(shape, dim, descending, device):
 
     if len(shape) == 0 or (len(shape) == 1 and shape[0] == 1):
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
-        assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices)
+        assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices).to(torch.int64)
     else:
         # Validate sorted values
-        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
+
         # Validate that the indices correctly index into the original tensor
         ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
         assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
@@ -196,7 +203,8 @@ def test_sort_program_cache(shape, dim, descending, device):
     test_iterations = 3
     for _ in range(test_iterations):
         # Run the sort operation multiple times to fill the program cache
-        ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+        with device.cache_entries_counter.measure():
+            ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
         ttnn_sort_values_torch = ttnn.to_torch(ttnn_sort_values)
 
         assert torch_sort_values.shape == ttnn_sort_values.shape
@@ -207,10 +215,11 @@ def test_sort_program_cache(shape, dim, descending, device):
 
         assert_equal(torch_sort_values, ttnn_sort_values_torch)
         ttnn.synchronize_device(device)
-    cache_entries = device.num_program_cache_entries()
     device.disable_and_clear_program_cache()
-    assert cache_entries == 1, "Expected only one program cache entry for sort operation, but found {}".format(
-        cache_entries
+    assert (
+        device.cache_entries_counter.total == 1
+    ), "Expected only one program cache entry for sort operation, but found {}".format(
+        device.cache_entries_counter.total
     )
 
 

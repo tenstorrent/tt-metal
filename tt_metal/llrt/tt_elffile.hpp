@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,6 +58,9 @@ public:
     }
 
     std::vector<Segment> const& GetSegments() const { return segments_; }
+
+    // Get the contents of a named section. Returns empty span if not found.
+    std::span<std::byte> GetSectionContents(std::string_view section_name, uint64_t& virtual_address) const;
 
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.

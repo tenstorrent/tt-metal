@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -160,6 +160,7 @@ from ttnn._ttnn.fabric import (
     FabricManagerMode,
     FabricRouterConfig,
     set_fabric_config,
+    get_fabric_config,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
     MeshId,
@@ -196,6 +197,7 @@ from ttnn._ttnn.hd_socket import (
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    DumpTensorMode,
     uint8,
     uint16,
     int32,
@@ -223,7 +225,9 @@ from ttnn.types import (
     CoreRange,
     CoreCoord,
     corerange_to_cores,
+    get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -267,6 +271,8 @@ from ttnn.types import (
     merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
+    UnpackToDestMode,
+    compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
 
@@ -404,6 +410,11 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
@@ -425,6 +436,8 @@ from ttnn.operations.normalization import (
     create_group_norm_reciprocals,
     create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    determine_expected_group_norm_dram_grid_size,
+    get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
     layernorm_default_compute_config,
     rmsnorm_default_compute_config,
@@ -489,6 +502,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util

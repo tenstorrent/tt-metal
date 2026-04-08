@@ -7,7 +7,7 @@ training_config:
   max_steps: 4
   gradient_accumulation_steps: 2
   use_clip_grad_norm: false
-  model_config: "configs/model_configs/llama3_gpt2s_size.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_gpt2s_size.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

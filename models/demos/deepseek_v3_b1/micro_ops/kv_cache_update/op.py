@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 KV_CACHE_INPUT_CB = 31
 KV_CACHE_OUTPUT_CB = 30
 KV_CACHE_INTERMED_CB = 29
+KV_CACHE_INTERMED_SYNC_CB = 28
 KV_RMSNORM_OUTPUT_CB = 26
 KROPE_OUTPUT_CB = 27
 KV_CACHE_NUM_TILES = 16
@@ -63,38 +64,25 @@ class KVCacheUpdate:
         ncrisc_compile_time_args = tensor_accessor_args.get_compile_time_args()
         brisc_compile_time_args = tensor_accessor_args.get_compile_time_args()
 
-        device = full_kv_cache_tensor.device()
-        device_grid_size = device.compute_with_storage_grid_size()
-        full_device_grid = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1)
-        )
-        full_grid_mcast_start_core = device.worker_core_from_logical_core(full_device_grid.start)
-        full_grid_mcast_end_core = device.worker_core_from_logical_core(full_device_grid.end)
-        full_grid_mcast_num_dests = full_device_grid.grid_size().x * full_device_grid.grid_size().y
-
-        # CB indices and krope_Wt passed as named compile-time args; kernel uses get_named_compile_time_arg_val
+        # CB indices passed as named compile-time args; kernel uses get_named_compile_time_arg_val
         ncrisc_named = [
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
+            ("kv_cache_intermed_cb", KV_CACHE_INTERMED_CB),
+            ("kv_cache_intermed_sync_cb", KV_CACHE_INTERMED_SYNC_CB),
+            ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
+            ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
+            ("kv_cache_cur_pos_ready_semaphore_id", 0),
         ]
         brisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
-            ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
-            ("kv_cache_intermed_cb", KV_CACHE_INTERMED_CB),
-            ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
-            ("krope_output_cb", KROPE_OUTPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
-            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
-            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
-            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
-            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
-            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
-            ("kv_cache_cur_pos_ready_semaphore_id", 0),
         ]
         trisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
             ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
             ("kv_cache_intermed_cb", KV_CACHE_INTERMED_CB),
+            ("kv_cache_intermed_sync_cb", KV_CACHE_INTERMED_SYNC_CB),
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
         ]
@@ -120,6 +108,12 @@ class KVCacheUpdate:
             page_size=intermed_page_size,
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
+        kv_cache_intermed_sync_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=KV_CACHE_INTERMED_SYNC_CB,
+            data_format=ttnn.bfloat16,
+            page_size=intermed_page_size,
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
 
         kv_rmsnorm_output_cb_format = ttnn.cb_descriptor_from_sharded_tensor(KV_RMSNORM_OUTPUT_CB, nope_cache_tensor)
 
@@ -139,9 +133,9 @@ class KVCacheUpdate:
                 format_descriptors=[kv_cache_output_cb_format],
             ),
             ttnn.CBDescriptor(
-                total_size=(KV_CACHE_NUM_TILES + 1) * intermed_page_size,
+                total_size=KV_CACHE_NUM_TILES * intermed_page_size,
                 core_ranges=kv_cache_core_grid,
-                format_descriptors=[kv_cache_intermed_cb_format],
+                format_descriptors=[kv_cache_intermed_cb_format, kv_cache_intermed_sync_cb_format],
             ),
         ]
 
@@ -152,7 +146,7 @@ class KVCacheUpdate:
             initial_value=0,
         )
         pos_addr = position_ids_tensor.buffer_address()
-        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address()]
+        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
         brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
 
         kernel_desc = UnifiedKernelDescriptor(

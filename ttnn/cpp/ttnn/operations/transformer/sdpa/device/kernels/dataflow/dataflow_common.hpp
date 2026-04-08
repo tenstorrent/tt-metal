@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -837,7 +840,11 @@ struct CatAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, first_reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<FirstReaderType>) {
+                fill_zeros_async(dst_addr, first_reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, first_reader.page_size);
+            }
             return 1;
         }
     }
@@ -874,7 +881,11 @@ struct PaddedAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+                fill_zeros_async(dst_addr, reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, reader.page_size);
+            }
             return 1;
         }
     }
@@ -1067,12 +1078,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     }
 }
 
-template <
-    bool is_causal,
-    bool is_chunked,
-    uint32_t sliding_window_size,
-    bool padded_or_joint_masks,
-    uint32_t cb_mask_in>
+template <bool is_chunked, uint32_t sliding_window_size, bool padded_or_joint_masks, uint32_t cb_mask_in>
 void generate_mask(
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
@@ -1081,8 +1087,9 @@ void generate_mask(
     const bool generate_mask_0,
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
-    const uint32_t unpadded_Sk_mask_1) {
-    if constexpr (is_causal || sliding_window_size > 0) {
+    const uint32_t unpadded_Sk_mask_1,
+    const bool is_causal) {
+    if (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
             // Bump it up to the chunk start

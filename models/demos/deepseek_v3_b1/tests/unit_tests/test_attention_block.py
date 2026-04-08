@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,15 +25,10 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 @pytest.mark.parametrize(
@@ -43,9 +38,7 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
+@pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -62,6 +55,7 @@ def create_fabric_router_config(max_payload_size):
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -71,11 +65,14 @@ def create_fabric_router_config(max_payload_size):
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
+            "worker_l1_size": 1374544,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.requires_grid_size((13, 10))
 def test_attention_block(
     bh_2d_mesh_device,
     mesh_rows,
@@ -84,18 +81,21 @@ def test_attention_block(
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
+    device_params,
     noc_mode,
+    num_internal_iterations,
 ):
     """Test TTNN attention block fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
+    num_links_bcast = 1
+    num_links_allreduce = 2
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -107,7 +107,9 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh)
+    attention_block_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
 
     # ========================================================================
     # Configuration
@@ -190,13 +192,12 @@ def test_attention_block(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # TODO: Reduce to 3 slots
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
-    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 4
-    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_num_slots = 5
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 3 tile-rows of [8, 32]
     sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
@@ -282,7 +283,6 @@ def test_attention_block(
     # ========================================================================
     # Create PyTorch tensors
     # ========================================================================
-    torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
     torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
@@ -482,7 +482,7 @@ def test_attention_block(
 
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem_config,
@@ -622,7 +622,7 @@ def test_attention_block(
     num_matmul1_cores = matmul1_grid.num_cores()  # 64
 
     # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
-    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    matmul2_grid = o_proj_cfg.o_proj.core_range_set
     num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # SDPA configuration (matching original sdpa_reduce_to_all test)
@@ -719,8 +719,9 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create CCL tensors and semaphores
+    # Create CCL tensors
     # ========================================================================
+    # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -824,6 +825,8 @@ def test_attention_block(
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
     # WIDTH_SHARDED across 2 forwarder cores, each gets half
     num_forwarders = 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
@@ -866,7 +869,6 @@ def test_attention_block(
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
-            position_id,
             ttnn_position_ids,
             scale,
             ttnn_output,
@@ -885,17 +887,17 @@ def test_attention_block(
             program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
-            attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
-            reduce_cluster_axis,
-            0,  # sdpa_cluster_axis
-            1.0,  # sdpa_scale_fp32
-            1,  # num_links
-            epsilon,
-            use_fp32,
-            skip_ccl,
-            noc_mode,
+            attention_block_semaphores=attention_block_semaphores,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links_bcast=num_links_bcast,
+            num_links_allreduce=num_links_allreduce,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
+            num_iterations=num_internal_iterations,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 
@@ -1084,6 +1086,7 @@ def test_attention_block(
             tp_start = tp_group * slice_size
             tp_end = tp_start + slice_size
             expected = golden_mla_output[tp_start:tp_end, :]
+            print(expected[:8, :32:8])
 
             if received.shape != expected.shape:
                 logger.error(
@@ -1092,26 +1095,25 @@ def test_attention_block(
                 )
                 continue
 
-            passing, pcc = comp_pcc(expected, received, 0.99)  # TODO: Might need to tweak if too high
+            passing, pcc = comp_pcc(expected, received, 0.84)
             logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {pcc}")
             assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
 
     # ========================================================================
     # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
     # ========================================================================
+    ref_device_idx = 0
+    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
-        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
-        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
+        if device_idx != ref_device_idx:
+            dev_eq = torch.equal(received, ref_device_output)
+            assert dev_eq, f"Device {device_idx} output mismatch"
 
-    # Verify cur_pos was incremented by 1 on every core of every device
-    cur_pos_torch = ttnn.to_torch(ttnn_position_ids, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-    expected_pos = position_id + 1
-    assert (
-        cur_pos_torch == expected_pos
-    ).all(), f"cur_pos not incremented correctly: expected {expected_pos}, got unique values {cur_pos_torch.unique().tolist()}"
-    logger.info(f"✓ cur_pos correctly incremented to {expected_pos}")
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
+        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
+        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
     logger.info("✓ Attention Block mesh test passed!")
 

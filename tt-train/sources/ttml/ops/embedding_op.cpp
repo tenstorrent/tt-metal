@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,8 +36,7 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
         weight->add_grad(weight_grad);
     };
 
-    auto links = autograd::get_links(weight);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor));
     return out;
 }
 

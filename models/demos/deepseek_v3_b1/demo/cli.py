@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,9 @@ import argparse
 import contextlib
 import os
 import sys
+import time
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger
 from transformers import AutoTokenizer
@@ -18,7 +20,7 @@ from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
-DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
+DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -41,7 +43,7 @@ def open_mesh_device():
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(15232),
-        "trace_region_size": 573440,
+        "worker_l1_size": 1431568,
     }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
@@ -71,15 +73,21 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the weight cache directory (required for --weights real)",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
-        choices=("synthetic", "real"),
-        default="synthetic",
-        help="Use synthetic or real (cached) weights (default: synthetic)",
+        choices=("synthetic", "real", "state_dict"),
+        default="real",
+        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
     )
     parser.add_argument(
         "--fp32",
@@ -107,6 +115,22 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--launch-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Only launch the pipeline, export H2D/D2H socket descriptors on mesh id 0, and keep the pipeline alive.",
+    )
+    parser.add_argument(
+        "--io-socket-descriptor-prefix",
+        type=str,
+        default=None,
+        help=(
+            "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
+            "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
+            "this is omitted, defaults to deepseek_v3_b1."
+        ),
+    )
     return parser
 
 
@@ -119,12 +143,15 @@ def run_demo(
     prompt: str,
     max_new_tokens: int,
     tokenizer_name_or_path: str,
-    cache_path: Path,
-    use_real_weights: bool = False,
+    weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
+    cache_path: Path | None = None,
+    model_path: Path | None = None,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    launch_only: bool = False,
+    io_socket_descriptor_prefix: str | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -134,21 +161,31 @@ def run_demo(
         # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
+            weights_mode=weights_mode,
             cache_path=cache_path,
-            use_real_weights=use_real_weights,
+            model_path=model_path,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
-        if my_mesh_id == 0:
+        if my_mesh_id == 0 and not launch_only:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            logger.debug(f"Encoded prompt: {prompt_ids}")
+            messages = [{"role": "user", "content": prompt}]
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            logger.debug("Prompt with chat template: {}", prompt)
+
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             if not prompt_ids:
-                prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
+                raise RuntimeError("Chat template produced an empty prompt")
+            logger.debug(f"Encoded prompt: {prompt_ids}")
 
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
             generated_tokens = model_pipeline.run_inference(
@@ -161,8 +198,18 @@ def run_demo(
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
+        if launch_only and my_mesh_id == 0:
+            # Keep process/pipeline alive until user interrupts
+            # Only runs on mesh 0, all other processes wait for a barrier
+            logger.info("Pipeline launched; keeping sockets alive until interrupted.")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                logger.info("Shutting down launch-only pipeline after interrupt.")
+
         model_pipeline.barrier()
-    logger.info("Pod pipeline complete")
+        logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,16 +217,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.weights == "real" and args.cache_path is None:
+        parser.error("--cache-path is required when --weights real")
+    if args.weights == "state_dict":
+        if args.model_path is None:
+            parser.error("--model-path is required when --weights state_dict")
+        index_path = args.model_path / "model.safetensors.index.json"
+        if not index_path.is_file():
+            parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
+
+    io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
+    if args.launch_only and io_socket_descriptor_prefix is None:
+        io_socket_descriptor_prefix = "deepseek_v3_b1"
+
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
+        weights_mode=args.weights,
         cache_path=args.cache_path,
-        use_real_weights=(args.weights == "real"),
+        model_path=args.model_path,
         lm_head_fp32_dest_acc_en=args.fp32,
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
+        launch_only=args.launch_only,
+        io_socket_descriptor_prefix=io_socket_descriptor_prefix,
     )
     print(file=sys.stdout, flush=True)
     return 0

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,12 @@
 
 #include <unordered_set>
 
+// UMD: EthCoord is a UMD type alias used in the private method
+// get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -15,8 +19,9 @@
 #include <tt-metalium/distributed_context.hpp>
 
 #include <map>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt {
@@ -44,8 +49,6 @@ class Cluster;
 }  // namespace tt::umd
 
 namespace tt::tt_fabric {
-
-class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -254,6 +257,12 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
+    // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
+    void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
+
+    // Merge inter-mesh exit/peer FabricNodeId pair lists from all hosts (each host only fills edges from its mesh).
+    void collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
+
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -273,6 +282,21 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
+
+    /// Topology mapper for fabric node ↔ physical ASIC / host bindings (used by routing and pipeline layout).
+    const TopologyMapper& get_topology_mapper() const;
+
+    // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
+    // setup). Inter-mesh connectivity is merged across hosts during setup, so multi-host runs can query any mesh pair
+    // with connectivity (empty when there is no inter-mesh link for that pair).
+    std::vector<FabricNodeId> get_exit_fabric_node_ids_between_meshes(MeshId src_mesh_id, MeshId dst_mesh_id) const;
+
+    // For each inter-mesh link from `src_mesh_id` to `dst_mesh_id`, the exit `FabricNodeId` on the source mesh and
+    // the peer `FabricNodeId` on the destination mesh (cabled pair). Vectors are sorted by `pair.first` so link
+    // indices align with `get_exit_fabric_node_ids_between_meshes(src_mesh_id, dst_mesh_id)`.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+        MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -344,6 +368,12 @@ private:
     // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
     // to the physical channel id
     std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
+    // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
+        intermesh_exit_fabric_node_ids_;
+    // Directed inter-mesh links: exit node on src mesh paired with peer node on dst mesh (same cable / logical port).
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>
+        intermesh_exit_peer_fabric_node_id_pairs_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
@@ -463,7 +493,7 @@ private:
     // Multi-Host Intermesh Connectivity Helper Function:
     // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
     // connections.
-    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+    AnnotatedIntermeshConnections convert_port_descriptors_to_intermesh_connections(
         PortDescriptorTable& port_descriptors);
 
     // Single-Host Intermesh Connectivity Helper Function:

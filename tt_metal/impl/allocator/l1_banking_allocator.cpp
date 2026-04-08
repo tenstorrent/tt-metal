@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -119,23 +119,48 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(config_->worker_l1_size) - config_->l1_unreserved_base - config_->l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    l1_manager_ = std::make_unique<BankManager>(
-        BufferType::L1,
-        bank_id_to_bank_offset,
-        allocatable_l1_size,
-        interleaved_address_limit,
-        config_->l1_alignment,
-        config_->l1_unreserved_base,
-        config_->disable_interleaved);
+    if (config_->allocator_mode == AllocatorMode::HYBRID) {
+        // Build per-core dependency graph (N+1 allocators: lockstep + per-bank)
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>> deps_map;
+        ttsl::SmallVector<AllocatorID> lockstep_deps;
+        for (uint32_t i = 1; i <= num_l1_banks; i++) {
+            lockstep_deps.push_back(AllocatorID{i});
+            deps_map[AllocatorID{i}] = {AllocatorID{0}};
+        }
+        deps_map[AllocatorID{0}] = lockstep_deps;
+        BankManager::AllocatorDependencies l1_deps{deps_map};
+        l1_manager_ = std::make_unique<BankManager>(
+            BufferType::L1,
+            bank_id_to_bank_offset,
+            allocatable_l1_size,
+            interleaved_address_limit,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            config_->l1_unreserved_base,
+            config_->disable_interleaved,
+            l1_deps);
+    } else {
+        l1_manager_ = std::make_unique<BankManager>(
+            BufferType::L1,
+            bank_id_to_bank_offset,
+            allocatable_l1_size,
+            interleaved_address_limit,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            config_->l1_unreserved_base,
+            config_->disable_interleaved);
+    }
     log_debug(
         tt::LogMetal,
         "Configured partition params: worker_l1_size:0x{:X}, "
-        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}",
+        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}, dram_alignment:{}",
         config_->worker_l1_size,
         config_->l1_unreserved_base,
         config_->l1_small_size,
         config_->disable_interleaved,
-        config_->l1_alignment);
+        config_->l1_alignment,
+        config_->dram_alignment);
 
     uint64_t small_interleaved_address_limit = config_->worker_l1_size - config_->l1_small_size;
     uint64_t small_alloc_offset = config_->l1_unreserved_base + allocatable_l1_size;
@@ -158,6 +183,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         config_->l1_small_size,
         small_interleaved_address_limit,
         config_->l1_alignment,
+        config_->dram_alignment,
         small_alloc_offset,
         config_->disable_interleaved);
 }
@@ -169,16 +195,18 @@ L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Al
 }
 
 AllocatorConfig L1BankingAllocator::generate_config(
+    dispatch_core_manager& dispatch_core_manager,
+    MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
     BankMapping l1_bank_remap) {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& cluster = env.get_cluster();
+    const auto& hal = env.get_hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    const auto& dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
@@ -186,7 +214,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
-    const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
+    const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -229,12 +257,12 @@ AllocatorConfig L1BankingAllocator::generate_config(
              AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::WORKER);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config)) {
+    for (const CoreCoord& core : tt::get_logical_dispatch_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;

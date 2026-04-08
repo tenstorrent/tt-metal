@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout) {
         case flatbuffer::TensorMemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;
+        case flatbuffer::TensorMemoryLayout::NdSharded: return TensorMemoryLayout::ND_SHARDED;
     }
     TT_THROW("Unsupported TensorMemoryLayout from flatbuffer.");
 }

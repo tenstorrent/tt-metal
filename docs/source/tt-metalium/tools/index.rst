@@ -14,6 +14,20 @@ Kernel print is the debug tool for printing tiles, scalers, and strings from dev
 .. toctree::
     :maxdepth: 1
 
+    checkpoint
+
+Debug checkpoints provide synchronized inspection points for fused kernels, where all RISCs on a core halt together and dump circular buffer state.
+
+.. toctree::
+    :maxdepth: 1
+
+    device_print
+
+Device print is the debug tool for printing formatted messages from device to host. It is currently experimental feature and it expected to replace dprint in the future.
+
+.. toctree::
+    :maxdepth: 1
+
     watcher
 
 The Watcher is a thread that monitors the status of the TT device to help with

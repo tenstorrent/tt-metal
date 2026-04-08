@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,9 +18,9 @@
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
+#include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
-#include "ttnn-nanobind/operations/creation.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
@@ -35,6 +35,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
+#include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
@@ -72,6 +73,7 @@
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
+#include "ttnn/operations/randn/randn_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
@@ -130,7 +132,7 @@ void py_module(nb::module_& mod) {
     debug::py_module(m_debug);
 
     auto m_creation = mod.def_submodule("creation", "creation operations");
-    creation::py_module(m_creation);
+    creation::bind_creation_operations(m_creation);
 
     auto m_embedding = mod.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
@@ -204,6 +206,9 @@ void py_module(nb::module_& mod) {
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
+
+    auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
+    randn::bind_randn_operation(m_randn);
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);
@@ -286,6 +291,9 @@ NB_MODULE(_ttnn, mod) {
     tracy_decorator(m_tensor);
     tracy_decorator(m_depr_operations);
 #endif
+
+    auto m_bfp_utils = mod.def_submodule("bfp_utils", "BFP tile pack/unpack utilities");
+    ttnn::bfp_utils::py_module(m_bfp_utils);
 
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);

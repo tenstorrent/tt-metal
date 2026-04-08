@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,7 +56,9 @@ void print_tile_rows(
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -72,8 +74,24 @@ void print_tile_rows(
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)start_col,
+                    .w1 = (uint8_t)end_col,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 // Initialize the expert activation buffer with default values:
@@ -184,8 +202,13 @@ FORCE_INLINE void print_expert_activation_buffer(
     volatile tt_l1_ptr uint32_t* buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
 
     DPRINT << "=== Expert Activation Buffer ===" << ENDL();
+    DEVICE_PRINT("=== Expert Activation Buffer ===\n");
     DPRINT << "Row format: [token_id | act_0..act_" << (experts_per_device - 1) << " | score_0..score_"
            << (experts_per_device - 1) << "]" << ENDL();
+    DEVICE_PRINT(
+        "Row format: [token_id | act_0..act_{} | score_0...score_{}]\n",
+        experts_per_device - 1,
+        experts_per_device - 1);
 
     for (uint32_t t = start_token; t < end_token; t++) {
         uint32_t base = t * aligned_row_elements;
@@ -193,26 +216,35 @@ FORCE_INLINE void print_expert_activation_buffer(
         // Token ID (stored as uint32_t, but -1 means unset)
         uint32_t token_id = buffer[base];
         DPRINT << "T" << t << ": [";
+        DEVICE_PRINT("T{}: [", t);
         if (token_id == static_cast<uint32_t>(-1)) {
             DPRINT << "-1";
+            DEVICE_PRINT("-1");
         } else {
             DPRINT << token_id;
+            DEVICE_PRINT("{}", token_id);
         }
         DPRINT << " |";
+        DEVICE_PRINT(" |");
 
         // Expert activations (k+1 means not activated, 0..k-1 means activated with that k-index)
         for (uint32_t e = 0; e < experts_per_device; e++) {
             DPRINT << " " << buffer[base + 1 + e];
+            DEVICE_PRINT(" {}", buffer[base + 1 + e]);
         }
         DPRINT << " |";
+        DEVICE_PRINT(" |");
 
         // Scores
         for (uint32_t e = 0; e < experts_per_device; e++) {
             DPRINT << " " << BF16(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e]));
+            DEVICE_PRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
         }
         DPRINT << "]" << ENDL();
+        DEVICE_PRINT("]\n");
     }
     DPRINT << "================================" << ENDL();
+    DEVICE_PRINT("================================\n");
 }
 
 // Print the E-T buffer (Expert-Token buffer)
@@ -222,24 +254,30 @@ void print_e_t_buffer(uint32_t cb_id) {
     uint32_t buffer_base = get_read_ptr(cb_id);
 
     DPRINT << "=== E-T Buffer (Expert -> Tokens) ===" << ENDL();
+    DEVICE_PRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
     for (uint32_t e = 0; e < experts_per_device; e++) {
         DPRINT << "Expert " << e << ": [";
+        DEVICE_PRINT("Expert {}: [", e);
         uint32_t expert_base = buffer_base + e * tokens * entry_size;
         bool first = true;
         for (uint32_t i = 0; i < tokens; i++) {
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_base + i * entry_size);
             if (token_id == static_cast<uint32_t>(-1)) {
                 DPRINT << " -1]" << ENDL();
+                DEVICE_PRINT(" -1]\n");
                 break;
             }
             if (!first) {
                 DPRINT << ", ";
+                DEVICE_PRINT(", ");
             }
             DPRINT << token_id;
+            DEVICE_PRINT("{}", token_id);
             first = false;
         }
     }
     DPRINT << "======================================" << ENDL();
+    DEVICE_PRINT("======================================\n");
 }
 
 void kernel_main() {
@@ -320,16 +358,22 @@ void kernel_main() {
     constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t matmul_bounding_box_num_cores = get_named_compile_time_arg_val("matmul_bounding_box_num_cores");
 
+    // Coordinates for combine signalling seminc
+    constexpr uint32_t combine_sync_noc_x = get_named_compile_time_arg_val("combine_sync_noc_x");
+    constexpr uint32_t combine_sync_noc_y = get_named_compile_time_arg_val("combine_sync_noc_y");
+
     // Semaphores
     constexpr uint32_t partial_metadata_ready_semaphore_id =
         get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
+    constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
+    const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -466,10 +510,13 @@ void kernel_main() {
             if (local_expert_count >= experts_per_device) {
                 // DEBUG: DPRINT << "Error: more than " << experts_per_device << " experts on device " <<
                 // linearized_mesh_coord << ENDL();
+                // DEBUG: DEVICE_PRINT("Error: more than {} experts on device {}\n", experts_per_device,
+                // linearized_mesh_coord);
                 ASSERT(false);
             }
             // DEBUG: DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is "
             // << i << ENDL();
+            // DEBUG: DEVICE_PRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
 
             local_expert_ids[local_expert_count] = i;
             local_expert_count++;
@@ -730,14 +777,8 @@ void kernel_main() {
         cb_push_back(total_chunks_cb_id, one_page);
 
         // ========== Write expert_activation buffer to DRAM ==========
-        // Write activated rows + sentinel row (with -1 in token_id) to DRAM
-        // Cap off expert_activation buffer with sentinel row
-        uint32_t* sentinel_row_ptr =
-            reinterpret_cast<uint32_t*>(expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-        sentinel_row_ptr[0] = static_cast<uint32_t>(-1);  // token_id = -1 indicates end
-
-        // Write to DRAM: activated rows + sentinel = (num_activated_tokens + 1) rows
-        uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
+        // Write to DRAM: activated rows (num_activated_tokens) rows
+        uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
         noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         // Barrier for this write is at the very end of the kernel
@@ -956,6 +997,15 @@ void kernel_main() {
 
     // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
     // (drain core only issued these writes)
+
     noc_async_write_barrier();
+
+    // signal to A2A combine that metadata is available
+    if (is_drain_tilize_core) {
+        const uint64_t combine_sync_noc_addr =
+            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+        noc_semaphore_inc(combine_sync_noc_addr, 1);
+    }
+
     noc_async_atomic_barrier();
 }

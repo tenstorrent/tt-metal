@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
 // packet size bytes 4352
-
 namespace detail {
 
 template <
@@ -47,6 +46,8 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
 }  // namespace detail
 
 void kernel_main() {
+    DeviceZoneScopedN("Combine-writer");
+
     constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
     constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
@@ -76,8 +77,10 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-    constexpr uint32_t num_mux_workers = get_named_compile_time_arg_val("num_mux_workers");
-
+    constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
+    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
+    constexpr uint32_t compute_cores_per_combine_core =
+        get_named_compile_time_arg_val("compute_cores_per_combine_core");
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
@@ -92,12 +95,9 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    // constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
-
     constexpr uint32_t num_local_experts = experts / num_devices;
     constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-    // constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -110,6 +110,9 @@ void kernel_main() {
     const auto dest_token_segment_offset_bytes = get_arg_val<uint32_t>(rt_arg_count++);
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
+
+    const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
     // rt_arg_count does not get incremented
     MuxSyncCoreArgs sync_args(rt_arg_count);
@@ -138,7 +141,7 @@ void kernel_main() {
         directions, fabric_connections, rt_arg_count);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
-    if (sync_args.is_sync_core && use_init_semaphore) {
+    if (is_init_sync_core && use_init_semaphore) {
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -175,21 +178,27 @@ void kernel_main() {
 
     if constexpr (use_init_semaphore) {
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-        if (sync_args.is_sync_core) {
+        if (is_init_sync_core) {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+            // swap start/end coordinates because this kernel is using NOC1
             const uint64_t semaphore_mc_addr =
-                get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, init_semaphore_addr);
+                get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, init_semaphore_addr, /*noc=*/1);
             noc_semaphore_set_multicast(
-                init_semaphore_addr, semaphore_mc_addr, num_token_parallel_cores * num_data_parallel_cores - 1);
-            noc_async_write_barrier();
-            noc_async_atomic_barrier();
+                init_semaphore_addr,
+                semaphore_mc_addr,
+                num_token_parallel_cores * num_data_parallel_cores - 1,
+                /*linked=*/false,
+                /*noc=*/1);
+            noc_async_writes_flushed(/*noc=*/1);
+
         } else {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
         }
         noc_semaphore_set(init_semaphore_ptr, 0);
     }
 
-    bool needs_barrier = false;
+    auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
+    uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
@@ -218,12 +227,13 @@ void kernel_main() {
                 mesh_cols,
                 replicate_axis>(st);
 
+            noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
-                    get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
-                noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
-                needs_barrier = true;
-                noc_async_writes_flushed();
+                    get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes, /*noc=*/1);
+                noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes, /*noc=*/1);
+                noc_async_writes_flushed(/*noc=*/1);
             } else {
                 fabric_send_chip_unicast_noc_unicast_1d<
                     linearized_mesh_coord,
@@ -242,23 +252,25 @@ void kernel_main() {
                     dest_token_segment_offset_bytes);
             }
         }
+        compute_sync_semaphore_val += compute_cores_per_combine_core;
     }
+
+    noc_semaphore_set(compute_sync_semaphore_ptr, 0);
+
     cb_pop_front(dense_token_maps_cb_id, num_local_experts);
     cb_pop_front(token_activations_cb_id, 1);
-
-    if (needs_barrier) {
-        noc_async_write_barrier();
-    }
     cb_push_back(data_cb_id, 1);
+
+    noc_async_write_barrier(/*noc=*/1);
 
     if (sync_args.is_sync_core) {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, (num_token_parallel_cores * num_data_parallel_cores) - 1);
+        noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
-        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
+        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
         fabric_multicast_bidirectional_atomic_inc_ring_1d<
             linearized_mesh_coord,
@@ -269,15 +281,17 @@ void kernel_main() {
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
+        noc_async_write_barrier(/*noc=*/1);
+        noc_async_atomic_barrier(/*noc=*/1);
+
         close_direction_connections<
             Num_Directions,
             fabric_mux_num_buffers_per_channel,
             fabric_mux_termination_signal_address,
-            num_mux_workers>(directions, fabric_connections, true, rt_arg_count);
+            num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
 
         noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
         noc_semaphore_set(semaphore_ptr, 0);
-
     } else {
         // get sync core semaphore noc address
         close_direction_connections<
@@ -285,14 +299,14 @@ void kernel_main() {
             fabric_mux_num_buffers_per_channel,
             fabric_mux_termination_signal_address>(directions, fabric_connections, false);
 
-        uint64_t safe_termination_sync_address = safe_get_noc_addr(
+        const uint64_t safe_termination_sync_address = safe_get_noc_addr(
             sync_args.termination_master_noc_x,
             sync_args.termination_master_noc_y,
             sync_args.termination_sync_address,
-            0);
-        noc_semaphore_inc(safe_termination_sync_address, 1);
+            /*noc=*/1);
+        noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
 
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
+        noc_async_write_barrier(/*noc=*/1);
+        noc_async_atomic_barrier(/*noc=*/1);
     }
 }

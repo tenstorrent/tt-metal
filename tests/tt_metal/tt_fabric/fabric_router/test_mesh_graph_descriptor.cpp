@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -161,6 +161,12 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
     // Sample file should parse successfully; unknown fields are allowed.
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
+}
+
+TEST(MeshGraphDescriptorTests, ParsesBhGalaxySp4TorusXY) {
+    const std::filesystem::path text_proto_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto";
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 

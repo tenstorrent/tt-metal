@@ -1,47 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
-
-#include "api/debug/dprint_pages.h"
-
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
 
 void kernel_main() {
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -64,9 +35,11 @@ void kernel_main() {
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
 
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
-    constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
+    constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
+    constexpr uint32_t matmul_combine_sync_semaphore_id =
+        get_named_compile_time_arg_val("matmul_combine_sync_semaphore_id");
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
@@ -111,7 +84,7 @@ void kernel_main() {
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+        buffer_size_total_tokens / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
@@ -121,6 +94,7 @@ void kernel_main() {
     const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+    const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -198,6 +172,19 @@ void kernel_main() {
     // Tilize core we signal to that tilize cores can send another chunk of tiles
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
+
+    // Signal to combine cores that chunk is available
+    auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
+        for (uint32_t y = 0; y < height_shard_dim; ++y) {
+            const uint32_t idx = combine_core_x + y * width_shard_dim;
+            const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
+                output_shard_core_map[2 * idx],
+                output_shard_core_map[2 * idx + 1],
+                combine_semaphore_addr,
+                /*noc_id=*/1);
+            noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+        };
+    };
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -326,13 +313,7 @@ void kernel_main() {
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
+        combine_semaphore_inc();
     }
-
-    for (uint32_t y = 0; y < height_shard_dim; ++y) {
-        uint32_t idx = combine_core_x + y * width_shard_dim;
-        uint64_t dest_sem_noc_addr =
-            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
-        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
-    }
-    noc_async_atomic_barrier(/*noc_idx=*/1);
+    noc_async_posted_writes_flushed(/*noc=*/1);
 }

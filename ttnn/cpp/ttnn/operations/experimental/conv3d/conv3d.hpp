@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ namespace ttnn::experimental {
 ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    std::optional<ttnn::MeshDevice*> device,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const std::optional<ttnn::experimental::prim::Conv3dConfig>& config,
     tt::tt_metal::DataType dtype_,

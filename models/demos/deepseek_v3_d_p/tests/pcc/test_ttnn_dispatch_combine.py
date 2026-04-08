@@ -1,0 +1,642 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Test for end-to-end TTNN MoE dispatch→combine round-trip.
+
+This test verifies that tokens dispatched to experts using TTNN dispatch and then
+combined back using TTNN combine produce the original input after host-side reduction,
+validating the full round-trip through TTNN dispatch and combine operations.
+"""
+
+import pytest
+import torch
+from loguru import logger
+from tracy import signpost
+
+import ttnn
+from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
+from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    compute_constants,
+    create_fabric_router_config,
+    extract_mesh_config,
+    get_dispatch_input_mesh_mapper,
+    get_ep_mesh_composer,
+    get_gate_outputs,
+    initialize_predictable_test_inputs,
+    initialize_test_inputs,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    compare_exact,
+    log_combine_mismatch_details,
+    validate_combine_output,
+    validate_composed,
+    validate_roundtrip_output,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    [
+        (3200, 7168, 64, 2, 2),
+    ],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (2, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
+            id="linear-2-1link",
+        ),
+        pytest.param(
+            (2, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
+            id="linear-2-2link",
+        ),
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+            id="linear-4-1link",
+        ),
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+            id="linear-4-2link",
+        ),
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="ring-4-1link",
+        ),
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="ring-4-2link",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8-1link",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8-2link",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="ring-8-1link",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="ring-8-2link",
+        ),
+        pytest.param(
+            (2, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="mesh-2x2",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_dispatch_combine(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+):
+    """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+    torch.manual_seed(42)
+
+    num_devices = mesh_device.get_num_devices()
+
+    mesh_config = extract_mesh_config(mesh_device)
+    sp_axis = mesh_config.sp_axis
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
+
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    ttnn.visualize_mesh_device(mesh_device)
+
+    # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
+    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    )
+
+    signpost(
+        f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} "
+        f"{seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} "
+        f"{capacity_factor=} {use_predictable_data=} {max_dispatched_tokens_per_expert=}"
+    )
+
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+
+    # Generate test inputs
+    # For 2D mesh, generate different weights per EP rank
+    if use_predictable_data:
+        x, weights, indices = initialize_predictable_test_inputs(
+            dispatch_group_size=dispatch_group_size,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=emb_dim,
+            num_routed_experts=num_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        logger.debug("Using PREDICTABLE test data for debugging")
+    else:
+        x, weights, indices = initialize_test_inputs(
+            dispatch_group_size=dispatch_group_size,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=emb_dim,
+            num_routed_experts=num_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        logger.debug("Using RANDOM test data")
+
+    logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
+
+    # x, weights, and indices: sharded across SP axis, replicated across EP ranks
+    mesh_mapper_dispatch_inputs = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
+
+    tt_x = ttnn.from_torch(
+        x,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_weights = ttnn.from_torch(
+        weights,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_indices = ttnn.from_torch(
+        indices,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+
+    # Initialize TTNN dispatch module
+    tt_dispatch_module = TtDispatchModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+    )
+
+    # Create expert dispatch table
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    log_expert_dispatch_table(
+        expert_dispatch_table=expert_dispatch_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+    )
+
+    # Run TtMoERoutingSetup for TTNN execution path
+    tt_moe_routing_setup = TtMoERoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+    )
+    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+        ttnn_top_k_experts_indices=indices,
+        num_routed_experts=num_routed_experts,
+        seq_len_per_chip=seq_len_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+    )
+
+    # Compute gate outputs (offsets and token counts) for torch reference path
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    # Validate routing setup outputs against torch reference
+    ep_composer = get_ep_mesh_composer(mesh_device)
+    host_offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_dispatch_offsets), mesh_composer=ep_composer).squeeze(2)
+    host_token_counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(
+        2
+    )
+
+    offsets_result = validate_composed(
+        host_offsets.int(),
+        expert_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_offsets",
+    )
+    counts_result = validate_composed(
+        host_token_counts.int(),
+        expert_token_counts.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_token_counts",
+    )
+    log_validation_results(
+        results=[offsets_result, counts_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Routing Setup Validation",
+    )
+    offsets_result.assert_passed("Dispatch offsets mismatch before dispatch")
+    counts_result.assert_passed("Expert token counts mismatch before dispatch")
+
+    # Run TTNN dispatch
+    logger.debug("Running TTNN dispatch...")
+    tt_expert_offsets = tt_dispatch_offsets
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
+    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
+        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.debug("Dispatch complete!")
+
+    # --- Torch reference for verbose validation ---
+    torch_dispatch_module = TorchDispatchModule(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        num_dispatch_groups=num_dispatch_groups,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    torch_dispatched_buffer, torch_dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
+
+    torch_combine_module = TorchCombineModule(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+
+    torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
+
+    # Initialize TTNN combine module
+    tt_combine_module = TtCombineModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+        init_zeros=True,
+    )
+
+    # Run TTNN combine
+    logger.debug("Running TTNN combine...")
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    ttnn.synchronize_device(mesh_device)
+    logger.debug("Combine complete!")
+
+    # Convert TTNN output back to torch
+    y = ttnn.to_torch(tt_output, mesh_composer=ep_composer, dtype=torch.bfloat16)
+
+    # Host-side reduction: remove extra dimension added for 2D mesh composition
+    y = y.squeeze(-4)
+
+    # Verbose combine validation (compare torch combine vs TTNN combine)
+    combine_result = validate_combine_output(
+        torch_output,
+        y,
+        indices,
+        num_dispatch_groups,
+        num_routed_experts,
+        verbose=True,
+        expert_dispatch_table=expert_dispatch_table,
+        expert_token_counts=expert_token_counts,
+        experts_per_chip=experts_per_chip,
+    )
+
+    log_validation_results(
+        results=[combine_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Combine Validation Results (verbose)",
+    )
+
+    # Verify round-trip correctness
+    # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
+    # Each EP rank's output only contains data for tokens that EP rank processed.
+    # Output positions not written by local combine contain uninitialized garbage.
+    # We validate per (chip, token, topk) using the EP rank that actually processed it.
+
+    result = validate_roundtrip_output(
+        x,
+        y,
+        indices,
+        num_dispatch_groups,
+        num_routed_experts,
+    )
+
+    log_validation_results(
+        results=[result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Roundtrip Validation Results",
+    )
+
+    if not result.passed:
+        # Create a pseudo-output tensor for mismatch logging (x repeated for each topk)
+        # We need to expand x to match the shape expected by log_combine_mismatch_details
+        x_expanded = x.unsqueeze(2).expand(-1, -1, num_experts_per_tok, -1)
+        log_combine_mismatch_details(result.mismatches, x_expanded, y)
+
+    result.assert_passed("Round-trip mismatch")
+
+    logger.debug("✅ TTNN dispatch→combine round-trip matches input!")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8-1link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_dispatch_combine_overflow(
+    mesh_device,
+    num_links,
+    topology,
+):
+    """Test that dispatch/combine hangs (or corrupts) when token count exceeds max_dispatched_tokens_per_expert.
+
+    This test fabricates indices that route ALL tokens to expert 0, causing a massive
+    overflow of the dispatch buffer. Before the device-side bounds check fix, this will
+    hang. After the fix, dispatch should complete (tokens silently dropped).
+    """
+    seq_len_per_chip = 256
+    emb_dim = 128
+    num_routed_experts = 16
+    num_experts_per_tok = 2
+    capacity_factor = 1
+
+    num_devices = mesh_device.get_num_devices()
+    mesh_config = extract_mesh_config(mesh_device)
+    sp_axis = mesh_config.sp_axis
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
+
+    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    )
+
+    total_tokens_to_expert_0 = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+    logger.info(
+        f"[overflow test] max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}, "
+        f"tokens routed to expert 0={total_tokens_to_expert_0} "
+        f"(overflow ratio: {total_tokens_to_expert_0 / max_dispatched_tokens_per_expert:.0f}x)"
+    )
+
+    # Fabricate inputs: route ALL tokens to expert 0 to cause overflow
+    x = torch.randn((dispatch_group_size, seq_len_per_chip, emb_dim), dtype=torch.bfloat16)
+    weights = torch.ones((dispatch_group_size, seq_len_per_chip, num_experts_per_tok), dtype=torch.bfloat16)
+    weights = weights / weights.sum(dim=-1, keepdim=True)
+    indices = torch.full(
+        (dispatch_group_size, seq_len_per_chip, num_experts_per_tok), num_routed_experts - 1, dtype=torch.int32
+    )
+
+    # Send to device
+    mesh_mapper_dispatch_inputs = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
+    tt_x = ttnn.from_torch(
+        x,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_weights = ttnn.from_torch(
+        weights,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_indices = ttnn.from_torch(
+        indices,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+
+    # Create dispatch table and routing setup
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+
+    tt_moe_routing_setup = TtMoERoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+    )
+    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+        ttnn_top_k_experts_indices=indices,
+        num_routed_experts=num_routed_experts,
+        seq_len_per_chip=seq_len_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+    )
+
+    # Initialize dispatch module
+    tt_dispatch_module = TtDispatchModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+    )
+
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
+
+    # Run dispatch - this will hang without the device-side bounds check fix
+    logger.info("[overflow test] Running dispatch with overflow indices...")
+    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
+        tt_x, tt_weights, tt_indices, tt_dispatch_offsets, tt_expert_dispatch_table
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("[overflow test] Dispatch completed (did not hang)")
+
+    # Run combine
+    tt_combine_module = TtCombineModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+        init_zeros=True,
+    )
+
+    logger.info("[overflow test] Running combine with overflow data...")
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    ttnn.synchronize_device(mesh_device)
+    logger.info("[overflow test] Combine completed (did not hang)")

@@ -14,4 +14,4 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/ttnn/tracy/
 )
-target_precompile_headers(test_get_programs_perf_data REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(test_get_programs_perf_data TTNN::PCH)

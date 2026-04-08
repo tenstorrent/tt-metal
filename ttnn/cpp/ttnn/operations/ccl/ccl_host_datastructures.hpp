@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,4 +23,4 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
 )
-target_precompile_headers(unit_tests_ttnn_udm REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(unit_tests_ttnn_udm TTNN::PCH)

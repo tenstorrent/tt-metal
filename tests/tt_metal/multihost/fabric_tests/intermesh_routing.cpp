@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -174,6 +174,15 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
         multihost_utils::InterMeshLineMcast(
             this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups], 1, 0);
     }
+}
+
+// ========= Setup Validation for BigMesh 1x16 Dual T3K  =========
+// BigMesh is a single mesh spanning two hosts — no inter-mesh routing.
+// This test validates that FABRIC_2D setup and device open/close succeed.
+
+TEST_F(IntermeshBigMesh1x16FabricFixture, DeviceSetupAndTeardown) {
+    ASSERT_FALSE(this->devices_.empty());
+    log_info(tt::LogTest, "BigMesh 1x16: opened {} local devices successfully", this->devices_.size());
 }
 
 // ========= Data-Movement Tests for NanoExabox Machines  =========

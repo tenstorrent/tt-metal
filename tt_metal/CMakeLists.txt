@@ -91,7 +91,7 @@ endif()
 target_link_libraries(
     tt_metal
     PUBLIC
-        umd::device
+        umd::tt-umd
         enchantum::enchantum
         fmt::fmt-header-only
         TracyClient
@@ -115,7 +115,7 @@ target_link_libraries(
         Reflect::Reflect
 )
 
-target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(tt_metal TT::CommonPCH)
 
 target_include_directories(
     tt_metal

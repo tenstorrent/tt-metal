@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -92,6 +92,18 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
         case KernelName::ReaderScalarBcastNg:
             return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
+        case KernelName::ReaderRmNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_rm_no_bcast.cpp");
+        case KernelName::ReaderRmRowBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_bcast.cpp");
+        case KernelName::ReaderRmColBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_col_bcast.cpp");
+        case KernelName::ReaderRmRowBColABcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_col_mixed_bcast.cpp");
+        case KernelName::ReaderRmScalarBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_bcast.cpp");
+        case KernelName::ReaderRmScalarOpNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_op.cpp");
+        case KernelName::WriterRmNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_rm_no_bcast.cpp");
         case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
         case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
@@ -341,6 +353,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::ATAN2:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::ATAN2;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::WHERE_TTS:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::WHERE;
@@ -460,6 +479,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
+        case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
         case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
@@ -494,7 +514,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
@@ -519,20 +539,28 @@ std::map<std::string, std::string> make_dataflow_defines(
     // to maintain backward compatibility, we need to support both dtype and b_dtype
     if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
     } else if (dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
     } else if (dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
     } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";

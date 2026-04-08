@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -165,6 +166,10 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
+    nb::enum_<DumpTensorMode>(m_tensor, "DumpTensorMode")
+        .value("DISTRIBUTED_GATHER", DumpTensorMode::DISTRIBUTED_GATHER)
+        .value("LOCAL", DumpTensorMode::LOCAL);
+
     auto py_core_coord = static_cast<nb::class_<CoreCoord>>(m_tensor.attr("CoreCoord"));
     py_core_coord.def(nb::init<std::size_t, std::size_t>())
         .def(
@@ -297,7 +302,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -314,7 +319,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                CoreRangeSet grid,
                ShardOrientation orientation) {
                 return self.sharded_across_dims_except(
-                    tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -447,10 +452,17 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             )doc")
         .def(
             "__hash__",
-            [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
-                return tt::stl::hash::detail::hash_object(memory_config);
+            [](const MemoryConfig& memory_config) -> ttsl::hash::hash_t {
+                return ttsl::hash::detail::hash_object(memory_config);
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
+        .def(
+            "experimental_set_per_core_allocation",
+            [](MemoryConfig& self, bool enable) {
+                experimental::per_core_allocation::set_per_core_allocation(self, enable);
+            },
+            nb::arg("enable"),
+            "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
         .def(
             "with_shard_spec",
             &MemoryConfig::with_shard_spec,
@@ -501,7 +513,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "__init__",
             [](CoreRangeSet* t, const std::vector<CoreRange>& core_ranges) {
-                new (t) CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
+                new (t) CoreRangeSet(ttsl::Span<const CoreRange>(core_ranges));
             },
             nb::arg("core_ranges"))
         .def(
@@ -599,6 +611,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &dump_tensor_flatbuffer,
             nb::arg("filename"),
             nb::arg("tensor"),
+            nb::arg("mode") = DumpTensorMode::DISTRIBUTED_GATHER,
             R"doc(
                 Dump tensor to file using FlatBuffer format with inline file storage.
             )doc")
@@ -609,6 +622,111 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("device") = nullptr,
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc");
+
+    nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(
+        A logical view of a sub-tensor within a fused (overlapped) device buffer.
+
+        The fused tensor is a raw byte container whose own tensor properties
+        (dtype, layout, shard spec) are generally meaningless for the individual
+        sub-tensors.  This class carries the intended per-sub-tensor properties
+        alongside a shared reference to the underlying fused buffer.
+    )doc")
+        .def(
+            "__init__",
+            [](OverlappedTensorView* self,
+               Tensor fused_tensor,
+               std::array<uint32_t, 2> tensor_shape,
+               std::array<uint32_t, 2> shard_shape,
+               CoreRangeSet core_range_set,
+               DataType dtype,
+               std::array<uint32_t, 2> tile_shape,
+               uint64_t byte_offset,
+               uint64_t total_size) {
+                new (self) OverlappedTensorView{
+                    .name = "",
+                    .fused_tensor = std::move(fused_tensor),
+                    .tensor_shape = tensor_shape,
+                    .shard_shape = shard_shape,
+                    .core_range_set = std::move(core_range_set),
+                    .dtype = dtype,
+                    .tile_shape = tile_shape,
+                    .byte_offset = byte_offset,
+                    .total_size = total_size,
+                };
+            },
+            nb::arg("fused_tensor"),
+            nb::arg("tensor_shape"),
+            nb::arg("shard_shape"),
+            nb::arg("core_range_set"),
+            nb::arg("dtype"),
+            nb::arg("tile_shape"),
+            nb::arg("byte_offset") = 0,
+            nb::arg("total_size") = 0)
+        .def_rw("fused_tensor", &OverlappedTensorView::fused_tensor)
+        .def_prop_rw(
+            "tensor_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.tensor_shape[0], self.tensor_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.tensor_shape = v; })
+        .def_prop_rw(
+            "shard_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.shard_shape[0], self.shard_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.shard_shape = v; })
+        .def_rw("core_range_set", &OverlappedTensorView::core_range_set)
+        .def_rw("dtype", &OverlappedTensorView::dtype)
+        .def_prop_rw(
+            "tile_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.tile_shape[0], self.tile_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.tile_shape = v; })
+        .def_rw("byte_offset", &OverlappedTensorView::byte_offset)
+        .def_rw("total_size", &OverlappedTensorView::total_size)
+        .def(
+            "get_tile",
+            [](const OverlappedTensorView& self) { return Tile(self.tile_shape); },
+            "Return a Tile object constructed from the tile_shape.");
+
+    m_tensor
+        .def(
+            "dump_overlapped_tensors",
+            [](const std::string& file_name, const nb::dict& py_views) {
+                constexpr std::string_view kExt = ".overlappedtensorbin";
+                if (!file_name.ends_with(kExt)) {
+                    throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
+                }
+                std::vector<OverlappedTensorView> views;
+                views.reserve(nb::len(py_views));
+                for (auto [key, value] : py_views) {
+                    auto view = nb::cast<OverlappedTensorView>(value);
+                    view.name = nb::cast<std::string>(key);
+                    views.push_back(std::move(view));
+                }
+                dump_overlapped_tensors(file_name, views);
+            },
+            nb::arg("file_name"),
+            nb::arg("views"),
+            R"doc(
+                Dump a dict of OverlappedTensor to a single file using FlatBuffer format.
+                All views must reference the same fused tensor.
+            )doc")
+        .def(
+            "load_overlapped_tensors",
+            [](const std::string& file_name, MeshDevice* device) -> nb::dict {
+                constexpr std::string_view kExt = ".overlappedtensorbin";
+                if (!file_name.ends_with(kExt)) {
+                    throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
+                }
+                auto views = load_overlapped_tensors(file_name, device);
+                nb::dict result;
+                for (auto& v : views) {
+                    auto key = nb::cast(v.name);
+                    result[key] = nb::cast(std::move(v));
+                }
+                return result;
+            },
+            nb::arg("file_name"),
+            nb::arg("device") = nullptr,
+            R"doc(
+                Load a dict of OverlappedTensor from a file serialized with dump_overlapped_tensors.
             )doc");
 }
 

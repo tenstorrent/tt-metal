@@ -68,7 +68,7 @@ target_link_libraries(
     PRIVATE
         TT::ScaleoutTools
         Metalium::Metal::LLRT
-        umd::device
+        umd::tt-umd
         metal_common_libs
         enchantum::enchantum
         fmt::fmt-header-only
@@ -79,7 +79,7 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
-target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(fabric TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 

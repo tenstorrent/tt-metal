@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TOPK_MIN_WIDTH,
     even_int_div,
+    get_dequantized_tensor,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -53,11 +54,15 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
+        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
+        score_correction_bias = get_dequantized_tensor(
+            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
+        )
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                    gate_weight.T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -68,7 +73,7 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
@@ -300,6 +305,8 @@ class MoEGate(AbstractModule):
         # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
+        token_count = scores.shape[1] * scores.shape[2]
+        scores_flat = scores if scores.shape[1] == 1 else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
         # Add score correction bias
         # Expand bias to match scores shape(dynamic shape)
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
@@ -311,8 +318,13 @@ class MoEGate(AbstractModule):
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
+        scores_with_bias_flat = (
+            scores_with_bias
+            if scores_with_bias.shape[1] == 1
+            else ttnn.reshape(scores_with_bias, (1, 1, token_count, scores_with_bias.shape[3]))
+        )
         # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
+        expert_scores_grouped = ttnn.reshape(scores_with_bias_flat, **cfg["reshape_scores"])
         num_experts_per_group = expert_scores_grouped.shape[3]
 
         # calculate top-2 scores with expert groups
@@ -359,11 +371,11 @@ class MoEGate(AbstractModule):
 
         # create full expert_groups_mask(dynamic shape)
         input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, scores.shape[2], 1)))
+        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
 
         # create full src tensor of ones
         src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
+        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
 
         # scatter top-k expert groups indices to full expert_groups_mask
         active_groups_mask = ttnn.scatter(
@@ -380,7 +392,7 @@ class MoEGate(AbstractModule):
         active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
         ttnn.deallocate(active_groups_mask)
         active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias, active_experts_mask, **cfg["mul_scores_with_mask"])
+        active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
         ttnn.deallocate(scores_with_bias)
         ttnn.deallocate(active_experts_mask)
 
@@ -397,7 +409,7 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(topk_experts_scores_with_bias)
 
         # gather original scores without bias
-        topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)
+        topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)
         ttnn.deallocate(scores)
 
         # normalize scores

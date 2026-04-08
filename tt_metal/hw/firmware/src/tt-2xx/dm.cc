@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,13 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
-#include "internal/dataflow_buffer_init.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
-#include "internal/dataflow_buffer_interface.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/kernel_thread_globals.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
@@ -44,7 +45,7 @@ thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used)
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));
@@ -99,9 +100,10 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+
+thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -109,6 +111,7 @@ void device_setup() {
     // clock gating
     // NOC setup
     set_deassert_addresses();
+    setup_isr_csrs();
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
@@ -124,6 +127,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    DEVICE_PRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -131,6 +135,7 @@ inline void run_triscs(uint32_t enables) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
+    DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
@@ -192,6 +197,7 @@ extern "C" uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
     DPRINT << "DM0-FW: initialized" << ENDL();
+    DEVICE_PRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -199,15 +205,17 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    // risc_init();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
+        DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -223,6 +231,7 @@ extern "C" uint32_t _start1() {
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
             DPRINT << "DM0-FW: waiting for GO message" << ENDL();
+            DEVICE_PRINT("DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
@@ -303,6 +312,9 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -310,7 +322,7 @@ extern "C" uint32_t _start1() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
                     uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
-                    experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+                    setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
@@ -344,28 +356,6 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-                if constexpr (ASSERT_ENABLED) {
-                    if (noc_mode == DM_DYNAMIC_NOC) {
-                        WAYPOINT("NKFW");
-                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
-                        // landed and the NOC interface is in a known idle state for the next kernel.
-                        for (int noc = 0; noc < NUM_NOCS; noc++) {
-                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        }
-                        WAYPOINT("NKFD");
-                    }
-                }
-
-#if defined(PROFILE_KERNEL)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // re-init for profiler to able to run barrier in dedicated noc mode
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Need to ensure that Remapper state is cleared for next kernel launch
                 if (g_remapper_configurator.is_remapper_enabled()) {
                     g_remapper_configurator.clear_all_pairs();
@@ -416,7 +406,7 @@ extern "C" uint32_t _start1() {
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
-        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
@@ -429,6 +419,7 @@ extern "C" uint32_t _start1() {
 
         record_stack_usage(stack_free);
         WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

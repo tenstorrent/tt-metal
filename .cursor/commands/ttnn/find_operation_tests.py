@@ -106,7 +106,7 @@ def find_pipelines_for_test_directory(test_dir: str, repo_root: Path) -> List[Di
         "ttnn-post-commit.yaml",
         "tt-metal-l2-nightly-impl.yaml",
         "blackhole-multi-card-unit-tests-impl.yaml",
-        "all-post-commit-workflows.yaml",
+        "sanity-tests.yaml",
     ]
 
     for workflow_file in workflow_files:
