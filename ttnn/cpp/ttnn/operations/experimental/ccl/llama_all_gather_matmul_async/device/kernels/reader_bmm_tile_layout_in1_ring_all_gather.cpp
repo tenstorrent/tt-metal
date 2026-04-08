@@ -102,7 +102,8 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
-    constexpr auto src_args = TensorAccessorArgs<15>();
+
+    constexpr auto src_args = TensorAccessorArgs<16>();
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 
