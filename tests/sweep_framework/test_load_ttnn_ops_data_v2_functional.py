@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Functional tests for load_ttnn_ops_data_v2.py.
 
@@ -987,12 +987,12 @@ class TestLoadDataWithMockedDB:
 
 # =====================================================================
 # §5  Production Manifest Mirroring
-#     (Tests against the actual sweep_manifest.yaml patterns)
+#     (Tests against the actual trace_selection_registry.yaml patterns)
 # =====================================================================
 
 
 class TestProductionManifestPatterns:
-    """Reproduce the exact structure of the real sweep_manifest.yaml."""
+    """Reproduce the exact structure of the real trace_selection_registry.yaml."""
 
     @pytest.fixture
     def prod_manifest(self, tmp_path):

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -85,6 +85,7 @@ DECLARE_UNARY_NG_OP(hardswish)
 DECLARE_UNARY_NG_OP(softsign)
 DECLARE_UNARY_NG_OP(cbrt)
 DECLARE_UNARY_NG_OP(lgamma)
+DECLARE_UNARY_NG_OP(digamma)
 DECLARE_UNARY_NG_OP(eqz)
 DECLARE_UNARY_NG_OP(hardmish)
 DECLARE_UNARY_NG_OP(identity)

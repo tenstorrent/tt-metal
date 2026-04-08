@@ -1,0 +1,930 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <limits>
+
+#include "ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_recip.h"
+#include "lltt.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+
+namespace ckernel::sfpu
+{
+
+/*
+ * _float_to_int32_positive_ use branch to handle special cases
+ * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
+ * This allow for a branch free (and much smaller algorithm) to compute integer value
+ *
+ * The constraint on `val` is: 0 <= val < 128.0f
+ * Note: Unlike _float_to_int32_positive, this function assumes that
+ * value has been been divided by 2^23. Output value will be scaled by 2^23 compared to 'val'.
+ * If that was not the case, we would have had to shift by `exp - 23` instead of `exp`
+ * This saves 1 SFPADDI instruction.
+ */
+sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val)
+{
+    sfpi::vInt exp = sfpi::exexp(val);
+    sfpi::vInt man = sfpi::exman8(val); // get mantissa with implicit bit (man in [1; 2])
+    man            = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    return man;
+}
+
+/*
+ * This function implements the exponential function using a polynomial approximation algorithm
+ * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
+ * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
+ * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
+ *
+ * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ *
+ * @return sfpi::vFloat Result of exp(val)
+ *
+ * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
+ *      ( https://doi.org/10.1109/MSP.2022.3157460 )
+ */
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
+{
+    // This function computes exp(x) by leveraging mathematic properties of exp(x):
+    // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
+    // - z_i = trunc(x / ln2) (integer part)
+    // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
+    //
+    // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
+    // z = (bias + x * factor * N_m); where:
+    // factor = log(2) * 2^23
+    // bias = 127 * 2^23
+    // Fundamentally, the formula in the paper computes
+    // z = val * log(2) * 2^23 + 127 * 2^23
+    // This formula prepares for the computation of exp(x) = 2^(x/log(2))
+    //
+    // In our case, we will let the multiplication by 2^23 be done implicitly in _float_to_int32_exp21f_ function
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    sfpi::vFloat xlog2      = (val * ONE_LN2 + 127.f);
+
+    // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
+    // (when input < -88.5) and +inf (when input > 88.5)
+    // To avoid this, we clamp xlog2 to [0, 255]
+    // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
+    sfpi::vFloat threshold_low  = 0.f;
+    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
+    sfpi::vec_min_max(threshold_low, xlog2);
+    sfpi::vec_min_max(xlog2, threshold_high);
+
+    sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+
+    sfpi::vInt exponential_part = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z)); // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vInt fractional_part  = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract mantissa ( = leftover part, in [0; 1])
+
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
+
+    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
+    // This uses a 2nd degree polynomial adjustment of the fractional part
+    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+
+    // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    if constexpr (!is_fp32_dest_acc_en)
+    {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+    }
+
+    return y;
+}
+
+// Utility function to round a float to a 32-bit integer while also calculating the
+// integer part of the rounded value
+sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vInt& k_int)
+{
+    // From Hacker's Delight: round-to-nearest-even method
+    // float -> int32 (round to nearest even): n = (x + float(c231)) - int32(c231)
+    // round-to-nearest-even: n = (x + float(c231)) - float(c231)
+    // where c231 = 0x4B400000 (2^23 + 2^22)
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U); // 2^23 + 2^22
+
+    sfpi::vFloat tmp = z + c231;
+    sfpi::vFloat k   = tmp - c231;
+    k_int            = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+
+    return k;
+}
+
+/*
+ * This function implements exp(x) using Cody-Waite range reduction for improved accuracy.
+ * Target accuracy: < 1 ULP for float32.
+ *
+ * Algorithm:
+ * 1. Handle special cases (overflow, underflow, NaN)
+ * 2. Convert to base-2: exp(x) = 2^(x/ln2)
+ * 3. Range reduction using Cody-Waite: compute k, then r = x - k*ln2_hi - k*ln2_lo
+ * 4. Compute exp(r) using polynomial approximation (Taylor series)
+ * 5. Scale by 2^k: result = 2^k * exp(r)
+ *
+ * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * @return sfpi::vFloat Result of exp(val)
+ */
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
+{
+    sfpi::vFloat result = sfpi::vConst0;
+
+    // Exp computation uses bit-wise manipulation using exponent and mantissa fields
+    // For large values (e.g. |x| > 89), some intermediate values can overflow
+    // To avoid this, we check the value of the input using two thresholds.
+    //
+    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
+    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
+    constexpr float OVERFLOW_THRESHOLD  = 128.0f;
+    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
+
+    // Step 1: Compute k = round(x / ln(2))
+    // z = x / ln(2) = x * (1/ln(2))
+    constexpr float INV_LN2 = 1.4426950408889634f; // 1/ln(2)
+    sfpi::vFloat z          = val * INV_LN2;
+
+    // Check for special cases
+    sfpi::vInt exp_bits = sfpi::exexp(z);
+
+    v_if (z >= OVERFLOW_THRESHOLD)
+    {
+        // Overflow
+        result = std::numeric_limits<float>::infinity();
+    }
+    v_elseif (z <= UNDERFLOW_THRESHOLD)
+    {
+        // Underflow
+        result = sfpi::vConst0;
+    }
+    v_elseif (exp_bits == 255)
+    {
+        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
+        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
+        // would have been true and their cases have already been handled.
+        // Thus, we know that if exp == 0 here, then man != 0 as well.
+        result = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_else
+    {
+        // Round z to nearest integer using round-to-nearest-even
+        sfpi::vInt k_int;
+        sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+
+        // Step 2: Cody-Waite range reduction
+        // Compute r = x - k*ln(2) in extended precision
+        // r = x - k*LN2_HI - k*LN2_LO
+        // This provides better accuracy than simple r = x - k*ln(2)
+        // Cody-Waite constants: ln(2) split into high and low parts for extended precision.
+        // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k in the valid range.
+        // LN2_LO contains the remainder: LN2_HI + LN2_LO ≈ -ln(2)
+
+        // We want to do:
+        // 1) r_hi = val - k * LN2_HI
+        // 2) r = r_hi - k * LN2_LO
+        // Since SFPMAD on Wormhole can only do VD = VA * VB + VC,
+        // this expression would require additional instructions,
+        // To avoid this, we transform the expressions to:
+        // 1) r_hi = val + k * (-LN2_HI)
+        // 2) r = r_hi + k * (-LN2_LO)
+        // Where LN2_HI and LN2_LO are negated.
+        // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
+        constexpr float LN2_HI = -0.6931152343750000f; // High bits of ln(2)
+        constexpr float LN2_LO = -3.19461832987e-05f;  // Low bits of ln(2)
+
+        // First subtract k * LN2_HI
+        sfpi::vFloat r_hi = k * LN2_HI + val;
+
+        // Then subtract k * LN2_LO
+        sfpi::vFloat r = k * LN2_LO + r_hi;
+
+        // Step 3: Polynomial approximation for exp(r) using Taylor series
+        // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
+        // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
+        // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
+        sfpi::vFloat p = PolynomialEvaluator::eval(
+            r,
+            sfpi::vConst1, // c0 = 1
+            sfpi::vConst1, // c1 = 1
+            0.5f,          // c2 = 1/2!
+            1.0f / 6.0f,   // c3 = 1/3!
+            1.0f / 24.0f,  // c4 = 1/4!
+            1.0f / 120.0f, // c5 = 1/5!
+            1.0f / 720.0f, // c6 = 1/6!
+            1.0f / 5040.0f // c7 = 1/7!
+        );
+
+        // Step 4: Scale by 2^k using exponent manipulation
+        // ldexp(p, k_int) = p * 2^k
+        // We do this by adding k_int to the exponent of p
+        // Get the current exponent of p (without bias)
+        sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
+        // Add k_int to get the new exponent
+        sfpi::vInt new_exp = p_exp + k_int;
+
+        // Set the new exponent
+        result = sfpi::setexp(p, new_exp);
+    }
+    v_endif;
+
+    return result;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
+
+// is_fp32_dest_acc_en == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_accurate_<false>(sfpi::vFloat val)
+{
+    return _sfpu_exp_21f_bf16_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_accurate_<true>(sfpi::vFloat val)
+{
+    return _sfpu_exp_fp32_accurate_(val);
+}
+
+sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val)
+{
+    // If exponent is > -1 extract it and replace with -1
+    sfpi::vInt exp = exexp(val);
+    v_if (exp >= 0)
+    {
+        val = setexp(val, 126);
+    }
+    v_endif;
+
+    // Run series in Horner form
+    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::sFloat16b(0.863281f);
+    val              = val * tmp + sfpi::vConst1;
+
+    v_if (exp >= 0)
+    {
+        val = val * val;
+        for (int s_iter = 0; s_iter < 7; s_iter++)
+        {
+            exp = exp - 1;
+            // Narrow predication on each loop
+            v_and(exp >= 0);
+            val = val * val;
+        }
+    }
+    v_endif;
+
+    return val;
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in)
+{
+    sfpi::vFloat out;
+
+    if constexpr (APPROXIMATION_MODE)
+    {
+        constexpr int FRAC_BITS         = 3;
+        constexpr std::uint32_t SP_BIAS = 127 << FRAC_BITS;
+
+        // * by 1/ln2 and add convert to 7.3 FxP format
+        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
+        sfpi::vFloat conv           = in * vConstLn2Recip;
+
+        // Clear exp bits
+        sfpi::vInt c23_73 = p_exp::C23_73;
+        sfpi::vInt tmp    = sfpi::reinterpret<sfpi::vInt>(conv) - c23_73;
+
+        // Add bias
+        tmp += SP_BIAS;
+
+        // SHL to move integer bits to exponent
+        out = sfpi::reinterpret<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
+    }
+    else
+    {
+        // Force sign to 0 (make number positive)
+        out = _sfpu_exp_(sfpi::setsgn(in, 0));
+
+        v_if (in < 0)
+        {
+            out = _sfpu_reciprocal_<2>(out);
+        }
+        v_endif;
+    }
+
+    return out;
+}
+
+inline sfpi::vFloat _calculate_exponential_approx_(sfpi::vFloat in)
+{
+    // * by 1/ln2 and add convert to 7.3 FxP format
+    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat c23_73         = sfpi::vConstFloatPrgm1;
+    sfpi::vInt adj_exp          = sfpi::vConstIntPrgm2;
+    in                          = in * vConstLn2Recip + c23_73;
+
+    // Remove Exponent of 7 and bias the Mantissa to 127.
+    sfpi::vInt in_short = adj_exp + sfpi::reinterpret<sfpi::vInt>(in);
+
+    // SHL to move integer bits to exponent
+    in_short <<= 10 - p_exp::FRAC_BITS;
+    return sfpi::reinterpret<sfpi::vFloat>(in_short);
+}
+
+template <bool APPROXIMATION_MODE, bool SCALE_EN, bool SKIP_POSITIVE_CHECK>
+inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+{
+    // This function is used to calculate the exponential of a value in a more accurate manner.
+    sfpi::vFloat result = 0.0f;
+    if constexpr (SCALE_EN)
+    {
+        in = in * sfpi::sFloat16b(exp_base_scale_factor);
+    }
+    if constexpr (APPROXIMATION_MODE)
+    {
+        if constexpr (!SKIP_POSITIVE_CHECK)
+        {
+            v_if (in >= 89)
+            {
+                // Algorithm is incorrect for inputs >= 89, so saturate output to infinity.
+                sfpi::vFloat in_inf = std::numeric_limits<float>::infinity();
+                result              = in_inf;
+            }
+            v_elseif (in < -42)
+            {
+                // Algorithm is incorrect for inputs < -42, so saturate output to 0.
+                result = 0.0f;
+            }
+            v_else
+            {
+                result = _calculate_exponential_approx_(in);
+            }
+            v_endif;
+        }
+        else
+        {
+            // SKIP_POSITIVE_CHECK is true, so user is responsible for ensuring inputs are <= 89.
+            v_if (in < -42)
+            {
+                result = 0.0f;
+            }
+            v_else
+            {
+                result = _calculate_exponential_approx_(in);
+            }
+            v_endif;
+        }
+    }
+    else
+    {
+        result = _sfpu_exp_(sfpi::setsgn(in, 0));
+
+        v_if (in < 0)
+        {
+            result = _sfpu_reciprocal_<2>(result);
+        }
+        v_endif;
+    }
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool FAST_APPROX, bool SKIP_POSITIVE_CHECK, bool CLAMP_NEGATIVE = true>
+void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+{
+    if constexpr (FAST_APPROX && APPROXIMATION_MODE && CLAMP_NEGATIVE)
+    {
+#ifdef DISABLE_SFPLOADMACRO
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            sfpi::dst_reg++;
+        }
+#else
+        // Code below is hand-unrolled for 8 iterations
+        // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
+        // static_assert(ITERATIONS == 8);
+
+        // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more negative than that, swap the input
+        // value with -88.5 and store back to DEST
+        //  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}
+
+        // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a range we can handle, and then store them back
+        // to dest
+        //  LD     : bring in the original value from DEST (y)
+        //  MAD    : unused
+        //  ROUND  : unused
+        //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
+        //  STORE  : store the sanitized value back to dest
+        TTI_SFPLOADMACRO(
+            4,
+            0,
+            3,
+            0);     // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting the even columns for rows   3: 0
+        TTI_SFPNOP; // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
+        TTI_SFPLOADMACRO(
+            5,
+            0,
+            3,
+            2); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting the odd  columns for rows   3: 0
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            6,
+            0,
+            3,
+            4); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting the even columns for rows   7: 4
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            7,
+            0,
+            3,
+            6); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting the odd  columns for rows   7: 4
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            4,
+            0,
+            3,
+            8); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting the even columns for rows  11: 8
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            5,
+            0,
+            3,
+            10); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is targeting the even columns for rows  11: 8
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            6,
+            0,
+            3,
+            12); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is targeting the odd  columns for rows  15:12
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(
+            7,
+            0,
+            3,
+            14); // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is targeting the even columns for rows  15:12
+        // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use the SIMPLE unit
+
+        // Macro Sequence Register 0 configured to read back in the sanitized values and calculate the approximate exponential value
+        //  LD     : the sanitized value from DEST (y)
+        //  MAD    : compute (A * y) + (B-C)  , where A = (2^8)/ln(2) , B = 127 * (2^8) , C = Adjustment parameter of roughly 11.2 to minimize error
+        //  ROUND  : convert the MAD result from FP32 to a 16-bit unsigned integer using stochastic rounding
+        //  SIMPLE : shift the 16-bit integer to the left by 15 bits to place the MSB of the computed value into the MSB of the exponent bits of the fp32 format
+        //  STORE  : store the shifted value back to dest
+        TTI_SFPLOADMACRO(0, 0, 3, 0);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest
+                                       // offset  0 is targeting the even columns for rows   3: 0
+        TTI_SFPLOADMACRO(1, 0, 3, 2);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest
+                                       // offset  2 is targeting the odd  columns for rows   3: 0
+        TTI_SFPLOADMACRO(2, 0, 3, 4);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest
+                                       // offset  4 is targeting the even columns for rows   7: 4
+        TTI_SFPLOADMACRO(3, 0, 3, 6);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest
+                                       // offset  6 is targeting the odd  columns for rows   7: 4
+        TTI_SFPLOADMACRO(0, 0, 3, 8);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[0] for loading and intermediate results - Dest
+                                       // offset  8 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(1, 0, 3, 10); // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[1] for loading and intermediate results - Dest
+                                       // offset 10 is targeting the even columns for rows  11: 8
+        TTI_SFPLOADMACRO(2, 0, 3, 12); // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[2] for loading and intermediate results - Dest
+                                       // offset 12 is targeting the odd  columns for rows  15:12
+        TTI_SFPLOADMACRO(3, 0, 3, 14); // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and intermediate results - Dest
+                                       // offset 14 is targeting the even columns for rows  15:12
+        // NOP needed to allow time for the final Computation Loadmacro to complete before returning to the Sanitation Loadmacro at the top for the next
+        // iteration
+        //  - to be completely safe, use 3 NOP; in practice 1 seems to be enough, probably because the overhead of the DEST INCRW stuff introduces 2 cycles of
+        //  delay
+        TTI_SFPNOP;
+        // TTI_SFPNOP;
+        // TTI_SFPNOP;
+#endif
+    }
+#ifdef DISABLE_SFPLOADMACRO
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE)
+    {
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] << 15
+            TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);             // lreg[0] preserves sign, copies e/m from lreg[1]
+            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            sfpi::dst_reg++;
+        }
+    }
+#else
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE && ITERATIONS == 8)
+    {
+        // =======================================================================
+        // 8-element version using replay buffer.
+        // Total: ~20 cycles for 8 elements = 2.5 cycles/element
+        //
+        // Uses 1 replay of the 16-instruction pattern.
+        // First 2 SHFT2s are dummy (timing placeholders), then 6 real SHFT2s.
+        // Drain phase handles final 2 SHFT2s.
+        // =======================================================================
+
+        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Single replay of 16 instructions = 8 LM + 8 SHFT2 (2 dummy + 6 real).
+        lltt::replay(0, 16);
+
+        // Drain: SHFT2[6-7].
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5); // SHFT2[6]
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5); // SHFT2[7]
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE && ITERATIONS == 32)
+    {
+        // =======================================================================
+        // 32-element version using replay buffer.
+        // Total: ~68 cycles for 32 elements = 2.125 cycles/element
+        //
+        // Uses 2 replays of the 32-instruction pattern.
+        // First 2 SHFT2s are dummy (timing placeholders), then 30 real SHFT2s.
+        // Drain phase handles final 2 SHFT2s.
+        // =======================================================================
+
+        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // 2 replays of 32 instructions = 32 LM + 32 SHFT2 (2 dummy + 30 real).
+        lltt::replay(0, 32);
+        lltt::replay(0, 32);
+
+        // Drain: SHFT2[30-31].
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5); // SHFT2[30]
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5); // SHFT2[31]
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE)
+    {
+        static_assert(ITERATIONS == 8 || ITERATIONS == 32, "This version of exponential only supports 8 or 32 iterations.");
+    }
+#endif
+    else
+    {
+        // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            sfpi::vFloat val    = sfpi::dst_reg[0];
+            sfpi::vFloat result = _calculate_exponential_piecewise_<APPROXIMATION_MODE, SCALE_EN, SKIP_POSITIVE_CHECK>(val, exp_base_scale_factor);
+            sfpi::dst_reg[0]    = result;
+            sfpi::dst_reg++;
+        }
+    }
+}
+
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, std::uint32_t scale /* 1.0f in FP32 */, bool CLAMP_NEGATIVE = true>
+inline void _init_exponential_()
+{
+    if constexpr (FAST_APPROX && APPROXIMATION_MODE && CLAMP_NEGATIVE)
+    {
+        // Algorithm is adapted from:
+        //      A Fast, Compact Approximation of the Exponential Function
+        //      Nicol N. Schraudolph
+        //      IDSIA, Lugano, Switzerland
+
+        // First, set up constant values which are needed for the computation
+        //      We will first sanitize the input values (y) to be in the range that won't cause underflow, which for our hardware means we need to limit
+        //      negative values to be greater than or equal to -88.5 The computation that is needed is (A * y) + (B - C) , where A = (2^8)/ln(2) , B = 127 *
+        //      (2^8) , C = Adjustment parameter of roughly 11.2 to minimize error
+        //          - NOTE: we would like to be able to use 2^23 instead of 2^8 and compute a 32-bit quantity, but our hardware only supports rounding FP32 into
+        //          a 16-bit integer, so we use 2^8 and then shift left by 15 bits after rounding
+        //      So we will set up the following constants:
+        //          LREG[14] =       =    -88.5               = 0xc2b10000
+        //          LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
+        //          LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+
+        constexpr float LN2_RECIP = 1.4426950408889634f;
+        constexpr float A         = 256.0f * LN2_RECIP;
+        constexpr float B_minus_C = 32500.818359375f;
+        constexpr float THRESHOLD = -88.5f;
+
+        constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+
+        constexpr float A_scaled         = A * scale_fp32;
+        constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+
+        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+        TTI_SFPCONFIG(0, 14, 0); // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
+
+        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPCONFIG(0, 12, 0); // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
+
+        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPCONFIG(0, 13, 0); // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+
+#ifndef DISABLE_SFPLOADMACRO
+        // Next, set up the macro instructions which will be necessary
+        //  - for the sanitize function: we will need a SWAP instruction
+        //  - for the main computation function: we will need MAD, ROUND, and SHIFT instructions
+
+        // There are two ways to program the macro instruction registers, and this setup leverages both ways
+        //  - we can either use the SFPCONFIG flow, by setting up the bits of the instruction into LREG[0] and then targeting the Macro instruction register
+        //  - or we can use the shortcut / backdoor load method which relies on having some illegal destination register values as part of the instruction
+
+        // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which is not normally a legal value
+        //      (we are cheating a bit here, since we only care about one half of the swap and we want to use a constant for the other half)
+        //
+        //              imm12 = 0,       lreg_src_c = 0 (will be fed by value loaded from Dest into Loadmacro lreg_dest),  lreg_dest = LREG[14] = - 88.5,
+        //              instr_mod1 = 1 swap the values with the larger of the two ending up in lreg_dest -> but we will use the Loadmacro lreg_dest register as
+        //              output
+        // TTI_SFP_SWAP(0,               0,                                                                                14,                            1);
+        TTI_SFPLOADI(0, 0xA, 0x00E1);
+        TTI_SFPLOADI(0, 0x8, 0x9200);
+        TTI_SFPCONFIG(0, 0, 0); // SFPCONFIG Dest 0 = Programmable Macro instruction 0: TTI_SFPSWAP(0, 0, 14, 1); // compare against LREG[14] (-88.5), and put
+                                // the larger value into LREG[loadmacro_lreg_dest]
+        TTI_SFPNOP;
+
+        // Backdoor load of Macro Instruction 1
+        // Dummy version of MAD instruction with lreg_dest = 4'b11_01 = 13 to install into Programmable Macro instruction register 1, which is Macro Instruction
+        // Register 5
+        TTI_SFPMAD(12, 0, 13, 13, 0); // MACRO Instruction 1 <--- lreg X = lreg[12] (A) * lreg[0] (y) + lreg[13] (B-C)
+
+        // Backdoor load of Macro Instruction 2
+        // ROUND instruction to convert FP32 result into an integer value (int16)
+        //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to install in Programmable Macro Instruction reg
+        //                2'b10,  instr_mod1 = 14 to treat input as fp32, output as unsigned int16, use imm as descale
+        TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 14); // Round to unsigned Int16
+
+        // Backdoor load of Macro Instruction 3
+        // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
+        TTI_SFPSHFT(15, 0, 15, 1); // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in Programmable Macro
+                                   // Instruction reg 2'b11, which is Macro Instruction Register 7
+
+        // So at this point, we have the following instructions loaded into our macro registers:
+        //
+        // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not programmable
+        // 01: ( Rsvd                                                            ) <-- these are fixed / not programmable
+        // 02: ( NOP                                                             ) <-- these are fixed / not programmable
+        // 03: ( SFPSTORE                                                        ) <-- these are fixed / not programmable
+        // 04: TTI_SFPSWAP       (0, 0, 11, 1)
+        // 05: TTI_SFPMAD        (12, 0, 13, 13, 0)
+        // 06: TTI_SFP_STOCH_RND (1, 0, 0, 0, 14, 14)
+        // 07: TTI_SFPSHFT       (15,0,15,1)
+
+        // Now we want to set up our two sequences
+
+        // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
+        //       Delay slot:                  0     1        2
+        //                                                                                                                                                                                                 Use
+        //                                                                                                                                                                                                 Loaded  Result          Macro
+        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
+        TTI_SFPLOADI(0, 0xA, 0x0004); // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0 ; not using staging flop
+                                      // as dest; not using load reg as srcb : 8'b0_______0_______000_____100          = 0x04 slot2 : MAD    UNIT, unused :
+                                      // 8'b0_______0_______000_____000          = 0x00
+        TTI_SFPLOADI(0, 0x8, 0x1300); // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 : STORE  UNIT, want STORE
+                                      // instruction which is in macro instruction mux[3], delayed by 2 ; not using staging flop as src ; :
+                                      // 8'b0_______0_______010_____011          = 0x13
+        TTI_SFPCONFIG(0, 5, 0);       // SFPCONFIG Dest 5 = Macro Sequence Register 1
+
+        // Sequence 0 setup: we want to Load, MAD, <delay>, ROUND, SHIFT, Store
+        //       Delay slot:                  0    1        2      3      4
+        //                                                                                                                                                                                                 Use
+        //                                                                                                                                                                                                 Loaded  Result          Macro
+        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
+        TTI_SFPLOADI(
+            0,
+            0xA,
+            0x85DF); // slot1 : SIMPLE UNIT, want SHIFT instruction which is in macro instruction mux[7], delayed by 3 ;     using staging flop as dest; using
+                     // load reg as srcb : 8'b1_______1_______011_____111          = 0xDF slot2 : MAD    UNIT, want MAD   instruction which is in macro
+                     // instruction mux[5], delayed by 0 ; not using staging flop as dest;     using load reg as srcb : 8'b1_______0_______000_____101 = 0x85
+        TTI_SFPLOADI(
+            0,
+            0x8,
+            0x6316); // slot3 : ROUND  UNIT, want ROUND instruction which is in macro instruction mux[6], delayed by 2 ; not using staging flop as dest; using
+                     // : 8'b0_______0_______010_____110          = 0x16 slot4 : STORE  UNIT, want STORE instruction which is in macro instruction mux[3],
+                     // delayed by 4 ;     using staging flop as src ;     using                  : 8'b0_______1_______100_____011          = 0x63
+        TTI_SFPCONFIG(0, 4, 0); // Load it into macro sequence register 0 (destination = 4)
+
+        // Reset LoadMacroConfig[Lane].Misc for all lanes, in case it has been previously set by another use of macros.
+        TTI_SFPCONFIG(0, 8, 1);
+#endif
+    }
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE)
+    {
+        // ===================================================================
+        // Based on "A Fast, Compact Approximation of the Exponential Function" by Schraudolph.
+        //
+        // The Schraudolph algorithm computes exp(x) by exploiting the fact that IEEE 754 floats
+        // encode values as 2^(exponent) * (1 + mantissa), where the bit-pattern read as an integer
+        // is linear in log2(value). This allows exp(x) to be computed as i = A*x + (B-C)
+        // when reinterpreted as float.
+        // This implementation adds an explicit sign-setting step (SETSGN) to ensure outputs are
+        // negative for inputs below ~-88, where the algorithm would otherwise produce incorrect values.
+        // To get a correct result for inputs below ~-88 the output of this function must be ReLU'd.
+        // In this implementation, for inputs above 0.72 the output saturates to exp(0.72).
+        // Valid input range: [-88, 0.72] with no following ReLU, [-inf, 0.72] with ReLU.
+        //
+        // Constants:
+        //   LREG[12] = A = 256.0 * (1/ln2) = 369.329925537109375
+        //   LREG[13] = B - C = 32500.818359375
+        //   LREG[14] = 15 (shift amount for SFPSHFT2)
+        //
+        // Macro Instructions (backdoor loaded):
+        //   Macro 5: MAD        - compute i = A * x + (B-C)
+        //   Macro 6: STOCHRND   - convert to INT16 (sign-magnitude format)
+        //   Macro 7: SETSGN     - restore sign from STOCHRND result to shifted value
+        //
+        // Macro Sequence Register 0
+        //   Slot 1 (Simple): SETSGN @ delay 5, writes to LREG[16] (staging)
+        //     - Bit 7 = 1: VB = loadmacro's VD (sign source from STOCHRND result)
+        //     - Bit 6 = 1: VD = 16 (staging register, avoids write port conflict)
+        //     - Bits 5:3 = 101: delay 5
+        //     - Bits 2:0 = 111: macro 7 (SETSGN)
+        //     - Encoding: 0b1_1_101_111 = 0xEF
+        //
+        //   Slot 2 (MAD): MAD @ delay 0
+        //     - Bit 7 = 1: use loaded value as VB
+        //     - Bit 6 = 0: write to LREG[lreg_dest]
+        //     - Bits 5:3 = 000: delay 0
+        //     - Bits 2:0 = 101: macro 5 (MAD)
+        //     - Encoding: 0b1_0_000_101 = 0x85
+        //
+        //   Slot 3 (Round): STOCHRND @ delay 3
+        //     - Bits 5:3 = 011: delay 3
+        //     - Bits 2:0 = 110: macro 6 (STOCHRND)
+        //     - Encoding: 0b0_0_011_110 = 0x1E
+        //
+        //   Slot 4 (Store): STORE @ delay 6, reads from LREG[16]
+        //     - Bit 7 = 0: don't preserve VD from instruction
+        //     - Bit 6 = 1: read from LREG[16] (staging register)
+        //     - Bits 5:3 = 110: delay 6
+        //     - Bits 2:0 = 011: macro 3 (STORE)
+        //     - Encoding: 0b0_1_110_011 = 0x73
+        //
+        // =======================================================================
+
+        constexpr float LN2_RECIP = 1.4426950408889634f;
+        constexpr float A         = 256.0f * LN2_RECIP;
+        constexpr float B_minus_C = 32500.818359375f;
+
+        constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+        constexpr float A_scaled   = A * scale_fp32;
+
+        // Load constant A into LREG[12]
+        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPCONFIG(0, 12, 0);
+
+        // Load constant (B-C) into LREG[13]
+        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPCONFIG(0, 13, 0);
+
+        // Load shift amount (15) into LREG[14] for SFPSHFT2
+        // SFPSHFT2 mode 5 reads shift amount from VC register
+        TTI_SFPLOADI(0, 0xA, 15); // Lower 16 bits = 15
+        TTI_SFPLOADI(0, 0x8, 0);  // Upper 16 bits = 0
+        TTI_SFPCONFIG(0, 14, 0);  // Store in LREG[14]
+
+#ifndef DISABLE_SFPLOADMACRO
+        // ===================================================================
+        // Program Macro Instructions via Backdoor Load
+        // ===================================================================
+
+        // Macro Instruction 1 (slot 5): MAD
+        // Computes: LREG[dest] = LREG[12] * LREG[dest] + LREG[13]
+        // dest=13 triggers backdoor load to Macro Instruction Register 5
+        TTI_SFPMAD(12, 0, 13, 13, 0);
+
+        // Macro Instruction 2 (slot 6): STOCHRND with INT16 mode
+        // Converts FP32 to sign-magnitude integer with max magnitude 32767
+        // dest=14 triggers backdoor load to Macro Instruction Register 6
+        // Mode 7 = FP32_TO_INT16 (keeps sign in bit 31, clamps magnitude to 32767)
+        TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 7);
+
+        // Macro Instruction 3 (slot 7): SETSGN
+        // VC=4: reads exp/mantissa from LREG[4] (where discrete SHFT2 writes)
+        // VD=15: triggers backdoor load to Macro Instruction Register 7
+        // Mod1=0: sign comes from VB (which equals loadmacro's VD after override)
+        //
+        // When executed via LOADMACRO with sequence bits:
+        //   - Bit 7=1: VB = loadmacro's VD (0-3, sign source from STOCHRND)
+        //   - Bit 6=1: VD = 16 (staging register for output)
+        //   - VC is preserved as 4 (exp/man source from SHFT2 result)
+        TTI_SFPSETSGN(0, 4, 15, 0);
+
+        //   Low 16 bits:  Slot2(MAD)=0x85, Slot1(Simple)=0xEF -> 0x85EF
+        //   High 16 bits: Slot4(Store)=0x73, Slot3(Round)=0x1E -> 0x731E
+        //   - STOCHRND delay 3: 0x1E
+        //   - SETSGN delay 5: 0xEF
+        //   - STORE delay 6: 0x73
+        TTI_SFPLOADI(0, 0xA, 0x85EF); // Slots 1-2: Simple=0xEF (delay 5), MAD=0x85
+        TTI_SFPLOADI(0, 0x8, 0x731E); // Slots 3-4: Round=0x1E (delay 3), Store=0x73 (delay 6)
+        TTI_SFPCONFIG(0, 4, 0);       // Load into Macro Sequence Register 0 (dest=4)
+
+        // Reset LoadMacroConfig[Lane].Misc for all lanes
+        // Sets StoreMod0=0 (SRCB), UsesLoadMod0ForStore=0, UnitDelayKind=0xF
+        // UnitDelayKind prevents pipeline advancement when not seeing new instructions,
+        // avoiding race conditions from dest bank conflicts or other pipeline hiccups.
+        TTI_SFPCONFIG(0xF00, 0x8, 0x1);
+
+        // ===================================================================
+        // Program Replay Buffer
+        // ===================================================================
+        // Record 32 instructions (16 LM+SHFT2 pairs) into replay buffer.
+        // ADDR_MOD_7/3 will be configured for auto-increment at replay time.
+        //
+        // Pattern starts with LM(LREG0) so all LOADMACROs can be replayed.
+        // The first two SHFT2s are "dummy" (operate on not-yet-loaded LREGs)
+        // but provide correct pipeline timing for subsequent real SHFT2s.
+        //
+        // LREG pattern cycles every 4 elements:
+        //   LM uses:    LREG0, LREG1, LREG2, LREG3, LREG0, ...
+        //   SHFT2 uses: LREG2, LREG3, LREG0, LREG1, LREG2, ...
+        // ===================================================================
+
+        lltt::record(0, 32);
+
+        // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
+        // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13
+        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+
+        TTI_SFPNOP;
+#endif
+    }
+    else if constexpr (APPROXIMATION_MODE)
+    {
+        sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
+        sfpi::vConstFloatPrgm1 = sfpi::sFloat16b(p_exp::C23_73);
+        sfpi::vConstFloatPrgm2 = sfpi::sFloat16b(p_exp::ADJ_EXP);
+    }
+    else
+    {
+        // Initialisation for use of _sfpu_reciprocal_<2> in _calculate_exponential_<APPROXIMATION_MODE=false>.
+        _init_sfpu_reciprocal_<false>();
+    }
+}
+
+} // namespace ckernel::sfpu

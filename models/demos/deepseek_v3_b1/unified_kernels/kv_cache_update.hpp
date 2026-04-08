@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
+#include "mcast.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "mcast.hpp"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack_untilize.h"
@@ -23,11 +24,20 @@ namespace deepseek_b1_ops {
 // KVCacheUpdate micro-op
 //
 // Computes: Update existing KV Cache with 1x576 new cache
-// assumes one core with 1x512 NOPE cache and 2 cores each with 1x32 ROPE cache
+// NOPE cache: 16 cores (2x8 knope grid), each handles 1 tile (1x32 BFP8 page)
+// ROPE cache: 2 cores each with 1x32
 //
-// BRISC: streams existing KV cache pages from DRAM into kv_cache_input_cb
-// NCRISC: waits on compute (untilize), patches new data, waits on compute
-//         (tilize), writes updated pages back to DRAM, signals cache ready
+// Input expectations:
+//   NOPE: Input is on a single "nope sender" core. NCRISC on that core
+//         multicasts the data to the full knope grid, then each core
+//         independently reads/patches/writes 1 DRAM page.
+//         BRISC can start the DRAM read in parallel with the mcast.
+//   ROPE: Input is already split across 2 cores. Each core handles
+//         its own tile independently.
+//
+// BRISC: DRAM read (all knope/rope cores)
+// NCRISC: mcast sender (nope sender core) + mcast receiver (knope non-sender
+//         cores) + patch + DRAM write
 // TRISC: untilize input_cb -> intermed_cb, tilize intermed_cb -> output_cb
 // ============================================================================
 struct KVCacheUpdate {
@@ -64,12 +74,24 @@ struct KVCacheUpdate {
         uint32_t num_cores_per_head;
         uint32_t mla_sender_noc_x[MAX_MLA_CORES_PER_HEAD];
         uint32_t mla_sender_noc_y[MAX_MLA_CORES_PER_HEAD];
+        uint32_t knope_core_index;
+        // NOPE mcast fields (NCRISC handles both send and receive)
+        uint32_t nope_mcast_dest_noc_start_x;
+        uint32_t nope_mcast_dest_noc_start_y;
+        uint32_t nope_mcast_dest_noc_end_x;
+        uint32_t nope_mcast_dest_noc_end_y;
+        uint32_t nope_mcast_sender_semaphore_addr;
+        uint32_t nope_mcast_receiver_semaphore_addr;
+        uint32_t nope_mcast_data_size_bytes;
+        uint32_t nope_mcast_num_dests;
+        uint32_t kv_rmsnorm_num_tiles;
     };
     struct ReaderArgs {
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
         uint32_t kv_cache_input_cb;
         uint32_t grid_start_y;
+        uint32_t knope_core_index;
     };
     struct ComputeArgs {
         uint32_t kv_cache_input_cb;
@@ -83,7 +105,7 @@ struct KVCacheUpdate {
     // ========================================================================
     // Op - full KV cache update (owning device)
     // ========================================================================
-    template <bool IsNopeCore, bool IsRopeCore>
+    template <bool IsNopeSenderCore, bool IsNopeCore, bool IsRopeCore>
     class Op {
     public:
         void operator()([[maybe_unused]] const RTArgs& args) { impl(args); }
@@ -113,14 +135,71 @@ struct KVCacheUpdate {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
+            // ============================================================
+            // NOPE mcast on NCRISC: sender broadcasts rmsnorm output to
+            // knope grid, receivers wait for semaphore.
+            // BRISC is free to start DRAM reads in parallel.
+            // ============================================================
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (IsNopeSenderCore) {
+                cb_wait_front(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
+
+                {
+                    DeviceZoneScopedN("MCAST_RMSNORM");
+                    uint32_t data_addr = get_read_ptr(args.kv_rmsnorm_output_cb);
+
+                    volatile tt_l1_ptr uint32_t* sender_sem_ptr =
+                        (volatile tt_l1_ptr uint32_t*)args.nope_mcast_sender_semaphore_addr;
+                    noc_semaphore_set(sender_sem_ptr, VALID);
+
+                    uint64_t mcast_noc_addr = get_noc_multicast_addr<0>(
+                        args.nope_mcast_dest_noc_start_x,
+                        args.nope_mcast_dest_noc_start_y,
+                        args.nope_mcast_dest_noc_end_x,
+                        args.nope_mcast_dest_noc_end_y,
+                        0);
+                    noc_async_write_multicast(
+                        data_addr,
+                        mcast_noc_addr | data_addr,
+                        args.nope_mcast_data_size_bytes,
+                        args.nope_mcast_num_dests,
+                        false,
+                        0,
+                        NOC_DISPATCH_MULTICAST_WRITE_VC);
+                    noc_semaphore_set_multicast(
+                        args.nope_mcast_sender_semaphore_addr,
+                        mcast_noc_addr | args.nope_mcast_receiver_semaphore_addr,
+                        args.nope_mcast_num_dests,
+                        false,
+                        0,
+                        NOC_DISPATCH_MULTICAST_WRITE_VC);
+
+                    noc_async_write_barrier();
+                }
+            } else if constexpr (IsNopeCore) {
+                {
+                    DeviceZoneScopedN("RECEIVE_RMSNORM");
+                    volatile tt_l1_ptr uint32_t* receiver_sem_ptr =
+                        (volatile tt_l1_ptr uint32_t*)args.nope_mcast_receiver_semaphore_addr;
+                    cb_reserve_back(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
+                    noc_semaphore_wait(receiver_sem_ptr, VALID);
+                    noc_semaphore_set(receiver_sem_ptr, INVALID);
+                    cb_push_back(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
+                }
+            }
+#endif
+
+            // ============================================================
+            // KV cache DRAM read / patch / write
+            // ============================================================
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
                 constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
-                constexpr uint32_t CHUNK_SIZE = IsRopeCore ? 1 : 8;
-                constexpr uint32_t NUM_CHUNKS = IsRopeCore ? 1 : 2;
+                constexpr uint32_t CHUNK_SIZE = 1;
+                constexpr uint32_t NUM_CHUNKS = 1;
 
                 uint32_t cur_pos = args.local_cur_pos;
 
@@ -132,6 +211,8 @@ struct KVCacheUpdate {
                     uint32_t grid_offset_pages = 1 * (get_absolute_logical_y() - args.grid_start_y);
                     kv_cache_page_id_start += grid_offset_pages;
                     kv_cache_page_id_start += nope_num_pages;
+                } else {
+                    kv_cache_page_id_start += args.knope_core_index;
                 }
 
 #if defined(COMPILE_FOR_BRISC)
@@ -156,10 +237,18 @@ struct KVCacheUpdate {
                 uint32_t new_cache_cb = IsRopeCore ? args.krope_output_cb : args.kv_rmsnorm_output_cb;
                 uint32_t offset_in_page = cur_pos % CACHES_PER_BLOCK;
 
-                constexpr uint32_t num_bytes_per_chunk = IsRopeCore ? 64 : (CHUNK_SIZE * 32 * 2);
+                constexpr uint32_t num_bytes_per_chunk = 32 * 2;
 
+                // For NOPESenderCore, this wait is redundant as the mcast sender will have already waited for
+                // args.kv_rmsnorm_output_cb.
                 cb_wait_front(new_cache_cb, 1);
                 uint32_t src_addr = get_read_ptr(new_cache_cb);
+                // RMSNorm output is [1, 512] row-major (treated as a 16x32 tile during
+                // compute, but the data is still a contiguous 512-element row).
+                // Each knope core owns a 32-element chunk, so linear indexing works.
+                if constexpr (IsNopeCore) {
+                    src_addr += args.knope_core_index * num_bytes_per_chunk;
+                }
                 uint32_t write_addr_offset = offset_in_page * num_bytes_per_chunk;
 
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
@@ -184,7 +273,6 @@ struct KVCacheUpdate {
 
                 cb_pop_front(new_cache_cb, 1);
 
-                // Phase 2: Wait for tilize to complete, write to DRAM
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
                     {
                         DeviceZoneScopedN("WAIT_TILIZE");
@@ -211,8 +299,8 @@ struct KVCacheUpdate {
                 uint32_t kv_cache_intermed_sync_cb = args.kv_cache_intermed_sync_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
-                constexpr uint32_t CHUNK_SIZE = IsRopeCore ? 1 : 8;
+                constexpr uint32_t kv_cache_num_tiles = 1;
+                constexpr uint32_t CHUNK_SIZE = 1;
                 constexpr uint32_t NUM_CHUNKS = kv_cache_num_tiles / CHUNK_SIZE;
 
                 // Phase 1: Untilize into intermed_cb, pushing each chunk of CHUNK_SIZE

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -19,6 +19,7 @@ Output:
 Prints GitHub Actions output lines to stdout (matrix + per-hw matrices).
 """
 
+import argparse
 import os
 import json
 import sys
@@ -27,19 +28,22 @@ from pathlib import Path
 
 from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
 from matrix_runner_config import (
+    DEFAULT_MODEL_TRACED_GROUPING_MODE,
     GENERATION_MANIFEST_FILENAME,
     HW_GROUP_MATRIX_KEYS,
     LEAD_MODELS_BATCH_POLICY,
     LEAD_MODELS_DEFAULT_TEST_GROUP,
-    LEAD_MODELS_MESH_TEST_GROUPS,
     LEAD_MODELS_SUITE_NAME,
-    MODEL_TRACED_MESH_TEST_GROUPS,
     SCHEDULE_TYPES,
+    SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
     get_lead_models_test_group_name_for_hardware_group,
+    get_mesh_test_group_map,
     get_runner_config,
     get_test_group_name_for_hardware_group,
 )
+
+DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -198,6 +202,7 @@ def _append_routed_group(
 
 def compute_lead_models_matrix(modules, batch_size):
     """Compute matrix for lead models with mesh-aware runner assignment."""
+    mesh_test_groups = get_mesh_test_group_map("lead_models")
     mesh_modules, hw_modules, unmatched = _group_modules_by_preference(modules, "mesh")
 
     include_entries = []
@@ -208,7 +213,7 @@ def compute_lead_models_matrix(modules, batch_size):
     for mesh_shape, mods in sorted(mesh_modules.items()):
         test_group_name = _get_test_group_for_mesh_shape(
             mesh_shape,
-            LEAD_MODELS_MESH_TEST_GROUPS,
+            mesh_test_groups,
             "lead_models",
         )
         if test_group_name is not None:
@@ -221,7 +226,7 @@ def compute_lead_models_matrix(modules, batch_size):
         routed_modules[LEAD_MODELS_DEFAULT_TEST_GROUP].extend(unmatched)
 
     lead_models_group_order = [LEAD_MODELS_DEFAULT_TEST_GROUP]
-    for test_group_name in dict.fromkeys(LEAD_MODELS_MESH_TEST_GROUPS.values()):
+    for test_group_name in dict.fromkeys(mesh_test_groups.values()):
         if test_group_name not in lead_models_group_order:
             lead_models_group_order.append(test_group_name)
     for test_group_name in routed_modules:
@@ -229,7 +234,7 @@ def compute_lead_models_matrix(modules, batch_size):
             lead_models_group_order.append(test_group_name)
 
     for test_group_name in lead_models_group_order:
-        label_meshes = [mesh for mesh, group in LEAD_MODELS_MESH_TEST_GROUPS.items() if group == test_group_name]
+        label_meshes = [mesh for mesh, group in mesh_test_groups.items() if group == test_group_name]
         batch_label = "+".join(label_meshes) if label_meshes else test_group_name
         _append_routed_group(
             include_entries,
@@ -257,10 +262,11 @@ def compute_lead_models_matrix(modules, batch_size):
 
 def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None):
     """Compute matrix for model_traced runs using mesh/hardware grouped vector files."""
-    mode = grouping_mode if grouping_mode in {"mesh", "hw"} else "hw"
-    if grouping_mode not in {"mesh", "hw", None}:
+    mode = grouping_mode if grouping_mode in SUPPORTED_VECTOR_GROUPING_MODES else DEFAULT_MODEL_TRACED_GROUPING_MODE
+    if grouping_mode not in (*SUPPORTED_VECTOR_GROUPING_MODES, None):
         print(f"Warning: Unsupported grouping_mode '{grouping_mode}', defaulting to hardware routing", file=sys.stderr)
 
+    mesh_test_groups = get_mesh_test_group_map("model_traced")
     mesh_modules, hw_modules, unmatched = _group_modules_by_preference(modules, mode)
 
     include_entries = []
@@ -270,7 +276,7 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
     for mesh_shape, mods in sorted(mesh_modules.items(), key=lambda x: x[0]):
         test_group_name = _get_test_group_for_mesh_shape(
             mesh_shape,
-            MODEL_TRACED_MESH_TEST_GROUPS,
+            mesh_test_groups,
             "model_traced",
             "wormhole-n150-sweeps",
         )
@@ -330,6 +336,20 @@ def compute_standard_matrix(modules, batch_size, suite_name):
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Compute sweep matrix and emit GitHub Actions outputs.")
+    parser.add_argument(
+        "--write-to-file",
+        required=False,
+        nargs="?",
+        const=DEFAULT_PRETTY_MATRIX_PATH,
+        default=None,
+        help=(
+            "Optional path to write a pretty-printed matrix JSON for human review. "
+            f"If provided without a value, defaults to {DEFAULT_PRETTY_MATRIX_PATH}."
+        ),
+    )
+    args = parser.parse_args()
+
     schedule_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     sweep_name = os.environ.get("SWEEP_NAME", "")
@@ -379,6 +399,18 @@ def main():
         "ccl_batches": ccl_batches,
         "include": include_entries,
     }
+
+    if args.write_to_file:
+        output_path = Path(args.write_to_file)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as file:
+                json.dump(result, file, indent=2)
+                file.write("\n")
+        except OSError as error:
+            print(f"Failed to write matrix JSON to {output_path}: {error}", file=sys.stderr)
+            sys.exit(1)
+
     print("matrix=" + json.dumps(result, **compact))
 
     for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():

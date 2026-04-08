@@ -72,6 +72,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_program_cache.py  #38203
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_sharded_interleaved  #39185
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_ng_row_major_sharded  #39185
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_ng_rm_interleaved  #39185
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_program_cache.py  #38203
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture  # ResNet-50 uses ops unsupported by ttsim
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::TestFastOperationGraphTracking  # Fast dispatch with ttnn.add crashes ttsim worker on teardown
@@ -123,81 +124,39 @@ blackhole:
   - tests/nightly/t3000/
   - tests/ttnn/unit_tests/operations/point_to_point/
 
-  # Multi-device tests
-  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py
-
-  # Base functionality - simulator limitations (tilize/untilize, layout conversion)
-  - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
-  - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::TestFastOperationGraphTracking  # Fast dispatch with ttnn.add crashes ttsim worker on teardown
-
   # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob  # ~150s under TTSim, hits 320s timeout with xdist contention
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_where.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
-
-  # Core tests
-  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
-  - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
-  - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
-  - tests/ttnn/unit_tests/base_functionality/test_concat_issue.py
-  - tests/ttnn/unit_tests/base_functionality/test_async.py
-
-  # Conv tests
-  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
-  - tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
-  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
 
   # Pool tests (same as wormhole + BH-specific)
-  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
-  - tests/ttnn/unit_tests/operations/pool/test_rotate.py
-  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_grid_sample.py
-  - tests/ttnn/unit_tests/operations/pool/test_upsample.py
 
   # Matmul tests (same simulator limitations as wormhole)
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/matmul/test_linear.py
 
   # Fused tests (same simulator limitations as wormhole + BH-specific)
-  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
-  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
+  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
 
   # Reduce tests (same as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
-  - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
   # Skipping due to CI failure - issue #41286

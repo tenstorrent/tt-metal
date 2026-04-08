@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -39,7 +39,7 @@ def random_weights(config_only):
     """
     config = config_only
 
-    torch.manual_seed(42)
+    torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
 
     # Use proper initialization scale from config (typically 0.02)
     std = config.initializer_range
@@ -87,8 +87,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -96,8 +96,12 @@ def random_weights(config_only):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
     ],
+    ids=["line", "ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -116,6 +120,7 @@ def test_mla(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    device_params,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -137,11 +142,15 @@ def test_mla(
     else:
         config, weights = request.getfixturevalue("random_weights")
 
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+
     production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
+
     if scale_down_sl:
         seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
 
@@ -214,6 +223,7 @@ def test_mla(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=is_balanced,
+        topology=topology,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -292,13 +302,16 @@ def test_mla(
     if is_balanced:
         tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
 
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
     tt_hidden_states = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     tt_output = mla_tt.forward(
         hidden_states=tt_hidden_states,
@@ -306,9 +319,13 @@ def test_mla(
         kvpe_cache=tt_kvpe_cache,
     )
 
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
     if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
-            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape)
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
 
         if is_balanced:
@@ -329,6 +346,14 @@ def test_mla(
         ).to(torch.bfloat16)
         tt_kvpe_cache_torch = tt_kvpe_cache_torch[:, :1, :, :]
 
+        logger.info("Starting synchronize call")
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
+
         if is_balanced:
             tt_kvpe_cache_torch = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch, chunk_order, seq_dim=2)
 
@@ -343,6 +368,12 @@ def test_mla(
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
     else:
+        logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")

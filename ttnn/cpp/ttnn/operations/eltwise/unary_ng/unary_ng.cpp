@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -147,6 +147,7 @@ DEFINE_UNARY_NG_OP(hardswish, HARDSWISH)
 DEFINE_UNARY_NG_OP(softsign, SOFTSIGN)
 DEFINE_UNARY_NG_OP(cbrt, CBRT)
 DEFINE_UNARY_NG_OP(lgamma, LGAMMA)
+DEFINE_UNARY_NG_OP(digamma, DIGAMMA)
 DEFINE_UNARY_NG_OP(eqz, EQZ)
 DEFINE_UNARY_NG_OP(hardmish, HARDMISH)
 DEFINE_UNARY_NG_OP(identity, IDENTITY)

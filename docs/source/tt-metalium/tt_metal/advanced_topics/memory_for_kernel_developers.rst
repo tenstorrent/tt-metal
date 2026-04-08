@@ -36,7 +36,7 @@ Refer to the `Baby RISC-V <https://github.com/tenstorrent/tt-isa-documentation/b
         cb_wait_front(tt::CBIndex::c_16, 1);
         uint32_t cb_addr = get_write_ptr(tt::CBIndex::c_16);
         // Treating it as address because the address is in shared SRAM
-        // DPRINT << ((uint32_t*)cb_addr)[0] << std::endl;
+        // DEVICE_PRINT("Value at circular buffer: {}\n", ((uint32_t*)cb_addr)[0]);
 
         // `dram_addr` is a DRAM address, however the address is not mapped in the RISC-V address space
         // and the content must be explicitly fetched from DRAM using NoC APIs and requesting a transfer

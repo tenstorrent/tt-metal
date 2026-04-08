@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -185,20 +185,22 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srca<>(m_srca_cb, cb);
+            reconfig_data_format_srca<false, true>(m_srca_cb, cb);
         }
 
         DPRINT << "reconfig_data_format_srca - ";
+        DEVICE_PRINT("reconfig_data_format_srca - ");
         m_srca_cb = cb;
     } else if constexpr (operand == Operand::SRCB) {
         if (m_srcb_cb == cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srcb<>(m_srcb_cb, cb);
+            reconfig_data_format_srcb<false, true>(m_srcb_cb, cb);
         }
 
         DPRINT << "reconfig_data_format_srcb - ";
+        DEVICE_PRINT("reconfig_data_format_srcb - ");
         m_srcb_cb = cb;
     } else if constexpr (operand == Operand::PACK) {
         if (m_pack_cb == cb) {
@@ -209,12 +211,15 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
         }
 
         DPRINT << "pack_reconfig_data_format - ";
+        DEVICE_PRINT("pack_reconfig_data_format - ");
         m_pack_cb = cb;
     }
     if (m_enabled) {
         DPRINT << "happened on line - " << m_last_call_line << ENDL();
+        DEVICE_PRINT("happened on line - {}\n", m_last_call_line);
     } else {
         DPRINT << "should be called before line - " << m_last_call_line << ENDL();
+        DEVICE_PRINT("should be called before line - {}\n", m_last_call_line);
     }
 
 #ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED

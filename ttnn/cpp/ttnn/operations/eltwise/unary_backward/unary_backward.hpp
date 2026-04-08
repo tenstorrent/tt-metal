@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -381,7 +381,7 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> sqrt_bw(
     const Tensor& grad_tensor_arg,

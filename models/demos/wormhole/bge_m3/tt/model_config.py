@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -129,12 +129,48 @@ class ModelArgs:
         if not ckp_point:
             raise ValueError("No checkpoint directory or HF URL provided.")
 
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import LocalEntryNotFoundError
+        from torch import load as torch_load
         from transformers import AutoModelForCausalLM
 
         model = AutoModelForCausalLM.from_pretrained(ckp_point, torch_dtype="auto")
+
         state_dict = model.state_dict()
 
-        # TODO: do layer checks here.
+        files_to_check = ["colbert_linear.pt", "sparse_linear.pt"]
+        download_repo_id = self.hf_model_name if os.path.isdir(ckp_point) else ckp_point
+
+        for file_name in files_to_check:
+            if os.path.isdir(ckp_point):
+                local_file_path = os.path.join(ckp_point, file_name)
+                if os.path.exists(local_file_path):
+                    file_path = local_file_path
+                elif download_repo_id:
+                    try:
+                        file_path = hf_hub_download(
+                            repo_id=download_repo_id,
+                            filename=file_name,
+                            local_files_only=True,
+                        )
+                    except LocalEntryNotFoundError:
+                        file_path = hf_hub_download(repo_id=download_repo_id, filename=file_name)
+                else:
+                    raise FileNotFoundError(f"Missing required file '{file_name}' in local checkpoint '{ckp_point}'")
+            else:
+                try:
+                    file_path = hf_hub_download(
+                        repo_id=ckp_point,
+                        filename=file_name,
+                        local_files_only=True,
+                    )
+                except LocalEntryNotFoundError:
+                    file_path = hf_hub_download(repo_id=ckp_point, filename=file_name)
+
+            model_weights = torch_load(file_path, map_location="cpu")
+            name = file_name.split(".")[0]
+            state_dict[f"{name}.weight"] = model_weights["weight"]
+            state_dict[f"{name}.bias"] = model_weights["bias"]
 
         return state_dict
 
@@ -148,23 +184,6 @@ class ModelArgs:
         tokenizer = AutoTokenizer.from_pretrained(ckp_point)
 
         return tokenizer
-
-    # def weight_cache_path(self, dtype: ttnn.DataType) -> Path:
-    #     cache_root_env = os.getenv("TT_CACHE_PATH")
-    #     if cache_root_env:
-    #         cache_root = Path(cache_root_env)
-    #     else:
-    #         model_path = Path(self.model_path)
-    #         if model_path.exists():
-    #             cache_root = model_path
-    #         else:
-    #             cache_root = Path.home() / ".cache" / "tt-metal" / "bge-m3"
-
-    #     dtype_name = _dtype_name(dtype)
-    #     cache_path = cache_root / f"tensor_cache_{dtype_name}"
-    #     cache_path.mkdir(parents=True, exist_ok=True)
-    #     self.resolved_weight_cache_path = cache_path
-    #     return cache_path
 
     def num_to_corerange(x):
         assert x < 8 or x % 8 == 0

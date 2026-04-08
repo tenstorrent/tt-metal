@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
 def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
     os.environ["HF_MODEL"] = model_weights
-    # os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
+    os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
@@ -33,6 +33,7 @@ def test_ci_dispatch(model_weights):
             "models/demos/wormhole/bge_m3/tests/pcc/test_attention.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_model.py",
+            "models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )

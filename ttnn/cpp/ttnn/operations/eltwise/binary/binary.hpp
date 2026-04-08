@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,6 +71,32 @@
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
         float rhs,                                                                        \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        std::optional<bool> use_legacy = std::nullopt,                                    \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// Tensor-Tensor bitwise binary op (no output_dtype, calls invoke_binary_ng)
+#define TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(NAME, OP_TYPE)                               \
+    Tensor NAME(                                                                          \
+        const Tensor& lhs,                                                                \
+        const Tensor& rhs,                                                                \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        std::optional<bool> use_legacy = std::nullopt,                                    \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// Tensor-int32_t bitwise binary op (no output_dtype, calls invoke_binary_ng)
+#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
+    Tensor NAME(                                                                          \
+        const Tensor& lhs,                                                                \
+        int32_t rhs,                                                                      \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
@@ -407,6 +433,18 @@ Tensor subalpha(
     const std::optional<Tensor>& output = std::nullopt);
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_FLOAT(logical_right_shift, LOGICAL_RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(logical_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR(xlogy, XLOGY)
 TTNN_BINARY_OP_TENSOR_FLOAT(xlogy, XLOGY)
 Tensor hypot(
@@ -464,6 +502,8 @@ ttnn::Tensor operator<=(const ttnn::Tensor& lhs, InputBType rhs) {
 
 #undef TTNN_BINARY_OP_TENSOR_TENSOR
 #undef TTNN_BINARY_OP_TENSOR_FLOAT
+#undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE
+#undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE
 #undef TTNN_BINARY_OP_INPLACE
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE

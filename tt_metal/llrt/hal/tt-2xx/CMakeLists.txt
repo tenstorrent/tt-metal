@@ -21,7 +21,7 @@ target_link_libraries(
         Tracy::TracyClient
         hw
         fmt::fmt-header-only
-        umd::device
+        umd::tt-umd
         TT::STL
         tt-logger::tt-logger
 )
@@ -37,7 +37,7 @@ target_link_libraries(
     PRIVATE
         fmt::fmt-header-only
         hw
-        umd::device
+        umd::tt-umd
         TT::STL
         tt-logger::tt-logger
 )

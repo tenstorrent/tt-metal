@@ -43,7 +43,7 @@ The script automatically:
 - Sources the Python virtual environment (`python_env/bin/activate`)
 - Sets `MESH_DEVICE` environment variable (`DUAL` for 2x, `QUAD` for 4x)
 - Exports required environment variables (`DEEPSEEK_V3_HF_MODEL`, `DEEPSEEK_V3_CACHE`)
-- Wraps your command with `tt-run` and MPI for multi-host execution
+- Wraps your command with **`tt-run`** (MPI) for multi-host execution; see [tt-run README](../../../ttnn/ttnn/distributed/README_ttrun.md) for **auto allocation** (`--mesh-graph-descriptor`, `--hosts`) vs **legacy** (`--rank-binding`, rankfile)
 
 ### Special Commands
 

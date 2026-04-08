@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ namespace sfpu {
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat ckernel_sfpu_exp_accurate(sfpi::vFloat val, const uint exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
-        val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
+        val = val * sfpi::sFloat16b(exp_base_scale_factor);
     }
     sfpi::vFloat result = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
     return result;

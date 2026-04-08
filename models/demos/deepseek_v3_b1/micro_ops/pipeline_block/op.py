@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -70,7 +70,7 @@ class PipelineBlock:
         self.num_procs = int(ttnn.distributed_context_get_size())
         self.initialize_loopback = initialize_loopback
 
-        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         if initialize_loopback:
             assert len(pipeline_config) == self.num_procs + 1
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -228,7 +228,8 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     """Merge multiple _BuildResults into one.
 
     Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, and unions semaphore refs.
+    concatenates output tensors, unions semaphore refs, and merges source maps
+    with CB index offsets.
     """
     if len(results) == 1:
         return results[0]
@@ -257,6 +258,23 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Concatenate kernel_phase_map (order matches merge_program_descriptors)
     all_kpm = tuple(entry for r in results for entry in r.kernel_phase_map)
 
+    # Merge source maps with CB index offsets.
+    # merge_program_descriptors concatenates CBs, so later results' CB
+    # indices need to be offset by the cumulative count from prior results.
+    cb_offset = 0
+    all_cb_src: List = []
+    all_gcb_src: List = []
+    all_rebind_src: List = []
+    all_output_src: List = []
+    for r in results:
+        for merged_idx, op, orig_idx in r.cb_source_map:
+            all_cb_src.append((merged_idx + cb_offset, op, orig_idx))
+        for merged_idx, op, orig_idx in r.global_cb_source_map:
+            all_gcb_src.append((merged_idx + cb_offset, op, orig_idx))
+        all_rebind_src.extend(r.rebind_source_map)
+        all_output_src.extend(r.output_source_map)
+        cb_offset += len(r.descriptor.cbs)
+
     return _BuildResult(
         descriptor=merged_desc,
         input_tensors=all_inputs,
@@ -264,6 +282,10 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
         semaphores=all_semaphores,
         kernel_labels=all_labels,
         kernel_phase_map=all_kpm,
+        cb_source_map=all_cb_src,
+        rebind_source_map=all_rebind_src,
+        global_cb_source_map=all_gcb_src,
+        output_source_map=all_output_src,
     )
 
 
@@ -316,6 +338,15 @@ class OpGraphBuilder:
                 in the tree's OpDescriptors.
         """
         from models.experimental.ops.descriptors.fusion.fusion import FusedOp
+
+        if self._built:
+            raise ValueError("Already built")
+
+        # Single node with no children — return FusedOp wrapping the original op.
+        if not self._root.children:
+            self._built = True
+            op = self._root.op
+            return FusedOp(op=op)
 
         r = self._build_internal(device)
         return FusedOp(
@@ -763,44 +794,8 @@ class OpGraphBuilder:
 # =============================================================================
 
 
-def build_op_graph(
-    root_phases: List[OpDescriptor],
-    children: List[OpNode],
-    device: Any = None,
-):
-    """Build a fused descriptor for a tree topology.
-
-    Convenience wrapper around :class:`OpGraphBuilder`.  Converts
-    ``root_phases`` into a chain of nodes, attaches ``children`` to
-    the last root-phase node, then builds.
-
-    Args:
-        root_phases: Phases that run before the tree splits.  Converted
-            into a chain of OpNode objects.
-        children: Subtrees to attach to the last root-phase node.
-        device: Optional device for GlobalSemaphore allocation.
-            If *None*, auto-extracted from the first tensor found
-            in the tree's OpDescriptors.
-
-    Returns:
-        A single self-contained FusedOp suitable for
-        ``result.launch()``.
-    """
-    if not root_phases:
-        raise ValueError("root_phases cannot be empty")
-    # Last root phase gets children attached
-    last = OpNode(root_phases[-1], children=list(children))
-    node = last
-    for desc in reversed(root_phases[:-1]):
-        node = OpNode(desc, children=[node])
-    return OpGraphBuilder(node).build(device)
-
-
 __all__ = [
     "OpNode",
     "CoreGroup",
     "OpGraphBuilder",
-    "build_op_graph",
-    "_extract_device_from_tree",
-    "_merge_build_results",
 ]

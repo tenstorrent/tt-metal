@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -196,6 +196,7 @@ class Generator(WarmupForwardMixin):
                 model_id_warmup=model_id,
                 sampling_params=None,
                 pixel_values=warmup_pixel_values,
+                image_sizes=[(vision_chunk_size, vision_chunk_size)],
             )
             logger.info("Vision encoder warmup completed")
 
@@ -575,6 +576,8 @@ class Generator(WarmupForwardMixin):
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+                if "image_sizes" in local_kwargs and local_kwargs["image_sizes"] is not None:
+                    local_kwargs["image_sizes"] = local_kwargs["image_sizes"][idx]
 
             if sampling_enabled and not use_batched_prefill:
                 sampling_executed = True
@@ -893,6 +896,7 @@ class Generator(WarmupForwardMixin):
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                     batch_size=batch_size,
+                    **kwargs,
                 )
 
                 if chunk_start_relative == last_chunk_start:
@@ -934,6 +938,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        **kwargs,
     ):
         mode_switched = False
         if self.mode != Mode.DECODE:
@@ -1146,8 +1151,12 @@ class Generator(WarmupForwardMixin):
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode
-        reset_inputs = reset_batch or not sampling_on_device
+        # reset inputs when mode switches from prefill to decode,
+        # or when sampling_on_device changes (different trace has stale inputs)
+        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
+        self._prev_sampling_on_device = sampling_on_device
+        sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
+        reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -690,7 +690,7 @@ if __name__ == "__main__":
         logger.info("Lead models filter enabled.")
         logger.info(
             "Set TTNN_LEAD_MODELS_ONLY={} for tests.sweep_framework.master_config_loader_v2 "
-            "to filter traced configs to lead-model sources from model_tracer/sweep_manifest.yaml",
+            "to filter traced configs to lead-model sources from model_tracer/trace_selection_registry.yaml",
             os.environ.get("TTNN_LEAD_MODELS_ONLY"),
         )
         logger.info("=" * 80)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 """Load ttnn_operations_master.json into Neon.tech PostgreSQL.
@@ -27,7 +27,7 @@ except ImportError:
 from model_tracer.mesh_metadata import normalize_machine_info
 
 # Default manifest path (relative to repo root)
-_DEFAULT_MANIFEST = "model_tracer/sweep_manifest.yaml"
+_DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
 
 def _get_manifest_path(manifest_path=None):
@@ -1253,7 +1253,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result
@@ -1446,7 +1446,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result
@@ -1523,7 +1523,7 @@ def resolve_manifest(manifest_path=None, scope=None):
                              exactly matches a model_name in the registry models list
 
     Args:
-        manifest_path: Path to sweep_manifest.yaml (optional).
+        manifest_path: Path to trace_selection_registry.yaml (optional).
         scope: Which group to resolve.
             - 'lead_models'  : only the lead_models group
             - 'model_traced' : only the model_traced group
@@ -1687,7 +1687,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
     filtered to the specified models, then merges configs deduplicated by config_hash.
 
     Args:
-        manifest_path: Path to sweep_manifest.yaml (optional).
+        manifest_path: Path to trace_selection_registry.yaml (optional).
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
         schema: Database schema to read from (default: "ttnn_ops_v6").
@@ -1762,7 +1762,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(merged, f, indent=2)
+            json.dump(merged, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return merged
@@ -1891,7 +1891,7 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result

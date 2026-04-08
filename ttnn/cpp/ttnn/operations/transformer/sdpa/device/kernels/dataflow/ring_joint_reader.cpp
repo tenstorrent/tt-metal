@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -235,7 +235,7 @@ void kernel_main() {
             }
 
             // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
-            const uint32_t q_iter_local = global_q_chunk - global_q_start;
+            const uint32_t q_iter_local = q_iter;
             const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                                         (q_iter_local < next_core_q_chunks);
             const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);

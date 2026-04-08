@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -24,6 +24,7 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
+        topology=ttnn.Topology.Linear,
     ):
         self.config = config
         self.mesh_device = mesh_device
@@ -81,19 +82,21 @@ class ttMLA:
         )
 
         self.ring_sdpa_compute_grid = (
-            mesh_device.compute_with_storage_grid_size().x,
-            mesh_device.compute_with_storage_grid_size().y - 1,
+            mesh_device.compute_with_storage_grid_size().x - 1,
+            mesh_device.compute_with_storage_grid_size().y,
         )
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
-        self.tp_factor = mesh_device.shape[tp_axis]
+        self.tp_factor = mesh_device.shape[self.tp_axis]
+        self.sp_factor = mesh_device.shape[self.sp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1
+        self.ccl_topology = topology
 
         # ring attention setup
         persistent_v_shard_dims = [None, None]
-        persistent_v_shard_dims[tp_axis] = 1  # TP heads
+        persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
         persistent_k_shard_dims = [None, None]
 
         ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
@@ -124,7 +127,7 @@ class ttMLA:
         # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
         num_heads_local = self.num_heads // self.tp_factor
         joint_shard_dims = [None, None]
-        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+        joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
 
         self.joint_q = ttnn.from_torch(
             torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
@@ -319,11 +322,7 @@ class ttMLA:
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor) -> ttnn.Tensor:
-        mesh_size = self.mesh_device.shape
-        sp_factor = mesh_size[0]
-        tp_factor = mesh_size[1]
-
-        num_heads_local = self.num_heads // tp_factor
+        num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
         # q_projection
@@ -343,7 +342,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         tt_q = ttnn.experimental.all_gather_async(
@@ -353,7 +352,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -425,7 +424,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -485,7 +484,7 @@ class ttMLA:
             persistent_output_buffer_k=self.persistent_k_output_buffer,
             persistent_output_buffer_v=self.persistent_v_output_buffer,
             joint_strategy="rear",
-            logical_n=seq_len_local * sp_factor,
+            logical_n=seq_len_local * self.sp_factor,
             program_config=self._get_sdpa_program_config(seq_len_local),
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
@@ -493,9 +492,10 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
             is_causal=True,
             scale=self.scale,
             is_balanced=self.is_balanced,
@@ -515,7 +515,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
         return out
