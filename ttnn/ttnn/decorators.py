@@ -388,13 +388,13 @@ def _drain_traceback_ids():
         UnsafeAllocationTracker._tracebacks[buf_id] = stack
 
 
-if not os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS"):
+if os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") != "1":
 
     def _drain_traceback_ids():  # noqa: F811
         pass
 
 
-if os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS"):
+if os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") == "1" or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") == "1":
 
     def _push_allocation_context(name):
         from ttnn._ttnn.operations.trace import push_allocation_context
