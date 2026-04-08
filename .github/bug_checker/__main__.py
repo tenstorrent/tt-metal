@@ -15,7 +15,12 @@ from bug_checker.github_client import (
     fetch_pr_info,
 )
 from bug_checker.logger import set_verbose
-from bug_checker.orchestrator import run_bug_check
+from bug_checker.orchestrator import (
+    check_rule_command,
+    dry_run_command,
+    list_rules_command,
+    run_bug_check,
+)
 
 
 def main() -> int:
@@ -54,6 +59,18 @@ def main() -> int:
         help="Labels to simulate for rule matching (used with --branch).",
     )
     parser.add_argument(
+        "--subcommand",
+        choices=["run", "list-rules", "check-rule", "dry-run"],
+        default="run",
+        help="Subcommand: run (default), list-rules, check-rule, dry-run.",
+    )
+    parser.add_argument(
+        "--rule-id",
+        type=str,
+        default=None,
+        help="Rule ID to check (used with --subcommand check-rule).",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -65,11 +82,23 @@ def main() -> int:
     if args.verbose:
         set_verbose()
 
-    if not args.pr and args.branch is None:
-        parser.error("Either --pr or --branch is required.")
+    if args.subcommand == "check-rule" and not args.rule_id:
+        parser.error("--subcommand check-rule requires --rule-id.")
 
     if args.post_comments and not args.pr:
         parser.error("--post-comments requires --pr.")
+
+    # list-rules needs no PR or branch
+    if args.subcommand == "list-rules":
+        list_rules_command(
+            pr_number=args.pr,
+            post_comments=args.post_comments,
+        )
+        return 0
+
+    # All other subcommands need a diff source
+    if not args.pr and args.branch is None:
+        parser.error("Either --pr or --branch is required.")
 
     if args.pr:
         check_prerequisites(need_gh=True)
@@ -81,11 +110,24 @@ def main() -> int:
             pr_info.labels = args.labels
 
     sarif_path = Path(args.sarif) if args.sarif else None
-    findings = run_bug_check(
-        pr_info=pr_info,
-        sarif_path=sarif_path,
-        post_comments=args.post_comments,
-    )
+
+    if args.subcommand == "dry-run":
+        dry_run_command(pr_info=pr_info, post_comments=args.post_comments)
+        return 0
+
+    if args.subcommand == "check-rule":
+        findings = check_rule_command(
+            pr_info=pr_info,
+            rule_id=args.rule_id,
+            sarif_path=sarif_path,
+            post_comments=args.post_comments,
+        )
+    else:
+        findings = run_bug_check(
+            pr_info=pr_info,
+            sarif_path=sarif_path,
+            post_comments=args.post_comments,
+        )
 
     # Exit code: 1 if any blocking findings, 0 otherwise
     has_blocking = any(f.severity == "blocking" for f in findings)

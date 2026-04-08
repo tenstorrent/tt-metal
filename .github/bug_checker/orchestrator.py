@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from .github_client import PRInfo, diff_line_numbers, post_pr_comment
+from .github_client import PRInfo, diff_file_paths, diff_line_numbers, post_pr_comment
 from .llm import Finding, LLMSession
 from .logger import logger
 from .output import (
@@ -15,7 +15,7 @@ from .output import (
     print_findings,
     write_sarif,
 )
-from .rules import load_rules, select_rules
+from .rules import Rule, load_rules, select_rules
 
 
 def run_bug_check(
@@ -157,6 +157,152 @@ def _filter_diff_for_rule(diff: str, changed_files: list[str], rule) -> str:
         kept.extend(current_lines)
 
     return "".join(kept)
+
+
+def list_rules_command(
+    pr_number: int | None = None,
+    post_comments: bool = False,
+) -> None:
+    """List all rules from manifest with their metadata. No LLM call, no diff."""
+    all_rules = load_rules()
+    body = _format_list_rules(all_rules)
+    logger.info(body)
+
+    if post_comments and pr_number:
+        post_pr_comment(pr_number=pr_number, body=body)
+
+
+def check_rule_command(
+    pr_info: PRInfo,
+    rule_id: str,
+    sarif_path: Optional[Path] = None,
+    post_comments: bool = False,
+) -> list[Finding]:
+    """Run a single named rule against the PR. Error if rule not found."""
+    all_rules = load_rules()
+    rule = next((r for r in all_rules if r.id == rule_id), None)
+    if rule is None:
+        available = ", ".join(r.id for r in all_rules)
+        msg = f"Rule '{rule_id}' not found. Available rules: {available}"
+        logger.error(msg)
+        if post_comments:
+            post_pr_comment(
+                pr_number=pr_info.number,
+                body=f"## Bug Checker\n{msg}",
+            )
+        return []
+
+    logger.info(f"Running single rule: {rule.id}")
+
+    LLMSession()  # Preflight check
+
+    filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
+    if not filtered_diff:
+        msg = f"Rule `{rule.id}` has no matching diff sections in this PR."
+        logger.info(msg)
+        if post_comments:
+            post_pr_comment(pr_number=pr_info.number, body=f"## Bug Checker\n{msg}")
+        return []
+
+    session = LLMSession(model=rule.model or "")
+    findings = session.analyze_rule(
+        rule_content=rule.content,
+        rule_id=rule.id,
+        severity=rule.severity,
+        suggest_fix=rule.suggest_fix,
+        diff=filtered_diff,
+    )
+
+    print_findings(findings)
+    if sarif_path:
+        write_sarif(findings, [rule.id], sarif_path)
+    if post_comments:
+        _post_findings_as_comments(pr_info, findings, [], [])
+
+    return findings
+
+
+def dry_run_command(
+    pr_info: PRInfo,
+    post_comments: bool = False,
+) -> None:
+    """Show which rules match and what diff each would see. No LLM calls."""
+    all_rules = load_rules()
+    matched_rules = select_rules(all_rules, pr_info.changed_files, pr_info.labels)
+    body = _format_dry_run(all_rules, matched_rules, pr_info)
+    logger.info(body)
+
+    if post_comments:
+        post_pr_comment(pr_number=pr_info.number, body=body)
+
+
+def _format_list_rules(rules: list[Rule]) -> str:
+    """Format rule list as a markdown comment."""
+    lines = ["## Bug Checker — Available Rules\n"]
+    if not rules:
+        lines.append("No rules found in manifest.")
+        return "\n".join(lines)
+
+    lines.append(f"**{len(rules)} rule(s)** loaded from `manifest.yaml`:\n")
+    lines.append("| Rule ID | Severity | Suggest Fix | Paths | Labels |")
+    lines.append("|---------|----------|-------------|-------|--------|")
+    for r in rules:
+        paths = ", ".join(f"`{p}`" for p in r.paths) or "\u2014"
+        labels = ", ".join(f"`{l}`" for l in r.labels) or "\u2014"
+        fix = "Yes" if r.suggest_fix else "No"
+        lines.append(f"| `{r.id}` | {r.severity} | {fix} | {paths} | {labels} |")
+
+    return "\n".join(lines)
+
+
+def _format_dry_run(
+    all_rules: list[Rule],
+    matched_rules: list[Rule],
+    pr_info: PRInfo,
+) -> str:
+    """Format dry-run results as a markdown comment."""
+    lines = ["## Bug Checker — Dry Run\n"]
+
+    matched_ids = {r.id for r in matched_rules}
+    unmatched = [r for r in all_rules if r.id not in matched_ids]
+
+    lines.append(f"**PR:** #{pr_info.number} — {pr_info.title}")
+    lines.append(f"**Changed files:** {len(pr_info.changed_files)}")
+    lines.append(f"**Labels:** {', '.join(pr_info.labels) or '(none)'}")
+    lines.append(f"**Rules matched:** {len(matched_rules)} of {len(all_rules)}\n")
+
+    if not matched_rules:
+        lines.append("No rules matched this PR.")
+        return "\n".join(lines)
+
+    for rule in matched_rules:
+        reason = rule.match_reason(pr_info.changed_files, pr_info.labels)
+        filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
+        diff_files = diff_file_paths(filtered_diff) if filtered_diff else set()
+        diff_line_count = len(filtered_diff.splitlines()) if filtered_diff else 0
+
+        lines.append(f"### `{rule.id}` ({rule.severity})")
+        lines.append(f"- **Match reason:** {reason}")
+        lines.append(
+            f"- **Diff sections:** {len(diff_files)} file(s), {diff_line_count} line(s)"
+        )
+        if diff_files:
+            for f in sorted(diff_files):
+                lines.append(f"  - `{f}`")
+        else:
+            lines.append(
+                "  - (no diff sections — rule matched by label only or all matched files were truncated)"
+            )
+        lines.append("")
+
+    if unmatched:
+        lines.append("### Unmatched Rules\n")
+        for rule in unmatched:
+            paths = ", ".join(f"`{p}`" for p in rule.paths) or "(none)"
+            labels = ", ".join(f"`{l}`" for l in rule.labels) or "(none)"
+            lines.append(f"- `{rule.id}` — paths: {paths}, labels: {labels}")
+
+    return "\n".join(lines)
 
 
 def _post_findings_as_comments(

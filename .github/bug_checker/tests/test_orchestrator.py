@@ -38,16 +38,19 @@ index 111..222 100644
 """
 
 
-def test_returns_empty_when_no_files_match():
+def test_returns_full_diff_when_no_files_match_paths():
+    """When no changed files match the rule's path globs, the rule was selected
+    by label only — return the full diff so label-only rules still run."""
     rule = _rule(["ttnn/cpp/**"])
     result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp", "baz/qux.cpp"], rule)
-    assert result == ""
+    assert result == DIFF_TWO_FILES
 
 
-def test_returns_empty_when_changed_files_list_is_empty():
+def test_returns_full_diff_when_changed_files_list_is_empty():
+    """Empty changed_files means no path match is possible — same label-only fallback."""
     rule = _rule(["foo/**"])
     result = _filter_diff_for_rule(DIFF_TWO_FILES, [], rule)
-    assert result == ""
+    assert result == DIFF_TWO_FILES
 
 
 def test_keeps_only_matching_section():

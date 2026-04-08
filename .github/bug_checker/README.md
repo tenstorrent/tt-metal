@@ -134,6 +134,23 @@ python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 - `BUG_CHECKER_API_KEY` or `ANTHROPIC_API_KEY` — Claude API key
 - `BUG_CHECKER_MODEL` — Override the default model (default: `claude-sonnet-4-6`)
 
+## Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `/bug-check` | Run all matching rules (default) |
+| `/bug-check list-rules` | List all rules with their severity, paths, and labels |
+| `/bug-check check-rule <id>` | Run only the named rule against the PR |
+| `/bug-check dry-run` | Show which rules match and what diff sections each would analyze (no LLM calls) |
+
+CLI equivalents:
+
+```bash
+python .github/bug_checker/run_bug_checker.py --subcommand list-rules
+python .github/bug_checker/run_bug_checker.py --pr 12345 --subcommand check-rule --rule-id ccl-ring-buffer-mismatch
+python .github/bug_checker/run_bug_checker.py --branch --subcommand dry-run
+```
+
 ## Adding a New Rule
 
 1. **Write the rule markdown** in `.github/bug_checker/rules/your-rule-name.md`. Copy `rules/template-rule.md` and fill in each section:
