@@ -5,10 +5,11 @@
 #pragma once
 
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 #include <memory>
 #include <optional>
-#include <functional>
 #include <concepts>
 #include <variant>
 #include "ttnn/distributed/types.hpp"
@@ -167,12 +168,122 @@ struct MeshDeviceOperationAdapter {
         }
     };
 
+    // -----------------------------------------------------------------------
+    // DescriptorMeshWorkloadFactoryAdapter
+    //
+    // Adapts a ProgramDescriptorFactoryConcept factory for mesh dispatch.
+    // The developer writes ONLY create_descriptor (and optionally
+    // prepare_resources / post_create_validation).
+    //
+    // The descriptor is created fresh on every dispatch.  On cache miss
+    // the framework builds a Program from it;
+    // on cache hit the generic apply_descriptor_runtime_args() copies all
+    // runtime args from the fresh descriptor into the cached Program.
+    // No override_runtime_arguments, no address scanning, no patching logic.
+    // -----------------------------------------------------------------------
+    template <ProgramDescriptorFactoryConcept DescriptorFactory>
+    struct DescriptorMeshWorkloadFactoryAdapter {
+        // --- Optional hook detection ---
+
+        static constexpr bool has_prepare_resources =
+            requires(const operation_attributes_t& a, const tensor_args_t& t, tensor_return_value_t& r) {
+                DescriptorFactory::prepare_resources(a, t, r);
+            };
+
+    private:
+        template <bool HasHook, typename = void>
+        struct ResourceTypeHelper {
+            using type = std::monostate;
+        };
+        template <typename Dummy>
+        struct ResourceTypeHelper<true, Dummy> {
+            using type = decltype(DescriptorFactory::prepare_resources(
+                std::declval<const operation_attributes_t&>(),
+                std::declval<const tensor_args_t&>(),
+                std::declval<tensor_return_value_t&>()));
+        };
+
+    public:
+        using resource_t = typename ResourceTypeHelper<has_prepare_resources>::type;
+
+        static constexpr bool has_post_create_validation = requires(
+            tt::tt_metal::Program& p,
+            const operation_attributes_t& a,
+            const tensor_args_t& t,
+            tensor_return_value_t& r) { DescriptorFactory::post_create_validation(p, a, t, r); };
+
+        struct shared_variables_t {
+            [[no_unique_address]] resource_t resources{};
+        };
+        using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static tt::tt_metal::ProgramDescriptor invoke_create_descriptor(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            resource_t& resources) {
+            if constexpr (has_prepare_resources) {
+                return DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value, resources);
+            } else {
+                return DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+            }
+        }
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+            for (const auto& range : tensor_coords.ranges()) {
+                resource_t resources{};
+                if constexpr (has_prepare_resources) {
+                    resources = DescriptorFactory::prepare_resources(attrs, tensor_args, tensor_return_value);
+                }
+
+                auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
+                tt::tt_metal::Program program{desc};
+
+                if constexpr (has_post_create_validation) {
+                    DescriptorFactory::post_create_validation(program, attrs, tensor_args, tensor_return_value);
+                }
+
+                mesh_workload.add_program(range, std::move(program));
+                shared_variables[range] = shared_variables_t{.resources = std::move(resources)};
+            }
+            return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+        }
+
+        static void apply_descriptor(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, sv.resources);
+                tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+            }
+        }
+    };
+
     static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
-        auto hash = compute_program_hash(attrs, tensor_args);
+        const tensor_args_t& tensor_args,
+        [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+        ttsl::hash::hash_t hash;
+
+        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else {
+            hash =
+                ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+        }
+
+        // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             hash = ttsl::hash::hash_objects(hash, coord);
         }

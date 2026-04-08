@@ -5,6 +5,7 @@
 #include "bernoulli_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::bernoulli {
 
@@ -57,6 +58,16 @@ ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
     auto cached_operation_attributes = operation_attributes;
     cached_operation_attributes.seed = 0;
     return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+}
+
+ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<BernoulliDeviceOperation>,
+        attrs.dtype,
+        attrs.memory_config,
+        attrs.compute_kernel_config,
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::bernoulli

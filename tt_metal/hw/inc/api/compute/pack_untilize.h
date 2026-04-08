@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -62,18 +63,21 @@ template <
     bool dense = false>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
-#endif
-    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-
+#endif  // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
+#else
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
+#endif
 }
 
 // clang-format off
@@ -100,20 +104,25 @@ ALWI void pack_untilize_dest_init(
  *
  * Return value: None
  *
- * | Param Type | Name         | Description                                | Type      | Valid Range     | Required |
- * |------------|--------------|--------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | Divisible by block_ct_dim | False    |
- * | Function   | icb          | Input circular buffer identifier           | uint32_t  | 0 to 31         | True     |
- * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31         | True     |
+ * | Param Type | Name         | Description                                | Type      | Valid Range               | Required                |
+ * |------------|--------------|--------------------------------------------|-----------|---------------------------|-------------------------|
+ * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to max (see note)       | False (default = 8)     |
+ * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | Divisible by block_ct_dim | False                   |
+ * | Function   | icb          | Input circular buffer identifier           | uint32_t  | 0 to 31                   | True                    |
+ * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
  */
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+#else
+    UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+#endif
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }
 
@@ -132,14 +141,14 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
  *
  * Return value: None
  *
- * | Param Type | Name         | Description                                 | Type      | Valid Range     | Required |
- * |------------|--------------|---------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles            | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles              | uint32_t  | Divisible by block_ct_dim | False    |
- * | Function   | icb          | Input circular buffer identifier            | uint32_t  | 0 to 31         | True     |
- * | Function   | block_rt_dim | Height of a single block in tiles           | uint32_t  | >= 1            | True     |
- * | Function   | ocb          | Output circular buffer identifier           | uint32_t  | 0 to 31         | True     |
- * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | >= 0            | False    |
+ * | Param Type | Name         | Description                                 | Type      | Valid Range               | Required            |
+ * |------------|--------------|---------------------------------------------|-----------|---------------------------|---------------------|
+ * | Template   | block_ct_dim | Width of a single block in tiles            | uint32_t  | 1 to max (see note)       | False (default = 8) |
+ * | Template   | full_ct_dim  | Width of a full input in tiles              | uint32_t  | Divisible by block_ct_dim | False               |
+ * | Function   | icb          | Input circular buffer identifier            | uint32_t  | 0 to 31                   | True                |
+ * | Function   | block_rt_dim | Height of a single block in tiles           | uint32_t  | >= 1                      | True                |
+ * | Function   | ocb          | Output circular buffer identifier           | uint32_t  | 0 to 31                   | True                |
+ * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | >= 0                      | False               |
  */
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
@@ -147,15 +156,23 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
+#ifndef ARCH_QUASAR
             UNPACK(
                 (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
             MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(c)));
+#else
+            UNPACK((llk_unpack_A(icb, c)));
+            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
+#endif
         }
-
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-
+#ifndef ARCH_QUASAR
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
+#else
+        PACK((llk_packer_wait_for_math_done()));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+#endif
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
@@ -208,8 +225,12 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
+#ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
+#else
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
+#endif
 }
 
 // clang-format off
@@ -229,15 +250,19 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-    PACK((llk_init_packer_dest_offset_registers<false>()));
-
+#ifndef ARCH_QUASAR
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
+    PACK((llk_init_packer_dest_offset_registers<false>()));
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
+#endif
+#else
+    // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
+    // don't conflict with standard PACR paths, so no reconfiguration is needed.
 #endif
 }
 

@@ -229,14 +229,18 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
         ttsl::overloaded{
             [&]<ProgramFactoryConcept T>(const T&) {
-                // Adapt ProgramFactory to MeshWorkloadFactory concept.
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<ProgramDescriptorFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory =
+                    mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -264,22 +268,21 @@ void handle_mesh_adapter_cache_hit(
     auto program_factory = map_index_to_variant(
         program_factory_index, mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
 
-    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
-        program_factory, [&]<MeshWorkloadFactoryConcept WorkloadFactory>() {
-            using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
-            auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
+        using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+        auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
+        if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+            WorkloadFactory::apply_descriptor(
+                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        } else {
             WorkloadFactory::override_runtime_arguments(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        }
 
-            enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes,
-                tensor_args,
-                tensor_return_value,
-                mesh_device,
-                cached_mesh_workload.workload,
-                true);
-        });
+        enqueue_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
+    });
 }
 
 // Helper for creating and caching a mesh workload
@@ -301,7 +304,7 @@ void create_and_cache_mesh_workload(
             "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
     };
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
-        program_factory, [&]<MeshWorkloadFactoryConcept WorkloadFactory>() {
+        program_factory, [&]<typename WorkloadFactory>() {
             using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
 
             ttnn::MeshCoordinateRangeSet tensor_coords;
@@ -374,8 +377,8 @@ void launch_operation_with_adapter(
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
         // Use device_operation's compute_program_hash if available
-        program_hash =
-            mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
+        program_hash = mesh_device_operation_t::compute_mesh_workload_hash(
+            mesh_device, operation_attributes, tensor_args, tensor_return_value);
         program_cache_hit = program_cache.contains(program_hash);
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
