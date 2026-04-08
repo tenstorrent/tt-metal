@@ -24,7 +24,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.inworld_tts.reference.functional import (
     activation1d_forward,
-    encoder_block_forward,
     weight_norm_compute,
 )
 from models.demos.inworld_tts.tt.model_config import ENCODER_CHANNELS, ENCODER_STRIDES, get_compute_kernel_config_hifi4
@@ -42,13 +41,11 @@ def ttnn_snake_beta(x, alpha, beta):
     return x + (1.0 / beta) * ttnn.pow(ttnn.sin(alpha * x), 2)
 
 
-class TtActivation1dTTNN(LightweightModule):
-    """Anti-aliased SnakeBeta activation using TTNN operations.
+class TtActivation1d(LightweightModule):
+    """Anti-aliased SnakeBeta activation using CPU reference implementation.
 
-    TTNN implementation:
-    - Upsample 2x: ttnn.conv_transpose2d (with height=1 to mimic conv_transpose1d)
-    - SnakeBeta activation using TTNN ops
-    - Downsample 2x: ttnn.conv1d with stride=2
+    CPU implementation that wraps activation1d_forward for compatibility with
+    TtEncoderResidualUnit and TtEncoderBlock classes.
     """
 
     def __init__(
@@ -59,47 +56,28 @@ class TtActivation1dTTNN(LightweightModule):
         down_filter: torch.Tensor,
         device,
     ):
-        """Initialize anti-aliased SnakeBeta activation with TTNN.
+        """Initialize anti-aliased SnakeBeta activation.
 
         Args:
             alpha: [C] SnakeBeta alpha parameter
             beta: [C] SnakeBeta beta parameter
             up_filter: [1, 1, K] FIR upsampling filter
             down_filter: [1, 1, K] FIR lowpass/downsampling filter
-            device: TTNN device
+            device: TTNN device (unused, for API compatibility)
         """
         super().__init__()
         self.device = device
         
-        # Store parameters
-        self.alpha = ttnn.from_torch(alpha, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        self.beta = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        self.up_kernel = ttnn.from_torch(up_filter.squeeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)  # Will be expanded per call
-        self.down_kernel = ttnn.from_torch(down_filter.squeeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)  # Will be expanded per call
-        self.K_up = self.up_kernel.shape[-1]
-        self.K_down = self.down_kernel.shape[-1]
-        
-        # Compute padding
-        self.pad_left = self.K_up // 2
-        self.pad_right = self.K_up // 2 - 1 if self.K_up % 2 == 0 else self.K_up // 2
-        self.pad_w = (self.K_up - 2) // 2
-        
-        # Conv2d configuration (reusable)
-        self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.float32,
-            deallocate_activation=False,
-            output_layout=ttnn.TILE_LAYOUT,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            act_block_h_override=32,
-        )
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-        )
+        # Store parameters as torch tensors for CPU computation
+        self.alpha = ttnn.from_torch(alpha)
+        self.beta =  ttnn.from_torch(beta)
+        up_filter = up_filter.squeeze(0).expand(C, -1, -1)  # [C, 1, K]
+        down_filter = down_filter.squeeze(0).expand(C, -1, -1)  # [C, 1, K]
+        self.up_filter = ttnn.from_torch(up_filter * 2)
+        self.down_filter = ttnn.from_torch(down_filter)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply anti-aliased SnakeBeta activation using TTNN.
+        """Apply anti-aliased SnakeBeta activation using CPU reference.
 
         Args:
             x: [B, C, T] input tensor (torch)
@@ -109,21 +87,20 @@ class TtActivation1dTTNN(LightweightModule):
         B, C, T = x.shape
 
         # Expand kernels for this batch
-        up_kernel = self.up_kernel.expand(C, -1, -1)  # [C, 1, K]
-        down_kernel = self.down_kernel.expand(C, -1, -1)  # [C, 1, K]
+        # up_kernel = self.up_kernel.expand(C, -1, -1)  # [C, 1, K]
+        # down_kernel = self.down_kernel.expand(C, -1, -1)  # [C, 1, K]
 
         # === UPSAMPLE using TTNN ConvTranspose2D (height=1 for 1D operation) ===
         # Reshape input for 2D conv: [B, C, T] -> [B, 1, T, C] (NHWC with H=1)
-        x_nhwc = x.unsqueeze(1).permute(0, 1, 3, 2)  # [B, 1, T, C]
-        x_ttnn = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # x_nhwc = x.unsqueeze(1).permute(0, 1, 3, 2)  # [B, 1, T, C]
         
         # Prepare weight for conv_transpose2d: [C, 1, 1, K] (IOHW format)
-        up_weight_2d = up_kernel.unsqueeze(2) * 2.0  # [C, 1, 1, K]
+        # up_weight_2d = up_kernel.unsqueeze(2) * 2.0  # [C, 1, 1, K]
         
         # ConvTranspose2D with height=1, width=T, stride=(1,2) for 2x upsampling in width
-        x_up_ttnn, [out_h, out_w], [self.up_kernel, _] = ttnn.conv_transpose2d(
-            input_tensor=x_ttnn,
-            weight_tensor=self.up_kernel,  # [C, 1, 1, K]
+        x_up_ttnn, [out_h, out_w], [self.up_filter, _] = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=self.up_filter,  # [C, 1, 1, K]
             in_channels=C,
             out_channels=C,
             device=self.device,
@@ -152,9 +129,9 @@ class TtActivation1dTTNN(LightweightModule):
         # Prepare downsampling kernel
         
         # Apply downsampling filter with stride=2 via TTNN
-        x_down_ttnn, out_len, [self.down_kernel, _] = ttnn.conv1d(
+        x_down_ttnn, out_len, [self.down_filter, _] = ttnn.conv1d(
             input_tensor=x_act,
-            weight_tensor=self.down_kernel,
+            weight_tensor=self.down_filter,
             in_channels=C,
             out_channels=C,
             device=self.device,
@@ -181,119 +158,6 @@ class TtActivation1dTTNN(LightweightModule):
         return x_down_ttnn
 
 
-# Legacy function wrapper for backward compatibility
-def activation1d_forward_ttnn(
-    x: torch.Tensor,
-    alpha: torch.Tensor,
-    beta: torch.Tensor,
-    up_filter: torch.Tensor,
-    down_filter: torch.Tensor,
-    device,
-) -> torch.Tensor:
-    """Anti-aliased SnakeBeta activation using TTNN operations.
-    
-    Legacy function wrapper. Consider using TtActivation1dTTNN class instead.
-    """
-    activator = TtActivation1dTTNN(alpha, beta, up_filter, down_filter, device)
-    return activator.forward(x)
-
-
-
-class TtActivation1d(LightweightModule):
-    """Anti-aliased SnakeBeta activation using TTNN ops where possible.
-    
-    Pipeline: Upsample 2x -> SnakeBeta -> Downsample 2x to avoid aliasing.
-    SnakeBeta: x + (1/beta) * sin^2(alpha * x)
-    
-    Due to the custom anti-aliasing with FIR filters and complex upsampling/downsampling,
-    this currently falls back to CPU but accepts/returns tensors compatible with TTNN pipeline.
-    """
-    
-    def __init__(
-        self,
-        alpha: torch.Tensor,
-        beta: torch.Tensor,
-        up_filter: torch.Tensor,
-        down_filter: torch.Tensor,
-        device=None,
-    ):
-        """Initialize anti-aliased SnakeBeta activation.
-        
-        Args:
-            alpha: [C] SnakeBeta alpha parameter
-            beta: [C] SnakeBeta beta parameter
-            up_filter: [1, 1, K] FIR upsampling filter
-            down_filter: [1, 1, K] FIR lowpass/downsampling filter
-            device: Optional TTNN device (for future acceleration)
-        """
-        super().__init__()
-        # Store as torch tensors for CPU computation
-        self.alpha = alpha
-        self.beta = beta
-        self.up_filter = up_filter
-        self.down_filter = down_filter
-        self.device = device
-    
-    def _snake_beta_ttnn(self, x: torch.Tensor) -> torch.Tensor:
-        """SnakeBeta activation: x + (1/beta) * sin^2(alpha * x).
-        
-        Args:
-            x: [B, C, T] input tensor
-        Returns:
-            [B, C, T] activated tensor
-        """
-        # Reshape alpha and beta for broadcasting: [C] -> [1, C, 1]
-        alpha = self.alpha.unsqueeze(0).unsqueeze(-1)  # [1, C, 1]
-        beta = self.beta.unsqueeze(0).unsqueeze(-1)  # [1, C, 1]
-        
-        # SnakeBeta: x + (1/beta) * sin^2(alpha * x)
-        scaled = alpha * x
-        sin_val = torch.sin(scaled)
-        sin_sq = sin_val * sin_val
-        result = x + (1.0 / beta) * sin_sq
-        
-        return result
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply anti-aliased SnakeBeta activation.
-        
-        Handles both torch.Tensor and ttnn.Tensor inputs.
-        For ttnn inputs, converts to torch, processes, and converts back.
-        
-        Args:
-            x: [B, C, T] input tensor (channels-first) - torch.Tensor or ttnn.Tensor
-        Returns:
-            [B, C, T] activated tensor in same format as input
-        """
-        # Check if input is TTNN tensor
-        is_ttnn_input = hasattr(x, 'device') and hasattr(x.device, 'arch')
-        
-        # Convert TTNN to torch if needed
-        if is_ttnn_input:
-            x_torch = ttnn.to_torch(x)
-        else:
-            x_torch = x
-        
-        # Run CPU-based anti-aliased activation using reference implementation
-        # (FIR filtering with zero insertion/decimation is complex to implement in TTNN)
-        result = activation1d_forward(
-            x_torch,
-            self.alpha,
-            self.beta,
-            self.up_filter,
-            self.down_filter,
-        )
-        
-        # Convert back to TTNN if input was TTNN
-        if is_ttnn_input and self.device is not None:
-            result = ttnn.from_torch(
-                result,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-        
-        return result
 
 
 class TtConv1d(LightweightModule):
@@ -365,6 +229,173 @@ class TtConv1d(LightweightModule):
         output_torch = output_torch.float()
         
         return output_torch
+
+
+class TtEncoderResidualUnit(LightweightModule):
+    """TTNN implementation of Encoder ResidualUnit.
+    
+    Architecture: Activation1d -> Conv1d(k=7) -> Activation1d -> Conv1d(k=1) + skip
+    Uses TtActivation1d and TtConv1d for CPU-based operations.
+    """
+    
+    def __init__(self, weights: Dict[str, torch.Tensor], device):
+        """Initialize encoder residual unit.
+        
+        Args:
+            weights: Dict with keys:
+                act1_alpha, act1_beta, act1_up_filter, act1_down_filter,
+                conv1_weight, conv1_bias,
+                act2_alpha, act2_beta, act2_up_filter, act2_down_filter,
+                conv2_weight, conv2_bias
+            device: TTNN device
+        """
+        super().__init__()
+        self.device = device
+        
+        # First activation (anti-aliased SnakeBeta)
+        self.act1 = TtActivation1d(
+            alpha=weights["act1_alpha"],
+            beta=weights["act1_beta"],
+            up_filter=weights["act1_up_filter"],
+            down_filter=weights["act1_down_filter"],
+            device=device,
+        )
+        
+        # First conv: k=7, pad=3
+        C_in = weights["conv1_weight"].shape[1]  # input channels
+        C_out = weights["conv1_weight"].shape[0]  # output channels
+        self.conv1 = TtConv1d(
+            in_channels=C_in,
+            out_channels=C_out,
+            weight=weights["conv1_weight"],
+            bias=weights["conv1_bias"],
+            kernel_size=7,
+            padding=3,
+            device=device,
+        )
+        
+        # Second activation (anti-aliased SnakeBeta)
+        self.act2 = TtActivation1d(
+            alpha=weights["act2_alpha"],
+            beta=weights["act2_beta"],
+            up_filter=weights["act2_up_filter"],
+            down_filter=weights["act2_down_filter"],
+            device=device,
+        )
+        
+        # Second conv: k=1, pad=0
+        C_in2 = weights["conv2_weight"].shape[1]
+        C_out2 = weights["conv2_weight"].shape[0]
+        self.conv2 = TtConv1d(
+            in_channels=C_in2,
+            out_channels=C_out2,
+            weight=weights["conv2_weight"],
+            bias=weights["conv2_bias"],
+            kernel_size=1,
+            padding=0,
+            device=device,
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply residual unit: act1 -> conv1 -> act2 -> conv2 + skip.
+        
+        Args:
+            x: [B, C, T] input tensor
+        Returns:
+            [B, C, T] output tensor
+        """
+        # First activation + conv
+        h = self.act1(x)
+        h = self.conv1(h)
+        
+        # Second activation + conv
+        h = self.act2(h)
+        h = self.conv2(h)
+        
+        # Residual connection
+        return x + h
+
+
+class TtEncoderBlock(LightweightModule):
+    """TTNN implementation of Encoder Block.
+    
+    Architecture: 3x ResidualUnit -> Activation1d -> Downsampling Conv1d
+    Uses TtEncoderResidualUnit, TtActivation1d, and TtConv1d.
+    """
+    
+    def __init__(self, weights: Dict[str, torch.Tensor], stride: int, device):
+        """Initialize encoder block.
+        
+        Args:
+            weights: Dict with keys:
+                res_{0,1,2}_* (for 3 residual units),
+                act_alpha, act_beta, act_up_filter, act_down_filter,
+                downsample_weight, downsample_bias
+            stride: Downsampling stride (2, 4, or 5)
+            device: TTNN device
+        """
+        super().__init__()
+        self.device = device
+        self.stride = stride
+        
+        # Create 3 residual units
+        self.residual_units = []
+        for i in range(3):
+            prefix = f"res_{i}_"
+            res_weights = {k[len(prefix):]: v for k, v in weights.items() if k.startswith(prefix)}
+            self.residual_units.append(TtEncoderResidualUnit(res_weights, device))
+        
+        # Final activation before downsampling
+        self.final_activation = TtActivation1d(
+            alpha=weights["act_alpha"],
+            beta=weights["act_beta"],
+            up_filter=weights["act_up_filter"],
+            down_filter=weights["act_down_filter"],
+            device=device,
+        )
+        
+        # Downsampling conv: kernel_size = stride * 2
+        kernel_size = stride * 2
+        pad_total = kernel_size - stride
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        
+        # Note: For downsampling, we need to handle padding externally since
+        # asymmetric padding (pad_left != pad_right) requires F.pad
+        self.pad_left = pad_left
+        self.pad_right = pad_right
+        
+        C_in = weights["downsample_weight"].shape[1]  # input channels
+        C_out = weights["downsample_weight"].shape[0]  # output channels
+        
+        # Store downsampling parameters for manual conv computation
+        # (TtConv1d doesn't support variable stride, so we'll use reference for now)
+        self.downsample_weight = weights["downsample_weight"]
+        self.downsample_bias = weights["downsample_bias"]
+        self.kernel_size = kernel_size
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply encoder block: 3x residual -> activation -> downsample.
+        
+        Args:
+            x: [B, C_in, T] input tensor
+        Returns:
+            [B, C_out, T // stride] output tensor
+        """
+        # Apply 3 residual units
+        for res_unit in self.residual_units:
+            x = res_unit(x)
+        
+        # Apply final activation
+        x = self.final_activation(x)
+        
+        # Apply downsampling conv (with asymmetric padding)
+        x = F.pad(x, (self.pad_left, self.pad_right))
+        x = F.conv1d(x, self.downsample_weight, self.downsample_bias, stride=self.stride)
+        
+        return x
+
+
 class TtAcousticEncoder(LightweightModule):
     """AcousticEncoder -- Conv1d chains with SnakeBeta activation.
 
@@ -394,14 +425,14 @@ class TtAcousticEncoder(LightweightModule):
             device=device,
         )
 
-        # Precompute all encoder block weights
-        self.block_weights = []
+        # Create 5 encoder blocks
+        self.encoder_blocks = []
         for block_idx in range(5):
             prefix = f"conv_blocks.{block_idx + 1}."
             from models.demos.inworld_tts.reference.functional import _extract_encoder_block_weights
 
-            bw = _extract_encoder_block_weights(state_dict, prefix, self.channels[block_idx])
-            self.block_weights.append(bw)
+            block_weights = _extract_encoder_block_weights(state_dict, prefix, self.channels[block_idx])
+            self.encoder_blocks.append(TtEncoderBlock(block_weights, self.strides[block_idx], device))
 
         # Precompute final block weights
         final_prefix = "conv_final_block."
@@ -428,7 +459,7 @@ class TtAcousticEncoder(LightweightModule):
         )
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Forward pass on CPU with precomputed weights.
+        """Forward pass using TtEncoderBlock instances.
 
         Args:
             waveform: [B, 1, samples] input audio
@@ -437,10 +468,10 @@ class TtAcousticEncoder(LightweightModule):
         """
         # Initial conv: Conv1d(1, 48, k=7, pad=3)
         x = self.initial_conv1d(waveform)
-        return x
+        
         # 5 encoder blocks with progressive downsampling
-        for block_idx in range(5):
-            x = encoder_block_forward(x, self.block_weights[block_idx], self.strides[block_idx])
+        for encoder_block in self.encoder_blocks:
+            x = encoder_block(x)
 
         # Final block: SnakeBeta(1536) + Conv1d(1536, 1024, k=3)
         x = self.final_activation(x)

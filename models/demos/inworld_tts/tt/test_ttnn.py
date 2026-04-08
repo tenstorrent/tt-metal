@@ -132,7 +132,7 @@ ACOUSTIC_FIR_LEN = 12
 def _acoustic_snake_act_sd(sd: dict, p: str, channels: int, k_fir: int = ACOUSTIC_FIR_LEN) -> None:
     """Add Activation1d (SnakeBeta + FIR) keys at prefix p (must end with '.')."""
     sd[p + "act.alpha"] = _bf16(torch.randn(channels))
-    sd[p + "act.beta"] = _bf16(torch.rand(channels) + 4.1)  # beta=1 is a common default
+    sd[p + "act.beta"] = _bf16(torch.rand(channels) + 1.1)  # beta=1 is a common default
     sd[p + "upsample.filter"] = _bf16(torch.randn(1, 1, k_fir) / 4)
     sd[p + "downsample.lowpass.filter"] = _bf16(torch.randn(1, 1, k_fir) / 4)
 
@@ -376,6 +376,9 @@ class TestTtAcousticEncoder:
         tt_out = tt_enc(x)
 
         pcc = compute_pcc(ref_out, tt_out)
+        print(f"Ref mean = {ref_out.mean().item():.6f}, TTNN mean = {tt_out.mean().item():.6f}")
+        print(f"Ref max = {ref_out.max().item():.6f}, TTNN max = {tt_out.max().item():.6f}")
+        print(f"Ref min = {ref_out.min().item():.6f}, TTNN min = {tt_out.min().item():.6f}")
         print(f"AcousticEncoder PCC: {pcc:.6f}")
         assert pcc > 0.99, f"AcousticEncoder PCC {pcc:.6f} < 0.99"
 
