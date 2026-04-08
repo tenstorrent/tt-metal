@@ -20,11 +20,11 @@ void kernel_main() {
     uint32_t do_col_receive = get_arg_val<uint32_t>(rt++);
     uint32_t do_col_send = get_arg_val<uint32_t>(rt++);
     uint32_t is_origin = get_arg_val<uint32_t>(rt++);
-    // Chain neighbor coords (left for row send, up for col send)
-    uint32_t left_phys_x = get_arg_val<uint32_t>(rt++);
-    uint32_t left_phys_y = get_arg_val<uint32_t>(rt++);
-    uint32_t up_phys_x = get_arg_val<uint32_t>(rt++);
-    uint32_t up_phys_y = get_arg_val<uint32_t>(rt++);
+    // Chain neighbor coords (right for row send, down for col send)
+    uint32_t right_phys_x = get_arg_val<uint32_t>(rt++);
+    uint32_t right_phys_y = get_arg_val<uint32_t>(rt++);
+    uint32_t down_phys_x = get_arg_val<uint32_t>(rt++);
+    uint32_t down_phys_y = get_arg_val<uint32_t>(rt++);
     // Multicast broadcast args
     uint32_t bcast_sem_id = get_arg_val<uint32_t>(rt++);
     uint32_t norm_scalar_sem_id = get_arg_val<uint32_t>(rt++);
@@ -74,7 +74,7 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // Row chain reduction (right -> left)
+    // Row chain reduction (left -> right) — NOC_0 natural direction
     // =========================================================================
     if (do_row_receive) {
         noc_semaphore_wait(chain_sem_ptr, 1);
@@ -86,16 +86,16 @@ void kernel_main() {
         cb_wait_front(cb_scalar, 1);
         uint32_t src_l1 = get_read_ptr(cb_scalar);
         uint32_t dst_cb_recv_l1 = get_write_ptr(cb_recv);
-        uint64_t dst_noc_addr = get_noc_addr(left_phys_x, left_phys_y, dst_cb_recv_l1);
+        uint64_t dst_noc_addr = get_noc_addr(right_phys_x, right_phys_y, dst_cb_recv_l1);
         noc_async_write(src_l1, dst_noc_addr, fp32_tile_bytes);
         noc_async_write_barrier();
-        uint64_t dst_sem_noc = get_noc_addr(left_phys_x, left_phys_y, chain_sem_addr);
+        uint64_t dst_sem_noc = get_noc_addr(right_phys_x, right_phys_y, chain_sem_addr);
         noc_semaphore_inc(dst_sem_noc, 1);
         cb_pop_front(cb_scalar, 1);
     }
 
     // =========================================================================
-    // Column chain reduction (bottom -> top, row leaders only)
+    // Column chain reduction (top -> bottom, rightmost column)
     // =========================================================================
     if (do_col_receive) {
         noc_semaphore_wait(chain_sem_ptr, 1);
@@ -107,10 +107,10 @@ void kernel_main() {
         cb_wait_front(cb_scalar, 1);
         uint32_t src_l1 = get_read_ptr(cb_scalar);
         uint32_t dst_cb_recv_l1 = get_write_ptr(cb_recv);
-        uint64_t dst_noc_addr = get_noc_addr(up_phys_x, up_phys_y, dst_cb_recv_l1);
+        uint64_t dst_noc_addr = get_noc_addr(down_phys_x, down_phys_y, dst_cb_recv_l1);
         noc_async_write(src_l1, dst_noc_addr, fp32_tile_bytes);
         noc_async_write_barrier();
-        uint64_t dst_sem_noc = get_noc_addr(up_phys_x, up_phys_y, chain_sem_addr);
+        uint64_t dst_sem_noc = get_noc_addr(down_phys_x, down_phys_y, chain_sem_addr);
         noc_semaphore_inc(dst_sem_noc, 1);
         cb_pop_front(cb_scalar, 1);
     }
