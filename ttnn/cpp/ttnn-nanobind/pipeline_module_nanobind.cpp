@@ -30,15 +30,11 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
 
     mod.def(
         "generate_blitz_decode_pipeline",
-        [](tt::tt_metal::distributed::MeshDevice& mesh_device) {
-            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(mesh_device);
-        },
-        nb::arg("mesh_device"),
+        []() { return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(); },
         R"doc(
-            Generate the Blitz decode pipeline stages for the provided mesh device.
+            Generate the Blitz decode pipeline stages.
 
-            Args:
-                mesh_device (MeshDevice): Mesh device for which to generate the pipeline stages.
+            Pipeline topology is derived from the control plane's inter-mesh connectivity.
 
             Returns:
                 List[BlitzDecodePipelineStage]: Ordered pipeline stages for Blitz decode.

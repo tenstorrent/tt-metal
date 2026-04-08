@@ -29,9 +29,13 @@ void kernel_main() {
     experimental::Noc noc;
 
     // TODO: Replace with get_thread_idx() kernel API when available
+#ifdef ARCH_QUASAR
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
+#else
+    uint32_t producer_idx = 0;
+#endif
 
     // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
     // ENDL(); DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);

@@ -227,7 +227,7 @@ class Pipeline:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
         self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
