@@ -109,17 +109,33 @@ class TtActivation1dTTNN(LightweightModule):
             fp32_dest_acc_en=True,
         )
 
-        # Cached device weights
+        # Cached device weights (populated on first forward, used for trace)
         self._up_cached_w = None
         self._up_cached_b = None
         self._down_cached_w = None
         self._down_cached_b = None
 
+        # Pre-allocated zeros for trace compatibility (populated by prepare_for_trace)
+        self._zeros_cache = {}  # (T, C) -> ttnn zeros tensor
+        self._trace_mode = False
+
+    def prepare_for_trace(self, T):
+        """Prepare for trace capture: pre-allocate zeros and lock conv weights.
+
+        Must be called after a warmup forward (to populate conv weight caches).
+        """
+        C = self.C
+        # Pre-allocate the zeros tensor for the upsample zero-insertion
+        self._zeros_cache[(T, C)] = ttnn.zeros(
+            [1, T, 1, C], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        self._trace_mode = True
+
     def forward_ttnn(self, x_tt, C, T):
         """Anti-aliased SnakeBeta on TTNN tensor. All compute on device.
 
-        Stays in ROW_MAJOR throughout — no TILE conversions. All element-wise
-        ops (sin, pow, mul, add) work on ROW_MAJOR, matching conv1d's format.
+        Stays in ROW_MAJOR throughout. Trace-compatible when prepare_for_trace()
+        has been called (uses pre-allocated zeros, cached conv weights).
 
         Args:
             x_tt: [1, 1, T, C] TTNN ROW_MAJOR on device
@@ -131,32 +147,58 @@ class TtActivation1dTTNN(LightweightModule):
         B = 1
         # === UPSAMPLE 2x: zero-insertion + FIR filter ===
         x_reshaped = ttnn.reshape(x_tt, [1, T, 1, C])
-        z = ttnn.zeros([1, T, 1, C], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        # Use pre-allocated zeros in trace mode, fresh allocation otherwise
+        if self._trace_mode and (T, C) in self._zeros_cache:
+            z = self._zeros_cache[(T, C)]
+        else:
+            z = ttnn.zeros([1, T, 1, C], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         x_interleaved = ttnn.concat([x_reshaped, z], dim=2)  # [1, T, 2, C]
         x_up = ttnn.reshape(x_interleaved, [1, 1, T * 2, C])
 
         # FIR upsample filter (depthwise conv, groups=C, stride=1)
+        # In trace mode: weights already cached, no host mutation
         uw = self._up_cached_w or self.up_weight
         ub = self._up_cached_b
-        x_tt, _, [self._up_cached_w, self._up_cached_b] = ttnn.conv1d(
-            input_tensor=x_up,
-            weight_tensor=uw,
-            in_channels=C,
-            out_channels=C,
-            device=self.device,
-            bias_tensor=ub,
-            kernel_size=self.K_up,
-            stride=1,
-            padding=(self.up_pad_left, self.up_pad_right),
-            batch_size=B,
-            input_length=T * 2,
-            dtype=ttnn.bfloat16,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=C,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        if self._trace_mode:
+            x_tt, _, _ = ttnn.conv1d(
+                input_tensor=x_up,
+                weight_tensor=uw,
+                in_channels=C,
+                out_channels=C,
+                device=self.device,
+                bias_tensor=ub,
+                kernel_size=self.K_up,
+                stride=1,
+                padding=(self.up_pad_left, self.up_pad_right),
+                batch_size=B,
+                input_length=T * 2,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=C,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            x_tt, _, [self._up_cached_w, self._up_cached_b] = ttnn.conv1d(
+                input_tensor=x_up,
+                weight_tensor=uw,
+                in_channels=C,
+                out_channels=C,
+                device=self.device,
+                bias_tensor=ub,
+                kernel_size=self.K_up,
+                stride=1,
+                padding=(self.up_pad_left, self.up_pad_right),
+                batch_size=B,
+                input_length=T * 2,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=C,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
         x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.L1_MEMORY_CONFIG)
         if x_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_tt = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT)
@@ -168,25 +210,46 @@ class TtActivation1dTTNN(LightweightModule):
         T_act = x_tt.shape[2]
         dw = self._down_cached_w or self.down_weight
         db = self._down_cached_b
-        x_tt, _, [self._down_cached_w, self._down_cached_b] = ttnn.conv1d(
-            input_tensor=x_tt,
-            weight_tensor=dw,
-            in_channels=C,
-            out_channels=C,
-            device=self.device,
-            bias_tensor=db,
-            kernel_size=self.K_down,
-            stride=2,
-            padding=(self.down_pad_left, self.down_pad_right),
-            batch_size=B,
-            input_length=T_act,
-            dtype=ttnn.bfloat16,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=C,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        if self._trace_mode:
+            x_tt, _, _ = ttnn.conv1d(
+                input_tensor=x_tt,
+                weight_tensor=dw,
+                in_channels=C,
+                out_channels=C,
+                device=self.device,
+                bias_tensor=db,
+                kernel_size=self.K_down,
+                stride=2,
+                padding=(self.down_pad_left, self.down_pad_right),
+                batch_size=B,
+                input_length=T_act,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=C,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            x_tt, _, [self._down_cached_w, self._down_cached_b] = ttnn.conv1d(
+                input_tensor=x_tt,
+                weight_tensor=dw,
+                in_channels=C,
+                out_channels=C,
+                device=self.device,
+                bias_tensor=db,
+                kernel_size=self.K_down,
+                stride=2,
+                padding=(self.down_pad_left, self.down_pad_right),
+                batch_size=B,
+                input_length=T_act,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=C,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
         x_tt = ttnn.sharded_to_interleaved(x_tt, ttnn.L1_MEMORY_CONFIG)
         if x_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_tt = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT)
@@ -349,8 +412,14 @@ class TtConv1d(LightweightModule):
             fp32_dest_acc_en=True,
         )
 
+    def prepare_for_trace(self):
+        """Lock conv weights for trace. Must be called after warmup."""
+        self._trace_mode = True
+
     def forward_ttnn(self, x_tt, T):
         """Conv1d on TTNN tensor. Input/output: [1, 1, T, C] ROW_MAJOR on device.
+
+        Trace-compatible when prepare_for_trace() has been called.
 
         Args:
             x_tt: [1, 1, T, C] TTNN ROW_MAJOR on device
@@ -358,25 +427,46 @@ class TtConv1d(LightweightModule):
         Returns:
             (output_tt, out_length): output [1, 1, T_out, C_out] ROW_MAJOR on device, output time length
         """
-        output_tensor, out_length, (self.weight, self.bias) = ttnn.conv1d(
-            input_tensor=x_tt,
-            weight_tensor=self.weight,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=self.bias,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            batch_size=1,
-            input_length=T,
-            dtype=ttnn.bfloat16,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=1,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        if getattr(self, "_trace_mode", False):
+            output_tensor, out_length, _ = ttnn.conv1d(
+                input_tensor=x_tt,
+                weight_tensor=self.weight,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                device=self.device,
+                bias_tensor=self.bias,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                batch_size=1,
+                input_length=T,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=1,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            output_tensor, out_length, (self.weight, self.bias) = ttnn.conv1d(
+                input_tensor=x_tt,
+                weight_tensor=self.weight,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                device=self.device,
+                bias_tensor=self.bias,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                batch_size=1,
+                input_length=T,
+                dtype=ttnn.bfloat16,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=1,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         if output_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
             output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -543,6 +633,40 @@ class TtAcousticEncoder(LightweightModule):
             padding=1,
             device=device,
         )
+
+    def prepare_for_trace(self, T):
+        """Prepare all sub-components for trace capture.
+
+        Must be called after a warmup forward to populate all conv weight caches.
+        Pre-allocates zeros tensors and locks conv weights.
+
+        Args:
+            T: time dimension after initial conv (determines all downstream T values)
+        """
+        C = 48
+        t = T
+        for block_idx in range(5):
+            # Residual unit activations + convs
+            for res_idx in range(3):
+                act1, act2 = self.block_activations[block_idx][res_idx]
+                conv1, conv2 = self.block_res_convs[block_idx][res_idx]
+                act1.prepare_for_trace(t)
+                act2.prepare_for_trace(t)
+                conv1.prepare_for_trace()
+                conv2.prepare_for_trace()
+            # Final activation + downsample
+            self.block_final_act[block_idx].prepare_for_trace(t)
+            self.block_downsample[block_idx].prepare_for_trace()
+            # T changes after downsample
+            stride = self.strides[block_idx]
+            kernel_size = stride * 2
+            pad_total = kernel_size - stride
+            # Approximate T after conv with stride (matching conv1d output formula)
+            t = (t + pad_total - kernel_size) // stride + 1
+            C = self.channels[block_idx + 1]
+        # Final block
+        self.final_activation.prepare_for_trace(t)
+        self.final_conv1d.prepare_for_trace()
 
     def forward_ttnn(self, x_tt: ttnn.Tensor, T: int) -> ttnn.Tensor:
         """Device-only forward: 5 encoder blocks + final activation + final conv.
@@ -823,17 +947,22 @@ class TtCodecEncoder(LightweightModule):
     def forward_on_device(
         self,
         waveform: torch.Tensor,
-        semantic_features: Optional[torch.Tensor] = None,
+        mel_features: Optional[torch.Tensor] = None,
         sample_rate: int = 16000,
     ) -> torch.Tensor:
-        """Full codec encoder forward, keeping data on device through the pipeline.
+        """Full codec encoder: W2V → Semantic → Acoustic → Fusion → FSQ.
 
-        Eliminates PCIe round-trips between acoustic encoder, semantic encoder,
-        fusion concat, and fc_prior by using forward_ttnn methods.
+        Complete e2e pipeline where each block feeds into the next on device.
+        Only CPU boundaries: initial_conv (channels=1), mel extraction, FSQ quantize.
+
+        Data flow:
+            mel → from_torch → W2V.forward_ttnn → Semantic.forward_ttnn ─┐
+            wav → initial_conv → from_torch → Acoustic.forward_ttnn ─────┤
+                                    ttnn.concat → fc_prior linear → to_torch → FSQ
 
         Args:
             waveform: [B, 1, samples] raw audio waveform
-            semantic_features: optional [B, 1024, T] pre-computed. If None, extracted via Wav2Vec2-BERT.
+            mel_features: optional [B, T, 160] mel features. If None, extracted via AutoFeatureExtractor.
             sample_rate: audio sample rate (default 16000)
         Returns:
             [B, 1, T] integer VQ codes
@@ -841,7 +970,33 @@ class TtCodecEncoder(LightweightModule):
         if self.quantizer is None:
             raise ValueError("Quantizer required for FSQ quantization")
 
-        # Step 1: Acoustic encoder -- initial conv on host, rest on device
+        # === Semantic path: W2V → SemanticEncoder (all on device) ===
+
+        # Extract mel features if not provided
+        if mel_features is None:
+            fe = self._get_feature_extractor()
+            audio_np = waveform.squeeze(1).numpy()
+            inputs = fe(audio_np, sampling_rate=sample_rate, return_tensors="pt", padding=True)
+            mel_features = inputs["input_features"]
+
+        # W2V on device: [B, T, 160] → [1, 1, T, 1024]
+        mel_tt = ttnn.from_torch(
+            mel_features.to(torch.bfloat16).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        w2v_tt = self.w2v_bert.forward_ttnn(mel_tt)  # [1, 1, T, 1024] TILE on device
+
+        # Semantic encoder on device: needs ROW_MAJOR [1, 1, T, 1024]
+        T_sem = w2v_tt.shape[2]
+        semantic_tt = ttnn.to_layout(w2v_tt, ttnn.ROW_MAJOR_LAYOUT)
+        semantic_tt = self.semantic_encoder.forward_ttnn(semantic_tt, T_sem)
+        # semantic_tt: [1, 1, T, 1024] ROW_MAJOR on device
+
+        # === Acoustic path: initial_conv (CPU) → encoder blocks (device) ===
+
         x_initial = self.acoustic_encoder.initial_conv1d(waveform)  # [B, 48, T_init] torch
         T_init = x_initial.shape[2]
         x_nhwc = x_initial.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
@@ -849,25 +1004,12 @@ class TtCodecEncoder(LightweightModule):
         acoustic_tt = self.acoustic_encoder.forward_ttnn(acoustic_tt, T_init)
         # acoustic_tt: [1, 1, T, 1024] ROW_MAJOR on device
 
-        # Step 2: Extract or use provided semantic features via Wav2Vec2-BERT
-        if semantic_features is None:
-            semantic_features = self._extract_semantic_features(waveform, sample_rate)
-        # semantic_features: [B, 1024, T] torch
+        # === Fusion: concat → fc_prior → FSQ ===
 
-        # Step 3: Semantic encoder on device
-        B_sem, C_sem, T_sem = semantic_features.shape
-        sem_nhwc = semantic_features.permute(0, 2, 1).unsqueeze(0).to(torch.bfloat16)
-        semantic_tt = ttnn.from_torch(sem_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-        semantic_tt = self.semantic_encoder.forward_ttnn(semantic_tt, T_sem)
-        # semantic_tt: [1, 1, T, 1024] ROW_MAJOR on device
-
-        # Step 4: Fuse on device -- both [1, 1, T, 1024] -> concat -> [1, 1, T, 2048]
-        # Convert to TILE for concat and fc_prior linear
         acoustic_tt = ttnn.to_layout(acoustic_tt, ttnn.TILE_LAYOUT)
         semantic_tt = ttnn.to_layout(semantic_tt, ttnn.TILE_LAYOUT)
         fused_tt = ttnn.concat([acoustic_tt, semantic_tt], dim=-1)  # [1, 1, T, 2048]
 
-        # Step 5: fc_prior Linear(2048, 2048) on device
         projected_tt = ttnn.linear(
             fused_tt,
             self.fc_prior_weight,
@@ -877,7 +1019,7 @@ class TtCodecEncoder(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Step 6: Back to CPU for FSQ quantization (needs float32)
+        # FSQ quantize (CPU boundary)
         projected_torch = ttnn.to_torch(projected_tt).float()
         if projected_torch.dim() == 4:
             projected_torch = projected_torch.squeeze(0)
