@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+import gc
+
+import pytest
+import torch
+from diffusers import UNet2DConditionModel
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole, torch_random
+from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
+from models.demos.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+)
+@pytest.mark.parametrize("input_shape, module_path", [((1, 384), "time_embedding"), ((1, 2560), "add_embedding")])
+@pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
+def test_embedding(
+    device,
+    image_resolution,
+    input_shape,
+    module_path,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_unet_location,
+    reset_seeds,
+    linear_weights_dtype,
+):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+    unet = UNet2DConditionModel.from_pretrained(
+        sdxl_refiner_unet_location,
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
+    )
+    unet.eval()
+    state_dict = unet.state_dict()
+
+    torch_embedding = eval("unet." + module_path)
+    assert torch_embedding is not None, f"{module_path} is not a valid UNet module"
+
+    model_config = load_model_optimisations(image_resolution)
+    tt_embedding = TtTimestepEmbedding(
+        device, state_dict, module_path, model_config, linear_weights_dtype=linear_weights_dtype
+    )
+
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_output_tensor = torch_embedding(torch_input_tensor)
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn_output_tensor = tt_embedding.forward(ttnn_input_tensor)
+    output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    del unet
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    logger.info(f"PCC is {pcc_message}")

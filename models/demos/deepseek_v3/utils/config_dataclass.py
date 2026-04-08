@@ -1,0 +1,442 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+from dataclasses import dataclass, fields
+from pathlib import Path
+from typing import Any, Union
+
+import ttnn
+
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
+
+# Union type for all possible program configs used with ttnn.linear
+ProgramConfig = Union[
+    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig,
+    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    None,
+]
+
+
+@dataclass(frozen=True)
+class FromWeightConfig:
+    """A stub in a model config that gets replaced with a real ttnn.Tensor when creating the RunConfig.
+    Needs a matching entry in the WeightConfig. During the creation of the run config, mesh_device
+    gets filled with the ttnn.Device to load the tensor on"""
+
+    mesh_device: "ConfigDevice"
+
+
+@dataclass(frozen=True, eq=True)
+class MeshDeviceStub:
+    """A stub that gets replaced with a real ttnn.MeshDevice when creating the RunConfig."""
+
+    mesh_shape: tuple[int, int]
+
+    def __init__(self, mesh_shape: tuple[int, int] | ttnn.MeshShape):
+        object.__setattr__(self, "mesh_shape", tuple(mesh_shape))
+
+
+@dataclass
+class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    path: Path
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class DeepseekSamplingArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
+    cluster_shape: tuple[int, int]
+    sampling_all_gather_axis: int = 1
+
+
+ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
+ConfigWeight = ttnn.Tensor | FromWeightConfig
+
+
+@dataclass
+class OpConfigBase:
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def keys(self):
+        """Return only keys with non-None values for clean dictionary expansion."""
+        return tuple(f.name for f in fields(self) if getattr(self, f.name) is not None)
+
+    def items(self):
+        """Return only key-value pairs with non-None values."""
+        return ((f.name, getattr(self, f.name)) for f in fields(self) if getattr(self, f.name) is not None)
+
+    def all_keys(self):
+        """Return all keys, including those with None values."""
+        return tuple(f.name for f in fields(self))
+
+    def get(self, key: str, default=None):
+        """Get a field value with a default fallback."""
+        return getattr(self, key, default)
+
+
+@dataclass
+class LinearConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
+    program_config: ProgramConfig | None = None
+    output_tile: "tt.tt_metal.Tile | None" = None
+
+
+@dataclass
+class EmbeddingConfig(OpConfigBase):
+    """Common parameters for a ttnn.embedding op"""
+
+    weight: ConfigWeight
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT
+
+
+@dataclass
+class MulConfig(OpConfigBase):
+    """Common parameters for a ttnn.mul op"""
+
+    memory_config: ttnn.MemoryConfig | None = None
+    input_tensor_a_activations: list[ttnn.UnaryOpType] | None = None
+
+
+@dataclass
+class AllReduceConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_reduce op"""
+
+    cluster_axis: int
+    dim: int
+    num_reduce_scatter_links: int
+    num_all_gather_links: int
+    topology: ttnn.Topology
+    dtype: ttnn.DataType
+    use_composite: bool
+    mesh_device: ConfigDevice
+
+
+@dataclass
+class AllGatherAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_gather_async op"""
+
+    dim: int | None = None
+    cluster_axis: int | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
+    num_links: int | None = 4
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    use_optimal_ccl_for_llama: bool | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_workers_per_link: int | None = None
+    use_broadcast: bool | None = None
+
+
+@dataclass
+class AllBroadcastAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_broadcast_async op"""
+
+    num_links: int | None = 4
+    cluster_axis: int | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+
+
+@dataclass
+class AllToAllAsyncGenericConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_to_all_async_generic op"""
+
+    in_dim: int | None = None
+    out_dim: int | None = None
+    cluster_axis: int | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
+    num_links: int | None = 4
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+
+
+@dataclass
+class SliceConfig(OpConfigBase):
+    """Common parameters for a ttnn.slice op"""
+
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class ConcatConfig(OpConfigBase):
+    """Common parameters for a ttnn.concat op"""
+
+    dim: int
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class ReduceScatterAsyncMinimalConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
+
+    dim: int
+    multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_links: int | None = 4
+    persistent_output_buffers: ttnn.Tensor | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    topology: ttnn.Topology = optimal_topology
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    cluster_axis: int | None = None
+    chunks_per_sync: int | None = None
+    num_workers_per_link: int | None = None
+    num_buffers_per_channel: int | None = None
+
+
+@dataclass
+class DeepseekMoEReduceScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.deepseek_moe_reduce_scatter op"""
+
+    @classmethod
+    def create_default_input_memory_config(
+        cls, users_per_row: int, hidden_size: int, tp_size: int
+    ) -> ttnn.MemoryConfig:
+        NUM_DECODE_RS_SHARD_CORES = 7
+
+        if hidden_size % tp_size != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: hidden_size ({hidden_size}) must be divisible by tp_size ({tp_size})"
+            )
+        slice_size = hidden_size // tp_size
+
+        if slice_size % NUM_DECODE_RS_SHARD_CORES != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: slice_size ({slice_size}) must be divisible by number of op worker cores ({NUM_DECODE_RS_SHARD_CORES})"
+            )
+        per_core_shard_width = slice_size // NUM_DECODE_RS_SHARD_CORES
+
+        return ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                ttnn.Shape([1, 1, users_per_row, per_core_shard_width]),
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                    ]
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+
+    output_memory_config: ttnn.MemoryConfig
+    dim: int
+    num_links: int = 4
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    cluster_axis: int | None = None
+
+
+@dataclass
+class PointToPointConfig(OpConfigBase):
+    """Common parameters for a ttnn.point_to_point op"""
+
+    receiver_coord: ttnn.MeshCoordinate | None = None
+    sender_coord: ttnn.MeshCoordinate | None = None
+    topology: ttnn.Topology = optimal_topology
+    output_tensor: ttnn.Tensor | None = None
+
+
+@dataclass
+class AllGatherConfig(OpConfigBase):
+    dim: int
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    num_workers: int | None = None
+    num_buffers_per_channel: int | None = None
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
+
+
+@dataclass
+class ReduceScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.reduce_scatter op"""
+
+    dim: int
+    math_op: ttnn.ReduceType
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    memory_config: ttnn.MemoryConfig = None
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
+
+
+@dataclass
+class ReshardConfig(OpConfigBase):
+    """Common parameters for a ttnn.to_memory_config op"""
+
+    memory_config: ttnn.MemoryConfig
+    dtype: ttnn.DataType | None = None
+
+
+@dataclass
+class PermuteConfig(OpConfigBase):
+    """Common parameters for a ttnn.permute op"""
+
+    dims: tuple[int, int, int, int]
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class RMSNormConfig(OpConfigBase):
+    """ttnn.rms_norm config"""
+
+    epsilon: float = 1e-12
+    weight: ConfigWeight | None = None
+    bias: ConfigWeight | None = None
+    residual_input_tensor: ConfigWeight | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+
+
+@dataclass
+class RMSNormPreAllGatherConfig(OpConfigBase):
+    """ttnn.rms_norm_pre_all_gather config"""
+
+    dtype: ttnn.DataType = ttnn.bfloat16
+    residual_input_tensor: ConfigWeight | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class RMSNormPostAllGatherConfig(OpConfigBase):
+    """ttnn.rms_norm_post_all_gather config"""
+
+    epsilon: float = 1e-12
+    weight: ConfigWeight | None = None
+    bias: ConfigWeight | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+    dtype: ttnn.DataType | None = None
+
+
+@dataclass
+class BinaryOpConfig(OpConfigBase):
+    """Common parameters for a ttnn.add/sub/mul/div op, weights are in input_tensor_b"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    dtype: ttnn.DataType | None = None
+    activation: ttnn.UnaryOpType | None = None
+
+
+@dataclass
+class ReshapeConfig(OpConfigBase):
+    """Common parameters for a ttnn.reshape op"""
+
+    shape: tuple[int, int, int, int] | None = None
+
+
+@dataclass
+class TopKConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk op"""
+
+    k: int
+    dim: int
+    largest: bool = True
+    sorted: bool = True
+
+
+@dataclass
+class ScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.scatter op"""
+
+    input: ttnn.Tensor
+    dim: int
+    src: ttnn.Tensor
+
+
+@dataclass
+class AllToAllDispatchConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch op"""
+
+    cluster_axis: int
+    memory_config: ttnn.MemoryConfig
+    num_links: int | None = None
+    topology: ttnn.Topology = optimal_topology
+    subdevice_id: int | None = None
+
+
+@dataclass
+class AllToAllCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_combine op"""
+
+    cluster_axis: int
+    memory_config: ttnn.MemoryConfig
+    num_links: int | None = None
+    topology: ttnn.Topology = optimal_topology
+
+
+@dataclass
+class RepeatConfig(OpConfigBase):
+    """Common parameters for a ttnn.repeat op"""
+
+    repeat_dims: ttnn.Shape
+
+
+@dataclass
+class TopKFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
+    use_bitonic_sort: bool = False
+
+
+@dataclass
+class LinearFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+
+
+@dataclass
+class TypecastConfig(OpConfigBase):
+    """Common parameters for a ttnn.typecast op"""
+
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig | None = None
+    sub_core_grids: ttnn.CoreRangeSet | None = None
+
+
+@dataclass
+class KvCacheConfig(OpConfigBase):
+    """Common parameters for a kv cache.
+    Attributes:
+        The expected ordering is:
+        (num_blocks, num_heads = 1, block_size, kvpe_dim)
+    """
+
+    kv_cache_shape: tuple[int, int, int, int]
+    dtype: ttnn.DataType | None = None

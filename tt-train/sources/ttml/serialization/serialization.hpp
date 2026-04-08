@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <core/ttnn_all_includes.hpp>
+#include <string_view>
+
+#include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
+
+namespace ttml::optimizers {
+class OptimizerBase;
+}
+namespace ttml::serialization {
+class FlatBufferFile;
+
+void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor);
+void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor);
+
+void write_autograd_tensor(
+    FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads = false);
+void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::autograd::TensorPtr& tensor);
+
+void write_named_parameters(
+    FlatBufferFile& file, std::string_view name, const ttml::serialization::NamedParameters& params);
+void read_named_parameters(FlatBufferFile& file, std::string_view name, ttml::serialization::NamedParameters& params);
+
+void write_optimizer(FlatBufferFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer);
+void read_optimizer(FlatBufferFile& file, std::string_view name, optimizers::OptimizerBase* optimizer);
+
+void write_module(FlatBufferFile& file, std::string_view name, const modules::ModuleBase* module);
+void read_module(FlatBufferFile& file, std::string_view name, modules::ModuleBase* module);
+
+void write_state_dict(FlatBufferFile& file, std::string_view name, const serialization::StateDict& state_dict);
+void read_state_dict(FlatBufferFile& file, std::string_view name, serialization::StateDict& state_dict);
+
+}  // namespace ttml::serialization

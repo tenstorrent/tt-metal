@@ -1,0 +1,172 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import time
+
+import pytest
+import torch
+from loguru import logger
+from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
+
+import ttnn
+from models.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.utils.check import assert_quality
+
+
+@pytest.mark.parametrize(
+    "clip_path, tokenizer_path, expected_pcc",
+    [
+        ("text_encoder", "tokenizer", 0.99),
+        ("text_encoder_2", "tokenizer_2", 0.98),
+    ],
+    ids=["encoder_1", "encoder_2"],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["n150"], indirect=True)
+def test_clip_encoder(
+    *,
+    mesh_device: ttnn.Device,
+    clip_path: str,
+    tokenizer_path: str,
+    expected_pcc: float,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_text_encoder_location,
+    sdxl_base_text_encoder_2_location,
+    sdxl_base_tokenizer_location,
+    sdxl_base_tokenizer_2_location,
+    reset_seeds,
+) -> None:
+    has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
+
+    # Select the appropriate fixture based on the clip_path
+    model_location = sdxl_base_text_encoder_2_location if has_projection else sdxl_base_text_encoder_location
+    tokenizer_location = sdxl_base_tokenizer_2_location if has_projection else sdxl_base_tokenizer_location
+
+    # Build kwargs conditionally to avoid transformers subfolder=None bug
+    model_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
+    tokenizer_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
+
+    if not is_ci_v2_env:
+        model_kwargs["subfolder"] = clip_path
+        tokenizer_kwargs["subfolder"] = tokenizer_path
+
+    if has_projection:
+        hf_model = CLIPTextModelWithProjection.from_pretrained(
+            model_location,
+            **model_kwargs,
+        )
+    else:
+        hf_model = CLIPTextModel.from_pretrained(
+            model_location,
+            **model_kwargs,
+        )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        tokenizer_location,
+        **tokenizer_kwargs,
+    )
+
+    hf_model.eval()
+    eos_token_id = hf_model.config.eos_token_id
+
+    # debug
+    logger.info("=== HuggingFace Model 1 Config ===")
+    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
+    logger.info(f"hidden_size: {hf_model.config.hidden_size}")
+    logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
+    logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
+    logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
+    logger.info(f"layer_norm_eps: {hf_model.config.layer_norm_eps}")
+    logger.info(f"attention_dropout: {hf_model.config.attention_dropout}")
+    logger.info(f"hidden_act: {hf_model.config.hidden_act}")
+    logger.info(f"Full config: {hf_model.config}")
+
+    # test text encoder 1
+    logger.info("testing text encoder 1...")
+    start_time = time.time()
+
+    # === TT-DiT CLIP ====
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+    ccl_manager = None
+
+    config = CLIPConfig(
+        vocab_size=hf_model.config.vocab_size,
+        embed_dim=hf_model.config.hidden_size,
+        ff_dim=hf_model.config.intermediate_size,
+        num_heads=hf_model.config.num_attention_heads,
+        num_hidden_layers=hf_model.config.num_hidden_layers,
+        max_prompt_length=77,
+        layer_norm_eps=hf_model.config.layer_norm_eps,
+        attention_dropout=hf_model.config.attention_dropout,
+        hidden_act=hf_model.config.hidden_act,
+        projection_dim=hf_model.config.projection_dim if has_projection else None,
+    )
+
+    tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
+    logger.info(f"text encoder creation time: {time.time() - start_time}")
+
+    # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
+    test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
+
+    hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
+    tt_tokens = ttnn.from_torch(
+        hf_inputs.input_ids,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    start_time = time.time()
+    with torch.no_grad():
+        hf_output = hf_model(**hf_inputs, output_hidden_states=True)
+        sequence_output = hf_output.hidden_states[-2]
+        pooled_output = hf_output.text_embeds if has_projection else hf_output.pooler_output
+    logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
+
+    # debug
+    logger.info(f"HF text encoder 1 sequence output shape: {sequence_output.shape}")
+    logger.info(f"HF text encoder 1 pooled output shape: {pooled_output.shape}")
+    logger.info(
+        f"HF text encoder 1 sequence output mean: {sequence_output.mean():.6f}, std: {sequence_output.std():.6f}"
+    )
+    logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
+
+    logger.info("compiling text encoder...")
+    tt_clip(tt_tokens, mesh_device)
+
+    logger.info("executing text encoder...")
+    start_time = time.time()
+
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device)
+
+    logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
+    logger.info("text encoder done...")
+
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-2])[0])
+    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
+
+    # debug
+    logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
+    logger.info(f"TT text encoder pooled output shape: {tt_projected_output_torch.shape}")
+    logger.info(
+        f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
+    )
+    logger.info(
+        f"TT text encoder pooled output mean: {tt_projected_output_torch.mean():.6f}, std: {tt_projected_output_torch.std():.6f}"
+    )
+
+    assert sequence_output.shape == tt_sequence_output_torch.shape
+    assert pooled_output.shape == tt_projected_output_torch.shape
+
+    # For some reason, this has pcc 10 both here and in sd3.5 large when max_length padding is used
+    assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+    assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)

@@ -1,0 +1,68 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+void kernel_main() {
+    // X = output width
+    // Y = output height
+    // input shape = (..., H, W)
+    // output shape = (..., Y, X)
+
+    /**
+     * This kernel takes in the contiguous XW block read in in the reader kernel and transposes is to a WX block, ready
+     * to be written out The transpose LLK does not support transposing a tile without faces/subtiles, so we need to
+     * rearrange it into its faces, transpose, and then pack it back such that it's de-faced (WX, where X is contiguous
+     * and isn't divided into subtiles)
+     */
+    uint32_t start_block = get_arg_val<uint32_t>(0);
+    uint32_t end_block = get_arg_val<uint32_t>(1);
+
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_tilize = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
+
+    unary_op_init_common(cb_in, cb_out);
+
+    for (uint32_t block = start_block; block < end_block; block++) {
+        // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)
+        compute_kernel_lib::tilize<
+            1,
+            cb_in,
+            cb_tilize,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+
+        // transpose input
+        cb_wait_front(cb_tilize, 1);
+
+        transpose_wh_init_short(cb_tilize);
+        pack_untilize_dest_init<1>(cb_out);
+
+        tile_regs_acquire();
+        transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+        tile_regs_commit();
+
+        // pack and untilize
+        cb_reserve_back(cb_out, 1);
+
+        tile_regs_wait();
+        pack_untilize_dest<1>(cb_out);  // pack call
+        tile_regs_release();
+
+        cb_push_back(cb_out, 1);
+
+        pack_untilize_uninit(cb_out);
+
+        cb_pop_front(cb_tilize, 1);
+    }
+}

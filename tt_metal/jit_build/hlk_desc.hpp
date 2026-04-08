@@ -1,0 +1,136 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstring>
+
+#include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt_stl/fmt.hpp>
+
+#include "common/stable_hash.hpp"
+
+namespace tt {
+/**
+ * @brief A descriptor of the high-level kernel. Contains circular buffer formats, HLK filename, HLK args ptr/size.
+ */
+
+class tt_hlk_desc {
+private:
+    // data formats spec for the I/O operands (i.e., buffers)
+    MathFidelity math_fidelity{MathFidelity::Invalid};
+    bool approximation_mode{true};
+
+    void* hlk_args{nullptr};  // void ptr to user-defined hlk_args_t struct (user writes)
+    size_t hlk_args_size{0};  // size of hlk_args_t in bytes (result of sizeof())
+
+public:
+    std::vector<DataFormat> buf_dataformat_arr;
+    std::vector<uint32_t> buf_num_faces_arr;
+    std::vector<uint32_t> buf_partial_face_arr;
+    std::vector<uint32_t> buf_face_r_dim_arr;
+    std::vector<uint32_t> buf_narrow_tile_arr;
+    std::vector<uint32_t> buf_tile_r_dim_arr;
+    std::vector<uint32_t> buf_tile_c_dim_arr;
+    std::vector<uint32_t> buf_tile_size_arr;
+
+    tt_hlk_desc(uint32_t max_cbs) :
+        buf_dataformat_arr(max_cbs, DataFormat::Invalid),
+        buf_num_faces_arr(max_cbs, constants::TILE_HW / constants::FACE_HW),
+        buf_partial_face_arr(max_cbs, 0),
+        buf_face_r_dim_arr(max_cbs, constants::FACE_HEIGHT),
+        buf_narrow_tile_arr(max_cbs, 0),
+        buf_tile_r_dim_arr(max_cbs, constants::TILE_HEIGHT),
+        buf_tile_c_dim_arr(max_cbs, constants::TILE_WIDTH),
+        buf_tile_size_arr(max_cbs, constants::BFLOAT8_B_TILE_HW) {}
+
+    DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
+
+    void set_buf_dataformat(int buf_idx, DataFormat data_format) { buf_dataformat_arr[buf_idx] = data_format; }
+
+    uint32_t get_buf_num_faces(int buf_idx) const { return buf_num_faces_arr[buf_idx]; }
+
+    void set_buf_num_faces(int buf_idx, uint32_t num_faces) { buf_num_faces_arr[buf_idx] = num_faces; }
+
+    uint32_t get_buf_partial_face(int buf_idx) const { return buf_partial_face_arr[buf_idx]; }
+
+    void set_buf_partial_face(int buf_idx, uint32_t partial_face) { buf_partial_face_arr[buf_idx] = partial_face; }
+
+    uint32_t get_buf_face_r_dim(int buf_idx) const { return buf_face_r_dim_arr[buf_idx]; }
+
+    void set_buf_face_r_dim(int buf_idx, uint32_t face_r_dim) { buf_face_r_dim_arr[buf_idx] = face_r_dim; }
+
+    uint32_t get_buf_narrow_tile(int buf_idx) const { return buf_narrow_tile_arr[buf_idx]; }
+
+    void set_buf_narrow_tile(int buf_idx, uint32_t narrow_tile) { buf_narrow_tile_arr[buf_idx] = narrow_tile; }
+
+    uint32_t get_buf_tile_r_dim(int buf_idx) const { return buf_tile_r_dim_arr[buf_idx]; }
+
+    void set_buf_tile_r_dim(int buf_idx, uint32_t tile_r_dim) { buf_tile_r_dim_arr[buf_idx] = tile_r_dim; }
+
+    uint32_t get_buf_tile_c_dim(int buf_idx) const { return buf_tile_c_dim_arr[buf_idx]; }
+
+    void set_buf_tile_c_dim(int buf_idx, uint32_t tile_c_dim) { buf_tile_c_dim_arr[buf_idx] = tile_c_dim; }
+
+    uint32_t get_buf_tile_size(int buf_idx) const { return buf_tile_size_arr[buf_idx]; }
+
+    void set_buf_tile_size(int buf_idx, uint32_t tile_size) { buf_tile_size_arr[buf_idx] = tile_size; }
+
+    void set_hlk_args(void* args, size_t size) {
+        hlk_args = args;
+        hlk_args_size = size;
+    }
+
+    void* get_hlk_args() const { return hlk_args; }
+
+    void set_hlk_math_fidelity(MathFidelity math_fi) { math_fidelity = math_fi; }
+
+    MathFidelity get_hlk_math_fidelity() const { return math_fidelity; }
+
+    void set_hlk_math_approx_mode(bool approx_mode) { approximation_mode = approx_mode; }
+
+    bool get_hlk_math_approx_mode() const { return approximation_mode; }
+
+    // rk: added by fw-dma-test-2 team
+    size_t get_hlk_args_size() const { return hlk_args_size; }
+
+    const DataFormat* get_buf_dataformats() const { return buf_dataformat_arr.data(); }
+
+};  // tt_hlk_desc
+}  // namespace tt
+
+inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
+    tt::FNV1a hasher;
+    for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
+        hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_tile_c_dim(i)));
+    }
+    hasher.update(static_cast<uint64_t>(obj.get_hlk_math_fidelity()));
+    hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);
+    void* hlk_args = obj.get_hlk_args();
+    size_t hlk_args_size = obj.get_hlk_args_size();
+    // C++20 standard, section 7.2.1, paragraph 11:
+    // If a program attempts to access the stored value of an object through a glvalue whose type is not
+    // similar to one of the following types the behavior is undefined:
+    // - the dynamic type of the object,
+    // - a type that is the signed or unsigned type corresponding to the dynamic type of the object, or
+    // - a char, unsigned char, or std::byte type
+    // </standard>
+    //
+    // Since we are accessing the raw bytes through a char type,
+    // reinterpret_casting is well defined.
+    if (hlk_args != nullptr && hlk_args_size > 0) {
+        const char* raw = reinterpret_cast<const char*>(hlk_args);
+        hasher.update(raw, raw + hlk_args_size);
+    } else if (hlk_args != nullptr || hlk_args_size != 0) {
+        TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
+    }
+    return hasher.digest();
+}

@@ -1,0 +1,34 @@
+{%- extends "!layout.html" %}
+
+{%- block sidebartitle %}
+
+{# the logo helper function was removed in Sphinx 6 and deprecated since Sphinx 4 #}
+{# the master_doc variable was renamed to root_doc in Sphinx 4 (master_doc still exists in later Sphinx versions) #}
+{%- set _logo_url = logo_url|default(pathto('_static/' + (logo or ""), 1)) %}
+{%- set _root_doc = root_doc|default(master_doc) %}
+
+{%- if logo or logo_url %}
+<a href="{{ logo_link_url }}">
+    <img src="{{ _logo_url }}" class="logo" alt="{{ _('Logo') }}"/>
+</a>
+{%- endif %}
+
+<a href="{{ pathto(_root_doc) }}">
+    {{ project }}
+</a>
+
+{%- if theme_display_version %}
+  {%- set nav_version = version %}
+  {%- if READTHEDOCS and current_version %}
+    {%- set nav_version = current_version %}
+  {%- endif %}
+  {%- if nav_version %}
+    <div class="version">
+      {{ nav_version }}
+    </div>
+  {%- endif %}
+{%- endif %}
+
+{%- include "searchbox.html" %}
+
+{%- endblock %}

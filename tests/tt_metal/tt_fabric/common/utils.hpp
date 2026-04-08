@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "fabric_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include <filesystem>
+#include <string>
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}
+
+namespace tt::tt_fabric::fabric_router_tests {
+
+bool find_device_with_neighbor_in_multi_direction(
+    BaseFabricFixture* fixture,
+    FabricNodeId& src_fabric_node_id,
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>& dst_fabric_node_ids_by_dir,
+    ChipId& src_physical_device_id,
+    std::unordered_map<RoutingDirection, std::vector<ChipId>>& dst_physical_device_ids_by_dir,
+    const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops,
+    std::optional<RoutingDirection> incoming_direction = std::nullopt);
+
+bool find_device_with_neighbor_in_direction(
+    BaseFabricFixture* fixture,
+    FabricNodeId& src_fabric_node_id,
+    FabricNodeId& dst_fabric_node_id,
+    ChipId& src_physical_device_id,
+    ChipId& dst_physical_device_id,
+    RoutingDirection direction);
+
+std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
+
+// Compare ASIC mapping YAML files (hostname-agnostic comparison)
+bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
+
+// Helper function to check generated ASIC mapping files against golden files
+void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
+
+// Galaxy corner folding (dual/quad/triple-pod 16x8/single-galaxy ControlPlane init tests only): mesh endpoint logical
+// chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
+void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
+
+}  // namespace tt::tt_fabric::fabric_router_tests

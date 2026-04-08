@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+import gc
+
+import pytest
+import torch
+from diffusers import AutoencoderKL
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
+from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
+from models.demos.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "image_resolution, input_shape, pcc, vae_block",
+    [
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), 0.933 if is_wormhole_b0() else 0.921, "decoder"),
+        # Blackhole has lower PCC due to DRAM groupnorm numerical differences
+        ((1024, 1024), (1, 3, 1024, 1024), 0.9769 if is_wormhole_b0() else 0.964, "encoder"),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), 0.936, "decoder"),
+        ((512, 512), (1, 3, 512, 512), 0.9797, "encoder"),
+    ],
+    ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),
+)
+def test_vae(
+    device,
+    image_resolution,
+    input_shape,
+    vae_block,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    reset_seeds,
+    is_ci_v2_env,
+    sdxl_base_vae_location,
+):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+    vae = AutoencoderKL.from_pretrained(
+        sdxl_base_vae_location,
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "vae",
+    )
+    vae.eval()
+    state_dict = vae.state_dict()
+
+    logger.info("Loading weights to device")
+    model_config = load_vae_model_optimisations(image_resolution)
+    tt_vae = TtAutoencoderKL(device, state_dict, model_config, debug_mode=debug_mode)
+    logger.info("Loaded weights")
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+
+    logger.info("Running reference model")
+    if vae_block == "encoder":
+        torch_output_tensor = vae.encode(torch_input_tensor, return_dict=False)[0]
+    else:
+        torch_output_tensor = vae.decode(torch_input_tensor, return_dict=False)[0]
+    logger.info("Torch model done")
+
+    if vae_block == "encoder":
+        ttnn_input_tensor = torch_input_tensor
+    else:
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        B, C, H, W = list(ttnn_input_tensor.shape)
+
+        ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
+
+    logger.info("Running TT model")
+    if vae_block == "encoder":
+        output_tensor = tt_vae.encode(ttnn_input_tensor)
+
+        output_tensor = output_tensor.latent_dist[0].sample()
+        torch_output_tensor = torch_output_tensor.sample()
+    else:
+        output_tensor, [C, H, W] = tt_vae.decode(ttnn_input_tensor, [B, C, H, W])
+
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
+        output_tensor = output_tensor.reshape(B, C, H, W)
+    logger.info("TT model done")
+
+    del vae
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

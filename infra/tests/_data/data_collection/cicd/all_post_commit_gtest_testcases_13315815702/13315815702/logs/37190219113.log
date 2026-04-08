@@ -1,0 +1,2178 @@
+﻿2025-02-13T20:00:52.7788540Z Current runner version: '2.322.0'
+2025-02-13T20:00:52.7796036Z Runner name: 'tt-metal-ci-vm-68'
+2025-02-13T20:00:52.7797076Z Runner group name: 'Default'
+2025-02-13T20:00:52.7798383Z Machine name: 'tt-metal-ci-vm-68'
+2025-02-13T20:00:52.7802653Z ##[group]GITHUB_TOKEN Permissions
+2025-02-13T20:00:52.7805322Z Actions: read
+2025-02-13T20:00:52.7806056Z Contents: write
+2025-02-13T20:00:52.7806784Z Metadata: read
+2025-02-13T20:00:52.7807522Z Packages: write
+2025-02-13T20:00:52.7808329Z Pages: write
+2025-02-13T20:00:52.7809107Z PullRequests: write
+2025-02-13T20:00:52.7809874Z ##[endgroup]
+2025-02-13T20:00:52.7813322Z Secret source: Actions
+2025-02-13T20:00:52.7814305Z Prepare workflow directory
+2025-02-13T20:00:53.0392477Z Prepare all required actions
+2025-02-13T20:00:53.0441740Z Getting action download info
+2025-02-13T20:00:53.2037727Z Download action repository 'tenstorrent/tt-metal@main' (SHA:ac426de3d4a9c274964843fdae6aa83ea3960a30)
+2025-02-13T20:00:59.2308829Z Getting action download info
+2025-02-13T20:00:59.3802472Z Download action repository 'actions/checkout@v4' (SHA:11bd71901bbe5b1630ceea73d27597364c9af683)
+2025-02-13T20:00:59.9810909Z Uses: tenstorrent/tt-metal/.github/workflows/build-and-unit-tests.yaml@refs/heads/sagarwal/multi_page_buffer (ac8ce51fedfe3a43fc1ee309ca81e8c67b736d70)
+2025-02-13T20:00:59.9813637Z ##[group] Inputs
+2025-02-13T20:00:59.9814102Z   build-type: Release
+2025-02-13T20:00:59.9815152Z   with-retries: false
+2025-02-13T20:00:59.9815600Z   arch: wormhole_b0
+2025-02-13T20:00:59.9816007Z   runner-label: N150
+2025-02-13T20:00:59.9817042Z   timeout: 35
+2025-02-13T20:00:59.9817454Z   os: ubuntu-20.04
+2025-02-13T20:00:59.9817882Z ##[endgroup]
+2025-02-13T20:00:59.9818457Z Complete job name: sd-unit-tests (wormhole_b0, N150) / wormhole_b0 N150 device
+2025-02-13T20:01:00.0448285Z A job started hook has been configured by the self-hosted runner administrator
+2025-02-13T20:01:00.0599074Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/reset.sh'
+2025-02-13T20:01:00.0619218Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:01:00.0620130Z ##[endgroup]
+2025-02-13T20:01:00.0791615Z ++ date
+2025-02-13T20:01:00.0792413Z + echo Current date / time is Thu Feb 13 20:01:00 UTC 2025
+2025-02-13T20:01:00.0793059Z + set_e_was_enabled=false
+2025-02-13T20:01:00.0793602Z + [[ ehxB == *e* ]]
+2025-02-13T20:01:00.0794045Z + set_e_was_enabled=true
+2025-02-13T20:01:00.0794491Z + set +e
+2025-02-13T20:01:00.0794912Z + docker image prune
+2025-02-13T20:01:00.0797191Z Current date / time is Thu Feb 13 20:01:00 UTC 2025
+2025-02-13T20:01:00.0927148Z WARNING! This will remove all dangling images.
+2025-02-13T20:01:00.0959913Z ++ df
+2025-02-13T20:01:00.0962419Z ++ awk '{print $5}'
+2025-02-13T20:01:00.0965445Z ++ sed s/%//
+2025-02-13T20:01:00.0966078Z +++ findmnt -n -o SOURCE /
+2025-02-13T20:01:00.0999513Z ++ grep -w '^/dev/vda1'
+2025-02-13T20:01:00.1017856Z + disk_usage_before=82
+2025-02-13T20:01:00.1031346Z + echo '::notice title=disk-usage-before-startup::Disk usage is 82 %'
+2025-02-13T20:01:00.1032092Z + '[' 82 -ge 90 ']'
+2025-02-13T20:01:00.1032591Z ++ df
+2025-02-13T20:01:00.1032982Z ++ awk '{print $5}'
+2025-02-13T20:01:00.1033576Z ++ sed s/%//
+2025-02-13T20:01:00.1034003Z +++ findmnt -n -o SOURCE /
+2025-02-13T20:01:00.1035102Z Are you sure you want to continue? [y/N] ::notice title=disk-usage-before-startup::Disk usage is 82 %
+2025-02-13T20:01:00.1056764Z ++ grep -w '^/dev/vda1'
+2025-02-13T20:01:00.1075319Z + disk_usage_after=82
+2025-02-13T20:01:00.1076077Z + echo '::notice title=disk-usage-after-startup::Disk usage is 82 %'
+2025-02-13T20:01:00.1076702Z + '[' 82 -ge 90 ']'
+2025-02-13T20:01:00.1103508Z ##[notice]Disk usage is 82 %
+2025-02-13T20:01:00.1112105Z ++ lsmod
+2025-02-13T20:01:00.1137756Z + lsmod_output='Module                  Size  Used by
+2025-02-13T20:01:00.1138756Z wekafsio            70086656  1
+2025-02-13T20:01:00.1139389Z wekafsgw               40960  4 wekafsio
+2025-02-13T20:01:00.1140077Z uio_pci_generic        16384  0
+2025-02-13T20:01:00.1140890Z igb_uio                20480  0
+2025-02-13T20:01:00.1142182Z uio                    20480  2 igb_uio,uio_pci_generic
+2025-02-13T20:01:00.1142933Z veth                   28672  0
+2025-02-13T20:01:00.1143580Z xt_conntrack           16384  1
+2025-02-13T20:01:00.1144239Z xt_MASQUERADE          20480  1
+2025-02-13T20:01:00.1145085Z nf_conntrack_netlink    45056  0
+2025-02-13T20:01:00.1151871Z nfnetlink              16384  2 nf_conntrack_netlink
+2025-02-13T20:01:00.1152645Z xfrm_user              36864  1
+2025-02-13T20:01:00.1153302Z xfrm_algo              16384  1 xfrm_user
+2025-02-13T20:01:00.1153979Z iptable_nat            16384  1
+2025-02-13T20:01:00.1155290Z nf_nat                 45056  2 iptable_nat,xt_MASQUERADE
+2025-02-13T20:01:00.1156960Z nf_conntrack          139264  4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE
+2025-02-13T20:01:00.1158544Z nf_defrag_ipv6         24576  1 nf_conntrack
+2025-02-13T20:01:00.1159706Z nf_defrag_ipv4         16384  1 nf_conntrack
+2025-02-13T20:01:00.1160415Z xt_addrtype            16384  2
+2025-02-13T20:01:00.1161068Z iptable_filter         16384  1
+2025-02-13T20:01:00.1161695Z bpfilter               32768  0
+2025-02-13T20:01:00.1162325Z br_netfilter           28672  0
+2025-02-13T20:01:00.1162983Z bridge                176128  1 br_netfilter
+2025-02-13T20:01:00.1163687Z stp                    16384  1 bridge
+2025-02-13T20:01:00.1164381Z llc                    16384  2 bridge,stp
+2025-02-13T20:01:00.1165056Z xfs                  1286144  2
+2025-02-13T20:01:00.1165662Z aufs                  262144  0
+2025-02-13T20:01:00.1166282Z overlay               118784  0
+2025-02-13T20:01:00.1166906Z rdma_ucm               28672  0
+2025-02-13T20:01:00.1167542Z rdma_cm               110592  1 rdma_ucm
+2025-02-13T20:01:00.1168207Z iw_cm                  49152  1 rdma_cm
+2025-02-13T20:01:00.1169154Z ib_ipoib              131072  0
+2025-02-13T20:01:00.1169783Z ib_cm                 114688  2 rdma_cm,ib_ipoib
+2025-02-13T20:01:00.1170487Z ib_umad                28672  0
+2025-02-13T20:01:00.1171049Z nls_iso8859_1          16384  1
+2025-02-13T20:01:00.1171644Z dm_multipath           32768  0
+2025-02-13T20:01:00.1172225Z scsi_dh_rdac           16384  0
+2025-02-13T20:01:00.1172782Z scsi_dh_emc            16384  0
+2025-02-13T20:01:00.1173370Z scsi_dh_alua           20480  0
+2025-02-13T20:01:00.1177649Z mlx5_ib               397312  0
+2025-02-13T20:01:00.1178947Z ib_uverbs             139264  2 rdma_ucm,mlx5_ib
+2025-02-13T20:01:00.1180006Z kvm_amd                98304  0
+2025-02-13T20:01:00.1180784Z ccp                    90112  1 kvm_amd
+2025-02-13T20:01:00.1181469Z kvm                   667648  1 kvm_amd
+2025-02-13T20:01:00.1182145Z input_leds             16384  0
+2025-02-13T20:01:00.1182775Z joydev                 24576  0
+2025-02-13T20:01:00.1184046Z ib_core               348160  8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm
+2025-02-13T20:01:00.1184999Z serio_raw              20480  0
+2025-02-13T20:01:00.1185740Z tenstorrent            49152  0
+2025-02-13T20:01:00.1186468Z sch_fq_codel           20480  45
+2025-02-13T20:01:00.1187238Z binfmt_misc            24576  1
+2025-02-13T20:01:00.1187943Z msr                    16384  0
+2025-02-13T20:01:00.1188565Z efi_pstore             16384  0
+2025-02-13T20:01:00.1189300Z virtio_rng             16384  0
+2025-02-13T20:01:00.1190031Z ip_tables              32768  2 iptable_filter,iptable_nat
+2025-02-13T20:01:00.1191199Z x_tables               40960  5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE
+2025-02-13T20:01:00.1192548Z autofs4                45056  2
+2025-02-13T20:01:00.1229915Z btrfs                1269760  0
+2025-02-13T20:01:00.1230648Z zstd_compress         167936  1 btrfs
+2025-02-13T20:01:00.1231646Z raid10                 61440  0
+2025-02-13T20:01:00.1232690Z raid456               155648  0
+2025-02-13T20:01:00.1234002Z async_raid6_recov      24576  1 raid456
+2025-02-13T20:01:00.1235593Z async_memcpy           20480  2 raid456,async_raid6_recov
+2025-02-13T20:01:00.1236884Z async_pq               24576  2 raid456,async_raid6_recov
+2025-02-13T20:01:00.1238100Z async_xor              20480  3 async_pq,raid456,async_raid6_recov
+2025-02-13T20:01:00.1239138Z async_tx               20480  5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov
+2025-02-13T20:01:00.1240107Z xor                    24576  2 async_xor,btrfs
+2025-02-13T20:01:00.1240976Z raid6_pq              114688  4 async_pq,btrfs,raid456,async_raid6_recov
+2025-02-13T20:01:00.1242191Z libcrc32c              16384  5 nf_conntrack,nf_nat,btrfs,xfs,raid456
+2025-02-13T20:01:00.1243024Z raid1                  45056  0
+2025-02-13T20:01:00.1243720Z raid0                  24576  0
+2025-02-13T20:01:00.1244431Z multipath              20480  0
+2025-02-13T20:01:00.1245048Z linear                 20480  0
+2025-02-13T20:01:00.1245688Z hid_generic            16384  0
+2025-02-13T20:01:00.1246332Z crct10dif_pclmul       16384  1
+2025-02-13T20:01:00.1246962Z crc32_pclmul           16384  0
+2025-02-13T20:01:00.1247589Z usbhid                 57344  0
+2025-02-13T20:01:00.1248218Z ghash_clmulni_intel    16384  0
+2025-02-13T20:01:00.1248953Z hid                   131072  2 usbhid,hid_generic
+2025-02-13T20:01:00.1249687Z mlx5_core            1626112  1 mlx5_ib
+2025-02-13T20:01:00.1250339Z cirrus                 16384  0
+2025-02-13T20:01:00.1250968Z drm_kms_helper        184320  3 cirrus
+2025-02-13T20:01:00.1251603Z aesni_intel           372736  0
+2025-02-13T20:01:00.1252296Z syscopyarea            16384  1 drm_kms_helper
+2025-02-13T20:01:00.1253076Z sysfillrect            16384  1 drm_kms_helper
+2025-02-13T20:01:00.1253900Z sysimgblt              16384  1 drm_kms_helper
+2025-02-13T20:01:00.1254828Z pci_hyperv_intf        16384  1 mlx5_core
+2025-02-13T20:01:00.1255553Z crypto_simd            16384  1 aesni_intel
+2025-02-13T20:01:00.1256494Z fb_sys_fops            16384  1 drm_kms_helper
+2025-02-13T20:01:00.1257227Z mlxdevm               172032  1 mlx5_core
+2025-02-13T20:01:00.1257974Z auxiliary              16384  2 mlx5_ib,mlx5_core
+2025-02-13T20:01:00.1258828Z cryptd                 24576  2 crypto_simd,ghash_clmulni_intel
+2025-02-13T20:01:00.1260211Z mlx_compat             65536  12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core
+2025-02-13T20:01:00.1261431Z tls                    73728  1 mlx5_core
+2025-02-13T20:01:00.1262150Z glue_helper            16384  1 aesni_intel
+2025-02-13T20:01:00.1262844Z ahci                   40960  0
+2025-02-13T20:01:00.1263508Z drm                   495616  3 drm_kms_helper,cirrus
+2025-02-13T20:01:00.1264304Z psmouse               155648  0
+2025-02-13T20:01:00.1265011Z mlxfw                  32768  1 mlx5_core
+2025-02-13T20:01:00.1265727Z libahci                36864  1 ahci
+2025-02-13T20:01:00.1266412Z virtio_blk             20480  3
+2025-02-13T20:01:00.1267098Z psample                20480  1 mlx5_core'
+2025-02-13T20:01:00.1267828Z + grep -q tenstorrent
+2025-02-13T20:01:00.1291172Z + echo Module Size Used by wekafsio 70086656 1 wekafsgw 40960 4 wekafsio uio_pci_generic 16384 0 igb_uio 20480 0 uio 20480 2 igb_uio,uio_pci_generic veth 28672 0 xt_conntrack 16384 1 xt_MASQUERADE 20480 1 nf_conntrack_netlink 45056 0 nfnetlink 16384 2 nf_conntrack_netlink xfrm_user 36864 1 xfrm_algo 16384 1 xfrm_user iptable_nat 16384 1 nf_nat 45056 2 iptable_nat,xt_MASQUERADE nf_conntrack 139264 4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE nf_defrag_ipv6 24576 1 nf_conntrack nf_defrag_ipv4 16384 1 nf_conntrack xt_addrtype 16384 2 iptable_filter 16384 1 bpfilter 32768 0 br_netfilter 28672 0 bridge 176128 1 br_netfilter stp 16384 1 bridge llc 16384 2 bridge,stp xfs 1286144 2 aufs 262144 0 overlay 118784 0 rdma_ucm 28672 0 rdma_cm 110592 1 rdma_ucm iw_cm 49152 1 rdma_cm ib_ipoib 131072 0 ib_cm 114688 2 rdma_cm,ib_ipoib ib_umad 28672 0 nls_iso8859_1 16384 1 dm_multipath 32768 0 scsi_dh_rdac 16384 0 scsi_dh_emc 16384 0 scsi_dh_alua 20480 0 mlx5_ib 397312 0 ib_uverbs 139264 2 rdma_ucm,mlx5_ib kvm_amd 98304 0 ccp 90112 1 kvm_amd kvm 667648 1 kvm_amd input_leds 16384 0 joydev 24576 0 ib_core 348160 8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm serio_raw 20480 0 tenstorrent 49152 0 sch_fq_codel 20480 45 binfmt_misc 24576 1 msr 16384 0 efi_pstore 16384 0 virtio_rng 16384 0 ip_tables 32768 2 iptable_filter,iptable_nat x_tables 40960 5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE autofs4 45056 2 btrfs 1269760 0 zstd_compress 167936 1 btrfs raid10 61440 0 raid456 155648 0 async_raid6_recov 24576 1 raid456 async_memcpy 20480 2 raid456,async_raid6_recov async_pq 24576 2 raid456,async_raid6_recov async_xor 20480 3 async_pq,raid456,async_raid6_recov async_tx 20480 5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov xor 24576 2 async_xor,btrfs raid6_pq 114688 4 async_pq,btrfs,raid456,async_raid6_recov libcrc32c 16384 5 nf_conntrack,nf_nat,btrfs,xfs,raid456 raid1 45056 0 raid0 24576 0 multipath 20480 0 linear 20480 0 hid_generic 16384 0 crct10dif_pclmul 16384 1 crc32_pclmul 16384 0 usbhid 57344 0 ghash_clmulni_intel 16384 0 hid 131072 2 usbhid,hid_generic mlx5_core 1626112 1 mlx5_ib cirrus 16384 0 drm_kms_helper 184320 3 cirrus aesni_intel 372736 0 syscopyarea 16384 1 drm_kms_helper sysfillrect 16384 1 drm_kms_helper sysimgblt 16384 1 drm_kms_helper pci_hyperv_intf 16384 1 mlx5_core crypto_simd 16384 1 aesni_intel fb_sys_fops 16384 1 drm_kms_helper mlxdevm 172032 1 mlx5_core auxiliary 16384 2 mlx5_ib,mlx5_core cryptd 24576 2 crypto_simd,ghash_clmulni_intel mlx_compat 65536 12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core tls 73728 1 mlx5_core glue_helper 16384 1 aesni_intel ahci 40960 0 drm 495616 3 drm_kms_helper,cirrus psmouse 155648 0 mlxfw 32768 1 mlx5_core libahci 36864 1 ahci virtio_blk 20480 3 psample 20480 1 mlx5_core
+2025-02-13T20:01:00.1311828Z + [[ 0 -ne 0 ]]
+2025-02-13T20:01:00.1312946Z ++ lsof -w /dev/tenstorrent/0
+2025-02-13T20:01:00.2582315Z + lsof_output=
+2025-02-13T20:01:00.2583002Z + '[' -n '' ']'
+2025-02-13T20:01:00.2583520Z + i=0
+2025-02-13T20:01:00.2583998Z + iter_limit=10
+2025-02-13T20:01:00.2584989Z + echo '::notice title=printing-smi-info-startup::Touching and printing out SMI info'
+2025-02-13T20:01:00.2586025Z + sleep 20
+2025-02-13T20:01:00.2588935Z ##[notice]Touching and printing out SMI info
+2025-02-13T20:01:20.2598126Z + sudo touch /opt/tt_metal_infra/smi.log
+2025-02-13T20:01:20.2858446Z + sudo chown ubuntu /opt/tt_metal_infra/smi.log
+2025-02-13T20:01:20.3216292Z + tt-smi-metal -s -f /opt/tt_metal_infra/smi.log
+2025-02-13T20:01:20.7169221Z
+2025-02-13T20:01:20.7184913Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:01:20.7185494Z [1A[J
+2025-02-13T20:01:20.7185897Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:01:20.7186452Z
+2025-02-13T20:01:20.7186667Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:01:20.7186935Z
+2025-02-13T20:01:20.7187149Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:01:20.7187392Z
+2025-02-13T20:01:20.7187695Z  [95m[][94m [16/16] ETH: [93m|[0m
+2025-02-13T20:01:20.7252129Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2025-02-13T20:01:20.7261278Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2025-02-13T20:01:20.7866833Z + cat /opt/tt_metal_infra/smi.log
+2025-02-13T20:01:20.7875444Z {
+2025-02-13T20:01:20.7877319Z + echo '::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first'
+2025-02-13T20:01:20.7878219Z + sleep 30
+2025-02-13T20:01:20.7878535Z     "time": "2025-02-13T20:01:20.718602",
+2025-02-13T20:01:20.7878942Z     "host_info": {
+2025-02-13T20:01:20.7879284Z         "OS": "Linux",
+2025-02-13T20:01:20.7879646Z         "Distro": "Ubuntu 20.04.3 LTS",
+2025-02-13T20:01:20.7880067Z         "Kernel": "5.4.0-205-generic",
+2025-02-13T20:01:20.7880520Z         "Hostname": "tt-metal-ci-vm-68",
+2025-02-13T20:01:20.7880952Z         "Platform": "x86_64",
+2025-02-13T20:01:20.7881355Z         "Python": "3.8.10",
+2025-02-13T20:01:20.7881737Z         "Memory": "47.14 GB",
+2025-02-13T20:01:20.7882134Z         "Driver": "TTKMD 1.29"
+2025-02-13T20:01:20.7882688Z     },
+2025-02-13T20:01:20.7883036Z     "device_info": [
+2025-02-13T20:01:20.7883366Z         {
+2025-02-13T20:01:20.7884283Z             "smbus_telem": {
+2025-02-13T20:01:20.7884673Z                 "BOARD_ID": "0x10001851172b06b",
+2025-02-13T20:01:20.7885209Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2025-02-13T20:01:20.7885688Z                 "SMBUS_TX_DEVICE_ID": "0x401e1e52",
+2025-02-13T20:01:20.7886133Z                 "SMBUS_TX_ASIC_RO": "0x2ec29",
+2025-02-13T20:01:20.7886579Z                 "SMBUS_TX_ASIC_IDD": "0xb96",
+2025-02-13T20:01:20.7887028Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000185",
+2025-02-13T20:01:20.7887489Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1172b06b",
+2025-02-13T20:01:20.7887957Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21d0000",
+2025-02-13T20:01:20.7888421Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21d0000",
+2025-02-13T20:01:20.7888889Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2025-02-13T20:01:20.7889334Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21d0000",
+2025-02-13T20:01:20.7889827Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2025-02-13T20:01:20.7890339Z                 "SMBUS_TX_ETH_FW_VERSION": "0x6a000",
+2025-02-13T20:01:20.7890808Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2025-02-13T20:01:20.7891294Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090000",
+2025-02-13T20:01:20.7891914Z                 "SMBUS_TX_DDR_SPEED": null,
+2025-02-13T20:01:20.7892359Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2025-02-13T20:01:20.7892819Z                 "SMBUS_TX_ETH_STATUS0": "0x11111111",
+2025-02-13T20:01:20.7893279Z                 "SMBUS_TX_ETH_STATUS1": "0x11111111",
+2025-02-13T20:01:20.7893733Z                 "SMBUS_TX_PCIE_STATUS": "0x11040000",
+2025-02-13T20:01:20.7894180Z                 "SMBUS_TX_FAULTS": null,
+2025-02-13T20:01:20.7895108Z                 "SMBUS_TX_ARC0_HEALTH": "0x1b8369",
+2025-02-13T20:01:20.7895568Z                 "SMBUS_TX_ARC1_HEALTH": "0xa1ac6",
+2025-02-13T20:01:20.7896026Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2025-02-13T20:01:20.7896470Z                 "SMBUS_TX_ARC3_HEALTH": "0x112f",
+2025-02-13T20:01:20.7896941Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2025-02-13T20:01:20.7897394Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2025-02-13T20:01:20.7897835Z                 "SMBUS_TX_AXICLK": "0x384",
+2025-02-13T20:01:20.7898264Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2025-02-13T20:01:20.7898695Z                 "SMBUS_TX_THROTTLER": null,
+2025-02-13T20:01:20.7899128Z                 "SMBUS_TX_VCORE": "0x2d5",
+2025-02-13T20:01:20.7899570Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x254022a",
+2025-02-13T20:01:20.7900050Z                 "SMBUS_TX_VREG_TEMPERATURE": null,
+2025-02-13T20:01:20.7900528Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x212423",
+2025-02-13T20:01:20.7901000Z                 "SMBUS_TX_TDP": "0x64000e",
+2025-02-13T20:01:20.7901430Z                 "SMBUS_TX_TDC": "0xf00012",
+2025-02-13T20:01:20.7901859Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802d0",
+2025-02-13T20:01:20.7902309Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2025-02-13T20:01:20.7902766Z                 "SMBUS_TX_WH_FW_DATE": "0x4b01121f",
+2025-02-13T20:01:20.7903213Z                 "SMBUS_TX_ASIC_TMON0": "0x27262320",
+2025-02-13T20:01:20.7903643Z                 "SMBUS_TX_ASIC_TMON1": "0x251c",
+2025-02-13T20:01:20.7904164Z                 "SMBUS_TX_MVDDQ_POWER": "0x190000",
+2025-02-13T20:01:20.7904616Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2025-02-13T20:01:20.7905071Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2025-02-13T20:01:20.7905518Z                 "SMBUS_TX_BOOT_DATE": "0x520d1335",
+2025-02-13T20:01:20.7905965Z                 "SMBUS_TX_RT_SECONDS": "0x1be",
+2025-02-13T20:01:20.7906403Z                 "SMBUS_TX_AUX_STATUS": null,
+2025-02-13T20:01:20.7906877Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccddddcc",
+2025-02-13T20:01:20.7907347Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xccdddddd",
+2025-02-13T20:01:20.7907819Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x30100"
+2025-02-13T20:01:20.7908244Z             },
+2025-02-13T20:01:20.7908687Z             "board_info": {
+2025-02-13T20:01:20.7909057Z                 "bus_id": "0000:07:00.0",
+2025-02-13T20:01:20.7909479Z                 "board_type": "n150 L",
+2025-02-13T20:01:20.7909901Z                 "board_id": "010001851172b06b",
+2025-02-13T20:01:20.7910325Z                 "coords": "(0, 0, 0, 0)",
+2025-02-13T20:01:20.7910740Z                 "dram_status": true,
+2025-02-13T20:01:20.7911132Z                 "dram_speed": "12G",
+2025-02-13T20:01:20.7911541Z                 "pcie_speed": 4,
+2025-02-13T20:01:20.7911927Z                 "pcie_width": 16
+2025-02-13T20:01:20.7912297Z             },
+2025-02-13T20:01:20.7912619Z             "telemetry": {
+2025-02-13T20:01:20.7912992Z                 "voltage": "0.72",
+2025-02-13T20:01:20.7913388Z                 "current": " 18.0",
+2025-02-13T20:01:20.7913793Z                 "power": " 14.0",
+2025-02-13T20:01:20.7914170Z                 "aiclk": " 500",
+2025-02-13T20:01:20.7914570Z                 "asic_temperature": "34.6"
+2025-02-13T20:01:20.7914996Z             },
+2025-02-13T20:01:20.7915327Z             "firmwares": {
+2025-02-13T20:01:20.7915701Z                 "arc_fw": "2.29.0.0",
+2025-02-13T20:01:20.7916115Z                 "arc_fw_date": "2024-11-01",
+2025-02-13T20:01:20.7916539Z                 "eth_fw": "6.10.0",
+2025-02-13T20:01:20.7916938Z                 "m3_bl_fw": "129.2.0.0",
+2025-02-13T20:01:20.7917332Z                 "m3_app_fw": "5.9.0.0",
+2025-02-13T20:01:20.7917757Z                 "tt_flash_version": "0.3.1.0"
+2025-02-13T20:01:20.7918170Z             },
+2025-02-13T20:01:20.7918490Z             "limits": {
+2025-02-13T20:01:20.7918844Z                 "vdd_min": "0.72",
+2025-02-13T20:01:20.7919241Z                 "vdd_max": "1.00",
+2025-02-13T20:01:20.7919722Z                 "tdp_limit": "100",
+2025-02-13T20:01:20.7920132Z                 "tdc_limit": "240",
+2025-02-13T20:01:20.7920537Z                 "asic_fmax": "1000",
+2025-02-13T20:01:20.7920957Z                 "therm_trip_l1_limit": "83",
+2025-02-13T20:01:20.7921383Z                 "thm_limit": "75",
+2025-02-13T20:01:20.7921798Z                 "bus_peak_limit": null
+2025-02-13T20:01:20.7922202Z             }
+2025-02-13T20:01:20.7922511Z         }
+2025-02-13T20:01:20.7922813Z     ]
+2025-02-13T20:01:20.7923352Z }::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first
+2025-02-13T20:01:50.7889977Z + '[' 0 -lt 10 ']'
+2025-02-13T20:01:50.7890370Z + (( i++ ))
+2025-02-13T20:01:50.7895448Z ++ tt-smi-metal -r 0
+2025-02-13T20:02:01.9110636Z + reset_output='[94m Starting pci link reset on WH devices at pci indices: 0 [0m
+2025-02-13T20:02:01.9111681Z [92m Finishing pci link reset on WH devices at pci indices: 0 [0m
+2025-02-13T20:02:01.9112817Z [95m Re-initializing boards after reset.... [0m
+2025-02-13T20:02:01.9113167Z
+2025-02-13T20:02:01.9113426Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9113845Z [1A[J
+2025-02-13T20:02:01.9114192Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9114424Z
+2025-02-13T20:02:01.9114653Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9114893Z
+2025-02-13T20:02:01.9115093Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9115326Z
+2025-02-13T20:02:01.9115699Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9116318Z [4A[J
+2025-02-13T20:02:01.9116712Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9116977Z
+2025-02-13T20:02:01.9117247Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9117506Z
+2025-02-13T20:02:01.9117705Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9117939Z
+2025-02-13T20:02:01.9118451Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9119113Z [4A[J
+2025-02-13T20:02:01.9119550Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9119839Z
+2025-02-13T20:02:01.9120068Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9120324Z
+2025-02-13T20:02:01.9120619Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9120893Z
+2025-02-13T20:02:01.9121999Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9122620Z [4A[J
+2025-02-13T20:02:01.9123018Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9123306Z
+2025-02-13T20:02:01.9123550Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9123851Z
+2025-02-13T20:02:01.9124072Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9124347Z
+2025-02-13T20:02:01.9124781Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9125385Z [4A[J
+2025-02-13T20:02:01.9125733Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9125970Z
+2025-02-13T20:02:01.9126168Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9126393Z
+2025-02-13T20:02:01.9126606Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9126837Z
+2025-02-13T20:02:01.9127196Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9127742Z [4A[J
+2025-02-13T20:02:01.9128100Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9128339Z
+2025-02-13T20:02:01.9128528Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9128760Z
+2025-02-13T20:02:01.9128952Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9129189Z
+2025-02-13T20:02:01.9129553Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9130092Z [4A[J
+2025-02-13T20:02:01.9130439Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9130671Z
+2025-02-13T20:02:01.9130871Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9131098Z
+2025-02-13T20:02:01.9131305Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9131532Z
+2025-02-13T20:02:01.9132119Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9132677Z [4A[J
+2025-02-13T20:02:01.9133018Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9133260Z
+2025-02-13T20:02:01.9133451Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9133687Z
+2025-02-13T20:02:01.9133887Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9134122Z
+2025-02-13T20:02:01.9134480Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9135280Z [4A[J
+2025-02-13T20:02:01.9135623Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9135857Z
+2025-02-13T20:02:01.9136054Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9136278Z
+2025-02-13T20:02:01.9136508Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9136740Z
+2025-02-13T20:02:01.9137176Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9137762Z [4A[J
+2025-02-13T20:02:01.9138341Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9138596Z
+2025-02-13T20:02:01.9138862Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9139104Z
+2025-02-13T20:02:01.9139343Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9139613Z
+2025-02-13T20:02:01.9140088Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9140697Z [4A[J
+2025-02-13T20:02:01.9141096Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9141430Z
+2025-02-13T20:02:01.9141651Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9141935Z
+2025-02-13T20:02:01.9142151Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9142422Z
+2025-02-13T20:02:01.9142834Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9143469Z [4A[J
+2025-02-13T20:02:01.9143889Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9144141Z
+2025-02-13T20:02:01.9144417Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9144665Z
+2025-02-13T20:02:01.9144915Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9145170Z
+2025-02-13T20:02:01.9145586Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9146233Z [4A[J
+2025-02-13T20:02:01.9146664Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9146935Z
+2025-02-13T20:02:01.9170568Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9171033Z
+2025-02-13T20:02:01.9171284Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9171535Z
+2025-02-13T20:02:01.9171908Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9172458Z [4A[J
+2025-02-13T20:02:01.9172818Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9173050Z
+2025-02-13T20:02:01.9173254Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9173481Z
+2025-02-13T20:02:01.9173684Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9173914Z
+2025-02-13T20:02:01.9174289Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9175049Z [4A[J
+2025-02-13T20:02:01.9175403Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9175650Z
+2025-02-13T20:02:01.9175843Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9176086Z
+2025-02-13T20:02:01.9176279Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9176522Z
+2025-02-13T20:02:01.9176891Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9177434Z [4A[J
+2025-02-13T20:02:01.9177783Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9178016Z
+2025-02-13T20:02:01.9178220Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9178443Z
+2025-02-13T20:02:01.9178650Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9178880Z
+2025-02-13T20:02:01.9179252Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9179798Z [4A[J
+2025-02-13T20:02:01.9180141Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9180390Z
+2025-02-13T20:02:01.9180587Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9180825Z
+2025-02-13T20:02:01.9181174Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9181496Z
+2025-02-13T20:02:01.9181914Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9182552Z [4A[J
+2025-02-13T20:02:01.9182901Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9183146Z
+2025-02-13T20:02:01.9183348Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9183581Z
+2025-02-13T20:02:01.9183787Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9184018Z
+2025-02-13T20:02:01.9184387Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9184924Z [4A[J
+2025-02-13T20:02:01.9185264Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9185509Z
+2025-02-13T20:02:01.9185701Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9185941Z
+2025-02-13T20:02:01.9186134Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9186376Z
+2025-02-13T20:02:01.9186735Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9187288Z [4A[J
+2025-02-13T20:02:01.9187633Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9187862Z
+2025-02-13T20:02:01.9188060Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9188283Z
+2025-02-13T20:02:01.9188487Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9188719Z
+2025-02-13T20:02:01.9189087Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9189706Z [4A[J
+2025-02-13T20:02:01.9190063Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9190297Z
+2025-02-13T20:02:01.9190493Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9190732Z
+2025-02-13T20:02:01.9190923Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9191165Z
+2025-02-13T20:02:01.9191526Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9192070Z [4A[J
+2025-02-13T20:02:01.9192421Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9192665Z
+2025-02-13T20:02:01.9192863Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9193089Z
+2025-02-13T20:02:01.9193296Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9193526Z
+2025-02-13T20:02:01.9193899Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9194572Z [4A[J
+2025-02-13T20:02:01.9194921Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9195146Z
+2025-02-13T20:02:01.9195331Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9195554Z
+2025-02-13T20:02:01.9195747Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9195991Z
+2025-02-13T20:02:01.9196354Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9196895Z [4A[J
+2025-02-13T20:02:01.9197245Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9197482Z
+2025-02-13T20:02:01.9197671Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9197897Z
+2025-02-13T20:02:01.9198097Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9198320Z
+2025-02-13T20:02:01.9198685Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9199216Z [4A[J
+2025-02-13T20:02:01.9199574Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9199803Z
+2025-02-13T20:02:01.9199999Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9200247Z
+2025-02-13T20:02:01.9200440Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9200682Z
+2025-02-13T20:02:01.9201042Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9201626Z [4A[J
+2025-02-13T20:02:01.9202123Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9202355Z
+2025-02-13T20:02:01.9202560Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9202789Z
+2025-02-13T20:02:01.9202988Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9203230Z
+2025-02-13T20:02:01.9203588Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9204130Z [4A[J
+2025-02-13T20:02:01.9204476Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9204811Z
+2025-02-13T20:02:01.9205010Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9205244Z
+2025-02-13T20:02:01.9205438Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9205666Z
+2025-02-13T20:02:01.9206032Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9206584Z [4A[J
+2025-02-13T20:02:01.9206916Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9207138Z
+2025-02-13T20:02:01.9207339Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9207558Z
+2025-02-13T20:02:01.9207744Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9207983Z
+2025-02-13T20:02:01.9208336Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9208883Z [4A[J
+2025-02-13T20:02:01.9209225Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9209465Z
+2025-02-13T20:02:01.9209655Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9209885Z
+2025-02-13T20:02:01.9210090Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9210323Z
+2025-02-13T20:02:01.9210684Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9211213Z [4A[J
+2025-02-13T20:02:01.9211535Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9211769Z
+2025-02-13T20:02:01.9211954Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9212175Z
+2025-02-13T20:02:01.9212360Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9212584Z
+2025-02-13T20:02:01.9212935Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9213472Z [4A[J
+2025-02-13T20:02:01.9213803Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9214026Z
+2025-02-13T20:02:01.9214216Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9214436Z
+2025-02-13T20:02:01.9214631Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9215038Z
+2025-02-13T20:02:01.9215407Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9215940Z [4A[J
+2025-02-13T20:02:01.9216272Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9216500Z
+2025-02-13T20:02:01.9216691Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9216915Z
+2025-02-13T20:02:01.9217102Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9217469Z
+2025-02-13T20:02:01.9217834Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9218359Z [4A[J
+2025-02-13T20:02:01.9218684Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9218914Z
+2025-02-13T20:02:01.9219118Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9219349Z
+2025-02-13T20:02:01.9219561Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9219783Z
+2025-02-13T20:02:01.9220148Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9220688Z [4A[J
+2025-02-13T20:02:01.9221035Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9221266Z
+2025-02-13T20:02:01.9221456Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9221689Z
+2025-02-13T20:02:01.9221879Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9222121Z
+2025-02-13T20:02:01.9222481Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9223038Z [4A[J
+2025-02-13T20:02:01.9223383Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9223620Z
+2025-02-13T20:02:01.9223810Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9224037Z
+2025-02-13T20:02:01.9224243Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9224472Z
+2025-02-13T20:02:01.9224843Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9225385Z [4A[J
+2025-02-13T20:02:01.9225727Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9225955Z
+2025-02-13T20:02:01.9226148Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9226382Z
+2025-02-13T20:02:01.9226572Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9226806Z
+2025-02-13T20:02:01.9227270Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9227814Z [4A[J
+2025-02-13T20:02:01.9228156Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9228386Z
+2025-02-13T20:02:01.9228571Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9228808Z
+2025-02-13T20:02:01.9229008Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9229238Z
+2025-02-13T20:02:01.9229678Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9230213Z [4A[J
+2025-02-13T20:02:01.9230552Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9230777Z
+2025-02-13T20:02:01.9230962Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9231195Z
+2025-02-13T20:02:01.9231386Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9231629Z
+2025-02-13T20:02:01.9231984Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9232520Z [4A[J
+2025-02-13T20:02:01.9232862Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9233120Z
+2025-02-13T20:02:01.9233315Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9233541Z
+2025-02-13T20:02:01.9233764Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9233996Z
+2025-02-13T20:02:01.9234371Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9234929Z [4A[J
+2025-02-13T20:02:01.9235296Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9235521Z
+2025-02-13T20:02:01.9235722Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9235949Z
+2025-02-13T20:02:01.9236144Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9236376Z
+2025-02-13T20:02:01.9236728Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9237280Z [4A[J
+2025-02-13T20:02:01.9237629Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9237880Z
+2025-02-13T20:02:01.9238077Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9238321Z
+2025-02-13T20:02:01.9238521Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9238763Z
+2025-02-13T20:02:01.9239148Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9239696Z [4A[J
+2025-02-13T20:02:01.9240061Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9240414Z
+2025-02-13T20:02:01.9240627Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9240858Z
+2025-02-13T20:02:01.9241058Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9241311Z
+2025-02-13T20:02:01.9241678Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9242235Z [4A[J
+2025-02-13T20:02:01.9242605Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9242858Z
+2025-02-13T20:02:01.9243059Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9243301Z
+2025-02-13T20:02:01.9243503Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9243736Z
+2025-02-13T20:02:01.9244120Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9244685Z [4A[J
+2025-02-13T20:02:01.9245057Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9245293Z
+2025-02-13T20:02:01.9245504Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9245734Z
+2025-02-13T20:02:01.9245927Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9246173Z
+2025-02-13T20:02:01.9246528Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9247068Z [4A[J
+2025-02-13T20:02:01.9247414Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9247654Z
+2025-02-13T20:02:01.9247844Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9248078Z
+2025-02-13T20:02:01.9248269Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9248498Z
+2025-02-13T20:02:01.9248864Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9249404Z [4A[J
+2025-02-13T20:02:01.9249746Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9249975Z
+2025-02-13T20:02:01.9250179Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9250523Z
+2025-02-13T20:02:01.9250730Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9250963Z
+2025-02-13T20:02:01.9251320Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9251860Z [4A[J
+2025-02-13T20:02:01.9252211Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9252452Z
+2025-02-13T20:02:01.9252643Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9252882Z
+2025-02-13T20:02:01.9253074Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9253304Z
+2025-02-13T20:02:01.9253680Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9254225Z [4A[J
+2025-02-13T20:02:01.9254578Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9255080Z
+2025-02-13T20:02:01.9255300Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9255535Z
+2025-02-13T20:02:01.9255738Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9255970Z
+2025-02-13T20:02:01.9256346Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9256916Z [4A[J
+2025-02-13T20:02:01.9257297Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9257551Z
+2025-02-13T20:02:01.9257748Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9258007Z
+2025-02-13T20:02:01.9258203Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9258451Z
+2025-02-13T20:02:01.9258822Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9259386Z [4A[J
+2025-02-13T20:02:01.9259747Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9259987Z
+2025-02-13T20:02:01.9260198Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9260427Z
+2025-02-13T20:02:01.9260638Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9260868Z
+2025-02-13T20:02:01.9261227Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9261777Z [4A[J
+2025-02-13T20:02:01.9262137Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9262394Z
+2025-02-13T20:02:01.9262638Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9262881Z
+2025-02-13T20:02:01.9263082Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9263328Z
+2025-02-13T20:02:01.9263699Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9264397Z [4A[J
+2025-02-13T20:02:01.9264759Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9264992Z
+2025-02-13T20:02:01.9265207Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9265437Z
+2025-02-13T20:02:01.9265653Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9265887Z
+2025-02-13T20:02:01.9266278Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9266832Z [4A[J
+2025-02-13T20:02:01.9267196Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9267440Z
+2025-02-13T20:02:01.9267629Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9267859Z
+2025-02-13T20:02:01.9268049Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9268288Z
+2025-02-13T20:02:01.9268658Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9269192Z [4A[J
+2025-02-13T20:02:01.9269539Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9269842Z
+2025-02-13T20:02:01.9270093Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9270317Z
+2025-02-13T20:02:01.9270515Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9270740Z
+2025-02-13T20:02:01.9271109Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9271648Z [4A[J
+2025-02-13T20:02:01.9271995Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9272235Z
+2025-02-13T20:02:01.9272427Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9272672Z
+2025-02-13T20:02:01.9272865Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9273104Z
+2025-02-13T20:02:01.9273462Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9274019Z [4A[J
+2025-02-13T20:02:01.9274482Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9274721Z
+2025-02-13T20:02:01.9274930Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9275153Z
+2025-02-13T20:02:01.9275358Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9275596Z
+2025-02-13T20:02:01.9275976Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9276509Z [4A[J
+2025-02-13T20:02:01.9276861Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9277123Z
+2025-02-13T20:02:01.9277318Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9277570Z
+2025-02-13T20:02:01.9277764Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9278018Z
+2025-02-13T20:02:01.9278383Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9278943Z [4A[J
+2025-02-13T20:02:01.9279311Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9279546Z
+2025-02-13T20:02:01.9279764Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9279998Z
+2025-02-13T20:02:01.9280218Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9280450Z
+2025-02-13T20:02:01.9280828Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9281368Z [4A[J
+2025-02-13T20:02:01.9281741Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9281992Z
+2025-02-13T20:02:01.9282189Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9282434Z
+2025-02-13T20:02:01.9282635Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9282893Z
+2025-02-13T20:02:01.9283258Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9283824Z [4A[J
+2025-02-13T20:02:01.9284192Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9284431Z
+2025-02-13T20:02:01.9284645Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9284878Z
+2025-02-13T20:02:01.9285096Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9285331Z
+2025-02-13T20:02:01.9285715Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9286268Z [4A[J
+2025-02-13T20:02:01.9286631Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9286888Z
+2025-02-13T20:02:01.9287085Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9287330Z
+2025-02-13T20:02:01.9287639Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9287878Z
+2025-02-13T20:02:01.9288236Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9288778Z [4A[J
+2025-02-13T20:02:01.9289129Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9289363Z
+2025-02-13T20:02:01.9289566Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9289790Z
+2025-02-13T20:02:01.9289998Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9290223Z
+2025-02-13T20:02:01.9290590Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9291126Z [4A[J
+2025-02-13T20:02:01.9291460Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9291696Z
+2025-02-13T20:02:01.9291892Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9292129Z
+2025-02-13T20:02:01.9292325Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9292564Z
+2025-02-13T20:02:01.9292922Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9293465Z [4A[J
+2025-02-13T20:02:01.9293813Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9294046Z
+2025-02-13T20:02:01.9294246Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9294471Z
+2025-02-13T20:02:01.9294848Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9295109Z
+2025-02-13T20:02:01.9295491Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9296032Z [4A[J
+2025-02-13T20:02:01.9296371Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9296610Z
+2025-02-13T20:02:01.9296807Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9297045Z
+2025-02-13T20:02:01.9297238Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9297477Z
+2025-02-13T20:02:01.9297973Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9298542Z [4A[J
+2025-02-13T20:02:01.9298904Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9299139Z
+2025-02-13T20:02:01.9299354Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9299592Z
+2025-02-13T20:02:01.9299811Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9300049Z
+2025-02-13T20:02:01.9300428Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9300995Z [4A[J
+2025-02-13T20:02:01.9301355Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9301590Z
+2025-02-13T20:02:01.9301786Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9302036Z
+2025-02-13T20:02:01.9302233Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9302483Z
+2025-02-13T20:02:01.9302848Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9303401Z [4A[J
+2025-02-13T20:02:01.9303765Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9304004Z
+2025-02-13T20:02:01.9304220Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9304448Z
+2025-02-13T20:02:01.9304664Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9304900Z
+2025-02-13T20:02:01.9305289Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9305840Z [4A[J
+2025-02-13T20:02:01.9306198Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9306432Z
+2025-02-13T20:02:01.9306626Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9306873Z
+2025-02-13T20:02:01.9307074Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9307332Z
+2025-02-13T20:02:01.9307693Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9308256Z [4A[J
+2025-02-13T20:02:01.9308606Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9308855Z
+2025-02-13T20:02:01.9309045Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9309274Z
+2025-02-13T20:02:01.9309488Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9309791Z
+2025-02-13T20:02:01.9310159Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9310698Z [4A[J
+2025-02-13T20:02:01.9311047Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9311431Z
+2025-02-13T20:02:01.9311625Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9311865Z
+2025-02-13T20:02:01.9312058Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9312296Z
+2025-02-13T20:02:01.9312656Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9313199Z [4A[J
+2025-02-13T20:02:01.9313545Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9313795Z
+2025-02-13T20:02:01.9314000Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9314236Z
+2025-02-13T20:02:01.9314437Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9314684Z
+2025-02-13T20:02:01.9315074Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9315629Z [4A[J
+2025-02-13T20:02:01.9315975Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9316206Z
+2025-02-13T20:02:01.9316403Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9316650Z
+2025-02-13T20:02:01.9316840Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9317088Z
+2025-02-13T20:02:01.9317445Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9317986Z [4A[J
+2025-02-13T20:02:01.9318342Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9318579Z
+2025-02-13T20:02:01.9319847Z ##[notice]tt-smi reset was successful
+2025-02-13T20:02:01.9322211Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9322452Z
+2025-02-13T20:02:01.9322658Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9322896Z
+2025-02-13T20:02:01.9323277Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9323837Z [4A[J
+2025-02-13T20:02:01.9324187Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9324565Z
+2025-02-13T20:02:01.9324789Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9325021Z
+2025-02-13T20:02:01.9325231Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9325472Z
+2025-02-13T20:02:01.9325832Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9326404Z [4A[J
+2025-02-13T20:02:01.9326757Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9327031Z
+2025-02-13T20:02:01.9327223Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9327466Z
+2025-02-13T20:02:01.9327660Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9327888Z
+2025-02-13T20:02:01.9328257Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9328821Z [4A[J
+2025-02-13T20:02:01.9329180Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9329414Z
+2025-02-13T20:02:01.9329632Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9329871Z
+2025-02-13T20:02:01.9330120Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9330357Z
+2025-02-13T20:02:01.9330719Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9331259Z [4A[J
+2025-02-13T20:02:01.9331605Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9331847Z
+2025-02-13T20:02:01.9332036Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9332268Z
+2025-02-13T20:02:01.9332461Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9332688Z
+2025-02-13T20:02:01.9332896Z  [95m[][94m [16/16] ETH: [93m/[0m'
+2025-02-13T20:02:01.9333271Z + [[ 0 -ne 0 ]]
+2025-02-13T20:02:01.9333781Z + [[ [94m Starting pci link reset on WH devices at pci indices: 0 [0m
+2025-02-13T20:02:01.9334495Z [92m Finishing pci link reset on WH devices at pci indices: 0 [0m
+2025-02-13T20:02:01.9335335Z [95m Re-initializing boards after reset.... [0m
+2025-02-13T20:02:01.9335698Z
+2025-02-13T20:02:01.9335919Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9336361Z [1A[J
+2025-02-13T20:02:01.9336758Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9337019Z
+2025-02-13T20:02:01.9337236Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9337507Z
+2025-02-13T20:02:01.9337723Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9337964Z
+2025-02-13T20:02:01.9338382Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9339221Z [4A[J
+2025-02-13T20:02:01.9339609Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9339864Z
+2025-02-13T20:02:01.9340081Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9340329Z
+2025-02-13T20:02:01.9340555Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9340821Z
+2025-02-13T20:02:01.9341240Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9341865Z [4A[J
+2025-02-13T20:02:01.9342267Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9342553Z
+2025-02-13T20:02:01.9342775Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9343055Z
+2025-02-13T20:02:01.9343294Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9354889Z
+2025-02-13T20:02:01.9355446Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9356124Z [4A[J
+2025-02-13T20:02:01.9356525Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9356826Z
+2025-02-13T20:02:01.9357064Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9357335Z
+2025-02-13T20:02:01.9357579Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9357827Z
+2025-02-13T20:02:01.9358247Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9358863Z [4A[J
+2025-02-13T20:02:01.9359246Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9359494Z
+2025-02-13T20:02:01.9359694Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9359929Z
+2025-02-13T20:02:01.9360122Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9360362Z
+2025-02-13T20:02:01.9360729Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9361442Z [4A[J
+2025-02-13T20:02:01.9361808Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9362040Z
+2025-02-13T20:02:01.9362242Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9362462Z
+2025-02-13T20:02:01.9362665Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9362909Z
+2025-02-13T20:02:01.9363285Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9363818Z [4A[J
+2025-02-13T20:02:01.9364168Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9364411Z
+2025-02-13T20:02:01.9364599Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9364841Z
+2025-02-13T20:02:01.9365035Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9365278Z
+2025-02-13T20:02:01.9365638Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9366179Z [4A[J
+2025-02-13T20:02:01.9366540Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9366772Z
+2025-02-13T20:02:01.9366975Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9367210Z
+2025-02-13T20:02:01.9367408Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9367636Z
+2025-02-13T20:02:01.9368004Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9368549Z [4A[J
+2025-02-13T20:02:01.9368887Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9369126Z
+2025-02-13T20:02:01.9369314Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9369549Z
+2025-02-13T20:02:01.9369744Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9369980Z
+2025-02-13T20:02:01.9370337Z  [95m[0/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9370885Z [4A[J
+2025-02-13T20:02:01.9371269Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9371532Z
+2025-02-13T20:02:01.9371741Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9371965Z
+2025-02-13T20:02:01.9372165Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9372394Z
+2025-02-13T20:02:01.9372766Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9373306Z [4A[J
+2025-02-13T20:02:01.9373638Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9373877Z
+2025-02-13T20:02:01.9374066Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9374427Z
+2025-02-13T20:02:01.9374623Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9375037Z
+2025-02-13T20:02:01.9375409Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9375951Z [4A[J
+2025-02-13T20:02:01.9376302Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9376572Z
+2025-02-13T20:02:01.9376826Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9377123Z
+2025-02-13T20:02:01.9377381Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9377685Z
+2025-02-13T20:02:01.9378178Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9378914Z [4A[J
+2025-02-13T20:02:01.9379337Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9379660Z
+2025-02-13T20:02:01.9379901Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9380218Z
+2025-02-13T20:02:01.9380465Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9380781Z
+2025-02-13T20:02:01.9381267Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9382013Z [4A[J
+2025-02-13T20:02:01.9382453Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9382762Z
+2025-02-13T20:02:01.9383005Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9383266Z
+2025-02-13T20:02:01.9383506Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9383771Z
+2025-02-13T20:02:01.9384202Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9384868Z [4A[J
+2025-02-13T20:02:01.9385271Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9385560Z
+2025-02-13T20:02:01.9385800Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9386090Z
+2025-02-13T20:02:01.9386329Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9386928Z
+2025-02-13T20:02:01.9387418Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9388106Z [4A[J
+2025-02-13T20:02:01.9388537Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9388845Z
+2025-02-13T20:02:01.9389098Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9389374Z
+2025-02-13T20:02:01.9389711Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9390003Z
+2025-02-13T20:02:01.9390476Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9391177Z [4A[J
+2025-02-13T20:02:01.9391587Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9391885Z
+2025-02-13T20:02:01.9392126Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9392422Z
+2025-02-13T20:02:01.9392659Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9392959Z
+2025-02-13T20:02:01.9393412Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9394110Z [4A[J
+2025-02-13T20:02:01.9394534Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9394826Z
+2025-02-13T20:02:01.9395072Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9395344Z
+2025-02-13T20:02:01.9395588Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9395874Z
+2025-02-13T20:02:01.9398200Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9398912Z [4A[J
+2025-02-13T20:02:01.9399340Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9399623Z
+2025-02-13T20:02:01.9399872Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9400169Z
+2025-02-13T20:02:01.9400411Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9400700Z
+2025-02-13T20:02:01.9401139Z  [95m[1/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9401809Z [4A[J
+2025-02-13T20:02:01.9402237Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9402515Z
+2025-02-13T20:02:01.9402756Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9403034Z
+2025-02-13T20:02:01.9403266Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9403538Z
+2025-02-13T20:02:01.9403995Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9404663Z [4A[J
+2025-02-13T20:02:01.9405256Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9405546Z
+2025-02-13T20:02:01.9405772Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9406046Z
+2025-02-13T20:02:01.9406265Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9406544Z
+2025-02-13T20:02:01.9406968Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9407620Z [4A[J
+2025-02-13T20:02:01.9408029Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9408305Z
+2025-02-13T20:02:01.9408548Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9408818Z
+2025-02-13T20:02:01.9409058Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9409331Z
+2025-02-13T20:02:01.9409782Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9410442Z [4A[J
+2025-02-13T20:02:01.9410832Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9411118Z
+2025-02-13T20:02:01.9411352Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9411661Z
+2025-02-13T20:02:01.9411895Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9412180Z
+2025-02-13T20:02:01.9412633Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9413286Z [4A[J
+2025-02-13T20:02:01.9413696Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9413980Z
+2025-02-13T20:02:01.9414213Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9414484Z
+2025-02-13T20:02:01.9414889Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9415179Z
+2025-02-13T20:02:01.9415643Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9416298Z [4A[J
+2025-02-13T20:02:01.9416676Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9416958Z
+2025-02-13T20:02:01.9417342Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9417635Z
+2025-02-13T20:02:01.9417878Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9418162Z
+2025-02-13T20:02:01.9418600Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9419271Z [4A[J
+2025-02-13T20:02:01.9419682Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9419962Z
+2025-02-13T20:02:01.9420201Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9420474Z
+2025-02-13T20:02:01.9420715Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9420998Z
+2025-02-13T20:02:01.9421454Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9422110Z [4A[J
+2025-02-13T20:02:01.9422510Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9422803Z
+2025-02-13T20:02:01.9423025Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9423306Z
+2025-02-13T20:02:01.9423541Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9423846Z
+2025-02-13T20:02:01.9424289Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9424951Z [4A[J
+2025-02-13T20:02:01.9425357Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9425637Z
+2025-02-13T20:02:01.9425879Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9426147Z
+2025-02-13T20:02:01.9426384Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9426656Z
+2025-02-13T20:02:01.9427108Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9427765Z [4A[J
+2025-02-13T20:02:01.9428163Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9428462Z
+2025-02-13T20:02:01.9428685Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9428962Z
+2025-02-13T20:02:01.9429182Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9429460Z
+2025-02-13T20:02:01.9429971Z  [95m[2/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9430617Z [4A[J
+2025-02-13T20:02:01.9431034Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9431309Z
+2025-02-13T20:02:01.9431546Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9431817Z
+2025-02-13T20:02:01.9432057Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9432513Z
+2025-02-13T20:02:01.9432968Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9433611Z [4A[J
+2025-02-13T20:02:01.9434010Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9434299Z
+2025-02-13T20:02:01.9434520Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9434800Z
+2025-02-13T20:02:01.9435031Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9435326Z
+2025-02-13T20:02:01.9435759Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9436410Z [4A[J
+2025-02-13T20:02:01.9436810Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9437094Z
+2025-02-13T20:02:01.9437328Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9437596Z
+2025-02-13T20:02:01.9437839Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9438120Z
+2025-02-13T20:02:01.9438578Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9439242Z [4A[J
+2025-02-13T20:02:01.9439651Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9439935Z
+2025-02-13T20:02:01.9440164Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9440443Z
+2025-02-13T20:02:01.9440670Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9440962Z
+2025-02-13T20:02:01.9441407Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9442073Z [4A[J
+2025-02-13T20:02:01.9442474Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9442752Z
+2025-02-13T20:02:01.9442991Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9443261Z
+2025-02-13T20:02:01.9443499Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9443777Z
+2025-02-13T20:02:01.9444357Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9445029Z [4A[J
+2025-02-13T20:02:01.9445443Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9445727Z
+2025-02-13T20:02:01.9445959Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9446256Z
+2025-02-13T20:02:01.9446494Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9446781Z
+2025-02-13T20:02:01.9447223Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9447893Z [4A[J
+2025-02-13T20:02:01.9448307Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9448613Z
+2025-02-13T20:02:01.9448837Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9449107Z
+2025-02-13T20:02:01.9449341Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9449614Z
+2025-02-13T20:02:01.9450065Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9450724Z [4A[J
+2025-02-13T20:02:01.9451127Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9451404Z
+2025-02-13T20:02:01.9451641Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9451922Z
+2025-02-13T20:02:01.9452156Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9452443Z
+2025-02-13T20:02:01.9452880Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9453527Z [4A[J
+2025-02-13T20:02:01.9453932Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9454219Z
+2025-02-13T20:02:01.9454447Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9454906Z
+2025-02-13T20:02:01.9455149Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9455434Z
+2025-02-13T20:02:01.9455860Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9456501Z [4A[J
+2025-02-13T20:02:01.9456921Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9457201Z
+2025-02-13T20:02:01.9457432Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9457701Z
+2025-02-13T20:02:01.9457928Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9458215Z
+2025-02-13T20:02:01.9458663Z  [95m[3/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9459326Z [4A[J
+2025-02-13T20:02:01.9459733Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9460019Z
+2025-02-13T20:02:01.9460434Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9460706Z
+2025-02-13T20:02:01.9460948Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9461226Z
+2025-02-13T20:02:01.9461674Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9462339Z [4A[J
+2025-02-13T20:02:01.9462739Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9463019Z
+2025-02-13T20:02:01.9463259Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9463532Z
+2025-02-13T20:02:01.9463766Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9464051Z
+2025-02-13T20:02:01.9464494Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9465157Z [4A[J
+2025-02-13T20:02:01.9465568Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9465863Z
+2025-02-13T20:02:01.9466112Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9466411Z
+2025-02-13T20:02:01.9466648Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9466928Z
+2025-02-13T20:02:01.9467402Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9468075Z [4A[J
+2025-02-13T20:02:01.9468499Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9468785Z
+2025-02-13T20:02:01.9469034Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9469314Z
+2025-02-13T20:02:01.9469635Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9469937Z
+2025-02-13T20:02:01.9470393Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9471076Z [4A[J
+2025-02-13T20:02:01.9471499Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9471804Z
+2025-02-13T20:02:01.9472042Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9472340Z
+2025-02-13T20:02:01.9472743Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9473043Z
+2025-02-13T20:02:01.9473517Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9474217Z [4A[J
+2025-02-13T20:02:01.9474645Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9474940Z
+2025-02-13T20:02:01.9475185Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9475468Z
+2025-02-13T20:02:01.9475705Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9476011Z
+2025-02-13T20:02:01.9476460Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9477142Z [4A[J
+2025-02-13T20:02:01.9477567Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9477866Z
+2025-02-13T20:02:01.9478101Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9478397Z
+2025-02-13T20:02:01.9478633Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9478927Z
+2025-02-13T20:02:01.9479400Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9480125Z [4A[J
+2025-02-13T20:02:01.9480540Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9480821Z
+2025-02-13T20:02:01.9481057Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9481336Z
+2025-02-13T20:02:01.9481580Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9481866Z
+2025-02-13T20:02:01.9482310Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9482982Z [4A[J
+2025-02-13T20:02:01.9483385Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9483671Z
+2025-02-13T20:02:01.9483904Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9484186Z
+2025-02-13T20:02:01.9484418Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9484700Z
+2025-02-13T20:02:01.9485150Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9485830Z [4A[J
+2025-02-13T20:02:01.9486243Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9486525Z
+2025-02-13T20:02:01.9486772Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9487046Z
+2025-02-13T20:02:01.9487288Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9487568Z
+2025-02-13T20:02:01.9488015Z  [95m[4/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9488856Z [4A[J
+2025-02-13T20:02:01.9489276Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9489572Z
+2025-02-13T20:02:01.9489803Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9490088Z
+2025-02-13T20:02:01.9490321Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9490611Z
+2025-02-13T20:02:01.9491057Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9491728Z [4A[J
+2025-02-13T20:02:01.9492146Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9492433Z
+2025-02-13T20:02:01.9492674Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9492958Z
+2025-02-13T20:02:01.9493211Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9493504Z
+2025-02-13T20:02:01.9493961Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9494838Z [4A[J
+2025-02-13T20:02:01.9495278Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9495591Z
+2025-02-13T20:02:01.9495827Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9496128Z
+2025-02-13T20:02:01.9496365Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9496666Z
+2025-02-13T20:02:01.9497118Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9497802Z [4A[J
+2025-02-13T20:02:01.9498226Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9498524Z
+2025-02-13T20:02:01.9498773Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9499033Z
+2025-02-13T20:02:01.9499267Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9499528Z
+2025-02-13T20:02:01.9499957Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9500597Z [4A[J
+2025-02-13T20:02:01.9501142Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9501438Z
+2025-02-13T20:02:01.9501663Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9501924Z
+2025-02-13T20:02:01.9502132Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9502402Z
+2025-02-13T20:02:01.9502789Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9503333Z [4A[J
+2025-02-13T20:02:01.9503680Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9503924Z
+2025-02-13T20:02:01.9504116Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9504341Z
+2025-02-13T20:02:01.9504540Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9504807Z
+2025-02-13T20:02:01.9505182Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9505722Z [4A[J
+2025-02-13T20:02:01.9506068Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9506297Z
+2025-02-13T20:02:01.9506498Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9506722Z
+2025-02-13T20:02:01.9506925Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9507162Z
+2025-02-13T20:02:01.9507518Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9508053Z [4A[J
+2025-02-13T20:02:01.9508408Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9508650Z
+2025-02-13T20:02:01.9508842Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9509065Z
+2025-02-13T20:02:01.9509268Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9509495Z
+2025-02-13T20:02:01.9509945Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9510509Z [4A[J
+2025-02-13T20:02:01.9510887Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9511147Z
+2025-02-13T20:02:01.9511381Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9511653Z
+2025-02-13T20:02:01.9511858Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9512097Z
+2025-02-13T20:02:01.9512459Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9513007Z [4A[J
+2025-02-13T20:02:01.9513348Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9513585Z
+2025-02-13T20:02:01.9513778Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9514008Z
+2025-02-13T20:02:01.9514200Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9514599Z
+2025-02-13T20:02:01.9514968Z  [95m[5/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9515500Z [4A[J
+2025-02-13T20:02:01.9515846Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9516072Z
+2025-02-13T20:02:01.9516266Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9516488Z
+2025-02-13T20:02:01.9516678Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9516914Z
+2025-02-13T20:02:01.9517268Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9517797Z [4A[J
+2025-02-13T20:02:01.9518146Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9518384Z
+2025-02-13T20:02:01.9518576Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9518818Z
+2025-02-13T20:02:01.9519012Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9519240Z
+2025-02-13T20:02:01.9519614Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9520164Z [4A[J
+2025-02-13T20:02:01.9520509Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9520744Z
+2025-02-13T20:02:01.9520956Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9521184Z
+2025-02-13T20:02:01.9521394Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9521627Z
+2025-02-13T20:02:01.9521988Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9522533Z [4A[J
+2025-02-13T20:02:01.9522873Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9523124Z
+2025-02-13T20:02:01.9523321Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9523553Z
+2025-02-13T20:02:01.9523743Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9523974Z
+2025-02-13T20:02:01.9524451Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9525013Z [4A[J
+2025-02-13T20:02:01.9525364Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9525591Z
+2025-02-13T20:02:01.9525788Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9526026Z
+2025-02-13T20:02:01.9526232Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9526462Z
+2025-02-13T20:02:01.9526820Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9527350Z [4A[J
+2025-02-13T20:02:01.9527701Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9527945Z
+2025-02-13T20:02:01.9528140Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9528373Z
+2025-02-13T20:02:01.9528565Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9528810Z
+2025-02-13T20:02:01.9529165Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9529708Z [4A[J
+2025-02-13T20:02:01.9530065Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9530306Z
+2025-02-13T20:02:01.9530516Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9530738Z
+2025-02-13T20:02:01.9530938Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9531173Z
+2025-02-13T20:02:01.9531530Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9532082Z [4A[J
+2025-02-13T20:02:01.9532434Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9532676Z
+2025-02-13T20:02:01.9532865Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9533096Z
+2025-02-13T20:02:01.9533288Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9533523Z
+2025-02-13T20:02:01.9533878Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9534424Z [4A[J
+2025-02-13T20:02:01.9534956Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9535201Z
+2025-02-13T20:02:01.9535415Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9535638Z
+2025-02-13T20:02:01.9535843Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9536078Z
+2025-02-13T20:02:01.9536441Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9536974Z [4A[J
+2025-02-13T20:02:01.9537316Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9537700Z
+2025-02-13T20:02:01.9537896Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9538132Z
+2025-02-13T20:02:01.9538323Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9538557Z
+2025-02-13T20:02:01.9538920Z  [95m[6/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9539447Z [4A[J
+2025-02-13T20:02:01.9539788Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9540041Z
+2025-02-13T20:02:01.9540265Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9540487Z
+2025-02-13T20:02:01.9540694Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9540925Z
+2025-02-13T20:02:01.9541297Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9541830Z [4A[J
+2025-02-13T20:02:01.9542186Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9542429Z
+2025-02-13T20:02:01.9542619Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9542854Z
+2025-02-13T20:02:01.9543047Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9543292Z
+2025-02-13T20:02:01.9543651Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9544196Z [4A[J
+2025-02-13T20:02:01.9544542Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9544773Z
+2025-02-13T20:02:01.9544972Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9545198Z
+2025-02-13T20:02:01.9545404Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9545629Z
+2025-02-13T20:02:01.9545999Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9546533Z [4A[J
+2025-02-13T20:02:01.9546891Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9547147Z
+2025-02-13T20:02:01.9547337Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9547753Z
+2025-02-13T20:02:01.9547969Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9548245Z
+2025-02-13T20:02:01.9548609Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9577067Z [4A[J
+2025-02-13T20:02:01.9577459Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9577720Z
+2025-02-13T20:02:01.9577923Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9578149Z
+2025-02-13T20:02:01.9578471Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9578751Z
+2025-02-13T20:02:01.9579175Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m/[0m
+2025-02-13T20:02:01.9579724Z [4A[J
+2025-02-13T20:02:01.9580126Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9580370Z
+2025-02-13T20:02:01.9580561Z [94m Detecting ARC: [93m-[0m
+2025-02-13T20:02:01.9580794Z
+2025-02-13T20:02:01.9580989Z [94m Detecting DRAM: [93m-[0m
+2025-02-13T20:02:01.9581241Z
+2025-02-13T20:02:01.9581604Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m-[0m
+2025-02-13T20:02:01.9582147Z [4A[J
+2025-02-13T20:02:01.9582504Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9582735Z
+2025-02-13T20:02:01.9582935Z [94m Detecting ARC: [93m\[0m
+2025-02-13T20:02:01.9583168Z
+2025-02-13T20:02:01.9583382Z [94m Detecting DRAM: [93m\[0m
+2025-02-13T20:02:01.9583616Z
+2025-02-13T20:02:01.9583982Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m\[0m
+2025-02-13T20:02:01.9584525Z [4A[J
+2025-02-13T20:02:01.9584876Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9585116Z
+2025-02-13T20:02:01.9585304Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:02:01.9585538Z
+2025-02-13T20:02:01.9585734Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:02:01.9585974Z
+2025-02-13T20:02:01.9586330Z  [95m[7/900][94m [0/16] ETH: Waiting for initial training to complete: [93m|[0m
+2025-02-13T20:02:01.9586883Z [4A[J
+2025-02-13T20:02:01.9587232Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:02:01.9587461Z
+2025-02-13T20:02:01.9587670Z [94m Detecting ARC: [93m/[0m
+2025-02-13T20:02:01.9587894Z
+2025-02-13T20:02:01.9588104Z [94m Detecting DRAM: [93m/[0m
+2025-02-13T20:02:01.9588332Z
+2025-02-13T20:02:01.9588678Z  [95m[][94m [16/16] ETH: [93m/[0m == *\N\o\ \c\h\i\p\s\ \d\e\t\e\c\t\e\d* ]]
+2025-02-13T20:02:01.9589355Z + break
+2025-02-13T20:02:01.9589724Z + '[' 1 -eq 10 ']'
+2025-02-13T20:02:01.9590281Z + echo '::notice title=reset-successful-startup::tt-smi reset was successful'
+2025-02-13T20:02:01.9590846Z + check_hugepages_service_status=0
+2025-02-13T20:02:01.9591302Z + sudo systemctl status tenstorrent-hugepages.service
+2025-02-13T20:02:01.9591860Z + check_hugepages_service_status=3
+2025-02-13T20:02:01.9592225Z + '[' 3 -eq 4 ']'
+2025-02-13T20:02:01.9593132Z + echo '::notice title=hugepages-service-found-startup::Hugepages service found. Command returned with exit code 3. Restarting it so we can ensure hugepages are available'
+2025-02-13T20:02:01.9594174Z + sudo systemctl restart tenstorrent-hugepages.service
+2025-02-13T20:02:01.9595013Z ● tenstorrent-hugepages.service - Script that configures hugepages for Tenstorrent ASICs
+2025-02-13T20:02:01.9595962Z      Loaded: loaded (/lib/systemd/system/tenstorrent-hugepages.service; enabled; vendor preset: enabled)
+2025-02-13T20:02:01.9596818Z      Active: failed (Result: exit-code) since Thu 2025-02-13 19:54:06 UTC; 7min ago
+2025-02-13T20:02:01.9597638Z     Process: 929227 ExecStart=/opt/tenstorrent/bin/hugepages-setup.sh (code=exited, status=1/FAILURE)
+2025-02-13T20:02:01.9598351Z    Main PID: 929227 (code=exited, status=1/FAILURE)
+2025-02-13T20:02:01.9598654Z
+2025-02-13T20:02:01.9599045Z Feb 13 19:54:06 tt-metal-ci-vm-68 systemd[1]: Started Script that configures hugepages for Tenstorrent ASICs.
+2025-02-13T20:02:01.9599869Z Feb 13 19:54:06 tt-metal-ci-vm-68 hugepages-setup.sh[929227]: Node 0 hugepages before: 0
+2025-02-13T20:02:01.9600598Z Feb 13 19:54:06 tt-metal-ci-vm-68 hugepages-setup.sh[929227]: Node 0 hugepages needed: 4
+2025-02-13T20:02:01.9601457Z Feb 13 19:54:06 tt-metal-ci-vm-68 hugepages-setup.sh[929227]: Node 0 hugepages after: 0
+2025-02-13T20:02:01.9602286Z Feb 13 19:54:06 tt-metal-ci-vm-68 hugepages-setup.sh[929227]: Failed to get requested 4 hugepages, only got 0
+2025-02-13T20:02:01.9603288Z Feb 13 19:54:06 tt-metal-ci-vm-68 systemd[1]: tenstorrent-hugepages.service: Main process exited, code=exited, status=1/FAILURE
+2025-02-13T20:02:01.9604296Z Feb 13 19:54:06 tt-metal-ci-vm-68 systemd[1]: tenstorrent-hugepages.service: Failed with result 'exit-code'.
+2025-02-13T20:02:01.9606576Z ##[notice]Hugepages service found. Command returned with exit code 3. Restarting it so we can ensure hugepages are available
+2025-02-13T20:02:01.9778291Z ++ date +%s
+2025-02-13T20:02:01.9791878Z + hugepages_check_start=1739476921
+2025-02-13T20:02:01.9813506Z + hugepages_check_timeout=60
+2025-02-13T20:02:01.9815118Z ++ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+2025-02-13T20:02:01.9815871Z + [[ 1 -eq 0 ]]
+2025-02-13T20:02:01.9818544Z ##[notice]Hugepages is now setup.
+2025-02-13T20:02:01.9820624Z + echo '::notice title=hugepages-setup-success-startup::Hugepages is now setup.'
+2025-02-13T20:02:01.9821433Z + echo 'Printing out cpu information...'
+2025-02-13T20:02:01.9821992Z + lscpu
+2025-02-13T20:02:01.9822397Z Printing out cpu information...
+2025-02-13T20:02:01.9854352Z Architecture:                       x86_64
+2025-02-13T20:02:01.9855159Z CPU op-mode(s):                     32-bit, 64-bit
+2025-02-13T20:02:01.9855680Z Byte Order:                         Little Endian
+2025-02-13T20:02:01.9856248Z Address sizes:                      40 bits physical, 48 bits virtual
+2025-02-13T20:02:01.9856791Z CPU(s):                             14
+2025-02-13T20:02:01.9857246Z On-line CPU(s) list:                0-13
+2025-02-13T20:02:01.9857701Z Thread(s) per core:                 1
+2025-02-13T20:02:01.9859578Z Core(s) per socket:                 1
+2025-02-13T20:02:01.9860164Z Socket(s):                          14
+2025-02-13T20:02:01.9860629Z NUMA node(s):                       2
+2025-02-13T20:02:01.9861674Z Vendor ID:                          AuthenticAMD
+2025-02-13T20:02:01.9862164Z CPU family:                         23
+2025-02-13T20:02:01.9862606Z Model:                              49
+2025-02-13T20:02:01.9863122Z Model name:                         AMD EPYC-Rome Processor
+2025-02-13T20:02:01.9864082Z Stepping:                           0
+2025-02-13T20:02:01.9864532Z CPU MHz:                            2300.000
+2025-02-13T20:02:01.9865004Z BogoMIPS:                           4600.00
+2025-02-13T20:02:01.9865518Z Virtualization:                     AMD-V
+2025-02-13T20:02:01.9865967Z Hypervisor vendor:                  KVM
+2025-02-13T20:02:01.9866483Z Virtualization type:                full
+2025-02-13T20:02:01.9866953Z L1d cache:                          448 KiB
+2025-02-13T20:02:01.9867414Z L1i cache:                          448 KiB
+2025-02-13T20:02:01.9867876Z L2 cache:                           7 MiB
+2025-02-13T20:02:01.9868330Z L3 cache:                           224 MiB
+2025-02-13T20:02:01.9868794Z NUMA node0 CPU(s):                  0-6
+2025-02-13T20:02:01.9869223Z NUMA node1 CPU(s):                  7-13
+2025-02-13T20:02:01.9869725Z Vulnerability Gather data sampling: Not affected
+2025-02-13T20:02:01.9870266Z Vulnerability Itlb multihit:        Not affected
+2025-02-13T20:02:01.9870801Z Vulnerability L1tf:                 Not affected
+2025-02-13T20:02:01.9871326Z Vulnerability Mds:                  Not affected
+2025-02-13T20:02:01.9871847Z Vulnerability Meltdown:             Not affected
+2025-02-13T20:02:01.9872373Z Vulnerability Mmio stale data:      Not affected
+2025-02-13T20:02:01.9872902Z Vulnerability Retbleed:             Vulnerable
+2025-02-13T20:02:01.9873763Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2025-02-13T20:02:01.9874751Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2025-02-13T20:02:01.9876235Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2025-02-13T20:02:01.9877154Z Vulnerability Srbds:                Not affected
+2025-02-13T20:02:01.9877658Z Vulnerability Tsx async abort:      Not affected
+2025-02-13T20:02:01.9880381Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2025-02-13T20:02:02.0115124Z ##[group]Run tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+2025-02-13T20:02:02.0115857Z with:
+2025-02-13T20:02:02.0116326Z   token: ***
+2025-02-13T20:02:02.0116641Z   fetch-depth: 1
+2025-02-13T20:02:02.0116962Z env:
+2025-02-13T20:02:02.0117249Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:02.0117611Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:02.0117975Z ##[endgroup]
+2025-02-13T20:02:02.0204518Z ##[group]Run set -x
+2025-02-13T20:02:02.0205026Z [36;1mset -x[0m
+2025-02-13T20:02:02.0205396Z [36;1mls -al[0m
+2025-02-13T20:02:02.0205805Z [36;1mif [ -f "semicolon_delimited_script" ]; then[0m
+2025-02-13T20:02:02.0206443Z [36;1m  file semicolon_delimited_script[0m
+2025-02-13T20:02:02.0206996Z [36;1m  head semicolon_delimited_script[0m
+2025-02-13T20:02:02.0207514Z [36;1mfi[0m
+2025-02-13T20:02:02.0207929Z [36;1msudo rm -rf deleteme[0m
+2025-02-13T20:02:02.0208422Z [36;1msudo rm -rf docker-job[0m
+2025-02-13T20:02:02.0208917Z [36;1mif [ -d ".git" ]; then[0m
+2025-02-13T20:02:02.0209532Z [36;1m  echo 'Cleaning repo'[0m
+2025-02-13T20:02:02.0210012Z [36;1m  git clean -xffd[0m
+2025-02-13T20:02:02.0210499Z [36;1m  echo 'Done git clean -xffd'[0m
+2025-02-13T20:02:02.0211040Z [36;1m  echo 'Attempting to delete any lock files'[0m
+2025-02-13T20:02:02.0211644Z [36;1m  find .git -type f -iname '*.lock' -delete[0m
+2025-02-13T20:02:02.0212202Z [36;1m  echo 'Done deleting lock files'[0m
+2025-02-13T20:02:02.0212963Z [36;1m  echo 'De-init-ing submodules'[0m
+2025-02-13T20:02:02.0213493Z [36;1m  git submodule deinit -f --all[0m
+2025-02-13T20:02:02.0214034Z [36;1m  echo 'Done de-initing submodules'[0m
+2025-02-13T20:02:02.0214524Z [36;1mfi[0m
+2025-02-13T20:02:02.0235352Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:02:02.0235997Z env:
+2025-02-13T20:02:02.0236340Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:02.0236709Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:02.0237106Z ##[endgroup]
+2025-02-13T20:02:02.0276240Z + ls -al
+2025-02-13T20:02:02.0290616Z total 699996
+2025-02-13T20:02:02.0291147Z drwxr-xr-x 26 ubuntu ubuntu      4096 Feb 13 19:56 .
+2025-02-13T20:02:02.0291859Z drwxr-xr-x  3 ubuntu ubuntu      4096 Aug 26 21:38 ..
+2025-02-13T20:02:02.0292437Z drwxr-xr-x  3 ubuntu ubuntu      4096 Feb 13 19:55 .cache
+2025-02-13T20:02:02.0293054Z -rw-r--r--  1 ubuntu ubuntu      3966 Dec 19 19:11 .clang-format
+2025-02-13T20:02:02.0293728Z -rw-r--r--  1 ubuntu ubuntu      6268 Jan 26 15:59 .clang-format-ignore
+2025-02-13T20:02:02.0294390Z -rw-r--r--  1 ubuntu ubuntu      6374 Jan 26 15:59 .clang-tidy
+2025-02-13T20:02:02.0295137Z -rw-r--r--  1 ubuntu ubuntu        43 Sep 25 11:01 .clangd
+2025-02-13T20:02:02.0295703Z -rw-r--r--  1 ubuntu ubuntu       222 Oct 29 04:04 .gersemirc
+2025-02-13T20:02:02.0296420Z drwxr-xr-x 10 ubuntu ubuntu      4096 Feb 13 19:56 .git
+2025-02-13T20:02:02.0297003Z -rw-r--r--  1 ubuntu ubuntu       239 Dec  9 18:06 .git-blame-ignore-revs
+2025-02-13T20:02:02.0297647Z -rw-r--r--  1 ubuntu ubuntu        35 Dec  4 05:07 .gitattributes
+2025-02-13T20:02:02.0298281Z drwxr-xr-x  6 ubuntu ubuntu      4096 Feb 13 08:56 .github
+2025-02-13T20:02:02.0298869Z -rw-r--r--  1 ubuntu ubuntu      1730 Jan 22 04:32 .gitignore
+2025-02-13T20:02:02.0299572Z -rw-r--r--  1 ubuntu ubuntu       991 Feb  5 00:09 .gitmodules
+2025-02-13T20:02:02.0300162Z drwx------  6 ubuntu ubuntu      4096 Feb 13 19:55 .local
+2025-02-13T20:02:02.0300785Z -rw-r--r--  1 ubuntu ubuntu       932 Dec  9 18:06 .pre-commit-config.yaml
+2025-02-13T20:02:02.0301457Z -rw-r--r--  1 ubuntu ubuntu  15813574 Feb 13 08:56 .test_durations
+2025-02-13T20:02:02.0302051Z -rw-r--r--  1 ubuntu ubuntu       213 Nov 22 03:23 .yamllint
+2025-02-13T20:02:02.0302637Z -rw-r--r--  1 ubuntu ubuntu     11086 Feb 13 08:56 CMakeLists.txt
+2025-02-13T20:02:02.0303381Z -rw-r--r--  1 ubuntu ubuntu      2231 Feb  5 00:09 CMakePresets.json
+2025-02-13T20:02:02.0303962Z -rw-r--r--  1 ubuntu ubuntu     11478 Feb 13 08:56 CODEOWNERS
+2025-02-13T20:02:02.0304791Z -rw-r--r--  1 ubuntu ubuntu      5253 Sep 19 20:34 CODE_OF_CONDUCT.md
+2025-02-13T20:02:02.0305475Z -rw-r--r--  1 ubuntu ubuntu     36527 Jan 15 01:12 CONTRIBUTING.md
+2025-02-13T20:02:02.0306095Z -rw-r--r--  1 ubuntu ubuntu    126373 Jan 26 15:59 Doxyfile
+2025-02-13T20:02:02.0306705Z -rw-r--r--  1 ubuntu ubuntu      6046 Feb  5 00:09 INSTALLING.md
+2025-02-13T20:02:02.0307333Z -rw-r--r--  1 ubuntu ubuntu     11825 Oct  9 11:34 LICENSE
+2025-02-13T20:02:02.0307928Z -rw-r--r--  1 ubuntu ubuntu      1562 Jan 27 05:58 MANIFEST.in
+2025-02-13T20:02:02.0308566Z -rw-r--r--  1 ubuntu ubuntu     18372 Feb 13 08:56 METALIUM_GUIDE.md
+2025-02-13T20:02:02.0309206Z -rw-r--r--  1 ubuntu ubuntu     15526 Feb 13 08:56 README.md
+2025-02-13T20:02:02.0309856Z drwxr-xr-x  7 ubuntu ubuntu      4096 Feb 13 19:54 build
+2025-02-13T20:02:02.0310494Z -rwxr-xr-x  1 ubuntu ubuntu     11097 Feb 13 08:56 build_metal.sh
+2025-02-13T20:02:02.0311080Z drwxr-xr-x  3 ubuntu ubuntu      4096 Feb 13 19:55 built
+2025-02-13T20:02:02.0311716Z -rw-r--r--  1 ubuntu ubuntu      1438 Oct  9 11:34 check_copyright_config.yaml
+2025-02-13T20:02:02.0312419Z -rw-r--r--  1 ubuntu ubuntu      1821 Sep 19 20:34 cloc.sh
+2025-02-13T20:02:02.0313004Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 08:56 cmake
+2025-02-13T20:02:02.0313620Z -rw-r--r--  1 ubuntu ubuntu     23178 Feb 13 08:56 conftest.py
+2025-02-13T20:02:02.0314277Z drwxr-xr-x  2 ubuntu ubuntu      4096 Nov 26 09:37 contributing
+2025-02-13T20:02:02.0314930Z -rwxr-xr-x  1 ubuntu ubuntu      1420 Oct 26 03:55 create_venv.sh
+2025-02-13T20:02:02.0315805Z drwxr-xr-x  2 ubuntu ubuntu      4096 Feb 13 19:44 data
+2025-02-13T20:02:02.0316423Z drwxr-xr-x  2 ubuntu ubuntu      4096 Feb 13 08:56 dependencies
+2025-02-13T20:02:02.0317139Z drwxr-xr-x  2 ubuntu ubuntu      4096 Feb 13 08:56 dockerfile
+2025-02-13T20:02:02.0317762Z drwxr-xr-x  3 ubuntu ubuntu      4096 Feb  2 00:53 docs
+2025-02-13T20:02:02.0318324Z drwxr-xr-x  5 ubuntu ubuntu      4096 Feb 13 19:56 generated
+2025-02-13T20:02:02.0318913Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb  5 00:09 infra
+2025-02-13T20:02:02.0319582Z -rwxr-xr-x  1 ubuntu ubuntu      6885 Feb 13 08:56 install_dependencies.sh
+2025-02-13T20:02:02.0320219Z drwxr-xr-x  9 ubuntu ubuntu      4096 Feb 13 19:54 models
+2025-02-13T20:02:02.0320815Z -rw-r--r--  1 ubuntu ubuntu      1042 Dec 18 16:56 pyproject.toml
+2025-02-13T20:02:02.0321433Z -rw-r--r--  1 ubuntu ubuntu      1200 Oct  9 11:34 pytest.ini
+2025-02-13T20:02:02.0322040Z drwxr-xr-x  7 ubuntu ubuntu      4096 Feb 13 15:08 python_env
+2025-02-13T20:02:02.0322668Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 19:44 runtime
+2025-02-13T20:02:02.0323323Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 08:56 scripts
+2025-02-13T20:02:02.0323937Z -rw-r--r--  1 root   root         348 Feb 13 19:54 semicolon_delimited_script
+2025-02-13T20:02:02.0324586Z -rw-r--r--  1 ubuntu ubuntu      7551 Feb  5 00:09 setup.py
+2025-02-13T20:02:02.0325161Z drwxr-xr-x 24 ubuntu ubuntu      4096 Jan 15 01:12 tech_reports
+2025-02-13T20:02:02.0325749Z drwxr-xr-x 11 ubuntu ubuntu      4096 Feb 13 08:56 tests
+2025-02-13T20:02:02.0326360Z drwxr-xr-x 11 ubuntu ubuntu      4096 Feb 13 08:56 tt-train
+2025-02-13T20:02:02.0326968Z drwxr-xr-x  5 ubuntu ubuntu      4096 Feb 13 19:50 tt_fabric
+2025-02-13T20:02:02.0327553Z drwxr-xr-x 22 ubuntu ubuntu      4096 Feb 13 08:56 tt_metal
+2025-02-13T20:02:02.0328181Z -rw-r--r--  1 ubuntu ubuntu 700477440 Feb 13 19:54 ttm_any.tar
+2025-02-13T20:02:02.0328787Z drwxr-xr-x 10 ubuntu ubuntu      4096 Feb 13 19:55 ttnn
+2025-02-13T20:02:02.0329402Z + '[' -f semicolon_delimited_script ']'
+2025-02-13T20:02:02.0330002Z + file semicolon_delimited_script
+2025-02-13T20:02:02.0351569Z semicolon_delimited_script: ASCII text
+2025-02-13T20:02:02.0353681Z + head semicolon_delimited_script
+2025-02-13T20:02:02.0360686Z set -eu
+2025-02-13T20:02:02.0360903Z
+2025-02-13T20:02:02.0361041Z install_wheel=false
+2025-02-13T20:02:02.0361536Z if [ "${install_wheel,,}" == "true" ]; then
+2025-02-13T20:02:02.0362044Z   WHEEL_FILENAME=$(ls -1 *.whl)
+2025-02-13T20:02:02.0362513Z   pip3 install "$WHEEL_FILENAME"
+2025-02-13T20:02:02.0362980Z fi
+2025-02-13T20:02:02.0363308Z
+2025-02-13T20:02:02.0363558Z pip install --force-reinstall pip==21.2.4
+2025-02-13T20:02:02.0364173Z pip install -r tt_metal/python_env/requirements-dev.txt
+2025-02-13T20:02:02.0364826Z + sudo rm -rf deleteme
+2025-02-13T20:02:02.0575004Z + sudo rm -rf docker-job
+2025-02-13T20:02:02.0799520Z + '[' -d .git ']'
+2025-02-13T20:02:02.0799922Z Cleaning repo
+2025-02-13T20:02:02.0800368Z + echo 'Cleaning repo'
+2025-02-13T20:02:02.0800809Z + git clean -xffd
+2025-02-13T20:02:05.0982042Z Removing .cache/
+2025-02-13T20:02:05.0982556Z Removing .local/
+2025-02-13T20:02:05.0982921Z Removing build/
+2025-02-13T20:02:05.0983281Z Removing built/
+2025-02-13T20:02:05.0983662Z Removing data/
+2025-02-13T20:02:05.0984021Z Removing generated/
+2025-02-13T20:02:05.0984400Z Removing python_env/
+2025-02-13T20:02:05.0984772Z Removing runtime/
+2025-02-13T20:02:05.0985165Z Removing semicolon_delimited_script
+2025-02-13T20:02:05.0985614Z Removing ttm_any.tar
+2025-02-13T20:02:05.0986039Z Removing ttnn/ttnn.egg-info/
+2025-02-13T20:02:05.0986562Z Removing ttnn/ttnn/_ttnn.so
+2025-02-13T20:02:05.1007386Z + echo 'Done git clean -xffd'
+2025-02-13T20:02:05.1007844Z Done git clean -xffd
+2025-02-13T20:02:05.1008712Z + echo 'Attempting to delete any lock files'
+2025-02-13T20:02:05.1009262Z Attempting to delete any lock files
+2025-02-13T20:02:05.1010121Z + find .git -type f -iname '*.lock' -delete
+2025-02-13T20:02:05.2325921Z + echo 'Done deleting lock files'
+2025-02-13T20:02:05.2326394Z Done deleting lock files
+2025-02-13T20:02:05.2326811Z De-init-ing submodules
+2025-02-13T20:02:05.2327260Z + echo 'De-init-ing submodules'
+2025-02-13T20:02:05.2327759Z + git submodule deinit -f --all
+2025-02-13T20:02:05.2593301Z Cleared directory 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:05.2624049Z Submodule 'models/demos/t3000/llama2_70b/reference/llama' (https://github.com/tenstorrent-metal/llama.git) unregistered for path 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:05.2625224Z Cleared directory 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:05.2781732Z Submodule '3rd_party/wandb-cpp' (https://github.com/yhisaki/wandb-cpp) unregistered for path 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:05.2782591Z Cleared directory 'tt_metal/third_party/tracy'
+2025-02-13T20:02:05.2817030Z Submodule 'tt_metal/third_party/tracy' (https://github.com/tenstorrent-metal/tracy.git) unregistered for path 'tt_metal/third_party/tracy'
+2025-02-13T20:02:05.2818029Z Cleared directory 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:05.2852703Z Submodule 'tt_metal/third_party/tt_llk_blackhole' (https://github.com/tenstorrent/tt-llk-bh.git) unregistered for path 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:05.2853736Z Cleared directory 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:05.2887524Z Submodule 'tt_metal/third_party/tt_llk_grayskull' (https://github.com/tenstorrent/tt-llk-gs.git) unregistered for path 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:05.2888578Z Cleared directory 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:05.3033986Z Submodule 'tt_metal/third_party/tt_llk_wormhole_b0' (https://github.com/tenstorrent/tt-llk-wh-b0.git) unregistered for path 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:05.3034998Z Cleared directory 'tt_metal/third_party/umd'
+2025-02-13T20:02:05.3051631Z Submodule 'tt_metal/third_party/umd' (https://github.com/tenstorrent/tt-umd.git) unregistered for path 'tt_metal/third_party/umd'
+2025-02-13T20:02:05.3065510Z + echo 'Done de-initing submodules'
+2025-02-13T20:02:05.3065899Z Done de-initing submodules
+2025-02-13T20:02:05.3161745Z ##[group]Run actions/checkout@v4
+2025-02-13T20:02:05.3162138Z with:
+2025-02-13T20:02:05.3162725Z   token: ***
+2025-02-13T20:02:05.3163017Z   fetch-depth: 1
+2025-02-13T20:02:05.3163327Z   lfs: false
+2025-02-13T20:02:05.3163635Z   submodules: recursive
+2025-02-13T20:02:05.3163963Z   clean: true
+2025-02-13T20:02:05.3164291Z   repository: tenstorrent/tt-metal
+2025-02-13T20:02:05.3164672Z   ssh-strict: true
+2025-02-13T20:02:05.3165277Z   ssh-user: git
+2025-02-13T20:02:05.3165616Z   persist-credentials: true
+2025-02-13T20:02:05.3165998Z   sparse-checkout-cone-mode: true
+2025-02-13T20:02:05.3166379Z   fetch-tags: false
+2025-02-13T20:02:05.3166700Z   show-progress: true
+2025-02-13T20:02:05.3167051Z   set-safe-directory: true
+2025-02-13T20:02:05.3167515Z env:
+2025-02-13T20:02:05.3167903Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:05.3168315Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:05.3168642Z ##[endgroup]
+2025-02-13T20:02:05.4418396Z Syncing repository: tenstorrent/tt-metal
+2025-02-13T20:02:05.4419922Z ##[group]Getting Git version info
+2025-02-13T20:02:05.4420512Z Working directory is '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal'
+2025-02-13T20:02:05.4421345Z [command]/usr/bin/git version
+2025-02-13T20:02:05.4421740Z git version 2.25.1
+2025-02-13T20:02:05.4445211Z ##[endgroup]
+2025-02-13T20:02:05.4456140Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/1e6c18f3-571f-4716-81a0-21115cf52d58/.gitconfig'
+2025-02-13T20:02:05.4469087Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/1e6c18f3-571f-4716-81a0-21115cf52d58' before making global git config changes
+2025-02-13T20:02:05.4470230Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:02:05.4473466Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:02:05.4519958Z [command]/usr/bin/git config --local --get remote.origin.url
+2025-02-13T20:02:05.4540835Z https://github.com/tenstorrent/tt-metal
+2025-02-13T20:02:05.4557805Z ##[group]Removing previously created refs, to avoid conflicts
+2025-02-13T20:02:05.4561842Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2025-02-13T20:02:05.4591079Z refs/heads/smanoj/conv_device_weights
+2025-02-13T20:02:05.4601036Z [command]/usr/bin/git checkout --detach
+2025-02-13T20:02:05.5244540Z HEAD is now at 68e85df3d #0: Skip weights bfloat8 on grayskull
+2025-02-13T20:02:05.5924346Z [command]/usr/bin/git branch --delete --force smanoj/conv_device_weights
+2025-02-13T20:02:05.5987031Z Deleted branch smanoj/conv_device_weights (was 68e85df3d).
+2025-02-13T20:02:05.6674929Z ##[endgroup]
+2025-02-13T20:02:05.6675680Z [command]/usr/bin/git submodule status
+2025-02-13T20:02:05.6939478Z -29125b7ad8b5513eeaa4417ed92892bf39c8bd74 models/demos/t3000/llama2_70b/reference/llama
+2025-02-13T20:02:05.6940885Z -368cd07f89f497df20a66936fbfae3956f151af4 tt-train/3rd_party/wandb-cpp
+2025-02-13T20:02:05.6943414Z -71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy
+2025-02-13T20:02:05.6944500Z -9fd3e2d93d1532373f52e11e963de40c1cdf9a55 tt_metal/third_party/tt_llk_blackhole
+2025-02-13T20:02:05.6945513Z -0c04db64275a4bd36a7e14d3c533855cb33f6a20 tt_metal/third_party/tt_llk_grayskull
+2025-02-13T20:02:05.6946483Z -0ec3177bfc262f7edf6cfc19531ecb8f669895d2 tt_metal/third_party/tt_llk_wormhole_b0
+2025-02-13T20:02:05.6947562Z -5de287e9c5b2fa3d55fbfd53e9bc59e2050f32fb tt_metal/third_party/umd
+2025-02-13T20:02:05.6951349Z ##[group]Cleaning the repository
+2025-02-13T20:02:05.6956197Z [command]/usr/bin/git clean -ffdx
+2025-02-13T20:02:05.7227189Z [command]/usr/bin/git reset --hard HEAD
+2025-02-13T20:02:05.7955288Z HEAD is now at 68e85df3d #0: Skip weights bfloat8 on grayskull
+2025-02-13T20:02:05.7969507Z ##[endgroup]
+2025-02-13T20:02:05.7970707Z ##[group]Disabling automatic garbage collection
+2025-02-13T20:02:05.7975335Z [command]/usr/bin/git config --local gc.auto 0
+2025-02-13T20:02:05.8004968Z ##[endgroup]
+2025-02-13T20:02:05.8005663Z ##[group]Setting up auth
+2025-02-13T20:02:05.8012465Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-02-13T20:02:05.8041826Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-02-13T20:02:05.8314285Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-02-13T20:02:05.8340146Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-02-13T20:02:05.8604184Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2025-02-13T20:02:05.8640977Z ##[endgroup]
+2025-02-13T20:02:05.8641739Z ##[group]Fetching the repository
+2025-02-13T20:02:05.8650332Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +ac8ce51fedfe3a43fc1ee309ca81e8c67b736d70:refs/remotes/origin/sagarwal/multi_page_buffer
+2025-02-13T20:02:06.6383631Z From https://github.com/tenstorrent/tt-metal
+2025-02-13T20:02:06.6384663Z  + 6d3999637...ac8ce51fe ac8ce51fedfe3a43fc1ee309ca81e8c67b736d70 -> origin/sagarwal/multi_page_buffer  (forced update)
+2025-02-13T20:02:06.6420763Z ##[endgroup]
+2025-02-13T20:02:06.6422597Z ##[group]Determining the checkout info
+2025-02-13T20:02:06.6423216Z ##[endgroup]
+2025-02-13T20:02:06.6423872Z ##[group]Checking out the ref
+2025-02-13T20:02:06.6429331Z [command]/usr/bin/git checkout --progress --force -B sagarwal/multi_page_buffer refs/remotes/origin/sagarwal/multi_page_buffer
+2025-02-13T20:02:06.7988381Z Previous HEAD position was 68e85df3d #0: Skip weights bfloat8 on grayskull
+2025-02-13T20:02:06.8201360Z Switched to a new branch 'sagarwal/multi_page_buffer'
+2025-02-13T20:02:06.8202309Z Branch 'sagarwal/multi_page_buffer' set up to track remote branch 'sagarwal/multi_page_buffer' from 'origin'.
+2025-02-13T20:02:06.8865868Z ##[endgroup]
+2025-02-13T20:02:06.8866675Z ##[group]Setting up auth for fetching submodules
+2025-02-13T20:02:06.8871900Z [command]/usr/bin/git config --global http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2025-02-13T20:02:06.8911219Z [command]/usr/bin/git config --global --unset-all url.https://github.com/.insteadOf
+2025-02-13T20:02:06.8938104Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf git@github.com:
+2025-02-13T20:02:06.8970055Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf org-64161552@github.com:
+2025-02-13T20:02:06.9002276Z ##[endgroup]
+2025-02-13T20:02:06.9002829Z ##[group]Fetching submodules
+2025-02-13T20:02:06.9005936Z [command]/usr/bin/git submodule sync --recursive
+2025-02-13T20:02:06.9278122Z [command]/usr/bin/git -c protocol.version=2 submodule update --init --force --depth=1 --recursive
+2025-02-13T20:02:06.9531421Z Submodule 'models/demos/t3000/llama2_70b/reference/llama' (https://github.com/tenstorrent-metal/llama.git) registered for path 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:06.9533308Z Submodule '3rd_party/wandb-cpp' (https://github.com/yhisaki/wandb-cpp) registered for path 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:06.9537604Z Submodule 'tt_metal/third_party/tracy' (https://github.com/tenstorrent-metal/tracy.git) registered for path 'tt_metal/third_party/tracy'
+2025-02-13T20:02:06.9540498Z Submodule 'tt_metal/third_party/tt_llk_blackhole' (https://github.com/tenstorrent/tt-llk-bh.git) registered for path 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:06.9544421Z Submodule 'tt_metal/third_party/tt_llk_grayskull' (https://github.com/tenstorrent/tt-llk-gs.git) registered for path 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:06.9547515Z Submodule 'tt_metal/third_party/tt_llk_wormhole_b0' (https://github.com/tenstorrent/tt-llk-wh-b0.git) registered for path 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:06.9551541Z Submodule 'tt_metal/third_party/umd' (https://github.com/tenstorrent/tt-umd.git) registered for path 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.0029829Z Submodule path 'models/demos/t3000/llama2_70b/reference/llama': checked out '29125b7ad8b5513eeaa4417ed92892bf39c8bd74'
+2025-02-13T20:02:07.0443627Z Submodule path 'tt-train/3rd_party/wandb-cpp': checked out '368cd07f89f497df20a66936fbfae3956f151af4'
+2025-02-13T20:02:07.2057485Z Submodule path 'tt_metal/third_party/tracy': checked out '71d4c8d378b52af7da7012b9b595a61e9304f0bb'
+2025-02-13T20:02:07.2407348Z Submodule path 'tt_metal/third_party/tt_llk_blackhole': checked out '9fd3e2d93d1532373f52e11e963de40c1cdf9a55'
+2025-02-13T20:02:07.2721299Z Submodule path 'tt_metal/third_party/tt_llk_grayskull': checked out '0c04db64275a4bd36a7e14d3c533855cb33f6a20'
+2025-02-13T20:02:07.3159777Z Submodule path 'tt_metal/third_party/tt_llk_wormhole_b0': checked out '0ec3177bfc262f7edf6cfc19531ecb8f669895d2'
+2025-02-13T20:02:07.6099821Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2025-02-13T20:02:07.6101086Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2025-02-13T20:02:07.6144744Z Submodule path 'tt_metal/third_party/umd': checked out '5de287e9c5b2fa3d55fbfd53e9bc59e2050f32fb'
+2025-02-13T20:02:07.6227406Z [command]/usr/bin/git submodule foreach --recursive git config --local gc.auto 0
+2025-02-13T20:02:07.6483178Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.6521779Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:07.6566966Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:07.6610452Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:07.6652532Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:07.6691974Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:07.6734957Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.6784981Z ##[endgroup]
+2025-02-13T20:02:07.6785793Z ##[group]Persisting credentials for submodules
+2025-02-13T20:02:07.6792607Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'url\.https\:\/\/github\.com\/\.insteadOf' && git config --local --unset-all 'url.https://github.com/.insteadOf' || :"
+2025-02-13T20:02:07.7037828Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.7062898Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7063550Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7093906Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:07.7121739Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7122380Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7156643Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:07.7182893Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7183552Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7216043Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:07.7243362Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7244010Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7277432Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:07.7308552Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7309345Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7345870Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:07.7374242Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7375063Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7409075Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.7436437Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7437097Z url.https://github.com/.insteadof
+2025-02-13T20:02:07.7485932Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local 'http.https://github.com/.extraheader' 'AUTHORIZATION: basic ***' && git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2025-02-13T20:02:07.7736836Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.7777447Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/models/demos/t3000/llama2_70b/reference/llama/config	remote.origin.url
+2025-02-13T20:02:07.7800810Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:07.7843469Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/3rd_party/wandb-cpp/config	remote.origin.url
+2025-02-13T20:02:07.7863420Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:07.7907433Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tracy/config	remote.origin.url
+2025-02-13T20:02:07.7929591Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:07.8059266Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_blackhole/config	remote.origin.url
+2025-02-13T20:02:07.8066363Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:07.8138933Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_grayskull/config	remote.origin.url
+2025-02-13T20:02:07.8140567Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:07.8175054Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_wormhole_b0/config	remote.origin.url
+2025-02-13T20:02:07.8195049Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.8235283Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/config	remote.origin.url
+2025-02-13T20:02:07.8308627Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'git@github.com:'
+2025-02-13T20:02:07.8559925Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.8597448Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:07.8639437Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:07.8682188Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:07.8723853Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:07.8760959Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:07.8802341Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.8855916Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'org-64161552@github.com:'
+2025-02-13T20:02:07.9100911Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.9138949Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:07.9174970Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:07.9217458Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:07.9255957Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:07.9292539Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:07.9332166Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:07.9383265Z ##[endgroup]
+2025-02-13T20:02:07.9462430Z [command]/usr/bin/git log -1 --format=%H
+2025-02-13T20:02:07.9520783Z ac8ce51fedfe3a43fc1ee309ca81e8c67b736d70
+2025-02-13T20:02:07.9664342Z ##[group]Run git submodule foreach 'git clean -xffd'
+2025-02-13T20:02:07.9664941Z [36;1mgit submodule foreach 'git clean -xffd'[0m
+2025-02-13T20:02:07.9685813Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:02:07.9686321Z env:
+2025-02-13T20:02:07.9686644Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:07.9687021Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:07.9687383Z ##[endgroup]
+2025-02-13T20:02:07.9962837Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:02:07.9984523Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:02:08.0009215Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:02:08.0042182Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:02:08.0063966Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:02:08.0088937Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:02:08.0115210Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:02:08.0238462Z Prepare all required actions
+2025-02-13T20:02:08.0239161Z Getting action download info
+2025-02-13T20:02:08.1927444Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2025-02-13T20:02:08.9129973Z Download action repository 'catchpoint/workflow-telemetry-action@v2' (SHA:94c3c3d9567a0205de6da68a76c428ce4e769af1)
+2025-02-13T20:02:09.8050374Z ##[group]Run ./.github/actions/prepare-metal-run
+2025-02-13T20:02:09.8050815Z with:
+2025-02-13T20:02:09.8051108Z   is_profiler: false
+2025-02-13T20:02:09.8051458Z   python-version: 3.8
+2025-02-13T20:02:09.8051827Z   run-telemetry: false
+2025-02-13T20:02:09.8052158Z env:
+2025-02-13T20:02:09.8052445Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:09.8052783Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:09.8053086Z ##[endgroup]
+2025-02-13T20:02:09.8122971Z ##[group]Run actions/download-artifact@v4
+2025-02-13T20:02:09.8123425Z with:
+2025-02-13T20:02:09.8123714Z   name: TTMetal_build_any
+2025-02-13T20:02:09.8124103Z   merge-multiple: false
+2025-02-13T20:02:09.8124465Z   repository: tenstorrent/tt-metal
+2025-02-13T20:02:09.8124847Z   run-id: 13315815702
+2025-02-13T20:02:09.8125142Z env:
+2025-02-13T20:02:09.8125421Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:02:09.8125753Z   LOGURU_LEVEL: INFO
+2025-02-13T20:02:09.8126085Z ##[endgroup]
+2025-02-13T20:02:10.0597799Z Downloading single artifact
+2025-02-13T20:02:10.3014239Z Preparing to download the following artifacts:
+2025-02-13T20:02:10.3015062Z - TTMetal_build_any (ID: 2588416029, Size: 171796974)
+2025-02-13T20:02:10.4427634Z Redirecting to blob download url: https://productionresultssa8.blob.core.windows.net/actions-results/c50d1cc6-5c31-4c4c-b0e4-cb91df2420e1/workflow-job-run-85e4bcb1-b635-5839-8d32-ecb05ba8175c/artifacts/220fe10383c34fbe00d66e183fcfa42d19c438ee1c01790da9aeb9ea9685c6a0.zip
+2025-02-13T20:02:10.4429548Z Starting download of artifact to: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:02:10.7055730Z (node:935428) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2025-02-13T20:02:10.7057178Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2025-02-13T20:02:20.8913190Z Artifact download completed successfully.
+2025-02-13T20:02:20.8913882Z Total of 1 artifact(s) downloaded
+2025-02-13T20:02:20.8920053Z Download artifact has finished successfully
+2025-02-13T20:02:20.9081942Z ##[group]Run tar -xvf ttm_any.tar
+2025-02-13T20:02:20.9082393Z [36;1mtar -xvf ttm_any.tar[0m
+2025-02-13T20:02:20.9104203Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:02:20.9104695Z env:
+
+2025-02-13T20:04:10.8487948Z [       OK ] DeviceInit/DeviceParamFixture.TensixDeviceLoadBlankKernels/1 (6 ms)
+2025-02-13T20:04:10.8489122Z [----------] 4 tests from DeviceInit/DeviceParamFixture (366 ms total)
+2025-02-13T20:04:10.8489529Z
+2025-02-13T20:04:10.8489710Z [----------] Global test environment tear-down
+2025-02-13T20:04:10.8499044Z [==========] 30 tests from 7 test suites ran. (3503 ms total)
+2025-02-13T20:04:10.8499669Z [  PASSED  ] 13 tests.
+2025-02-13T20:04:10.8500106Z [  SKIPPED ] 17 tests, listed below:
+2025-02-13T20:04:10.8500661Z [  SKIPPED ] N300DeviceFixture.EthValidateEthernetConnectivity
+2025-02-13T20:04:10.8501324Z [  SKIPPED ] N300DeviceFixture.EthInvalidLogicalEthernetCore
+2025-02-13T20:04:10.8501969Z [  SKIPPED ] N300DeviceFixture.EthValidateAllEthernetCoreMapping
+2025-02-13T20:04:10.8502658Z [  SKIPPED ] N300DeviceFixture.EthValidatePhysicalCoreConversion
+2025-02-13T20:04:10.8503343Z [  SKIPPED ] N300DeviceFixture.ActiveEthValidateEthernetSockets
+2025-02-13T20:04:10.8503955Z [  SKIPPED ] DevicePool.DevicePoolAddDevices
+2025-02-13T20:04:10.8504466Z [  SKIPPED ] DevicePool.DevicePoolReduceDevices
+2025-02-13T20:04:10.8505163Z [  SKIPPED ] TGFixture.ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips
+2025-02-13T20:04:10.8505871Z [  SKIPPED ] TGFixture.ValidateNumMMIOChips
+2025-02-13T20:04:10.8506411Z [  SKIPPED ] TGFixture.ValidateNumGalaxyChips
+2025-02-13T20:04:10.8506941Z [  SKIPPED ] TGFixture.ValidateChipBoardTypes
+2025-02-13T20:04:10.8507716Z [  SKIPPED ] GalaxyFixture.ActiveEthValidateLinksBetweenMMIOAndGalaxyChips
+2025-02-13T20:04:10.8508570Z [  SKIPPED ] GalaxyFixture.ValidateAllGalaxyChipsAreUnharvested
+2025-02-13T20:04:10.8509298Z [  SKIPPED ] GalaxyFixture.ValidateAllMMIOChipsHaveSingleRowHarvested
+2025-02-13T20:04:10.8509936Z [  SKIPPED ] TGGFixture.ValidateNumMMIOChips
+2025-02-13T20:04:10.8510439Z [  SKIPPED ] TGGFixture.ValidateNumGalaxyChips
+2025-02-13T20:04:10.8510949Z [  SKIPPED ] TGGFixture.ValidateChipBoardTypes
+2025-02-13T20:04:10.8511777Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2025-02-13T20:04:12.1677100Z Prepare all required actions
+2025-02-13T20:04:12.1677664Z Getting action download info
+2025-02-13T20:04:12.4634756Z Download action repository 'actions/upload-artifact@v4' (SHA:65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08)
+2025-02-13T20:04:13.2056274Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2025-02-13T20:04:13.2057082Z with:
+2025-02-13T20:04:13.2057400Z   path: generated/test_reports/
+
+2025-02-13T20:04:13.2057798Z   prefix: test_reports_
+2025-02-13T20:04:13.2058138Z env:
+2025-02-13T20:04:13.2058440Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:04:13.2058796Z   LOGURU_LEVEL: INFO
+2025-02-13T20:04:13.2059317Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2060118Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2025-02-13T20:04:13.2060907Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2061671Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2062412Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2063165Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib
+2025-02-13T20:04:13.2063939Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2025-02-13T20:04:13.2064588Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2065452Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2066250Z   RUNNER_UID: 1000
+2025-02-13T20:04:13.2066799Z   RUNNER_GID: 1000
+2025-02-13T20:04:13.2067124Z ##[endgroup]
+2025-02-13T20:04:13.2125063Z ##[group]Run uuid=$(uuidgen)
+2025-02-13T20:04:13.2125484Z [36;1muuid=$(uuidgen)[0m
+2025-02-13T20:04:13.2125901Z [36;1martifact_name="test_reports_$uuid"[0m
+2025-02-13T20:04:13.2126423Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2025-02-13T20:04:13.2127034Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2025-02-13T20:04:13.2149156Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:04:13.2149633Z env:
+2025-02-13T20:04:13.2149992Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:04:13.2150400Z   LOGURU_LEVEL: INFO
+2025-02-13T20:04:13.2150978Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2151797Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2025-02-13T20:04:13.2152590Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2153318Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2154241Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2154982Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib
+2025-02-13T20:04:13.2155730Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2025-02-13T20:04:13.2156540Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2157395Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2158192Z   RUNNER_UID: 1000
+2025-02-13T20:04:13.2158546Z   RUNNER_GID: 1000
+2025-02-13T20:04:13.2158915Z ##[endgroup]
+2025-02-13T20:04:13.2220585Z [UPLOAD-ARTIFACT-UUID] test_reports_304c9db0-c03c-4ec4-8503-cd90ed1e264c
+2025-02-13T20:04:13.2279075Z ##[group]Run actions/upload-artifact@v4
+2025-02-13T20:04:13.2279537Z with:
+2025-02-13T20:04:13.2279943Z   name: test_reports_304c9db0-c03c-4ec4-8503-cd90ed1e264c
+2025-02-13T20:04:13.2280474Z   path: generated/test_reports/
+
+2025-02-13T20:04:13.2280907Z   if-no-files-found: warn
+2025-02-13T20:04:13.2281319Z   compression-level: 6
+2025-02-13T20:04:13.2281694Z   overwrite: false
+2025-02-13T20:04:13.2282047Z   include-hidden-files: false
+2025-02-13T20:04:13.2282772Z env:
+2025-02-13T20:04:13.2283109Z   ARCH_NAME: wormhole_b0
+2025-02-13T20:04:13.2283484Z   LOGURU_LEVEL: INFO
+2025-02-13T20:04:13.2284053Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2284869Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2025-02-13T20:04:13.2285971Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2286706Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2287440Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2025-02-13T20:04:13.2288192Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib
+2025-02-13T20:04:13.2288959Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2025-02-13T20:04:13.2289592Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2290483Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:04:13.2291294Z   RUNNER_UID: 1000
+2025-02-13T20:04:13.2291638Z   RUNNER_GID: 1000
+2025-02-13T20:04:13.2291975Z ##[endgroup]
+2025-02-13T20:04:13.5173920Z With the provided path, there will be 1 file uploaded
+2025-02-13T20:04:13.5180547Z Artifact name is valid!
+2025-02-13T20:04:13.5182675Z Root directory input is valid!
+2025-02-13T20:04:13.7612885Z Beginning upload of artifact content to blob storage
+2025-02-13T20:04:13.9946020Z Uploaded bytes 1502
+2025-02-13T20:04:14.0553702Z Finished uploading artifact content to blob storage!
+2025-02-13T20:04:14.0555271Z SHA256 hash of uploaded artifact zip is 1776c969fd4ce0e532f0d0d5c56885d18266030c15230edf5f2a99d507142b36
+2025-02-13T20:04:14.0558400Z Finalizing artifact upload
+2025-02-13T20:04:14.1785523Z Artifact test_reports_304c9db0-c03c-4ec4-8503-cd90ed1e264c.zip successfully finalized. Artifact ID 2588438668
+2025-02-13T20:04:14.1787263Z Artifact test_reports_304c9db0-c03c-4ec4-8503-cd90ed1e264c has been successfully uploaded! Final size is 1502 bytes. Artifact ID is 2588438668
+2025-02-13T20:04:14.1795001Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/13315815702/artifacts/2588438668
+2025-02-13T20:04:14.2020183Z Post job cleanup.
+2025-02-13T20:04:14.2094157Z Post job cleanup.
+2025-02-13T20:04:14.2964363Z [command]/usr/bin/git version
+2025-02-13T20:04:14.3004908Z git version 2.25.1
+2025-02-13T20:04:14.3044758Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/8f65a5bc-195a-41a4-a81a-c97fc0af023a/.gitconfig'
+2025-02-13T20:04:14.3057401Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/8f65a5bc-195a-41a4-a81a-c97fc0af023a' before making global git config changes
+2025-02-13T20:04:14.3058519Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:04:14.3062979Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:04:14.3091378Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-02-13T20:04:14.3123168Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-02-13T20:04:14.3411167Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:04:14.3460150Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:04:14.3514222Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:04:14.3564199Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:04:14.3618509Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:04:14.3671996Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:04:14.3726540Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:04:14.3793724Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-02-13T20:04:14.3815107Z http.https://github.com/.extraheader
+2025-02-13T20:04:14.3824803Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2025-02-13T20:04:14.3853082Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-02-13T20:04:14.4119491Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:04:14.4170364Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:04:14.4213111Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:04:14.4258939Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:04:14.4307150Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:04:14.4356637Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:04:14.4399904Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:04:14.4585660Z Post job cleanup.
+2025-02-13T20:04:14.8133988Z [command]/usr/bin/docker logout https://ghcr.io
+2025-02-13T20:04:14.8302373Z Removing login credentials for ghcr.io
+2025-02-13T20:04:14.8351075Z ##[group]Post cache
+2025-02-13T20:04:14.8352495Z State not set
+2025-02-13T20:04:14.8353503Z ##[endgroup]
+2025-02-13T20:04:14.8525386Z Post job cleanup.
+2025-02-13T20:04:14.8612816Z Post job cleanup.
+2025-02-13T20:04:14.9388997Z Post job cleanup.
+2025-02-13T20:04:15.1024111Z Cache hit occurred on the primary key setup-venv-Linux-py-3.8.18-/home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/bin/python-509e0fbc74e4697ea036d8e6b4ed76321c253e4ffef8468c11ee556fb8e370e2-./create_venv.sh, not saving cache.
+2025-02-13T20:04:15.1138078Z Post job cleanup.
+2025-02-13T20:04:15.3232933Z Post job cleanup.
+2025-02-13T20:04:15.3308851Z Post job cleanup.
+2025-02-13T20:04:15.4753286Z [command]/usr/bin/git version
+2025-02-13T20:04:15.4796448Z git version 2.25.1
+2025-02-13T20:04:15.4837147Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/6339d470-e7f4-4506-b66c-6f14a7fa0ec4/.gitconfig'
+2025-02-13T20:04:15.4847551Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/6339d470-e7f4-4506-b66c-6f14a7fa0ec4' before making global git config changes
+2025-02-13T20:04:15.4848659Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:04:15.4853887Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:04:15.4894618Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-02-13T20:04:15.4934580Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-02-13T20:04:15.5212251Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:04:15.5270766Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:04:15.5321269Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:04:15.5379962Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:04:15.5428642Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:04:15.5476693Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:04:15.5528887Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:04:15.5599050Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-02-13T20:04:15.5637009Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-02-13T20:04:15.5907117Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:04:15.5960200Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:04:15.6007758Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:04:15.6056367Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:04:15.6108245Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:04:15.6154403Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:04:15.6202309Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:04:15.6390862Z A job completed hook has been configured by the self-hosted runner administrator
+2025-02-13T20:04:15.6423731Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2025-02-13T20:04:15.6439454Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:04:15.6439988Z ##[endgroup]
+2025-02-13T20:04:15.6501713Z Current date / time is Thu Feb 13 20:04:15 UTC 2025
+2025-02-13T20:04:15.8536860Z Cleaning up orphan processes

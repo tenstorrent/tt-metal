@@ -1,0 +1,438 @@
+name: Merge Gate
+# This pipeline is the minimum bar a PR must pass before it can pass the merge queue.
+# It is intended to be relatively fast and lightweight that the delay between completing
+# a PR and having the changes available on main is not onerous.
+
+# Requirements for all jobs in this workflow:
+# - End-to-end (excluding wait times for runners) must be less than 15mins.
+#   This includes the cost of checking out the code, preparing a runner, etc.
+# - Individual test cases must be less than 5s.
+
+run-name: >-
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'merged' && format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'dequeued' && format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'invalidated' && format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
+      '' }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  merge_group:
+    types:
+      - checks_requested
+      - destroyed
+  push:
+    branches:
+      - main # Builds on main will populate the shared ccache to speed up builds on branches
+
+concurrency:
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
+jobs:
+  static-checks:
+    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+
+  # Build all Docker images ONCE at the start, then share with all downstream jobs
+  docker-images:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/build-all-docker-images.yaml
+    secrets: inherit
+
+  code-analysis:
+    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    needs: docker-images
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+
+
+  fail-fast:
+    if: failure()
+    runs-on: ubuntu-latest
+    needs: [code-analysis]
+    permissions:
+      actions: write
+    steps:
+      - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
+
+  find-changes:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+
+  build:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.docs-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: [find-changes, docker-images]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: "Ubuntu 22.04"
+      enable-lto: false
+      skip-tt-train: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
+
+  build-tsan:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: [find-changes, docker-images]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: TSan
+      platform: "Ubuntu 24.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      skip-tt-train: false
+      publish-artifact: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
+
+  build-sweeps:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    needs: [find-changes, docker-images]
+    uses: ./.github/workflows/build-wrapper.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ubuntu-2204-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      ubuntu-2204-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
+
+  metalium-smoke-tests:
+    needs: [find-changes, build-tsan]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # run t3k tests on CIv1 for now in order to have dedicated machine
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+      product: tt-metalium
+
+  ttnn-smoke-tests:
+    needs: [find-changes, build-tsan]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # run t3k tests on CIv1 for now in order to have dedicated machine
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+      product: tt-nn
+
+  build-asan:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: [find-changes, docker-images]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ASan
+      platform: "Ubuntu 22.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      skip-tt-train: false
+      publish-artifact: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
+
+  metalium-basic-tests:
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changes.outputs.cmake-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    needs: [ build-asan, find-changes ]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+
+  ttnn-basic-tests:
+    needs: [build-asan, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+
+  ttnn-merge-gate-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit
+    with:
+      enabled-skus: "wh_n300_civ2"
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      merge-gate-call: true
+
+  # TT-CNN Unit tests
+  tt-cnn-unit-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/tt-cnn-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  fabric-unit-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  fabric-cpu-only-unit-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0 },
+        ]
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  ttsim-unit-tests:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    needs: [build, find-changes]
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    with:
+      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      run-ttsim-integration-tests: false
+      run-metal-cpp-unit-tests: true
+
+  triage-tests:
+    needs: [ build, find-changes ]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+          #"P150b-viommu-prio",   # p150b triage has been failing since latest p150b runner update; disable for now until we can investigate and stabilize
+        ]
+    uses: ./.github/workflows/triage.yaml
+    with:
+      runner-label: ${{ matrix.platform }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      timeout: 11
+
+  # GitHub has so many design limitations it's not even funny.
+  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
+  workflow-status:
+    name: Merge Gate Status
+    # Force this job to run so GH can 'see' it, provided some other job has actually run.
+    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
+    # report FAILED instead of SKIPPED.
+    if: >-
+      ${{
+        always() &&
+        contains(join(needs.*.result, ','), 'success') ||
+        contains(join(needs.*.result, ','), 'failure')
+      }}
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if all jobs passed
+        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+        with:
+          required-jobs: "static-checks, code-analysis, find-changes"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
+        env:
+          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
+        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+          owner: "U08GTDV8MDH"
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
+        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+          owner: "U0AK4BVCFM0,S0985AN7TC5"

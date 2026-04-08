@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "all_gather_concat_nanobind.hpp"
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
+
+namespace ttnn::operations::experimental::ccl {
+
+void bind_all_gather_concat(nb::module_& mod) {
+    ttnn::bind_function<"all_gather_concat", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Performs a fused all-gather/concat operation on multi-device (specific to llama model):attr:`input_tensor` across all devices.
+        Args:
+            input_tensor (ttnn.Tensor): multi-device tensor.
+            dim (int): Dimension to perform operation.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
+        Keyword Args:
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_heads (int): Number of heads for NLP concat heads
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
+        Returns:
+            ttnn.Tensor: the output tensor.
+        )doc",
+        ttnn::overload_t(
+            &ttnn::experimental::all_gather_concat,
+            nb::arg("input_tensor"),
+            nb::arg("buffer_tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis"),
+            nb::arg("mesh_device"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::arg("num_heads").noconvert(),
+            nb::arg("memory_config"),
+            nb::kw_only(),
+            nb::arg("use_noc1_only") = false,
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = ttnn::ccl::Topology::Linear,
+            nb::arg("subdevice_id") = nb::none()));
+}
+
+}  // namespace ttnn::operations::experimental::ccl

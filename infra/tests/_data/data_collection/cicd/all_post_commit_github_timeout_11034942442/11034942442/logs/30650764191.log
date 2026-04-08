@@ -1,0 +1,392 @@
+﻿2024-09-25T14:32:59.0548445Z Current runner version: '2.319.1'
+2024-09-25T14:32:59.0557735Z Runner name: 'tt-metal-ci-vm-124'
+2024-09-25T14:32:59.0558836Z Runner group name: 'Default'
+2024-09-25T14:32:59.0559957Z Machine name: 'tt-metal-ci-vm-124'
+2024-09-25T14:32:59.0587762Z Testing runner upgrade compatibility
+2024-09-25T14:32:59.2208416Z ##[group]GITHUB_TOKEN Permissions
+2024-09-25T14:32:59.2214616Z Actions: read
+2024-09-25T14:32:59.2215331Z Contents: read
+2024-09-25T14:32:59.2216768Z Metadata: read
+2024-09-25T14:32:59.2217520Z Packages: write
+2024-09-25T14:32:59.2218196Z Pages: write
+2024-09-25T14:32:59.2219064Z ##[endgroup]
+2024-09-25T14:32:59.2226076Z Secret source: Actions
+2024-09-25T14:32:59.2227826Z Prepare workflow directory
+2024-09-25T14:32:59.4871389Z Prepare all required actions
+2024-09-25T14:32:59.5235888Z Getting action download info
+2024-09-25T14:32:59.8989150Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-25T14:33:00.3136668Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2024-09-25T14:33:01.2107413Z Getting action download info
+2024-09-25T14:33:01.3479329Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-25T14:33:02.1013498Z Uses: tenstorrent/tt-metal/.github/workflows/ttnn-post-commit.yaml@refs/heads/npetrovic/new-sweeps-5 (3e1d154a7e9a4a41558eb2ee692b5ac91f974dc9)
+2024-09-25T14:33:02.1017820Z ##[group] Inputs
+2024-09-25T14:33:02.1018461Z   arch: wormhole_b0
+2024-09-25T14:33:02.1018945Z   runner-label: N150
+2024-09-25T14:33:02.1020566Z   timeout: 45
+2024-09-25T14:33:02.1021060Z ##[endgroup]
+2024-09-25T14:33:02.1022367Z Complete job name: ttnn-unit-tests (wormhole_b0, N150) / ttnn group 5 wormhole_b0 N150
+2024-09-25T14:33:02.2154168Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-25T14:33:02.2432833Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/reset.sh'
+2024-09-25T14:33:02.2463121Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:33:02.2464022Z ##[endgroup]
+2024-09-25T14:33:02.3157631Z Current date / time is Wed Sep 25 14:33:02 UTC 2024
+2024-09-25T14:33:15.4465780Z tt-smi reset was successful
+2024-09-25T14:33:16.1861794Z 
+2024-09-25T14:33:16.1863309Z [95m Detected Chips: [93m1[0m
+2024-09-25T14:33:16.2116117Z [1A[J
+2024-09-25T14:33:16.2116922Z [95m Detected Chips: [93m1[0m
+2024-09-25T14:33:16.2117413Z 
+2024-09-25T14:33:16.2117721Z [94m Detecting ARC: [93m|[0m
+2024-09-25T14:33:16.2118158Z 
+2024-09-25T14:33:16.2118460Z [94m Detecting DRAM: [93m|[0m
+2024-09-25T14:33:16.2127466Z 
+2024-09-25T14:33:16.2128046Z  [95m[][94m [16/16] ETH: [93m|[0m
+2024-09-25T14:33:16.2232421Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2024-09-25T14:33:16.2242549Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2024-09-25T14:33:16.3282308Z {
+2024-09-25T14:33:16.3286526Z     "time": "2024-09-25T14:33:16.212383",
+2024-09-25T14:33:16.3291917Z     "host_info": {
+2024-09-25T14:33:16.3296828Z         "OS": "Linux",
+2024-09-25T14:33:16.3300692Z         "Distro": "Ubuntu 20.04.6 LTS",
+2024-09-25T14:33:16.3308618Z         "Kernel": "5.4.0-196-generic",
+2024-09-25T14:33:16.3311303Z         "Hostname": "tt-metal-ci-vm-124",
+2024-09-25T14:33:16.3313346Z         "Platform": "x86_64",
+2024-09-25T14:33:16.3315570Z         "Python": "3.8.10",
+2024-09-25T14:33:16.3317604Z         "Memory": "31.39 GB",
+2024-09-25T14:33:16.3319551Z         "Driver": "TTKMD 1.27.1"
+2024-09-25T14:33:16.3321377Z     },
+2024-09-25T14:33:16.3323204Z     "device_info": [
+2024-09-25T14:33:16.3324971Z         {
+2024-09-25T14:33:16.3327086Z             "smbus_telem": {
+2024-09-25T14:33:16.3329171Z                 "BOARD_ID": "0x100018511732066",
+2024-09-25T14:33:16.3332639Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-25T14:33:16.3334930Z                 "SMBUS_TX_DEVICE_ID": "0x401e1e52",
+2024-09-25T14:33:16.3337084Z                 "SMBUS_TX_ASIC_RO": "0x2e9c9",
+2024-09-25T14:33:16.3340225Z                 "SMBUS_TX_ASIC_IDD": "0xbaa",
+2024-09-25T14:33:16.3342341Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000185",
+2024-09-25T14:33:16.3344448Z                 "SMBUS_TX_BOARD_ID_LOW": "0x11732066",
+2024-09-25T14:33:16.3347055Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:16.3349376Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:16.3351504Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-25T14:33:16.3353581Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:16.3355802Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-25T14:33:16.3357912Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-25T14:33:16.3360360Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-25T14:33:16.3362407Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090000",
+2024-09-25T14:33:16.3364554Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-25T14:33:16.3366813Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-25T14:33:16.3369297Z                 "SMBUS_TX_ETH_STATUS0": "0x11111111",
+2024-09-25T14:33:16.3371633Z                 "SMBUS_TX_ETH_STATUS1": "0x11111111",
+2024-09-25T14:33:16.3373803Z                 "SMBUS_TX_PCIE_STATUS": "0x11040000",
+2024-09-25T14:33:16.3375870Z                 "SMBUS_TX_FAULTS": null,
+2024-09-25T14:33:16.3377880Z                 "SMBUS_TX_ARC0_HEALTH": "0xaafb",
+2024-09-25T14:33:16.3379973Z                 "SMBUS_TX_ARC1_HEALTH": "0x466e",
+2024-09-25T14:33:16.3382508Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-25T14:33:16.3384477Z                 "SMBUS_TX_ARC3_HEALTH": "0x78",
+2024-09-25T14:33:16.3387323Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2024-09-25T14:33:16.3391012Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2024-09-25T14:33:16.3393781Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-25T14:33:16.3395775Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-25T14:33:16.3398131Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-25T14:33:16.3448654Z                 "SMBUS_TX_VCORE": "0x2d5",
+2024-09-25T14:33:16.3449456Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x2a902a0",
+2024-09-25T14:33:16.3450324Z                 "SMBUS_TX_VREG_TEMPERATURE": "0x2e002e",
+2024-09-25T14:33:16.3451150Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x262a29",
+2024-09-25T14:33:16.3451925Z                 "SMBUS_TX_TDP": "0x64000c",
+2024-09-25T14:33:16.3452670Z                 "SMBUS_TX_TDC": "0xf00010",
+2024-09-25T14:33:16.3453431Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802d0",
+2024-09-25T14:33:16.3454543Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-25T14:33:16.3455352Z                 "SMBUS_TX_WH_FW_DATE": "0x4711141b",
+2024-09-25T14:33:16.3456192Z                 "SMBUS_TX_ASIC_TMON0": "0x222b2c32",
+2024-09-25T14:33:16.3456964Z                 "SMBUS_TX_ASIC_TMON1": "0x272a",
+2024-09-25T14:33:16.3460916Z                 "SMBUS_TX_MVDDQ_POWER": "0x195fb6",
+2024-09-25T14:33:16.3461742Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2024-09-25T14:33:16.3462525Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2024-09-25T14:33:16.3463303Z                 "SMBUS_TX_BOOT_DATE": "0x49190e21",
+2024-09-25T14:33:16.3464064Z                 "SMBUS_TX_RT_SECONDS": "0xc",
+2024-09-25T14:33:16.3465498Z                 "SMBUS_TX_AUX_STATUS": null,
+2024-09-25T14:33:16.3466697Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccddddcc",
+2024-09-25T14:33:16.3467535Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xccdddddd",
+2024-09-25T14:33:16.3468350Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20200"
+2024-09-25T14:33:16.3469052Z             },
+2024-09-25T14:33:16.3469539Z             "board_info": {
+2024-09-25T14:33:16.3470166Z                 "bus_id": "0000:07:00.0",
+2024-09-25T14:33:16.3470850Z                 "board_type": "n150 L",
+2024-09-25T14:33:16.3471577Z                 "board_id": "0100018511732066",
+2024-09-25T14:33:16.3472298Z                 "coords": "(0, 0, 0, 0)",
+2024-09-25T14:33:16.3473325Z                 "dram_status": true,
+2024-09-25T14:33:16.3473959Z                 "dram_speed": "12G",
+2024-09-25T14:33:16.3474610Z                 "pcie_speed": 4,
+2024-09-25T14:33:16.3475244Z                 "pcie_width": 16
+2024-09-25T14:33:16.3475854Z             },
+2024-09-25T14:33:16.3476337Z             "telemetry": {
+2024-09-25T14:33:16.3477255Z                 "voltage": "0.72",
+2024-09-25T14:33:16.3477923Z                 "current": " 16.0",
+2024-09-25T14:33:16.3478554Z                 "power": " 12.0",
+2024-09-25T14:33:16.3479133Z                 "aiclk": " 500",
+2024-09-25T14:33:16.3479793Z                 "asic_temperature": "42.0"
+2024-09-25T14:33:16.3480496Z             },
+2024-09-25T14:33:16.3590879Z             "firmwares": {
+2024-09-25T14:33:16.3591723Z                 "arc_fw": "2.27.0.0",
+2024-09-25T14:33:16.3592919Z                 "arc_fw_date": "2024-07-17",
+2024-09-25T14:33:16.3593617Z                 "eth_fw": "6.9.0",
+2024-09-25T14:33:16.3594285Z                 "m3_bl_fw": "129.2.0.0",
+2024-09-25T14:33:16.3594987Z                 "m3_app_fw": "5.9.0.0",
+2024-09-25T14:33:16.3595688Z                 "tt_flash_version": "0.2.2.0"
+2024-09-25T14:33:16.3596315Z             },
+2024-09-25T14:33:16.3596785Z             "limits": {
+2024-09-25T14:33:16.3597321Z                 "vdd_min": "0.72",
+2024-09-25T14:33:16.3629574Z                 "vdd_max": "1.00",
+2024-09-25T14:33:16.3630381Z                 "tdp_limit": "100",
+2024-09-25T14:33:16.3630906Z                 "tdc_limit": "240",
+2024-09-25T14:33:16.3631436Z                 "asic_fmax": "1000",
+2024-09-25T14:33:16.3632050Z                 "therm_trip_l1_limit": "83",
+2024-09-25T14:33:16.3632620Z                 "thm_limit": "75",
+2024-09-25T14:33:16.3633692Z                 "bus_peak_limit": null
+2024-09-25T14:33:16.3634215Z             }
+2024-09-25T14:33:16.3634586Z         }
+2024-09-25T14:33:16.3634946Z     ]
+2024-09-25T14:33:16.3635361Z }Printing out cpu information...
+2024-09-25T14:33:16.3635938Z Architecture:                       x86_64
+2024-09-25T14:33:16.3637066Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-25T14:33:16.3637749Z Byte Order:                         Little Endian
+2024-09-25T14:33:16.3638486Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-25T14:33:16.3639544Z CPU(s):                             8
+2024-09-25T14:33:16.3640202Z On-line CPU(s) list:                0-7
+2024-09-25T14:33:16.3640771Z Thread(s) per core:                 1
+2024-09-25T14:33:16.3641331Z Core(s) per socket:                 1
+2024-09-25T14:33:16.3642108Z Socket(s):                          8
+2024-09-25T14:33:16.3642628Z NUMA node(s):                       2
+2024-09-25T14:33:16.3643192Z Vendor ID:                          AuthenticAMD
+2024-09-25T14:33:16.3644011Z CPU family:                         23
+2024-09-25T14:33:16.3644555Z Model:                              49
+2024-09-25T14:33:16.3645271Z Model name:                         AMD EPYC-Rome Processor
+2024-09-25T14:33:16.3645929Z Stepping:                           0
+2024-09-25T14:33:16.3646480Z CPU MHz:                            2300.000
+2024-09-25T14:33:16.3647064Z BogoMIPS:                           4600.00
+2024-09-25T14:33:16.3647668Z Virtualization:                     AMD-V
+2024-09-25T14:33:16.3648243Z Hypervisor vendor:                  KVM
+2024-09-25T14:33:16.3648823Z Virtualization type:                full
+2024-09-25T14:33:16.3649406Z L1d cache:                          256 KiB
+2024-09-25T14:33:16.3650260Z L1i cache:                          256 KiB
+2024-09-25T14:33:16.3650857Z L2 cache:                           4 MiB
+2024-09-25T14:33:16.3651440Z L3 cache:                           128 MiB
+2024-09-25T14:33:16.3652161Z NUMA node0 CPU(s):                  0-3
+2024-09-25T14:33:16.3653067Z NUMA node1 CPU(s):                  4-7
+2024-09-25T14:33:16.3653717Z Vulnerability Gather data sampling: Not affected
+2024-09-25T14:33:16.3654413Z Vulnerability Itlb multihit:        Not affected
+2024-09-25T14:33:16.3655082Z Vulnerability L1tf:                 Not affected
+2024-09-25T14:33:16.3655991Z Vulnerability Mds:                  Not affected
+2024-09-25T14:33:16.3656662Z Vulnerability Meltdown:             Not affected
+2024-09-25T14:33:16.3657325Z Vulnerability Mmio stale data:      Not affected
+2024-09-25T14:33:16.3657976Z Vulnerability Retbleed:             Vulnerable
+2024-09-25T14:33:16.3659004Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-25T14:33:16.3660340Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-25T14:33:16.3662480Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-25T14:33:16.3663931Z Vulnerability Srbds:                Not affected
+2024-09-25T14:33:16.3664593Z Vulnerability Tsx async abort:      Not affected
+2024-09-25T14:33:16.3670560Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-25T14:33:46.9720942Z /proc/cmdline is satisfactory, continuing with installation
+2024-09-25T14:33:46.9969765Z Huge pages is now set up
+2024-09-25T14:33:47.0919569Z Hugepage check passed!
+2024-09-25T14:33:47.1574733Z ##[group]Run tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+2024-09-25T14:33:47.1575904Z with:
+2024-09-25T14:33:47.1576649Z   token: ***
+2024-09-25T14:33:47.1577104Z   fetch-depth: 1
+2024-09-25T14:33:47.1577601Z env:
+2024-09-25T14:33:47.1578028Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:47.1578517Z ##[endgroup]
+2024-09-25T14:33:47.2184601Z ##[group]Run actions/checkout@v4
+2024-09-25T14:33:47.2185614Z with:
+...
+2024-09-25T15:19:27.0432306Z SKIPPED [160] tests/ttnn/unit_tests/operations/test_reduce_scatter_nightly.py:18: Skipped
+2024-09-25T15:19:27.0434203Z SKIPPED [8] tests/ttnn/unit_tests/operations/test_reduction.py:21: Issue #6991: PCC mismatch for dim=-2
+2024-09-25T15:19:27.0437071Z SKIPPED [8] tests/ttnn/unit_tests/operations/test_reduction.py:43: Issue #6991: PCC mismatch for dim=-2
+2024-09-25T15:19:27.0439120Z SKIPPED [1] tests/ttnn/unit_tests/operations/test_repeat_interleave.py:30: ttnn.repeat_interleave only supports `repeats` as int
+2024-09-25T15:19:27.0441011Z SKIPPED [32] tests/ttnn/unit_tests/operations/test_silu.py:120: Unsupported on WH and BH
+2024-09-25T15:19:27.0443694Z SKIPPED [6] tests/ttnn/unit_tests/operations/test_silu_row_major.py:97: Shard sizes that are not multiples of 1024 are not supported.
+2024-09-25T15:19:27.0446527Z SKIPPED [1] tests/ttnn/unit_tests/operations/test_slice.py:394: Page size will become 0 and we don't handle transforming pages to second last dimension
+2024-09-25T15:19:27.0448687Z SKIPPED [2] tests/ttnn/unit_tests/operations/test_small_resnet50_block.py:348: Needs testing!
+2024-09-25T15:19:27.0450501Z SKIPPED [1] tests/ttnn/unit_tests/operations/test_softmax.py:80: #4629: softmax pcc at 0.948 when comparing to torch
+2024-09-25T15:19:27.0452244Z SKIPPED [192] tests/ttnn/unit_tests/operations/test_sum.py:21: Issue #6991: PCC mismatch
+2024-09-25T15:19:27.0454490Z SKIPPED [64] tests/ttnn/unit_tests/operations/test_sum.py:42: Issue #6991: PCC mismatch
+2024-09-25T15:19:27.0455735Z !!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+2024-09-25T15:19:27.0456770Z /usr/lib/python3.8/traceback.py:336: KeyboardInterrupt
+2024-09-25T15:19:27.0458014Z (to show a full traceback on KeyboardInterrupt use --full-trace)
+2024-09-25T15:19:27.0459255Z = 945 passed, 698 skipped, 9237 deselected, 1485 warnings in 2607.98s (0:43:27) =
+2024-09-25T15:19:27.0460968Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-25T15:19:27.0734377Z ##[error]The action has timed out.
+2024-09-25T15:19:27.0970171Z Prepare all required actions
+2024-09-25T15:19:27.0970926Z Getting action download info
+2024-09-25T15:19:27.4212437Z Download action repository 'slackapi/slack-github-action@v1.26.0' (SHA:70cd7be8e40a46e8b0eced40b0de447bdb42f68e)
+2024-09-25T15:19:28.0158968Z ##[group]Run ./.github/actions/slack-report
+2024-09-25T15:19:28.0159940Z with:
+2024-09-25T15:19:28.0161187Z   slack_webhook_url: ***
+2024-09-25T15:19:28.0161766Z   owner: U0593J2RQRZ
+2024-09-25T15:19:28.0162249Z env:
+2024-09-25T15:19:28.0163081Z   LOGURU_LEVEL: INFO
+2024-09-25T15:19:28.0163604Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:28.0164795Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:28.0167252Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T15:19:28.0168386Z   RUNNER_UID: 1000
+2024-09-25T15:19:28.0168882Z   RUNNER_GID: 1000
+2024-09-25T15:19:28.0169681Z ##[endgroup]
+2024-09-25T15:19:28.0280002Z Prepare all required actions
+2024-09-25T15:19:28.0280729Z Getting action download info
+2024-09-25T15:19:28.1895464Z Download action repository 'actions/upload-artifact@v4' (SHA:50769540e7f4bd5e21e526ee35c689e35e0d6874)
+2024-09-25T15:19:29.2188905Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2024-09-25T15:19:29.2190295Z with:
+2024-09-25T15:19:29.2190786Z   path: generated/test_reports/
+
+2024-09-25T15:19:29.2191429Z   prefix: test_reports_
+2024-09-25T15:19:29.2191966Z env:
+2024-09-25T15:19:29.2192385Z   LOGURU_LEVEL: INFO
+2024-09-25T15:19:29.2192977Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.2194284Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.2196637Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T15:19:29.2197977Z   RUNNER_UID: 1000
+2024-09-25T15:19:29.2198478Z   RUNNER_GID: 1000
+2024-09-25T15:19:29.2199075Z ##[endgroup]
+2024-09-25T15:19:29.2351216Z ##[group]Run uuid=$(uuidgen)
+2024-09-25T15:19:29.2351958Z [36;1muuid=$(uuidgen)[0m
+2024-09-25T15:19:29.2352679Z [36;1martifact_name="test_reports_$uuid"[0m
+2024-09-25T15:19:29.2353655Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2024-09-25T15:19:29.2356169Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2024-09-25T15:19:29.2382010Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T15:19:29.2382908Z env:
+2024-09-25T15:19:29.2383390Z   LOGURU_LEVEL: INFO
+2024-09-25T15:19:29.2384049Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.2385964Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.2388306Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T15:19:29.2389447Z   RUNNER_UID: 1000
+2024-09-25T15:19:29.2389960Z   RUNNER_GID: 1000
+2024-09-25T15:19:29.2390511Z ##[endgroup]
+2024-09-25T15:19:29.2784754Z [UPLOAD-ARTIFACT-UUID] test_reports_3102c33f-9ba3-4553-a533-b51a3fe7488b
+2024-09-25T15:19:29.3011027Z ##[group]Run actions/upload-artifact@v4
+2024-09-25T15:19:29.3011701Z with:
+2024-09-25T15:19:29.3012288Z   name: test_reports_3102c33f-9ba3-4553-a533-b51a3fe7488b
+2024-09-25T15:19:29.3013226Z   path: generated/test_reports/
+
+2024-09-25T15:19:29.3014458Z   if-no-files-found: warn
+2024-09-25T15:19:29.3015028Z   compression-level: 6
+2024-09-25T15:19:29.3015577Z   overwrite: false
+2024-09-25T15:19:29.3016485Z   include-hidden-files: false
+2024-09-25T15:19:29.3017094Z env:
+2024-09-25T15:19:29.3017514Z   LOGURU_LEVEL: INFO
+2024-09-25T15:19:29.3018090Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.3019391Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T15:19:29.3021487Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T15:19:29.3022607Z   RUNNER_UID: 1000
+2024-09-25T15:19:29.3023119Z   RUNNER_GID: 1000
+2024-09-25T15:19:29.3023652Z ##[endgroup]
+2024-09-25T15:19:29.8990819Z With the provided path, there will be 1 file uploaded
+2024-09-25T15:19:29.8994925Z Artifact name is valid!
+2024-09-25T15:19:29.8995747Z Root directory input is valid!
+2024-09-25T15:19:30.1609805Z Beginning upload of artifact content to blob storage
+2024-09-25T15:19:30.4973981Z Uploaded bytes 27121
+2024-09-25T15:19:30.5599448Z Finished uploading artifact content to blob storage!
+2024-09-25T15:19:30.5607471Z SHA256 hash of uploaded artifact zip is 9d877c009f1e4dcc3d20e91fcc560cda953b1195c783f73af8fc71fe066f2c5f
+2024-09-25T15:19:30.5613488Z Finalizing artifact upload
+2024-09-25T15:19:30.6791562Z Artifact test_reports_3102c33f-9ba3-4553-a533-b51a3fe7488b.zip successfully finalized. Artifact ID 1977630381
+2024-09-25T15:19:30.6798007Z Artifact test_reports_3102c33f-9ba3-4553-a533-b51a3fe7488b has been successfully uploaded! Final size is 27121 bytes. Artifact ID is 1977630381
+2024-09-25T15:19:30.6810726Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/11034942442/artifacts/1977630381
+2024-09-25T15:19:30.7300885Z ##[warning]Unexpected input(s) 'docker_image_arch', valid inputs are ['run_args', 'docker_os_arch', 'docker_username', 'docker_password', 'docker_opts', 'device', 'install_wheel']
+2024-09-25T15:19:30.7314224Z Post job cleanup.
+2024-09-25T15:19:30.7452090Z Post job cleanup.
+2024-09-25T15:19:31.5202206Z [command]/usr/bin/docker logout https://ghcr.io
+2024-09-25T15:19:31.5374897Z Removing login credentials for ghcr.io
+2024-09-25T15:19:31.5514541Z ##[group]Post cache
+2024-09-25T15:19:31.5515256Z State not set
+2024-09-25T15:19:31.5516421Z ##[endgroup]
+2024-09-25T15:19:31.5995249Z Post job cleanup.
+2024-09-25T15:19:31.6109851Z Post job cleanup.
+2024-09-25T15:19:31.8891901Z [command]/usr/bin/git version
+2024-09-25T15:19:31.9234604Z git version 2.25.1
+2024-09-25T15:19:31.9539703Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/aa30bca9-0a64-4e03-8816-066eee3815d3' before making global git config changes
+2024-09-25T15:19:31.9542578Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-25T15:19:31.9574367Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-25T15:19:31.9793932Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-25T15:19:31.9952227Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-25T15:19:32.0531832Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T15:19:32.0836190Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T15:19:32.0970263Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T15:19:32.1137725Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T15:19:32.1208952Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T15:19:32.1336917Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T15:19:32.1408134Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T15:19:32.1491819Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T15:19:32.1545953Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T15:19:32.1615871Z Entering 'tt_metal/third_party/umd'
+2024-09-25T15:19:32.1661175Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T15:19:32.1782317Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-25T15:19:32.1888169Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.1897719Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-25T15:19:32.2083041Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-25T15:19:32.2506360Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T15:19:32.2837878Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.2995566Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T15:19:32.3024325Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3063894Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T15:19:32.3106432Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3333553Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T15:19:32.3386854Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3413374Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T15:19:32.3447495Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3526629Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T15:19:32.3554963Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3765845Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T15:19:32.3858805Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.3961483Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T15:19:32.4204191Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.4273410Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T15:19:32.4313552Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.4337126Z Entering 'tt_metal/third_party/umd'
+2024-09-25T15:19:32.4367996Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.4406360Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T15:19:32.4499313Z http.https://github.com/.extraheader
+2024-09-25T15:19:32.5125791Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-25T15:19:32.5173408Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2024-09-25T15:19:32.5199945Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T15:19:32.5200876Z ##[endgroup]
+2024-09-25T15:19:32.5830466Z Current date / time is Wed Sep 25 15:19:32 UTC 2024
+2024-09-25T15:19:32.5845603Z Printing out cpu information...
+2024-09-25T15:19:32.5846488Z Architecture:                       x86_64
+2024-09-25T15:19:32.5848196Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-25T15:19:32.5849384Z Byte Order:                         Little Endian
+2024-09-25T15:19:32.5850628Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-25T15:19:32.5853345Z CPU(s):                             8
+2024-09-25T15:19:32.5854214Z On-line CPU(s) list:                0-7
+2024-09-25T15:19:32.5854863Z Thread(s) per core:                 1
+2024-09-25T15:19:32.5855614Z Core(s) per socket:                 1
+2024-09-25T15:19:32.5856336Z Socket(s):                          8
+2024-09-25T15:19:32.5856945Z NUMA node(s):                       2
+2024-09-25T15:19:32.5857623Z Vendor ID:                          AuthenticAMD
+2024-09-25T15:19:32.5860212Z CPU family:                         23
+2024-09-25T15:19:32.5860857Z Model:                              49
+2024-09-25T15:19:32.5861728Z Model name:                         AMD EPYC-Rome Processor
+2024-09-25T15:19:32.5862573Z Stepping:                           0
+2024-09-25T15:19:32.5863302Z CPU MHz:                            2300.000
+2024-09-25T15:19:32.5864047Z BogoMIPS:                           4600.00
+2024-09-25T15:19:32.5865132Z Virtualization:                     AMD-V
+2024-09-25T15:19:32.5865900Z Hypervisor vendor:                  KVM
+2024-09-25T15:19:32.5867093Z Virtualization type:                full
+2024-09-25T15:19:32.5867944Z L1d cache:                          256 KiB
+2024-09-25T15:19:32.5868651Z L1i cache:                          256 KiB
+2024-09-25T15:19:32.5869344Z L2 cache:                           4 MiB
+2024-09-25T15:19:32.5870047Z L3 cache:                           128 MiB
+2024-09-25T15:19:32.5870916Z NUMA node0 CPU(s):                  0-3
+2024-09-25T15:19:32.5871578Z NUMA node1 CPU(s):                  4-7
+2024-09-25T15:19:32.5872241Z Vulnerability Gather data sampling: Not affected
+2024-09-25T15:19:32.5872984Z Vulnerability Itlb multihit:        Not affected
+2024-09-25T15:19:32.5873779Z Vulnerability L1tf:                 Not affected
+2024-09-25T15:19:32.5874621Z Vulnerability Mds:                  Not affected
+2024-09-25T15:19:32.5875513Z Vulnerability Meltdown:             Not affected
+2024-09-25T15:19:32.5876294Z Vulnerability Mmio stale data:      Not affected
+2024-09-25T15:19:32.5877044Z Vulnerability Retbleed:             Vulnerable
+2024-09-25T15:19:32.5878373Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-25T15:19:32.5879952Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-25T15:19:32.5882101Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-25T15:19:32.5883634Z Vulnerability Srbds:                Not affected
+2024-09-25T15:19:32.5884513Z Vulnerability Tsx async abort:      Not affected
+2024-09-25T15:19:32.5889635Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-25T15:19:32.6278658Z Cleaning up orphan processes

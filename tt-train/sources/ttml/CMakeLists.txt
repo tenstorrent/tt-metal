@@ -1,0 +1,488 @@
+project(ttml)
+
+set(SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/generators.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/in_memory_token_dataset.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/init/cpu_initializers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/init/tensor_initializers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/common/transformer_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon_composite.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+)
+
+# Manually select only specific files from metal ops
+set(METAL_OPS_FILES
+    # RMSNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # RMSNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
+    # LayerNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp
+    # LayerNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp
+    # CrossEntropy Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # CrossEntropy Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.cpp
+    # Softmax
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.cpp
+    # Softmax Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/softmax_backward.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_program_factory.cpp
+    # ProfilerNoOp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
+    # SiLU Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SwiGLU Elemwise Backward (fused eltwise backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
+    # SDPA Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # Ring SDPA Forward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.cpp
+    # Ring SDPA Backward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/ring_sdpa_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
+    # SDPA Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
+    # SGD Optimizer
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_program_factory.cpp
+    # AdamW Optimizer (consolidated: supports both half and full precision)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
+)
+
+list(APPEND SOURCES ${METAL_OPS_FILES})
+
+# TT::Metalium must be available (provided by tt-metal parent build)
+if(NOT TARGET TT::Metalium)
+    message(
+        FATAL_ERROR
+        "TT::Metalium target not found. "
+        "tt-train must be built as part of tt-metal using: ./build_metal.sh --build-tt-train"
+    )
+endif()
+
+# Include helper functions for flatbuffer generation
+include(flatbuffers)
+
+add_library(ttml STATIC ${SOURCES})
+
+target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
+
+find_package(
+    Python3
+    COMPONENTS
+        Development
+        Development.Module
+        Interpreter
+    REQUIRED
+)
+
+foreach(lib ${BoostPackages})
+    target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
+endforeach()
+
+# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
+target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
+
+# Define TTML_ROOT for config path resolution
+# This is used by ttml::utils::get_tt_train_root() as a fallback
+# when TT_TRAIN_ROOT/TT_METAL_HOME environment variables are not set
+target_compile_definitions(
+    ttml
+    PRIVATE
+        TTML_ROOT="${CMAKE_SOURCE_DIR}/tt-train"
+        TTML_DATA_ROOT="${CMAKE_SOURCE_DIR}/data"
+)
+# Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
+# Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
+target_compile_options(
+    ttml
+    PRIVATE
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+)
+
+target_link_libraries(
+    ttml
+    PUBLIC
+        dl
+        z
+        pthread
+        atomic
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        fmt::fmt-header-only
+        enchantum::enchantum
+        yaml-cpp::yaml-cpp
+        xtensor
+        xtensor-blas
+        xtl
+        Boost::core
+        Boost::container
+        tt-logger
+        simde::simde
+        FlatBuffers::FlatBuffers
+)
+
+# Add include directory for TTNN::Core's generated flatbuffer headers
+# These are needed because tensor_flatbuffer.hpp includes tensor_generated.h
+if(TARGET TTNN::Core)
+    # Building with tt-metal from source - get binary directory
+    get_target_property(TTNN_CORE_BINARY_DIR TTNN::Core BINARY_DIR)
+    if(TTNN_CORE_BINARY_DIR)
+        target_include_directories(ttml SYSTEM PRIVATE ${TTNN_CORE_BINARY_DIR}/flatbuffers)
+        message(STATUS "Added TTNN::Core flatbuffers directory: ${TTNN_CORE_BINARY_DIR}/flatbuffers")
+    endif()
+else()
+    # Building with installed tt-metal
+    # Try to get include directories from TTNN::TTNN which should include the flatbuffers path
+    # If the generated headers are installed, they should be in the include directories
+    get_target_property(TTNN_INCLUDES TTNN::TTNN INTERFACE_INCLUDE_DIRECTORIES)
+    if(TTNN_INCLUDES)
+        # Check if any of the include directories contain flatbuffers
+        # This is a fallback - ideally the headers should be in a standard location
+        message(STATUS "TTNN::Core not found, checking TTNN::TTNN include directories for flatbuffers")
+        # Note: If headers are not found, this may indicate an installation issue with tt-metal
+    endif()
+endif()
+
+# Generate flatbuffer header for ttml_metadata.fbs
+# Must be done after target_link_libraries so ttml has access to TTNN::TTNN's include directories
+set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_metadata.fbs)
+set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
+
+GENERATE_FBS_HEADER(${FLATBUFFERS_SCHEMA} TARGET ttml OUTPUT_DIR ${FLATBUFFER_GENERATED_DIR})
+
+# Add generated header to target sources and include directory
+target_sources(ttml PRIVATE ${FBS_GENERATED_HEADER_FILE})
+target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
+
+message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
+message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
+message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
+
+message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
+target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
+
+##################################################
+# Dedicated PCH provider for ttml
+# A tiny static library whose only job is to compile the precompiled header.
+# ttml (and ttml_tests) REUSE_FROM this target.
+# ccache is disabled only for this target so the .pch is always built fresh
+# while all real source files still benefit from ccache.
+##################################################
+
+add_library(ttml_pch STATIC)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp CONTENT "/*dummy ttml pch file*/\n")
+target_sources(ttml_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp)
+
+target_precompile_headers(
+    ttml_pch
+    PRIVATE
+        # Standard library headers (widely used across tt-train)
+        <algorithm>
+        <cmath>
+        <cstdint>
+        <cstring>
+        <functional>
+        <memory>
+        <optional>
+        <span>
+        <stdexcept>
+        <string>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        # Third-party headers
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <enchantum/enchantum.hpp>
+        # Heavy TTNN/Metalium umbrella headers used across tt-train sources
+        "core/ttnn_all_includes.hpp"
+        "metal/ttnn_all_includes.hpp"
+)
+
+# Mirror ttml's link libraries so the PCH and consuming TUs see identical
+# include paths.  Mismatched -I / -isystem ordering causes ODR violations
+# (e.g. tt-logger fetched locally vs system metalium copy).
+target_link_libraries(
+    ttml_pch
+    PRIVATE
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        fmt::fmt-header-only
+        nlohmann_json::nlohmann_json
+        enchantum::enchantum
+        yaml-cpp::yaml-cpp
+        xtensor
+        xtensor-blas
+        xtl
+        Boost::core
+        Boost::container
+        tt-logger
+        simde::simde
+        FlatBuffers::FlatBuffers
+)
+
+target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
+
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttml_pch)
+endif()
+
+target_precompile_headers(ttml REUSE_FROM ttml_pch)
+
+if(ENABLE_LIBCXX)
+    target_link_libraries(
+        ttml
+        PUBLIC
+            ${LIBC++}
+            ${LIBC++ABI}
+    )
+endif()
+
+target_compile_definitions(ttml PUBLIC TOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+
+set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
+set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${GPT2_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${GPT2_TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${GPT2_TOKENIZER_URL}
+            ${GPT2_TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${GPT2_TOKENIZER_FILE}, skipping download.")
+endif()
+
+set(TINYLLAMA_TOKENIZER_URL "https://huggingface.co/TinyLlama/TinyLlama_v1.1/resolve/main/tokenizer.json")
+set(TINYLLAMA_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tinyllama-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${TINYLLAMA_TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${TINYLLAMA_TOKENIZER_URL}
+            ${TINYLLAMA_TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
+endif()
+
+set(TTML_SRC_NANOBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
+)
+nanobind_add_module(
+    _ttml
+    STABLE_ABI NB_STATIC
+    ${TTML_SRC_NANOBIND}
+)
+target_link_libraries(
+    _ttml
+    PRIVATE
+        fmt::fmt-header-only
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        ttml
+)
+# Install Python source files
+install(
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
+    DESTINATION .
+    COMPONENT ttml
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
+)
+
+install(
+    TARGETS
+        _ttml
+    LIBRARY
+        DESTINATION ttml
+        COMPONENT ttml
+)
+
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+
+# CPack configuration for creating ttml deb package
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "ttml")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_VENDOR "Tenstorrent")
+set(CPACK_PACKAGE_DESCRIPTION "TT Machine Learning Library - Training framework for Tenstorrent hardware")
+set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Tenstorrent")
+
+# Component-based packaging
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL ttml)
+
+# Debian-specific settings
+set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
+set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
+
+# Set the package architecture
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+
+include(CPack)

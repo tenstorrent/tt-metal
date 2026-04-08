@@ -1,0 +1,148 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Main entry point for transformer training.
+
+This script orchestrates the training of transformer models (GPT-2, Llama)
+using configurations specified in YAML files.
+"""
+
+import sys
+import ttml
+from ttml.common.config import (
+    load_config,
+    DeviceConfig,
+    TrainingConfig,
+    MultiHostConfig,
+)
+from ttml.common.utils import set_seed, initialize_device, create_optimizer
+from ttml.common.model_factory import TransformerModelFactory
+import click
+
+from ttml.common.data import prepare_data
+from trainer import train
+
+import socket
+import ttnn
+from loguru import logger
+import numpy as np
+
+
+@click.command()
+@click.option(
+    "-c",
+    "--config",
+    type=str,
+    default="training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml",
+)
+def main(config: str):
+    """Main training function.
+
+    Args:
+        config: Path to YAML configuration file (relative to configs directory)
+    """
+
+    # Load configuration and set seed
+    yaml_config = load_config(config)
+
+    # Initialize device mesh
+    initialize_device(yaml_config)
+
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    autograd_ctx.initialize_distributed_context(*sys.argv)
+    distributed_ctx = autograd_ctx.get_distributed_context()
+    autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
+
+    print(f"rank {distributed_ctx.rank()} is assigned to hostname {socket.gethostname()}")
+
+    # Initialize socket manager based on multihost configuration
+    multihost_config = MultiHostConfig(load_config(yaml_config["training_config"]["multihost_config"]))
+    socket_type = (
+        ttml.core.distributed.SocketType.FABRIC
+        if multihost_config.socket_type == "fabric"
+        else ttml.core.distributed.SocketType.MPI
+    )
+    autograd_ctx.initialize_socket_manager(socket_type)
+    socket_manager = autograd_ctx.get_socket_manager()
+
+    rank = distributed_ctx.rank()
+    world_size = distributed_ctx.size()
+
+    assert multihost_config.enabled, "Multihost is not enabled"
+    assert (
+        world_size == multihost_config.num_workers
+    ), f"World size ({world_size}) must equal multihost_config.num_workers ({multihost_config.num_workers})"
+    assert world_size > 1, f"World size must be greater than 1, world size: {world_size}"
+
+    # adjust seed based on worker rank to make sure that each worker has a different seed
+    set_seed(yaml_config["training_config"].get("seed", 42) + rank)
+
+    # Prepare data
+    train_ids, val_ids, vocab_size, decode = prepare_data(yaml_config)
+
+    # Use vocab_size from data instead of config
+    training_config = yaml_config.setdefault("training_config", {})
+    transformer_config = training_config.setdefault("transformer_config", {})
+    transformer_config["vocab_size"] = int(vocab_size)
+
+    # Warm up with round robin communication
+    shard_dim = 3
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    ttnn.distributed_context_barrier()
+    connections_to_test = [(i, (i + 1) % world_size) for i in range(world_size)]
+    connections_to_test += [((i + 1) % world_size, i) for i in range(world_size)]
+
+    for sender, receiver in connections_to_test:
+        if rank == receiver:
+            print(f"Rank {rank} is receiving data")
+            tensor_data = np.ones((1, 1, 1, 32), dtype=np.float32)
+            mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, shard_dim, cluster_axis=1)
+            tensor = ttml.autograd.Tensor.from_numpy(tensor_data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+            tensor = socket_manager.recv(tensor, distributed_ctx, sender)
+            composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, shard_dim)
+            tensor_data = tensor.to_numpy(composer=composer).flatten()
+            assert tensor_data.tolist()[:32] == [
+                i for i in range(32)
+            ], f"Rank {rank} received data: {tensor_data} does not match expected data: {[i for i in range(32)]}"
+        if rank == sender:
+            print(f"Rank {rank} is sending data")
+            tensor_data = np.array([i for i in range(32)], dtype=np.float32)
+            tensor_data = tensor_data.reshape(1, 1, 1, 32)
+            mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, shard_dim, cluster_axis=1)
+            tensor = ttml.autograd.Tensor.from_numpy(
+                tensor_data,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                mapper,
+            )
+            socket_manager.send(tensor, distributed_ctx, receiver)
+        ttnn.distributed_context_barrier()
+    logger.info("Connections all verified working")
+
+    # Create model, optimizer, and training configuration
+    model_factory = TransformerModelFactory(yaml_config)
+    model = model_factory.create_model()
+    optimizer = create_optimizer(model, yaml_config)
+
+    training_cfg = TrainingConfig(yaml_config)
+    training_cfg.seq_len = model_factory.transformer_config.max_sequence_length
+    device_config = DeviceConfig(yaml_config)
+
+    # Execute training
+    train_losses, val_losses = train(
+        training_cfg,
+        model,
+        optimizer,
+        train_ids,
+        val_ids,
+        device_config.enable_ddp,
+        device_config.enable_tp,
+    )
+
+    # Cleanup
+    ttml.autograd.AutoContext.get_instance().close_device()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "cross_entropy_bw_device_operation_types.hpp"
+#include "cross_entropy_bw_program_factory.hpp"
+#include "metal/ttnn_all_includes.hpp"
+
+namespace ttml::metal::ops::cross_entropy_bw::device {
+
+struct CrossEntropyBackwardDeviceOperation {
+    using operation_attributes_t = ttml::metal::ops::cross_entropy_bw::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::cross_entropy_bw::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::cross_entropy_bw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::cross_entropy_bw::device::tensor_return_value_t;
+    using program_factory_t = std::variant<CrossEntropyBackwardProgramFactory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+
+}  // namespace ttml::metal::ops::cross_entropy_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation::tensor_return_value_t
+ttml_cross_entropy_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& target_tensor,
+    float scaler = 1.0F,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+
+}  // namespace ttnn::prim

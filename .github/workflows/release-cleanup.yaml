@@ -1,0 +1,49 @@
+name: Release Cleanup
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 7 * * *"  # Runs daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      months_back:
+        description: "Number of months back to check for pre-releases"
+        required: false
+        default: "3"  # Default set to 3 months
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup old pre-releases
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const monthsBack = parseInt(core.getInput("months_back") || "3"); // Default to 3 months
+            const now = new Date();
+            const cutoffDate = new Date(now.setMonth(now.getMonth() - monthsBack));
+
+            // Retrieve all releases using pagination
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            for (const release of releases) {
+              if (release.prerelease && new Date(release.created_at) < cutoffDate) {
+                console.log(`Deleting pre-release: ${release.name || release.tag_name} (created at: ${release.created_at})`);
+
+                try {
+                  await github.rest.repos.deleteRelease({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.id,
+                  });
+                  console.log(`Successfully deleted release: ${release.name || release.tag_name}`);
+                } catch (releaseError) {
+                  console.error(`Failed to delete release ${release.name || release.tag_name}: ${releaseError.message}`);
+                }
+              }
+            }

@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::prim {
+
+struct RepeatParams {
+    uint32_t m_num_repeats{};
+    bool m_is_last_dim{};
+    tt::tt_metal::MemoryConfig m_output_mem_config;
+};
+
+struct RepeatInputs {
+    Tensor input;
+};
+
+}  // namespace ttnn::prim

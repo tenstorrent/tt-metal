@@ -1,0 +1,154 @@
+grid:
+  x_size: 10
+  y_size: 12
+
+arc:
+  [ 0-10 ]
+
+pcie:
+  [ 0-3 ]
+
+dram:
+  [
+    [0-0, 0-1, 0-11],
+    [0-5, 0-6, 0-7],
+    [5-0, 5-1, 5-11],
+    [5-2, 5-9, 5-10],
+    [5-3, 5-4, 5-8],
+    [5-5, 5-6, 5-7]
+  ]
+
+# Dram view parameters are used by tt-metal and are not recognized by UMD.
+# Eth and worker dram endpoints represent subchannel id from dram array for each noc.
+# For example, a dram view where channel is 0 and worker_endpoint is [1, 2] would resolve to dram core at position [0,2] for noc1 which is 0-11.
+# Endpoint assignments are arbitrary.
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [2, 2],
+      address_offset: 0
+    },
+    {
+      channel: 0,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [1, 1],
+      address_offset: 1073741824
+    },
+    {
+      channel: 1,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
+      address_offset: 0
+    },
+    {
+      channel: 1,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
+      address_offset: 1073741824
+    },
+    {
+      channel: 2,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [1, 1],
+      address_offset: 0
+    },
+    {
+      channel: 2,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [2, 2],
+      address_offset: 1073741824
+    },
+    {
+      channel: 3,
+      eth_endpoint: [2, 2],
+      worker_endpoint: [0, 0],
+      address_offset: 0
+    },
+    {
+      channel: 3,
+      eth_endpoint: [2, 2],
+      worker_endpoint: [1, 1],
+      address_offset: 1073741824
+    },
+    {
+      channel: 4,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
+      address_offset: 0
+    },
+    {
+      channel: 4,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
+      address_offset: 1073741824
+    },
+    {
+      channel: 5,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [0, 0],
+      address_offset: 0
+    },
+    {
+      channel: 5,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [2, 2],
+      address_offset: 1073741824
+    }
+  ]
+
+dram_view_size:
+  1073741824
+
+eth:
+  [
+      9-0, 1-0, 8-0, 2-0, 7-0, 3-0, 6-0, 4-0,
+      9-6, 1-6, 8-6, 2-6, 7-6, 3-6, 6-6, 4-6,
+  ]
+
+functional_workers:
+  [
+   1-1,   2-1,   3-1,   4-1,   6-1,   7-1,   8-1,   9-1,
+   1-2,   2-2,   3-2,   4-2,   6-2,   7-2,   8-2,   9-2,
+   1-3,   2-3,   3-3,   4-3,   6-3,   7-3,   8-3,   9-3,
+   1-4,   2-4,   3-4,   4-4,   6-4,   7-4,   8-4,   9-4,
+   1-5,   2-5,   3-5,   4-5,   6-5,   7-5,   8-5,   9-5,
+   1-7,   2-7,   3-7,   4-7,   6-7,   7-7,   8-7,   9-7,
+   1-8,   2-8,   3-8,   4-8,   6-8,   7-8,   8-8,   9-8,
+   1-9,   2-9,   3-9,   4-9,   6-9,   7-9,   8-9,   9-9,
+   1-10,  2-10,  3-10,  4-10,  6-10,  7-10,  8-10,  9-10,
+   1-11,  2-11,  3-11,  4-11,  6-11,  7-11,  8-11,  9-11,
+  ]
+
+harvested_workers:
+  []
+
+router_only:
+  [
+   0-2, 0-4, 0-8, 0-9
+  ]
+
+worker_l1_size:
+  1499136
+
+dram_bank_size:
+  2147483648
+
+eth_l1_size:
+  262144
+
+arch_name: WORMHOLE_B0
+
+features:
+  noc:
+    translation_id_enabled: True
+  unpacker:
+    version: 2
+    inline_srca_trans_without_srca_trans_instr: True
+  math:
+    dst_size_alignment: 32768
+  packer:
+    version: 2
+  overlay:
+    version: 2

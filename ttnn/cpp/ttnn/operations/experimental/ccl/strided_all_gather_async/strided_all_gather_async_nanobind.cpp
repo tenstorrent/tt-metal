@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "strided_all_gather_async_nanobind.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/global_semaphore.hpp"
+
+namespace ttnn::operations::experimental::ccl {
+
+void bind_strided_all_gather_async(nb::module_& mod) {
+    ttnn::bind_function<"strided_all_gather_async", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
+
+        Args:
+            input_tensor (ttnn.Tensor): multi-device tensor.
+            dim (int): Dimension to perform operation.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
+
+        Keyword Args:
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Example:
+            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> ttnn_tensor = ttnn.from_torch(
+                            full_tensor,
+                            dtype=input_dtype,
+                            device=mesh_device,
+                            layout=layout,
+                            memory_config=mem_config,
+                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+            >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
+            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+
+        )doc",
+        &ttnn::experimental::strided_all_gather_async,
+        nb::arg("input_tensor"),
+        nb::arg("persistent_output_buffer"),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("tiles_per_chunk") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("mm_cores_y") = nb::none(),
+        nb::arg("mm_block_ht") = nb::none(),
+        nb::arg("mm_block_wt") = nb::none());
+}
+
+}  // namespace ttnn::operations::experimental::ccl

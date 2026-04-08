@@ -1,0 +1,16 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 30
+  node_type: "1x_bh_quietbox"
+  host: "forge-qbae-01"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 40
+  node_type: "1x_bh_quietbox"
+  host: "forge-qbae-02"
+}

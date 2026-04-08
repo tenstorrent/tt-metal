@@ -1,0 +1,5 @@
+bugprone-exception-escape
+cppcoreguidelines-pro-type-cstyle-cast
+cppcoreguidelines-special-member-functions
+readability-math-missing-parentheses
+readability-avoid-unconditional-preprocessor-if

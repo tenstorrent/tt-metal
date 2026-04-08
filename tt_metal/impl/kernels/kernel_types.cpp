@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <kernel_types.hpp>
+#include <cstdint>
+#include "impl/context/metal_context.hpp"
+#include <utility>
+#include <llrt/tt_cluster.hpp>
+
+namespace tt::tt_metal {
+
+ReaderDataMovementConfig::ReaderDataMovementConfig(
+    std::vector<uint32_t> compile_args,
+    std::map<std::string, std::string> defines,
+    std::unordered_map<std::string, uint32_t> named_compile_args,
+    KernelBuildOptLevel opt_level) :
+    DataMovementConfig{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = detail::preferred_noc_for_dram_read(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+        .compile_args = std::move(compile_args),
+        .defines = std::move(defines),
+        .named_compile_args = std::move(named_compile_args),
+        .opt_level = opt_level} {}
+
+WriterDataMovementConfig::WriterDataMovementConfig(
+    std::vector<uint32_t> compile_args,
+    std::map<std::string, std::string> defines,
+    std::unordered_map<std::string, uint32_t> named_compile_args,
+    KernelBuildOptLevel opt_level) :
+    DataMovementConfig{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = detail::preferred_noc_for_dram_write(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+        .compile_args = std::move(compile_args),
+        .defines = std::move(defines),
+        .named_compile_args = std::move(named_compile_args),
+        .opt_level = opt_level} {}
+
+}  // namespace tt::tt_metal

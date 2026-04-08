@@ -1,0 +1,56 @@
+name: "Create and Publish Release Docker Image"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag-latest:
+        description: 'Tag the image as latest (WARNING: Affects production!)'
+        required: true
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "ubuntu-22.04"
+        options:
+          - "ubuntu-22.04"
+          - "ubuntu-24.04"
+        description: "Platform to build and test"
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+      contents: read
+    secrets: inherit
+    with:
+      build-wheel: true
+      platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
+      enable-lto: false
+  create-image-tag-name:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
+    steps:
+      - name: Set the tag name of the docker image
+        id: set-tag-name
+        run: |
+          echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
+  publish-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
+    uses: ./.github/workflows/publish-release-image.yaml
+    permissions:
+      packages: write
+      contents: read
+    needs:
+      - build-artifact
+      - create-image-tag-name
+    secrets: inherit
+    with:
+      version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
+      tag-latest: ${{ inputs.tag-latest }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      platform: ${{ inputs.platform }}
+      image: ${{ matrix.image }}

@@ -1,0 +1,125 @@
+# Sweep Manifest
+#
+# This file controls which op configurations get reconstructed from the database
+#
+# There are two sections:
+#
+#   targets   — what to reconstruct (edited by you)
+#   registry  — log of every trace loaded into the DB (auto-appended on load)
+#
+# ── TARGETS ──────────────────────────────────────────────────────────────────
+#
+# Two scope groups (driven by CI): lead_models and model_traced.
+#
+# Each entry lists:
+#   model: [name, ...]   which models to include (must match model_name in the DB)
+#   trace: [N, M, ...]   which trace IDs to pull from (pinned; skips registry lookup)
+#
+# Only configs belonging to the listed models are reconstructed from each trace.
+# If a trace contains 20 models but you list only [whisper], you get whisper only.
+#
+# Omitting trace: causes each model to auto-resolve to its latest active trace
+# from the registry below (useful when you always want the newest data).
+#
+# Reconstruct from the command line:
+#   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/traced_operations/ttnn_operations_lead_models.json \
+#       lead_models
+#   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/traced_operations/ttnn_operations_model_traced.json \
+#       model_traced
+#
+# ── REGISTRY ─────────────────────────────────────────────────────────────────
+#
+# One entry per trace loaded into the DB. Auto-appended with status: draft on load.
+# Manually promote to status: active when the trace is ready for CI.
+# Models lists the exact model_name values (from ttnn_ops_v5.ttnn_model) in the trace.
+# See model_tracer/GUIDE.md for full CLI commands for loading
+
+
+targets:
+  lead_models:
+    - model:
+        - deepseek_v3
+      trace: [35]
+
+  model_traced:
+    - model:
+        - deepseek-llm-7b-chat
+        - deepseek-r1-distill-qwen-32b
+        - efficientnetb0
+        - falcon7b
+        - llama-3.2-11b-vision-instruct
+        - llama-3.2-1b-instruct
+        - llama-krikri-8b-instruct
+        - mistral-7b-instruct-v0.3
+        - phi-3-mini-128k-instruct
+        - qwen2.5-coder-32b
+        - qwen2.5-coder-7b-instruct
+        - qwen3-32b
+        - qwen3-32b-test
+        - segmentation
+        - sentence_bert
+        - stable_diffusion_xl_base
+        - vit-base-patch16-224
+        - vit_performant_imagenet_inference
+        - whisper
+      trace: [1,538,548]
+
+registry:
+  - trace_id: 1
+    status: active
+    models: [whisper]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    tt_metal_sha: null
+    config_count: 318
+    loaded_at: '2026-03-14'
+    notes: 'Consolidated p150 trace — whisper blackhole (v2.5 migration)'
+
+  - trace_id: 35
+    status: active
+    models: [deepseek_v3]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    tt_metal_sha: null
+    config_count: 323
+    loaded_at: '2026-03-14'
+    notes: 'Consolidated lead_models traces (v2.5 migration)'
+
+  - trace_id: 538
+    status: active
+    models:
+      - deepseek-llm-7b-chat
+      - efficientnetb0
+      - falcon7b
+      - llama-3.2-11b-vision-instruct
+      - llama-3.2-1b-instruct
+      - llama-krikri-8b-instruct
+      - mistral-7b-instruct-v0.3
+      - phi-3-mini-128k-instruct
+      - qwen2.5-coder-7b-instruct
+      - segmentation
+      - sentence_bert
+      - stable_diffusion_xl_base
+      - vit-base-patch16-224
+      - vit_performant_imagenet_inference
+      - whisper
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    tt_metal_sha: null
+    config_count: 6199
+    loaded_at: '2026-03-21'
+    notes: 'Consolidated n300 trace — single-card models (v2.5 migration)'
+
+  - trace_id: 548
+    status: active
+    models:
+      - deepseek-r1-distill-qwen-32b
+      - qwen2.5-coder-32b
+      - qwen3-32b
+      - qwen3-32b-test
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 4}
+    tt_metal_sha: null
+    config_count: 831
+    loaded_at: '2026-03-24'
+    notes: 'Split from trace 538: card_count=4 multi-card configs'

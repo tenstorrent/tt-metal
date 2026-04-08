@@ -1,0 +1,79 @@
+name: "(Galaxy) e2e tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        required: false
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 0 * * *" # Runs every day at 12am UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      build-wheel: true
+  galaxy-e2e-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # For scheduled runs: hardcode the full list of SKUs you want active.
+      # For workflow_dispatch: derive from checkboxes.
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_galaxy,bh_galaxy'
+            || (
+              inputs.wormhole && inputs.blackhole
+                && 'wh_galaxy,bh_galaxy'
+                || (
+                  inputs.wormhole
+                    && 'wh_galaxy'
+                    || (
+                      inputs.blackhole
+                        && 'bh_galaxy'
+                        || ''
+                    )
+                )
+            )
+        }}

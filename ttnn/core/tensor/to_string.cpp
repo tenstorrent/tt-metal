@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/reflection.hpp>
+#include "ttnn/tensor/to_string.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+#include "ttnn/graph/graph_serialization.hpp"
+
+namespace ttnn {
+
+std::string to_string(const tt::tt_metal::Tensor& tensor) {
+    tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
+
+    const auto& shape = tensor.logical_shape();
+
+    if (!tensor.is_allocated()) {
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            "ttnn.Tensor",
+            shape,
+            tensor.dtype(),
+            tensor.layout());
+    }
+
+    if (is_device_tensor(tensor)) {
+        if (tensor.is_allocated()) {
+            auto* mesh_device = tensor.device();
+
+            if (mesh_device->num_devices() == 1) {
+                auto cpu_tensor = tensor.cpu();
+                return tt::tt_metal::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+            }
+        }
+    }
+    auto result = tt::tt_metal::to_string(tensor);
+    tt::tt_metal::GraphTracker::instance().track_function_end();
+    return result;
+}
+
+}  // namespace ttnn

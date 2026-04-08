@@ -1,0 +1,260 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+from loguru import logger  # type: ignore
+import itertools
+import os
+import csv
+
+from tests.tt_metal.tt_metal.data_movement.python.constants import *
+
+
+class StatsReporter:
+    def __init__(
+        self, dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, output_dir, arch, metadata_loader=None
+    ):
+        self.dm_stats = dm_stats
+        self.aggregate_stats = aggregate_stats
+        self.test_id_to_name = test_id_to_name
+        self.test_type_attributes = test_type_attributes
+        self.metadata_loader = metadata_loader
+        self.arch = arch
+        # Create architecture-specific subdirectory
+        self.output_dir = os.path.join(output_dir, arch)
+
+    def print_stats(self):
+        # Print stats per runtime host id
+        for riscv1_run, riscv0_run in itertools.zip_longest(
+            self.dm_stats["riscv_1"]["analysis"]["series"],
+            self.dm_stats["riscv_0"]["analysis"]["series"],
+            fillvalue=None,
+        ):
+            logger.info(f"")
+            logger.info(f"")
+
+            riscv1_run_host_id = riscv1_run["duration_type"][0]["run_host_id"] if riscv1_run else None
+            riscv0_run_host_id = riscv0_run["duration_type"][0]["run_host_id"] if riscv0_run else None
+
+            logger.info(f"Run host id (riscv_1): {riscv1_run_host_id}")
+            if riscv0_run_host_id is not None and riscv0_run_host_id != riscv1_run_host_id:
+                logger.info(f"Run host id (riscv_0): {riscv0_run_host_id}")
+
+            for riscv, run in [("RISCV 1", riscv1_run), ("RISCV 0", riscv0_run)]:
+                if run:
+                    logger.info(f"")
+                    logger.info(f'{riscv} duration: {run["duration_cycles"]}')
+
+                    logger.info("Attributes:")
+                    riscv_key = riscv.lower().replace(" ", "_")
+                    run_host_id = run["duration_type"][0]["run_host_id"]
+                    for attr, val in self.dm_stats[riscv_key]["attributes"][run_host_id].items():
+                        if attr == "Test id":
+                            test_name = self.test_id_to_name.get(val, "Unknown Test")
+                            logger.info(f"  {attr}: {val} ({test_name})")
+                        else:
+                            logger.info(f"  {attr}: {val}")
+
+        logger.info(f"")
+        logger.info(f"")
+
+    def export_dm_stats_to_csv(self):
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Group by test id
+        test_ids = set()
+        for riscv in self.aggregate_stats.keys():
+            for test_run in self.aggregate_stats[riscv].values():
+                test_ids.add(test_run["attributes"]["Test id"])
+        test_ids = sorted(test_ids)
+
+        for test_id in test_ids:
+            test_name = (
+                self.test_id_to_name.get(test_id, f"Test ID {test_id}")
+                if self.test_id_to_name
+                else f"Test ID {test_id}"
+            )
+
+            csv_file = os.path.join(self.output_dir, f"{test_name}.csv")
+            with open(csv_file, mode="w", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+
+                # Get test metadata if metadata loader is available
+                test_metadata = None
+                bandwidth_mode = "per_core"
+                bandwidth_unit = "bpc"
+                if self.metadata_loader is not None:
+                    # Load bandwidth_mode from test_information.yaml
+                    test_info = self.metadata_loader.load_test_information()
+                    test_data = test_info.get("tests", {}).get(test_id, {})
+                    bandwidth_mode = test_data.get("bandwidth_mode", "per_core")
+                    bandwidth_unit = test_data.get("bandwidth_unit", "bpc")
+
+                    try:
+                        test_metadata = self.metadata_loader.get_test_metadata(test_id, self.arch)
+                    except Exception as e:
+                        # If metadata not found, log warning and continue without it
+                        logger.warning(f"Could not load metadata for test ID {test_id}: {e}")
+
+                header = [
+                    "Transaction Size (bytes)",
+                    "Number of Transactions",
+                ]
+
+                # Architecture is always included (known from the host side)
+                header.append("Architecture")
+
+                # Add metadata columns for NOC estimator consumption
+                # All metadata fields are automatically included (except 'name' and 'comment')
+                if test_metadata is not None:
+                    # Standard metadata fields in specific order for csv_reader.cpp compatibility
+                    standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                    for field in standard_fields:
+                        if field in test_metadata and field != "architecture":
+                            column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                            header.append(column_name)
+
+                    # Add any additional optional fields in alphabetical order
+                    # Exclude bandwidth_mode as it's a config flag, not data
+                    optional_fields = sorted(
+                        [
+                            k
+                            for k in test_metadata.keys()
+                            if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                        ]
+                    )
+                    for field in optional_fields:
+                        column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                        header.append(column_name)
+
+                header.extend(
+                    [
+                        "RISC-V Processor",
+                        "Run Host ID",
+                    ]
+                )
+
+                # Add test-specific headers
+                for test_type, test_type_attributes in self.test_type_attributes.items():
+                    if test_type.replace("_", " ").title() in test_name:
+                        header.extend(test_type_attributes["attributes"].keys())
+                        if test_type == "multicast_schemes":
+                            header.append("Grid Dimensions")
+                        break
+
+                # Add performance metrics at the end
+                use_gbps = bandwidth_unit == "gbps"
+                if bandwidth_mode == "combined":
+                    header.extend(
+                        [
+                            "Number of Cores",
+                            "Total Bytes",
+                            "Latency (cycles)",
+                            "Combined Bandwidth (bytes/cycle)",
+                        ]
+                    )
+                else:
+                    bw_label = "Bandwidth (GB/s)" if use_gbps else "Bandwidth (bytes/cycle)"
+                    header.extend(
+                        [
+                            "Latency (cycles)",
+                            bw_label,
+                        ]
+                    )
+
+                # Add clock frequency column if any run has it logged
+                has_clock_freq = any(
+                    self.aggregate_stats[r].get(rid, {}).get("clock_freq_mhz", 0) > 0
+                    for r in self.aggregate_stats
+                    for rid, rs in self.aggregate_stats[r].items()
+                    if rs["attributes"].get("Test id") == test_id
+                )
+                if has_clock_freq:
+                    header.append("Clock Frequency (MHz)")
+
+                writer.writerow(header)
+
+                for riscv in self.aggregate_stats.keys():
+                    for run_host_id, run_stats in self.aggregate_stats[riscv].items():
+                        attributes = run_stats["attributes"]
+                        if attributes.get("Test id") != test_id:
+                            continue
+
+                        # Base row data - configuration columns first
+                        row = [
+                            run_stats.get("transaction_size"),
+                            run_stats.get("num_transactions"),
+                        ]
+
+                        # Architecture is always included
+                        row.append(self.arch.lower())
+
+                        # Add metadata columns
+                        if test_metadata is not None:
+                            # Standard metadata fields in specific order
+                            standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                            for field in standard_fields:
+                                if field in test_metadata:
+                                    row.append(test_metadata[field])
+
+                            # Add any additional optional fields in alphabetical order
+                            # Exclude bandwidth_mode as it's a config flag, not data
+                            optional_fields = sorted(
+                                [
+                                    k
+                                    for k in test_metadata.keys()
+                                    if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                                ]
+                            )
+                            for field in optional_fields:
+                                value = test_metadata[field]
+                                row.append(value)
+                        row.extend(
+                            [
+                                riscv,
+                                run_host_id,
+                            ]
+                        )
+
+                        # Add test-specific data
+                        for test_type, test_type_attributes in self.test_type_attributes.items():
+                            if test_type.replace("_", " ").title() in test_name:
+                                row.extend([run_stats.get(val) for val in test_type_attributes["attributes"].values()])
+                                if test_type == "multicast_schemes":
+                                    row.append(run_stats.get("grid_dimensions"))
+                                break
+
+                        # Add performance metrics at the end
+                        if bandwidth_mode == "combined":
+                            row.extend(
+                                [
+                                    run_stats.get("num_cores", 1),
+                                    run_stats.get("total_bytes", 0),
+                                    run_stats.get("wall_clock_time", run_stats["duration_cycles"]),
+                                    run_stats.get("combined_bandwidth", run_stats["bandwidth"]),
+                                ]
+                            )
+                        else:
+                            if use_gbps:
+                                bw_val = run_stats.get("bandwidth_gbps", 0)
+                                if not bw_val:
+                                    # Fallback: B/cycle * arch freq
+                                    from tests.tt_metal.tt_metal.data_movement.python.constants import NOC_FREQ_GHZ
+
+                                    bw_val = run_stats["bandwidth"] * NOC_FREQ_GHZ.get(self.arch, 1.0)
+                            else:
+                                bw_val = run_stats["bandwidth"]
+                            row.extend(
+                                [
+                                    run_stats["duration_cycles"],
+                                    bw_val,
+                                ]
+                            )
+
+                        # Add clock frequency if present for this test
+                        if has_clock_freq:
+                            row.append(run_stats.get("clock_freq_mhz", 0))
+
+                        writer.writerow(row)
+
+            logger.info(f"CSV report for test id {test_id} saved at {csv_file}")

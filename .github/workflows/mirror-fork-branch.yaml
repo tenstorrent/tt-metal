@@ -1,0 +1,127 @@
+name: Mirror Fork Branch to Origin
+
+on:
+  workflow_call:
+    inputs:
+      source:
+        description: 'Source in format <fork_owner>:<branch>'
+        required: true
+        type: string
+      target_branch:
+        description: >
+          Optional. Target branch name in origin. If not provided, the branch will be named
+          `mirror/<fork_owner>/<branch>`.
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Source in format <fork_owner>:<branch>'
+        required: true
+      target_branch:
+        description: >
+          Optional. Target branch name in origin. If not provided, the branch will be named
+          `mirror/<fork_owner>/<branch>`.
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mirror-fork-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse input
+        id: parse_input
+        shell: bash
+        run: |
+          # Expect input format: <fork_owner>:<branch>
+          IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "${{ github.event.inputs.source }}"
+          if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
+            echo "Error: Input must be in the format <fork_owner>:<branch>"
+            exit 1
+          fi
+          # Derive the fork repository name from the current repository.
+          ORIGIN_REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          FORK_REPO="${FORK_OWNER}/${ORIGIN_REPO_NAME}"
+          echo "FORK_OWNER: $FORK_OWNER"
+          echo "Source branch: $SRC_BRANCH"
+          echo "Fork repository: $FORK_REPO"
+          echo "fork_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
+          echo "src_branch=$SRC_BRANCH" >> $GITHUB_OUTPUT
+          echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
+
+      - name: Checkout base repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add fork remote and fetch branch
+        run: |
+          echo "Adding remote for fork: ${{ steps.parse_input.outputs.fork_repo }}"
+          git remote add fork https://github.com/${{ steps.parse_input.outputs.fork_repo }}.git || echo "Remote 'fork' already exists"
+          echo "Fetching branch: ${{ steps.parse_input.outputs.src_branch }}"
+          git fetch fork ${{ steps.parse_input.outputs.src_branch }}
+
+      - name: Create or update local branch from fork branch
+        id: create_branch
+        shell: bash
+        run: |
+          # Determine the target branch name.
+          if [ -n "${{ github.event.inputs.target_branch }}" ]; then
+            TARGET_BRANCH="${{ github.event.inputs.target_branch }}"
+          else
+            TARGET_BRANCH="mirror/${{ steps.parse_input.outputs.fork_owner }}/${{ steps.parse_input.outputs.src_branch }}"
+          fi
+          echo "Using target branch: $TARGET_BRANCH"
+          # If the branch exists locally, update it; if not, create it.
+          if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+            echo "Branch '$TARGET_BRANCH' exists. Updating with latest commits from fork."
+            git checkout "$TARGET_BRANCH"
+            git reset --hard "fork/${{ steps.parse_input.outputs.src_branch }}"
+          else
+            echo "Branch '$TARGET_BRANCH' does not exist. Creating it from fork branch."
+            git checkout -b "$TARGET_BRANCH" "fork/${{ steps.parse_input.outputs.src_branch }}"
+          fi
+          echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
+
+      - name: Push branch to origin
+        run: |
+          TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
+          echo "Pushing branch '$TARGET_BRANCH' to origin"
+          git push origin "$TARGET_BRANCH" --force
+
+      - name: Find PR
+        id: pr
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look for a PR with head "fork_owner:src_branch"
+          HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
+          echo "Searching for PR with head: ${HEAD_QUERY}"
+          PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
+          PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found"
+            echo "issue=" >> $GITHUB_OUTPUT
+          else
+            echo "Found PR #$PR_NUMBER"
+            echo "issue=$PR_NUMBER" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post comment on PR
+        if: steps.pr.outputs.issue != ''
+        uses: mshick/add-pr-comment@v2
+        with:
+          issue: ${{ steps.pr.outputs.issue }}
+          message: |
+           ✨ A mirror branch has been created/updated for this PR: [`${{ steps.create_branch.outputs.target_branch }}`](https://github.com/${{ github.repository }}/tree/${{ steps.create_branch.outputs.target_branch }})

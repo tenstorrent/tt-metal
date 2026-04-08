@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::operations::experimental::adaptive_pool {
+
+Tensor adaptive_avg_pool2d(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> output_size,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config = std::nullopt,
+    std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool deallocate_input = false,
+    bool reallocate_output = true);
+
+Tensor adaptive_max_pool2d(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> output_size,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config = std::nullopt,
+    std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    bool deallocate_input = false,
+    bool reallocate_output = true);
+
+}  // namespace ttnn::operations::experimental::adaptive_pool
+
+namespace ttnn {
+using ttnn::operations::experimental::adaptive_pool::adaptive_avg_pool2d;
+using ttnn::operations::experimental::adaptive_pool::adaptive_max_pool2d;
+
+}  // namespace ttnn

@@ -1,0 +1,27 @@
+include(sources.cmake)
+
+add_executable(watcher_dump ${WATCHER_DUMP_SOURCES})
+target_link_libraries(
+    watcher_dump
+    PRIVATE
+        Metalium::Metal
+        Metalium::Metal::Hardware
+        TT::STL
+)
+target_include_directories(
+    watcher_dump
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tests
+        .
+)
+set_target_properties(
+    watcher_dump
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/tools
+)
+
+tt_reuse_precompile_headers(watcher_dump TT::CommonPCH)

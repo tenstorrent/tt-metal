@@ -1,0 +1,436 @@
+name: "Git bisect dispatch"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tracy:
+        required: true
+        type: boolean
+        default: true
+        description: "Build with tracy enabled"
+      nd-mode:
+        required: true
+        type: boolean
+        default: false
+        description: "Enable non-deterministic detection mode"
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P150
+          - P100
+          - config-t3000
+          - BH-LoudBox
+          - topology-6u
+        description: "Runner Type Label"
+      commit-range:
+        required: true
+        type: string
+        description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678)"
+      test-script:
+        required: true
+        type: string
+        description: "GitHub gist URL (e.g., https://gist.github.com/user/id) or inline command to run"
+      timeout:
+        required: true
+        type: string
+        default: "30"
+        description: "Timeout for each test run in minutes (positive integer only)"
+      attempts:
+        required: true
+        type: string
+        default: "3"
+        description: "Number of retry attempts for each test run (default: 3)"
+      download-artifacts:
+        required: false
+        type: boolean
+        default: true
+        description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
+      skip-commits:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated list of commits to automatically skip (e.g., abc123,def456)"
+
+permissions:
+  actions: write
+  contents: write
+
+run-name: "Bisect on ${{ inputs.runner-label }}"
+jobs:
+  determine-runner-config:
+    runs-on: ubuntu-latest
+    outputs:
+      runs-on-labels: ${{ steps.config.outputs.runs-on-labels }}
+      arch-name: ${{ steps.config.outputs.arch-name }}
+    steps:
+      - id: config
+        shell: bash
+        run: |
+          RUNNER_LABEL="${{ inputs.runner-label }}"
+
+          # Determine runs-on labels based on runner type
+
+          if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
+            # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
+            RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
+          elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
+            # Standard single-card runners use cloud-virtual-machine
+            RUNS_ON='["'$RUNNER_LABEL'", "in-service", "cloud-virtual-machine"]'
+          else
+            # Fallback to viommu-stable format (output as JSON array)
+            echo "Warning: unexpected runner label '$RUNNER_LABEL'; using fallback VIOMMU label." >&2
+            VIOMMU_LABEL='tt-ubuntu-2204-'$RUNNER_LABEL'-viommu-stable'
+            RUNS_ON='["'$VIOMMU_LABEL'"]'
+          fi
+
+          # Determine architecture name based on runner type
+          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000|topology-6u)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
+            ARCH_NAME="wormhole_b0"
+          else
+            ARCH_NAME="blackhole"
+          fi
+
+          echo "runs-on-labels=$RUNS_ON" >> $GITHUB_OUTPUT
+          echo "arch-name=$ARCH_NAME" >> $GITHUB_OUTPUT
+          echo "Determined runs-on: $RUNS_ON"
+          echo "Determined arch: $ARCH_NAME"
+
+  test-dispatch:
+    needs: determine-runner-config
+    timeout-minutes: 1440
+    runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ARCH_NAME: ${{ needs.determine-runner-config.outputs.arch-name }}
+        LOGURU_LEVEL: DEBUG
+        PYTHONPATH: /work:/work/ttnn:/work/tools
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
+        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >
+        --device /dev/tenstorrent
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+
+      - name: 🔧 Setup GitHub CLI and jq
+        if: ${{ inputs.download-artifacts == true }}
+        run: |
+          echo "Checking GitHub CLI, jq, and zstd installation..."
+
+          # Check and install GitHub CLI
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "Installing GitHub CLI 2.81.0..."
+            apt-get update
+            wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
+            apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
+            rm -f gh_2.81.0_linux_amd64.deb
+            echo "GitHub CLI 2.81.0 installed successfully"
+          else
+            echo "GitHub CLI is already installed"
+          fi
+
+          # Check and install jq and zstd
+          if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
+            echo "Installing jq and zstd..."
+            apt-get update
+            apt-get install -y --no-install-recommends jq zstd
+            echo "jq and zstd installed successfully"
+          else
+            echo "jq and zstd are already installed"
+          fi
+
+          # Verify installations
+          echo "Verifying installations:"
+          gh --version
+          jq --version
+          zstd --version
+
+          # Check GitHub CLI authentication (GH_TOKEN is provided via env)
+          echo "Checking GitHub CLI authentication status:"
+          gh auth status || echo "WARNING: Authentication check failed"
+
+          echo "Testing gh CLI with current repository:"
+          echo "Repository: $(gh repo view --repo tenstorrent/tt-metal --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
+        shell: bash
+      - name: Download Gist Script
+        if: ${{ contains(inputs.test-script, 'gist.github.com') || contains(inputs.test-script, 'gist.githubusercontent.com') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Downloading gist from ${{ inputs.test-script }}"
+          GIST_URL="${{ inputs.test-script }}"
+
+          # Extract gist ID and filename from various URL formats
+          if [[ "$GIST_URL" =~ gist\.github\.com/([^/]+)/([a-f0-9]+) ]]; then
+            # Regular gist URL: https://gist.github.com/username/gist_id
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            # Get the filename from the end of URL if present, otherwise use default
+            if [[ "$GIST_URL" =~ /([^/]+\.sh)$ ]]; then
+              FILENAME="${BASH_REMATCH[1]}"
+            else
+              FILENAME=""
+            fi
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/[^/]+/(.+\.sh)$ ]]; then
+            # Raw gist URL with revision: https://gist.githubusercontent.com/username/gist_id/raw/revision/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/(.+\.sh)$ ]]; then
+            # Raw gist URL without revision: https://gist.githubusercontent.com/username/gist_id/raw/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
+          else
+            echo "ERROR: Could not parse gist URL format"
+            exit 1
+          fi
+
+          # Construct the raw URL without revision hash to always get latest
+          if [ -n "$FILENAME" ]; then
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw/${FILENAME}"
+          else
+            # If no filename, try to get the first .sh file
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw"
+          fi
+
+          echo "Fetching from: $RAW_URL"
+          curl -fsSL "$RAW_URL" -o /work/bisect_gist_script.sh
+          chmod +x /work/bisect_gist_script.sh
+          echo "Gist script downloaded and made executable"
+
+      - name: Validate Inputs
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Parse commit range from combined input
+          COMMIT_RANGE='${{ inputs.commit-range }}'
+          IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+
+          # Validate parsed values
+          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
+            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+            exit 1
+          fi
+
+          echo "✓ Parsed good commit: $GOOD_COMMIT"
+          echo "✓ Parsed bad commit: $BAD_COMMIT"
+
+          # Validate that commits exist
+          if ! git cat-file -e "$GOOD_COMMIT^{commit}" 2>/dev/null; then
+            echo "ERROR: Good commit does not exist: $GOOD_COMMIT"
+            exit 1
+          fi
+
+          if ! git cat-file -e "$BAD_COMMIT^{commit}" 2>/dev/null; then
+            echo "ERROR: Bad commit does not exist: $BAD_COMMIT"
+            exit 1
+          fi
+
+          echo "✓ Both commits exist in repository"
+
+          # Validate that good commit is an ancestor of bad commit
+          if ! git merge-base --is-ancestor "$GOOD_COMMIT" "$BAD_COMMIT" 2>/dev/null; then
+            echo "ERROR: Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
+            echo "This means the good commit does not come before the bad commit in git history."
+            echo "Please verify your commit range."
+            exit 1
+          fi
+
+          echo "✓ Good commit is an ancestor of bad commit"
+
+          # Validate timeout and attempts
+          TIMEOUT='${{ inputs.timeout }}'
+          ATTEMPTS='${{ inputs.attempts }}'
+
+          if [ -z "$TIMEOUT" ]; then
+            echo "ERROR: Timeout must be provided"
+            exit 1
+          fi
+
+          # Validate timeout is a positive integer
+          if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Timeout must be a positive integer (got: '$TIMEOUT')"
+            exit 1
+          fi
+
+          if [ "$TIMEOUT" -le 0 ]; then
+            echo "ERROR: Timeout must be greater than 0 (got: $TIMEOUT)"
+            exit 1
+          fi
+
+          if [ -z "$ATTEMPTS" ]; then
+            echo "ERROR: Attempts must be provided"
+            exit 1
+          fi
+
+          # Validate attempts is a positive integer
+          if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Attempts must be a positive integer (got: '$ATTEMPTS')"
+            exit 1
+          fi
+
+          if [ "$ATTEMPTS" -le 0 ]; then
+            echo "ERROR: Attempts must be greater than 0 (got: $ATTEMPTS)"
+            exit 1
+          fi
+
+          echo "✓ Timeout: $TIMEOUT minutes"
+          echo "✓ Attempts: $ATTEMPTS"
+
+          # Validate test-script is provided
+          TEST_SCRIPT='${{ inputs.test-script }}'
+          if [ -z "$TEST_SCRIPT" ]; then
+            echo "ERROR: test-script must be provided"
+            exit 1
+          fi
+
+          # Determine if it's a gist or inline command
+          if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
+            echo "✓ Detected gist URL: $TEST_SCRIPT"
+          else
+            echo "✓ Using inline command"
+          fi
+
+          echo ""
+          echo "All inputs validated successfully"
+
+          # Export parsed values as outputs for next step
+          echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
+          echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+
+      - name: Run Git Bisect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
+        run: |
+          set -euo pipefail
+          trap 'rm -rf ./build_bisect' EXIT
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/tt_bisect.sh ./build_bisect/
+          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
+          chmod +x ./build_bisect/tt_bisect.sh
+          chmod +x ./build_bisect/download_artifacts.sh
+
+          # Use parsed values from validation step
+          GOOD_COMMIT='${{ steps.validate.outputs.good-commit }}'
+          BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
+          TIMEOUT='${{ inputs.timeout }}'
+          ATTEMPTS='${{ inputs.attempts }}'
+
+          # Determine which script to run based on test-script input
+          SCRIPT_PATH=""
+          TEST_SCRIPT='${{ inputs.test-script }}'
+
+          if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
+            # It's a gist URL, use the downloaded gist script
+            SCRIPT_PATH="/work/bisect_gist_script.sh"
+          else
+            # It's an inline command, write it to a temporary script to avoid quoting issues
+            # Note: using heredoc with 'EOF' prevents variable expansion
+            cat > /work/bisect_command_script.sh << 'EOF'
+          #!/bin/bash
+          set -eo pipefail
+          ${{ inputs.test-script }}
+          EOF
+            chmod +x /work/bisect_command_script.sh
+            SCRIPT_PATH="/work/bisect_command_script.sh"
+          fi
+
+          # Build arguments in an array to avoid empty string issues
+          declare -a bisect_args
+          bisect_args+=(-t "$TIMEOUT")
+          bisect_args+=(-b "$BAD_COMMIT")
+          bisect_args+=(-g "$GOOD_COMMIT")
+          bisect_args+=(-r "$ATTEMPTS")
+
+          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
+            bisect_args+=(-p)
+          fi
+          if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
+            bisect_args+=(-n)
+          fi
+          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
+            bisect_args+=(-a)
+          fi
+
+          if [[ "${{ inputs.skip-commits }}" != '' ]]; then
+            bisect_args+=(-c "${{ inputs.skip-commits }}")
+          fi
+
+          bisect_args+=(-s "$SCRIPT_PATH")
+
+          # Run bisect with clean, properly quoted arguments
+          set +e
+          ./build_bisect/tt_bisect.sh "${bisect_args[@]}"
+          BISECT_EXIT_CODE=$?
+          set -e
+
+          # Handle exit codes
+          if [ $BISECT_EXIT_CODE -eq 2 ]; then
+            echo "════════════════════════════════════════════════════════════════"
+            echo "Bisect completed with exit code 2"
+            echo "Likely outcome: No problematic commit found, only skipped commits remain"
+            echo "════════════════════════════════════════════════════════════════"
+            exit 0
+          elif [ $BISECT_EXIT_CODE -ne 0 ]; then
+            echo "Bisect failed with exit code $BISECT_EXIT_CODE"
+            exit $BISECT_EXIT_CODE
+          fi
+
+      - name: Upload ND results CSV
+        if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-nd-results
+          path: docker-job/bisect_nd_results.csv
+          if-no-files-found: ignore

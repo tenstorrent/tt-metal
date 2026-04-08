@@ -1,0 +1,61 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <stdint.h>
+#include <tuple>
+#include <fmt/core.h>
+#include <string>
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
+namespace tt::tt_metal::distributed {
+template <typename T>
+class MeshContainer;
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::distributed {
+
+// PhysicalMeshCoordinate is a 2D-coordinate in the physical mesh as defined by the Fabric layer.
+// MeshCoordinate[0] is the mesh_id and MeshCoordinate[1] is the physical_device_id.
+class PhysicalMeshCoordinate {
+public:
+    using ChipId = uint32_t;
+    using MeshId = tt::tt_fabric::MeshId;
+    PhysicalMeshCoordinate() = delete;
+    PhysicalMeshCoordinate(MeshId mesh_id, ChipId chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
+    MeshId mesh_id() const { return mesh_id_; }
+    ChipId chip_id() const { return chip_id_; }
+
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("mesh_id", "chip_id");
+    auto attribute_values() const { return std::forward_as_tuple(mesh_id_, chip_id_); }
+
+private:
+    MeshId mesh_id_{0};
+    ChipId chip_id_{0};
+};
+
+// Returns a map of all physical mesh coordinates in the system.
+MeshContainer<PhysicalMeshCoordinate> get_system_mesh_coordinate_translation_map(
+    const tt::tt_fabric::ControlPlane& control_plane);
+
+}  // namespace tt::tt_metal::distributed
+
+// fmt::formatter for PhysicalMeshCoordinate
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::distributed::PhysicalMeshCoordinate& coord);
+}  // namespace ttsl::fmt_detail
+
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::PhysicalMeshCoordinate> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::PhysicalMeshCoordinate& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};

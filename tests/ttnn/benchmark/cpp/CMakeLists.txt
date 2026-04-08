@@ -1,0 +1,39 @@
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
+foreach(TEST_SRC ${BENCHMARK_SRCS})
+    get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
+    get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
+
+    add_executable(${TEST_TARGET} ${TEST_SRC})
+
+    target_link_libraries(
+        ${TEST_TARGET}
+        PUBLIC
+            TTNN::TTNN
+            test_common_libs
+            benchmark::benchmark
+            Python3::Python
+    )
+    target_include_directories(
+        ${TEST_TARGET}
+        BEFORE
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${PROJECT_SOURCE_DIR}/ttnn/cpp
+            ${PROJECT_SOURCE_DIR}/ttnn/api
+            ${PROJECT_SOURCE_DIR}/ttnn/
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_target_properties(
+        ${TEST_TARGET}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/ttnn//benchmark/${TEST_DIR}
+    )
+    message(STATUS "TEST_TARGET: ${TEST_TARGET}")
+    target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
+    tt_reuse_precompile_headers(${TEST_TARGET} TTNN::PCH)
+endforeach()
