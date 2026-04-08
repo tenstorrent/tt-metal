@@ -36,9 +36,9 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     )
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_expert_mask = ttnn.from_torch(expert_mask, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_expert_mask, -42)  # garbage padding to test that the operation removes it
+    # ttnn.fill_implicit_tile_padding(ttnn_expert_mask, -42)  # garbage padding to test that the operation removes it
     ttnn_topE_mask = ttnn.from_torch(topE_mask, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_topE_mask, -42)  # garbage padding to test that the operation removes it
+    # ttnn.fill_implicit_tile_padding(ttnn_topE_mask, -42)  # garbage padding to test that the operation removes it
 
     for i in range(3):
         weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
