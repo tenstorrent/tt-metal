@@ -19,7 +19,7 @@ jobs:
       ref: ${{ github.sha }}
 
   create-allocation:
-    name: Create Allocation for 32x4 RINGxRING
+    name: Create Allocation for 32x4 LINExLINE
     needs: build-artifact
     timeout-minutes: 30
     outputs:
@@ -39,7 +39,7 @@ jobs:
             mesh_descriptors {
               name: \"M0\"
               arch: BLACKHOLE
-              device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
+              device_topology { dims: [ 32,4 ] dim_types: [ LINE,LINE ] }
               host_topology   { dims: [ 4,1 ] }
               channels { count: 2 policy: RELAXED }
             }
@@ -56,8 +56,9 @@ jobs:
           allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
           spec: |
-            allocationType: Count
-            count: 4
+            allocationType: MGD
+            mgd: |
+              ${{ steps.mgd.outputs.mgd }}
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
