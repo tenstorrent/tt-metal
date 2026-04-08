@@ -83,15 +83,12 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    .reshape(1, 16, 16)
+                    torch.nn.functional.pad(score_correction_bias.reshape(1, 16, 16), (0,16,0,16,0,0), "constant", 0)
                     .transpose(1, 2)
                     .repeat(num_device_cores, 1, 1),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
-                    dtype=ttnn.float32,
+                    dtype=ttnn.bfloat16,
                     memory_config=input_output_mem_config,
                     layout=ttnn.TILE_LAYOUT,
                 )
