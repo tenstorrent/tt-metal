@@ -18,10 +18,7 @@ from models.tt_transformers.tt.generator import Generator
 
 
 class GemmaMultimodalGenerator(Generator):
-    """Runs SigLIP vision before text prefill; implements vLLM ``encode_vision_for_prefill``."""
-
     def encode_vision_for_prefill(self, pixel_values: list):
-        """One vision tower pass per batch slot; used by vLLM v1 before ``prefill_forward``."""
         if not hasattr(self.model[0], "encode_vision_embeddings_from_pixels"):
             raise TypeError(
                 "GemmaMultimodalGenerator requires TtGemmaModel (multimodal). "
