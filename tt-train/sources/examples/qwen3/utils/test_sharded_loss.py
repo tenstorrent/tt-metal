@@ -258,6 +258,97 @@ def run_test(ctx, device, mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
             print(f"  dist CE backward: {tag}  max_diff={max_diff:.6f}  " f"mean_diff={mean_diff:.6f}")
 
     # ==================================================================
+    # 4. C++ sharded_cross_entropy_loss — forward value
+    # ==================================================================
+    if tp_size > 1:
+        print("\n--- C++ sharded_cross_entropy_loss: forward ---")
+
+        def _make_cpp_targets():
+            """Build per-device target tensor [B,1,S,1] uint32, replicated across TP."""
+            # For each DP group, repeat the target batch across tp_size devices
+            per_dp_group = []
+            for d in range(dp_size):
+                chunk = targets_np[d * batch_size : (d + 1) * batch_size]  # [B, S]
+                per_dp_group.extend([chunk] * tp_size)
+            stacked = np.stack(per_dp_group, axis=0)  # [dp*tp*B, S]
+            stacked = stacked.reshape(dp_size * tp_size * batch_size, 1, seq_len, 1).astype(np.uint32)
+            return ttml.autograd.Tensor.from_numpy(stacked, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, shard_mapper)
+
+        def test_cpp_ce_forward():
+            ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+            logits = ttml.autograd.Tensor.from_numpy(
+                logits_stacked,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                shard_mapper,
+            )
+            tgt = _make_cpp_targets()
+            loss = ttml.ops.distributed.sharded_cross_entropy_loss(logits, tgt, cluster_axis=1)
+            val = extract_loss(loss, device, distributed)
+            ctx.reset_graph()
+            return val
+
+        val, err = try_op(test_cpp_ce_forward)
+        report("C++ sharded CE forward", val, err, ref_loss)
+
+    # ==================================================================
+    # 5. C++ sharded_cross_entropy_loss — backward gradients
+    # ==================================================================
+    if tp_size > 1:
+        print("\n--- C++ sharded_cross_entropy_loss: backward ---")
+
+        def test_cpp_ce_backward():
+            ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+            logits = ttml.autograd.Tensor.from_numpy(
+                logits_stacked,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                shard_mapper,
+            )
+            logits.set_requires_grad(True)
+            tgt = _make_cpp_targets()
+            loss = ttml.ops.distributed.sharded_cross_entropy_loss(logits, tgt, cluster_axis=1)
+            loss.backward(False)
+
+            composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+            grad_raw = ttnn.to_torch(logits.get_grad(), mesh_composer=composer).float().numpy()
+
+            grad_full = np.zeros_like(logits_np)
+            for d in range(dp_size):
+                for k in range(tp_size):
+                    dev_idx = d * tp_size + k
+                    slab = grad_raw[dev_idx * batch_size : (dev_idx + 1) * batch_size]
+                    grad_full[
+                        d * batch_size : (d + 1) * batch_size,
+                        :,
+                        :,
+                        k * raw_local_V : (k + 1) * raw_local_V,
+                    ] = slab[:, :, :, :raw_local_V]
+
+            if dp_size > 1:
+                grad_full /= dp_size
+
+            max_diff = np.abs(grad_full - ref_grad).max()
+            mean_diff = np.abs(grad_full - ref_grad).mean()
+            ctx.reset_graph()
+            return max_diff, mean_diff
+
+        val, err = try_op(test_cpp_ce_backward)
+        total += 1
+        if err is not None:
+            failed += 1
+            print(f"  C++ dist CE backward: FAIL (crashed: {err})")
+        else:
+            max_diff, mean_diff = val
+            ok = max_diff < 0.05
+            tag = "PASS" if ok else "FAIL"
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            print(f"  C++ dist CE backward: {tag}  max_diff={max_diff:.6f}  mean_diff={mean_diff:.6f}")
+
+    # ==================================================================
     # Summary
     # ==================================================================
     print(f"\n{'=' * 70}")
