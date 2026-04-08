@@ -267,6 +267,34 @@ The key question then becomes:
 * In pre-release validation to catch edge cases.
 * When asserts are enabled, the slight performance overhead is acceptable as a safeguard against incorrect hardware configurations.
 
+## Testing newly added asserts
+
+After adding new `LLK_ASSERT` statements, you should validate them through CI to confirm they do not trigger false positives on supported configurations. Two tt-metal CI actions are particularly useful:
+
+**1. Sanity action with LLK asserts enabled**
+
+The [Sanity tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml) workflow accepts an `enable-llk-asserts` boolean input. When set to `true`, it exports `TT_METAL_LLK_ASSERTS=1` into the test environment, which causes JIT-compiled kernels to include `LLK_ASSERT` checks at runtime. This runs the full sanity suite (fast dispatch, models, ops, TTNN, profiler, etc.) with asserts active, exercising a broad range of configurations against your new checks.
+
+**2. Blackhole post-commit action**
+
+The [Blackhole post-commit](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-post-commit.yaml) workflow also accepts `enable-llk-asserts`. It runs the full Blackhole test matrix (models, ops, TTNN, UMD, multi-card) with asserts enabled, validating Blackhole-specific code paths.
+
+Both actions can be triggered manually via `workflow_dispatch` with the `enable-llk-asserts` checkbox enabled.
+
+## Why assert-helper functions use `noinline` and `no-jump-tables`
+
+Functions that perform assert validation checks (e.g. `is_unpacker_format_conversion_supported_fp32_acc`, `is_packer_to_L1_early_conversion_supported`) are annotated with:
+
+```cpp
+__attribute__((noinline, optimize("no-jump-tables")))
+```
+
+These attributes serve to reduce firmware binary size, which is critical because TRISC cores have very limited instruction and data memory:
+
+* **`noinline`** — prevents the compiler from inlining the function body at every call site. These validation functions contain large `switch` statements over `DataFormat` enums. If inlined, the full switch logic would be duplicated at each call site, inflating the `.text` (code) section. Keeping them as a single out-of-line function body means the code exists once and is called from multiple places.
+
+* **`optimize("no-jump-tables")`** — prevents the compiler from emitting jump tables for `switch` statements. Jump tables are stored in `.data` or `.rodata` and consume scarce data memory. By forcing the compiler to use a chain of conditional branches instead, the function avoids allocating any data-section storage. The branch chain is slightly larger in `.text` but avoids the `.data` overhead entirely, which is the more constrained resource on TRISC.
+
 # Assert Culture
 ## Development Mindset 💻
 * ✅ Consider assertions integral to API and kernel development

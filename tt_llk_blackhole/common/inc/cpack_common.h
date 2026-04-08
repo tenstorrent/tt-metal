@@ -166,7 +166,7 @@ inline void packer_addr_counter_init()
 /**
  * \brief Returns true if `out_l1` is a valid output of the FP32 late-conversion column.
  */
-__attribute__((noinline)) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
 {
     switch (out_l1)
     {
@@ -203,7 +203,7 @@ __attribute__((noinline)) bool is_packer_combined_late_column_output(const DataF
  * Validates supported dst-register to intermediate-format pairs for Blackhole's early conversion
  * stage. For this API, `out_l1` is interpreted as the requested intermediate format code.
  */
-__attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
@@ -250,7 +250,7 @@ __attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const 
  * Validates supported intermediate (LateFromFormat) to L1 pairs for Blackhole's late conversion
  * stage.
  */
-__attribute__((noinline)) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
