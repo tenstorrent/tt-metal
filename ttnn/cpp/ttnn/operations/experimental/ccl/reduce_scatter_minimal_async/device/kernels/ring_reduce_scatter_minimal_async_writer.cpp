@@ -266,7 +266,7 @@ void kernel_main() {
                 separate_even_odd_sems = false;
             }
 
-            // slice_idx = slice_idx % ring_size
+            // below code does 'slice_idx = slice_idx % ring_size'
             if (slice_idx < 0) {
                 slice_idx += ring_size;
             } else if (slice_idx >= (int)ring_size) {
