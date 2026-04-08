@@ -143,31 +143,28 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 
 Tensor::Tensor(const Tensor& other) = default;
 
-Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
+Tensor::~Tensor() { this->deallocate(/*force=*/false); }
 
-void Tensor::deallocate(bool force) { deallocate_impl(force); }
-
-void Tensor::deallocate_impl(bool force) {
+void Tensor::deallocate(bool force) {
     bool tracking = GraphTracker::instance().is_enabled();
-    std::visit(
-        ttsl::overloaded{
-            [](HostStorage&) {},
-            [force, tracking](DeviceStorage& storage) {
-                if (!storage.is_sole_owner_of_device_memory() && !force) {
-                    return;
-                }
+    if (storage_type() == StorageType::HOST) {
+        return;
+    }
 
-                if (tracking) {
-                    GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
-                }
+    auto& storage = device_storage();
+    if (!storage.is_sole_owner_of_device_memory() && !force) {
+        return;
+    }
 
-                storage.deallocate();
+    if (tracking) {
+        GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+    }
 
-                if (tracking) {
-                    GraphTracker::instance().track_function_end();
-                }
-            }},
-        storage_);
+    storage.deallocate();
+
+    if (tracking) {
+        GraphTracker::instance().track_function_end();
+    }
 }
 
 std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
