@@ -42,16 +42,27 @@ static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
  */
 template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
-    // helper lambda to transform TensorSpec to DeviceTensor
+    // helper lambda to transform TensorSpec/DistributedTensorSpec to DeviceTensor
     auto transform_arg = [device](auto&& arg) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, DistributedTensorSpec>) {
+            return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<DistributedTensorSpec>>) {
+            return arg ? std::optional<Tensor>(create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
+                       : std::nullopt;
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<DistributedTensorSpec>>) {
+            std::vector<Tensor> result(arg.size());
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
+                return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
+            });
+            return result;
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
             return create_device_tensor(arg, device);
         } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
             return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
         } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
             std::vector<Tensor> result(arg.size());
-            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
-                return create_device_tensor(arg, device);
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
+                return create_device_tensor(item, device);
             });
             return result;
         } else {
