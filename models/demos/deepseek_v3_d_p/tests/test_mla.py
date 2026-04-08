@@ -23,58 +23,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def init_kvpe_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers):
-    """
-    Initialize KVPE cache for MLA.
-
-    Args:
-        config: Model configuration
-        mesh_device: Mesh device for TT
-        seq_len: Sequence length
-        mesh_shape: Shape of mesh device
-        sp_axis: Sequence parallel axis
-
-    Returns:
-        tt_kvpe_cache: Initialized KVPE cache on device
-    """
-    # hack in num_layers into batch size, so they are contiguous in memory
-    num_layers = num_kvpe_cache_layers
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
-
-    BH_NUM_DRAM_BANKS = 8
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
-    ]
-    grid = ttnn.CoreRangeSet(core_ranges)
-
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32  # this is a predefined constant
-
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
-        grid=grid,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.DRAM,
-        nd_shard_spec=kv_nd_shard_spec,
-    )
-
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    return tt_kvpe_cache
 
 
 def run_mla_inference(
@@ -325,8 +275,9 @@ def test_mla(
     logger.info("=" * 80)
 
     # Initialize KVPE cache
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
     tt_kvpe_cache = init_kvpe_cache(
-        config=config,
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
