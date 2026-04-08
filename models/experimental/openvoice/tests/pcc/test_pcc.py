@@ -450,13 +450,17 @@ class TestResidualCouplingModule:
         x_mask = torch.ones(B, 1, T)
         g = torch.randn(B, 256, 1)
 
-        z_pt = flow._forward_pytorch(x_torch, x_mask, g, reverse=False)
+        # PyTorch path: run with device=None
+        flow.device = None
+        z_pt = flow(x_torch, x_mask, g=g, reverse=False)
 
+        # TTNN path: run with device set
+        flow.device = device
         x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
         mask_ttnn = ttnn.from_torch(x_mask, dtype=ttnn.bfloat16, device=device)
         g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, device=device)
 
-        z_tt = flow._forward_ttnn(x_ttnn, mask_ttnn, g_ttnn, reverse=False)
+        z_tt = flow(x_ttnn, mask_ttnn, g=g_ttnn, reverse=False)
 
         assert_with_pcc(z_pt, z_tt, pcc_threshold=0.90, name="ResidualCoupling forward")
 
@@ -482,13 +486,17 @@ class TestResidualCouplingModule:
         z_mask = torch.ones(B, 1, T)
         g = torch.randn(B, 256, 1)
 
-        x_pt = flow._forward_pytorch(z, z_mask, g, reverse=True)
+        # PyTorch path
+        flow.device = None
+        x_pt = flow(z, z_mask, g=g, reverse=True)
 
+        # TTNN path
+        flow.device = device
         z_ttnn = ttnn.from_torch(z, dtype=ttnn.bfloat16, device=device)
         mask_ttnn = ttnn.from_torch(z_mask, dtype=ttnn.bfloat16, device=device)
         g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, device=device)
 
-        x_tt = flow._forward_ttnn(z_ttnn, mask_ttnn, g_ttnn, reverse=True)
+        x_tt = flow(z_ttnn, mask_ttnn, g=g_ttnn, reverse=True)
 
         assert_with_pcc(x_pt, x_tt, pcc_threshold=0.90, name="ResidualCoupling reverse")
 
@@ -533,12 +541,12 @@ class TestTransformerFlowModule:
 
     def test_transformer_flow_pcc(self, device, model_weights):
         """Test TransformerFlow TTNN vs PyTorch PCC."""
-        from models.experimental.openvoice.tt.transformer_flow import TTNNTransformerFlow
+        from models.experimental.openvoice.tt.transformer_flow import TTNNTransformerCouplingBlock
 
         if "flow.flows.0.pre" not in model_weights:
             pytest.skip("TransformerFlow weights not in checkpoint")
 
-        flow = TTNNTransformerFlow.from_state_dict(
+        flow = TTNNTransformerCouplingBlock.from_state_dict(
             model_weights,
             prefix="flow",
             channels=192,
@@ -558,13 +566,17 @@ class TestTransformerFlowModule:
         x_mask = torch.ones(B, 1, T)
         g = torch.randn(B, 256, 1)
 
-        z_pt = flow._forward_pytorch(x, x_mask, g, reverse=False)
+        # PyTorch path
+        flow.device = None
+        z_pt = flow(x, x_mask, g=g, reverse=False)
 
+        # TTNN path
+        flow.device = device
         x_ttnn = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device)
         mask_ttnn = ttnn.from_torch(x_mask, dtype=ttnn.bfloat16, device=device)
         g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, device=device)
 
-        z_tt = flow._forward_ttnn(x_ttnn, mask_ttnn, g_ttnn, reverse=False)
+        z_tt = flow(x_ttnn, mask_ttnn, g=g_ttnn, reverse=False)
 
         assert_with_pcc(z_pt, z_tt, pcc_threshold=0.90, name="TransformerFlow")
 
@@ -585,8 +597,23 @@ class TestEndToEndPCC:
         """
         from models.experimental.openvoice.tt.synthesizer import TTNNSynthesizerTrn
 
+        # Default OpenVoice V2 config
+        config = {
+            "model": {
+                "inter_channels": 192,
+                "hidden_channels": 192,
+                "gin_channels": 256,
+                "zero_g": True,
+            },
+            "data": {
+                "n_speakers": 0,
+                "filter_length": 1024,
+            },
+        }
+
         synth = TTNNSynthesizerTrn.from_state_dict(
             model_weights,
+            config=config,
             device=device,
         )
 
@@ -597,7 +624,7 @@ class TestEndToEndPCC:
         tgt_se = torch.randn(B, 256, 1)
 
         synth.device = None
-        audio_pt, _ = synth.voice_conversion(mel, mel_lengths, src_se, tgt_se, tau=0.3)
+        audio_pt, _, _ = synth.voice_conversion(mel, mel_lengths, src_se, tgt_se, tau=0.3)
 
         synth.device = device
         mel_ttnn = ttnn.from_torch(mel, dtype=ttnn.bfloat16, device=device)
@@ -605,7 +632,7 @@ class TestEndToEndPCC:
         src_se_ttnn = ttnn.from_torch(src_se, dtype=ttnn.bfloat16, device=device)
         tgt_se_ttnn = ttnn.from_torch(tgt_se, dtype=ttnn.bfloat16, device=device)
 
-        audio_tt, _ = synth.voice_conversion(mel_ttnn, mel_len_ttnn, src_se_ttnn, tgt_se_ttnn, tau=0.3)
+        audio_tt, _, _ = synth.voice_conversion(mel_ttnn, mel_len_ttnn, src_se_ttnn, tgt_se_ttnn, tau=0.3)
 
         if not isinstance(audio_tt, torch.Tensor):
             audio_tt = ttnn.to_torch(audio_tt)

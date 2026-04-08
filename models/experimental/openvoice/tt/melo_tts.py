@@ -988,9 +988,9 @@ class TTNNMeloTTS:
         device: Optional[Any],
     ) -> TTNNStochasticDurationPredictor:
         """Build StochasticDurationPredictor from state dict."""
+        from models.experimental.openvoice.functional.operations import Flip
         from models.experimental.openvoice.tt.duration_predictor import (
             ElementwiseAffine,
-            Flip,
             Log,
             TTNNStochasticDurationPredictor,
         )
