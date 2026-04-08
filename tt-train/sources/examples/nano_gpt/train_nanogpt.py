@@ -48,7 +48,6 @@ from ttml.models.llama import (
 from ttml.models.deepseek import (
     DeepSeek,
     DeepSeekConfig,
-    calculate_flops_per_token as deepseek_flops_per_token,
 )
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
@@ -1418,7 +1417,6 @@ def main():
         batch_size = training_config.batch_size
         max_steps = training_config.max_steps
         dataset_len = len(dataset)
-        tokens_per_step = batch_size * seq_len
 
         # Flag to track if first iteration is complete (for memory tracking)
         is_everything_compiled = False
@@ -1467,7 +1465,7 @@ def main():
                     loss_meter.update(avg_loss)
 
                     # Throughput metrics
-                    tps = tokens_per_step / (step_time / 1000.0)  # tokens per second
+                    tps = (actual_batch_size * seq_len) / (step_time / 1000.0)
                     if flops_per_token > 0 and step_time > 0:
                         achieved_tflops = tps * flops_per_token / 1e12
                         mfu_str = ""

@@ -12,11 +12,14 @@ No CPU interaction during forward pass.
 
 Matches reference DeepSeek-V3 Gate semantics:
   1. scores = sigmoid(gate(x))           [or softmax]
-  2. topk on (scores + bias)             [expert selection]
+  2. topk on (scores + bias)             [expert selection, with optional group routing]
   3. weights = scores[selected]           [original unbiased scores]
   4. weights /= weights.sum()            [normalize across selected, sigmoid only]
   5. weights *= route_scale
   6. output = sum(expert_i(x) * weight_i) + shared_expert(x)
+
+Load balancing: auxiliary-loss-free expert bias updated between training steps
+using on-device token count accumulation.
 """
 
 from __future__ import annotations
@@ -46,16 +49,28 @@ class Expert(AbstractModuleBase):
 class MoE(AbstractModuleBase):
     """Mixture of Experts with fully on-device routing.
 
-    Routing: sigmoid/softmax scores -> topk on device -> per-expert masks.
+    Routing: sigmoid/softmax scores -> optional group selection -> topk.
     Execution: dense masking loop over experts (full input to each).
     No CPU interaction during forward pass.
     """
 
     def __init__(self, config) -> None:
         super().__init__()
+
+        # ttnn.topk returns indices as bf16 which represents integers exactly up to 256.
+        # Beyond that, ttnn.eq(topk_indices, float(expert_idx)) may match wrong experts.
+        if config.n_routed_experts > 256:
+            raise ValueError(
+                f"n_routed_experts={config.n_routed_experts} exceeds 256, the maximum "
+                f"integer exactly representable in bf16. On-device routing via "
+                f"ttnn.topk + ttnn.eq would produce incorrect expert masks."
+            )
+
         self.dim = config.dim
         self.num_experts = config.n_routed_experts
         self.n_activated = config.n_activated_experts
+        self.n_groups = config.n_expert_groups
+        self.n_limited_groups = config.n_limited_groups
         self.score_func = config.score_func
         self.route_scale = config.route_scale
 
@@ -75,6 +90,11 @@ class MoE(AbstractModuleBase):
         bias_np = np.zeros((1, 1, 1, config.n_routed_experts), dtype=np.float32)
         self._expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(bias_np, ttnn.Layout.TILE))
 
+        # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
+        # Each forward adds to this; update_expert_bias reads and resets it.
+        counts_np = np.zeros((1, 1, 1, config.n_routed_experts), dtype=np.float32)
+        self._token_counts = Buffer(ttml.autograd.Tensor.from_numpy(counts_np, ttnn.Layout.TILE))
+
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         B, _, S, dim = list(x.get_value().shape)
 
@@ -86,43 +106,87 @@ class MoE(AbstractModuleBase):
         else:
             scores = autograd_sigmoid(logits)
 
-        # ── 2. Top-k routing on device ──
+        # ── 2. Top-k routing on device (with optional group selection) ──
         scores_val = scores.get_value()
         biased = ttnn.add(scores_val, self._expert_bias.tensor.get_value())
-        _topk_values, topk_indices = ttnn.topk(biased, self.n_activated, dim=-1)
-        # topk_indices: [B, 1, S, n_activated] float
 
-        # ── 3. Build per-expert masks and normalization denominator on device ──
-        # For sigmoid: need to normalize scores across selected experts per token.
-        # denom[token] = sum of scores for the k selected experts for that token.
-        # We accumulate this as we iterate over experts.
-        #
-        # For softmax: scores already sum to 1, no extra normalization needed
-        # (reference DeepSeek only normalizes for sigmoid).
+        if self.n_groups > 1:
+            experts_per_group = self.num_experts // self.n_groups
 
-        expert_masks = {}  # expert_idx -> ttnn mask [B, 1, S, 1]
-        denom = None  # [B, 1, S, 1] running sum of selected scores
+            # Reshape to [B, 1, S*n_groups, experts_per_group]
+            biased_grouped = ttnn.reshape(biased, [B, 1, S * self.n_groups, experts_per_group])
+
+            # Score each group by its top-2 experts
+            top2_vals, _top2_idx = ttnn.topk(biased_grouped, 2, dim=-1)
+            group_scores = ttnn.sum(top2_vals, dim=-1, keepdim=True)
+            group_scores = ttnn.reshape(group_scores, [B, 1, S, self.n_groups])
+
+            # Select top n_limited_groups groups
+            _gv, top_group_indices = ttnn.topk(group_scores, self.n_limited_groups, dim=-1)
+
+            # Build group mask [B, 1, S, num_experts]
+            group_mask_parts = []
+            for g in range(self.n_groups):
+                match = ttnn.eq(top_group_indices, float(g))
+                match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
+                match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
+                group_selected = ttnn.gt(match_any, 0.0)
+                group_selected = ttnn.typecast(group_selected, ttnn.DataType.BFLOAT16)
+                group_expert_mask = ttnn.repeat(group_selected, ttnn.Shape([1, 1, 1, experts_per_group]))
+                group_mask_parts.append(group_expert_mask)
+
+            group_mask = ttnn.concat(group_mask_parts, dim=-1)
+            neg_inf = ttnn.multiply(ttnn.subtract(group_mask, 1.0), 1e9)
+            biased_masked = ttnn.add(biased, neg_inf)
+
+            _topk_values, topk_indices = ttnn.topk(biased_masked, self.n_activated, dim=-1)
+        else:
+            _topk_values, topk_indices = ttnn.topk(biased, self.n_activated, dim=-1)
+        # topk_indices: [B, 1, S, n_activated]
+
+        # ── 3. Build per-expert masks, denom, and token count accumulator ──
+        expert_masks = {}
+        denom = None
+        # token_counts_batch: [1, 1, 1, num_experts] — count of tokens routed to each expert this batch
+        token_counts_batch = None
 
         for expert_idx in range(self.num_experts):
             match = ttnn.eq(topk_indices, float(expert_idx))
             match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
             match_any = ttnn.sum(match_f, dim=-1, keepdim=True)  # [B, 1, S, 1]
-            mask_narrow = ttnn.gt(match_any, 0.0)  # [B, 1, S, 1]
+            mask_narrow = ttnn.gt(match_any, 0.0)
             mask_narrow = ttnn.typecast(mask_narrow, ttnn.DataType.BFLOAT16)
             expert_masks[expert_idx] = mask_narrow
 
+            # Sum this expert's mask to get token count: scalar = sum over [B, 1, S, 1]
+            # Reshape to [1, 1, 1, B*S] then sum to get a single scalar, but we need
+            # per-expert counts in a [1, 1, 1, num_experts] tensor.
+            # Simpler: sum the mask to a scalar, place into a one-hot position.
+            # We'll accumulate into token_counts_batch by concat at the end.
+
             if self.score_func == "sigmoid":
-                # Extract this expert's raw score for denom accumulation
-                score_i_raw = ttnn.slice(scores_val, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])  # [B, 1, S, 1]
+                score_i_raw = ttnn.slice(scores_val, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
                 selected_score = ttnn.multiply(score_i_raw, mask_narrow)
                 if denom is None:
                     denom = selected_score
                 else:
                     denom = ttnn.add(denom, selected_score)
 
-        # Avoid division by zero
         if denom is not None:
             denom = ttnn.add(denom, 1e-20)
+
+        # Accumulate token counts on device:
+        # Stack all expert mask sums into [1, 1, 1, num_experts]
+        expert_count_scalars = []
+        for expert_idx in range(self.num_experts):
+            # Sum mask [B,1,S,1] -> scalar, reshape to [1,1,1,1]
+            count = ttnn.sum(expert_masks[expert_idx])  # scalar-ish tensor
+            count = ttnn.reshape(count, [1, 1, 1, 1])
+            expert_count_scalars.append(count)
+        batch_counts = ttnn.concat(expert_count_scalars, dim=-1)  # [1, 1, 1, num_experts]
+        # Add to running accumulator
+        new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
+        self._token_counts.tensor.set_value(new_counts)
 
         # ── 4. Per-expert computation with normalized scores ──
         output = None
@@ -130,21 +194,15 @@ class MoE(AbstractModuleBase):
         for expert_idx in range(self.num_experts):
             mask_narrow = expert_masks[expert_idx]
 
-            # Expand mask to [B, 1, S, dim] for element-wise multiply
             expert_mask = ttnn.repeat(mask_narrow, ttnn.Shape([1, 1, 1, dim]))
             mask_tt = ttml.autograd.Tensor(expert_mask, False)
 
-            # Get this expert's score from autograd tensor (gradient -> gate)
-            score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])  # autograd [B, 1, S, 1]
+            score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
 
-            # Normalize score for sigmoid: score_i / denom (on device, non-differentiable normalization)
-            # The normalization constant is treated as a constant for gradient purposes.
-            # Gradient still flows through score_i to the gate.
             if self.score_func == "sigmoid" and denom is not None:
-                norm_factor = ttnn.reciprocal(denom)  # [B, 1, S, 1]
+                norm_factor = ttnn.reciprocal(denom)
                 norm_factor = ttnn.multiply(norm_factor, self.route_scale)
                 norm_tt = ttml.autograd.Tensor(norm_factor, False)
-                # score_i * (route_scale / denom) — gradient flows through score_i
                 routing_weight = ttml.ops.binary.mul(score_i, norm_tt)
             else:
                 if self.route_scale != 1.0:
@@ -152,13 +210,8 @@ class MoE(AbstractModuleBase):
                 else:
                     routing_weight = score_i
 
-            # Run expert (autograd -> expert weights + input x)
-            expert_out = self.experts[expert_idx](x)  # autograd [B, 1, S, dim]
-
-            # Weight by normalized routing score (autograd: gradients to gate AND expert)
+            expert_out = self.experts[expert_idx](x)
             weighted = ttml.ops.binary.mul(expert_out, routing_weight)
-
-            # Apply mask: zero non-selected tokens (non-trainable, gradient passes through)
             weighted = ttml.ops.binary.mul(weighted, mask_tt)
 
             if output is None:
@@ -176,17 +229,32 @@ class MoE(AbstractModuleBase):
         return output
 
     def update_expert_bias(self, coeff: float = 0.001) -> None:
-        """Auxiliary-loss-free load balancing.
+        """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
 
-        Call between training steps (outside forward). Only CPU interaction.
+        Reads accumulated token counts from device, computes bias adjustment
+        using sign(mean_count - expert_count), updates bias on device, and
+        resets the counter.
+
+        Call between training steps (e.g., every N steps).
         """
-        bias_val = self._expert_bias.tensor.get_value()
-        fp32 = ttnn.typecast(bias_val, ttnn.DataType.FLOAT32)
-        bias_np = np.array(ttnn.to_torch(ttnn.from_device(fp32)).numpy(), dtype=np.float32).reshape(1, 1, 1, -1)
+        counts_val = self._token_counts.tensor.get_value()
 
-        delta = np.random.normal(0, coeff, size=bias_np.shape).astype(np.float32)
-        delta -= delta.mean()
-        bias_np = bias_np + delta
+        # Compute mean token count across experts: [1,1,1,num_experts] -> scalar
+        mean_count = ttnn.mean(counts_val, dim=-1, keepdim=True)  # [1,1,1,1]
 
-        new_bias = ttml.autograd.Tensor.from_numpy(bias_np, ttnn.Layout.TILE)
-        self._expert_bias.tensor.assign(new_bias)
+        # delta = coeff * sign(mean - count_per_expert)
+        diff = ttnn.subtract(mean_count, counts_val)  # [1,1,1,num_experts] positive for underused
+        delta = ttnn.sign(diff)
+        delta = ttnn.multiply(delta, coeff)
+
+        # Zero-center the delta so total bias doesn't drift
+        delta_mean = ttnn.mean(delta, dim=-1, keepdim=True)
+        delta = ttnn.subtract(delta, delta_mean)
+
+        # Update bias
+        new_bias = ttnn.add(self._expert_bias.tensor.get_value(), delta)
+        self._expert_bias.tensor.set_value(new_bias)
+
+        # Reset token counts
+        zeros = ttnn.zeros_like(counts_val)
+        self._token_counts.tensor.set_value(zeros)
