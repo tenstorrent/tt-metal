@@ -6,7 +6,7 @@ Device profiling harness: compare rotary-embedding op time (HF vs mllama RoPE) v
 
 Runs selected phase(s) per module constant :data:`ROPE_PERF_MODE` (``"full"``, ``"prefill"``, or
 ``"decode"``): 1 layer, seqlen 1024, 2 generated tokens, batch sizes 1 and 32 under `python -m tracy`,
-parses the ops CSV, prints a Markdown table, and removes temp dirs on success.
+parses the ops CSV and captured demo logs (TTFT, decode tok/s/user), prints a Markdown table, and removes temp dirs on success.
 
 Set the model with env `HF_MODEL` only. Edit ``ROPE_PERF_MODE`` in this file to change which demo phase(s)
 run (``full`` = prefill + decode; ``prefill`` or ``decode`` = that phase only).
@@ -19,6 +19,7 @@ Example:
 """
 import csv
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -166,6 +167,50 @@ def ratio(hf_val: float, llama_val: float) -> float:
     return hf_val / llama_val
 
 
+# Logged by simple_text_demo.py after inference (see Performance metrics block).
+_RE_TTFT_MS = re.compile(r"Average Time to First Token \(TTFT\):\s*([0-9.]+)\s*ms")
+_RE_AVG_SPEED = re.compile(
+    r"Average speed:\s*([0-9.]+)\s*ms @\s*([0-9.]+)\s*tok/s/user",
+    re.IGNORECASE,
+)
+
+
+def parse_simple_text_demo_perf_log(log: str) -> tuple[float | None, float | None]:
+    """
+    Parse TTFT (ms) and decode throughput (tok/s/user) from captured pytest/demo subprocess output.
+
+    If a pattern appears multiple times (e.g. several tests), the last match is used.
+    """
+    ttft_hits = _RE_TTFT_MS.findall(log)
+    speed_hits = _RE_AVG_SPEED.findall(log)
+    ttft_ms = float(ttft_hits[-1]) if ttft_hits else None
+    tok_s_u = float(speed_hits[-1][1]) if speed_hits else None
+    return ttft_ms, tok_s_u
+
+
+def _fmt_pct_diff(hf_val: float | None, llama_val: float | None) -> str:
+    if hf_val is None or llama_val is None:
+        return "n/a"
+    if hf_val == 0:
+        return "n/a"
+    return f"{pct_diff(hf_val, llama_val):.2f}"
+
+
+def _fmt_ratio_metric(hf_val: float | None, llama_val: float | None) -> str:
+    if hf_val is None or llama_val is None:
+        return "n/a"
+    r = ratio(hf_val, llama_val)
+    if r != r:  # NaN
+        return "n/a"
+    return f"{r:.4f}"
+
+
+def _fmt_float_opt(x: float | None, *, ndigits: int) -> str:
+    if x is None:
+        return "n/a"
+    return f"{x:.{ndigits}f}"
+
+
 def _rope_perf_demo_pytest_args(
     *, batch_size: int, use_hf_rope: bool, mode: str, timeout: int | None = None
 ) -> list[str]:
@@ -241,14 +286,25 @@ def _run_tracy(
     env: dict[str, str],
     argv: list[str],
     timeout_sec: int | None = None,
-) -> None:
-    subprocess.run(
+) -> str:
+    """
+    Run Tracy + pytest; capture combined stdout/stderr for parsing demo perf logs, and echo to the parent
+    console so ``pytest -s`` still shows child output.
+    """
+    proc = subprocess.run(
         argv,
         cwd=repo_root,
         env=env,
         check=True,
         timeout=timeout_sec if timeout_sec is not None else int(os.environ.get("ROPE_PERF_TRACY_TIMEOUT_SEC", "3600")),
+        capture_output=True,
+        text=True,
     )
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+    return (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
 def _run_tracy_demo(
@@ -260,15 +316,15 @@ def _run_tracy_demo(
     run_name: str,
     mode: str,
     timeout: int | None = None,
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], str]:
     env = _rope_perf_subprocess_env(hf_model=hf_model)
 
     with TemporaryDirectory(prefix="rope_perf_") as tmp:
         pytest_cmd = rope_perf_pytest_argv(batch_size=batch_size, use_hf_rope=use_hf_rope, mode=mode, timeout=timeout)
         argv = rope_perf_tracy_argv(output_dir=tmp, run_name=run_name, pytest_argv=pytest_cmd)
-        _run_tracy(repo_root=repo_root, env=env, argv=argv)
+        captured_log = _run_tracy(repo_root=repo_root, env=env, argv=argv)
         csv_path = find_ops_perf_csv(Path(tmp), run_name)
-        return load_rows(csv_path)
+        return load_rows(csv_path), captured_log
 
 
 def _rope_perf_subprocess_env(*, hf_model: str) -> dict[str, str]:
@@ -303,12 +359,21 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
         "mode",
         "gen_tok",
         "batch_size",
-        "pct_diff_max_%",
-        "pct_diff_mean_%",
-        "ratio_max",
-        "ratio_mean",
+        "hf_ttft_ms",
+        "mllama_ttft_ms",
+        "pct_diff_ttft_%",
+        "ratio_ttft",
+        "hf_tok_s_u",
+        "mllama_tok_s_u",
+        "pct_diff_tok_s_u_%",
+        "ratio_tok_s_u",
         "hf_rope_max_mean_ns",
         "mllama_rope_max_mean_ns",
+        "delta_rope_max_mean_ns",
+        "pct_diff_rope_max_%",
+        "pct_diff_rope_mean_%",
+        "ratio_rope_max",
+        "ratio_rope_mean",
     ]
     lines = [
         "| " + " | ".join(headers) + " |",
@@ -337,7 +402,7 @@ def test_rope_performance_comparison_table():
     for mode in demo_modes:
         for batch_size in (1, 32):
             base = f"ropeperf_{mode}_g2_sl1024_bs{batch_size}"
-            llama_rows = _run_tracy_demo(
+            llama_rows, llama_log = _run_tracy_demo(
                 repo_root=REPO_ROOT,
                 hf_model=hf_model,
                 batch_size=batch_size,
@@ -346,7 +411,7 @@ def test_rope_performance_comparison_table():
                 mode=mode,
                 timeout=TIMEOUT_TEST,
             )
-            hf_rows = _run_tracy_demo(
+            hf_rows, hf_log = _run_tracy_demo(
                 repo_root=REPO_ROOT,
                 hf_model=hf_model,
                 batch_size=batch_size,
@@ -357,18 +422,29 @@ def test_rope_performance_comparison_table():
             )
             lm, lmean = scalar_rope_time_ns(llama_rows)
             hm, hmean = scalar_rope_time_ns(hf_rows)
+            hf_ttft_ms, hf_tok_s_u = parse_simple_text_demo_perf_log(hf_log)
+            ml_ttft_ms, ml_tok_s_u = parse_simple_text_demo_perf_log(llama_log)
             table_rows.append(
                 {
                     "model_id": model_id,
                     "mode": mode,
                     "gen_tok": 2,
                     "batch_size": batch_size,
-                    "pct_diff_max_%": f"{pct_diff(hm, lm):.2f}",
-                    "pct_diff_mean_%": f"{pct_diff(hmean, lmean):.2f}",
-                    "ratio_max": f"{ratio(hm, lm):.4f}",
-                    "ratio_mean": f"{ratio(hmean, lmean):.4f}",
+                    "hf_ttft_ms": _fmt_float_opt(hf_ttft_ms, ndigits=2),
+                    "mllama_ttft_ms": _fmt_float_opt(ml_ttft_ms, ndigits=2),
+                    "pct_diff_ttft_%": _fmt_pct_diff(hf_ttft_ms, ml_ttft_ms),
+                    "ratio_ttft": _fmt_ratio_metric(hf_ttft_ms, ml_ttft_ms),
+                    "hf_tok_s_u": _fmt_float_opt(hf_tok_s_u, ndigits=2),
+                    "mllama_tok_s_u": _fmt_float_opt(ml_tok_s_u, ndigits=2),
+                    "pct_diff_tok_s_u_%": _fmt_pct_diff(hf_tok_s_u, ml_tok_s_u),
+                    "ratio_tok_s_u": _fmt_ratio_metric(hf_tok_s_u, ml_tok_s_u),
                     "hf_rope_max_mean_ns": f"{hm:.0f}",
                     "mllama_rope_max_mean_ns": f"{lm:.0f}",
+                    "delta_rope_max_mean_ns": f"{hm - lm:.0f}",
+                    "pct_diff_rope_max_%": f"{pct_diff(hm, lm):.2f}",
+                    "pct_diff_rope_mean_%": f"{pct_diff(hmean, lmean):.2f}",
+                    "ratio_rope_max": f"{ratio(hm, lm):.4f}",
+                    "ratio_rope_mean": f"{ratio(hmean, lmean):.4f}",
                 }
             )
 
@@ -380,9 +456,12 @@ def test_rope_performance_comparison_table():
     print(f"`MESH_DEVICE`: `{mesh_device_display}`")
     print(f"`ROPE_PERF_MODE`: `{ROPE_PERF_MODE}` (demo phases: {', '.join(demo_modes)})\n")
     print(
-        "*Difference metrics (per table row, using aggregated HF vs mllama RoPE nanoseconds):* "
-        "`pct_diff_*` = 100 × (HF − mllama) / HF (%); "
-        "`ratio_*` = HF / mllama.\n"
+        "*Difference metrics (per table row; HF vs mllama):* "
+        "`pct_diff_ttft_%` / `pct_diff_tok_s_u_%` / `pct_diff_rope_*` = 100 × (HF − mllama) / HF. "
+        "For TTFT and RoPE (time), a positive % means HF uses more time than mllama. "
+        "For decode `tok/s/user`, a positive % means HF is faster (higher throughput). "
+        "`ratio_*` = HF / mllama. "
+        "`delta_rope_max_mean_ns` = HF − mllama (aggregated RoPE max-mean ns).\n"
     )
     print(md)
     print()
