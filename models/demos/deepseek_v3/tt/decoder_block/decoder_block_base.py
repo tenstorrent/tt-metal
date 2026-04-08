@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -83,10 +84,17 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         else:
             mlp_input_memory_config = mlp_config["input_memory_config"]
 
+        # Keep the pre-`users_per_row` decode reshard for the original full-row path.
+        mla_reshard = (
+            mla_config["mla1d"]["wq_kv_a_in0_memory_config"]
+            if batch_size_per_row == USERS_PER_ROW
+            else ReshardConfig(memory_config=mla_config["input_memory_config"])
+        )
+
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
-            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
+            "mla_reshard": mla_reshard,
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,

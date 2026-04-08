@@ -10,6 +10,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -74,7 +75,7 @@ class DecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        if x.shape[1] == 1:
+        if x.shape[1] == 1 or x.shape[1] == USERS_PER_ROW:
             return NonExpert.forward_prefill(x, cfg)
 
         batch_size = x.shape[1]

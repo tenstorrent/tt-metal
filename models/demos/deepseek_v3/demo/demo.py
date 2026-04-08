@@ -531,7 +531,23 @@ def run_demo(
             )
             raise
 
-    batch_size_per_row = max_users_per_row
+    use_legacy_teacher_forced_demo_path = bool(token_accuracy)
+    if use_legacy_teacher_forced_demo_path:
+        if max_seq_len != DEFAULT_MAX_SEQ_LEN:
+            logger.info(
+                "Teacher-forced demo uses legacy max_seq_len={}, ignoring requested max_seq_len={}.",
+                DEFAULT_MAX_SEQ_LEN,
+                max_seq_len,
+            )
+        if max_users_per_row != USERS_PER_ROW:
+            logger.info(
+                "Teacher-forced demo uses legacy users_per_row={}, ignoring requested max_users_per_row={}.",
+                USERS_PER_ROW,
+                max_users_per_row,
+            )
+
+    effective_max_seq_len = DEFAULT_MAX_SEQ_LEN if use_legacy_teacher_forced_demo_path else max_seq_len
+    batch_size_per_row = USERS_PER_ROW if use_legacy_teacher_forced_demo_path else max_users_per_row
     batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Configure sampling
@@ -578,14 +594,15 @@ def run_demo(
                 enable_trace=enable_trace,
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
-                max_seq_len=max_seq_len,
+                max_seq_len=effective_max_seq_len,
                 prefill_max_tokens=prefill_max_tokens,
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
                 enable_mtp=enable_mtp,
-                batch_size_per_row=max_users_per_row,
+                batch_size_per_row=batch_size_per_row,
                 sampling_params=sampling_params,
+                force_legacy_demo_path=use_legacy_teacher_forced_demo_path,
             )
         else:
             raise ValueError(f"Unsupported generator: {generator}")
