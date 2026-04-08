@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstring>
+#include <type_traits>
 #include <utility>
 
 #include "ckernel_common_ops.h"
@@ -846,6 +847,69 @@ constexpr std::uint32_t get_dest_max_tiles()
                                                                                 : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
     return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
+ * @brief Forces the compiler to load @p ref from memory.
+ *
+ * @note Does NOT enforce ordering in code or memory.
+ * @note Guarantees that a load will be performed.
+ *
+ * @tparam T type of the referenced object
+ * @param ref to load from memory
+ * @return loaded value
+ *
+ * @par Example
+ * Consumer waits for producer to create entries in a ringbuffer.
+ * @code
+ * // Producer updates write_idx, so we need to invalidate when polling
+ * while ((ckernel::load_force(write_idx) - read_idx + BUFFER_SIZE) % BUFFER_SIZE == 0);
+ * @endcode
+ */
+template <typename T>
+[[nodiscard]] inline T load_force(T &ref)
+{
+    // "=m" output constraint: tells the compiler that ref may have been modified by external code
+    // Effect: prevents the compiler from reusing a stale register-cached value.
+    asm volatile("" : "=m"(ref));
+    return ref;
+}
+
+/**
+ * @brief Assigns @p val to @p ref and prevents the compiler from eliminating or deferring the store.
+ *
+ * @note Does NOT enforce ordering in code or memory.
+ * @note Guarantees that a store will be performed.
+ *
+ * @tparam T type of the referenced object
+ * @tparam U type of the value to store
+ * @param ref reference to the object to store into
+ * @param val value to assign to @p ref
+ *
+ * @par Example
+ * Producer signals entries have been written to a ringbuffer.
+ * @code
+ * // Consumer polls write_idx, so we need to ensure the store is committed
+ * ckernel::store_force(write_idx, (write_idx + chunk) % BUFFER_SIZE);
+ * @endcode
+ */
+template <typename T, typename U>
+inline void store_force(T &ref, U &&val)
+{
+    ref = std::forward<U>(val);
+
+    // "m" input constraint: tells compiler this asm reads from ref
+    // Effect: compiler must flush any pending write to ref before this point
+    asm volatile("" : : "m"(ref));
+}
+
+/**
+ * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
+ * @note Does not enforce CPU or system memory ordering by itself.
+ */
+inline void fence_compiler()
+{
+    asm volatile("" ::: "memory");
 }
 
 /**
