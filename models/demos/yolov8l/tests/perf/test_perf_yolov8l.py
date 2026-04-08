@@ -29,7 +29,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
             12000,
         ],
         ["b8_640", 8, 640, 0.0, "test_yolov8l_dp_batch8 and 640", 12000],
-        ["b8_1280", 8, 1280, 0.0, "test_yolov8l_dp_batch8 and 1280", 12000],
+        ["b8_1280", 8, 1280, 0.0, "test_yolov8l_dp_batch8 and 1280 and not 640", 12000],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
