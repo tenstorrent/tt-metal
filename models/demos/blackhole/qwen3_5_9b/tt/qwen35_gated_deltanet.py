@@ -387,14 +387,6 @@ class Qwen35GatedDeltaNet:
             ttnn.deallocate(s_k)
             self.split_conv_state.append(buf)
 
-    def init_fused_conv_buffer(self, batch_size):
-        """Pre-allocate fused conv state buffer for trace capture."""
-        D_total = self.args.linear_q_dim + self.args.linear_k_dim + self.args.linear_v_dim
-        state = torch.zeros(batch_size, self.conv_kernel_size - 1, D_total, dtype=torch.bfloat16)
-        self.fused_conv_buffer = ttnn.from_torch(
-            state, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-
     def reset_state(self, batch_size=None):
         if batch_size is not None:
             self._init_recurrent_state(batch_size)
