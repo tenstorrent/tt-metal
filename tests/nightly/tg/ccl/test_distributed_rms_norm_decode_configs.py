@@ -293,15 +293,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,  # 7168 (DeepSeek V3 hidden_size)
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch8_seq32",
-        ),
-        # Test with seq_len=8
-        (
-            8,
-            896 * 8,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            None,
-            "mtp_norms_batch8_seq8",
+            "mtp_norms_batch8",
         ),
         # MTP norms with batch_size_per_row=32
         (
@@ -309,7 +301,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             None,
-            "mtp_norms_batch32_seq32",
+            "mtp_norms_batch32",
         ),
         # Decoder block mla_norm, mlp_norm configuration
         (
@@ -317,7 +309,7 @@ def run_distributed_rms_norm_decode_impl(
             896 * 8,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
-            "decoder_block_norms_batch8_seq32",
+            "decoder_block_norms_batch8",
         ),
         # Row batched model norm configuration
         (
