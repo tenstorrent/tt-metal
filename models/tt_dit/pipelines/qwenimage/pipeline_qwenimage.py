@@ -611,6 +611,13 @@ class QwenImagePipeline:
 
             logger.info("denoising...")
 
+            # Copy prompt embeddings to device once before the loop (they don't change per step)
+            for submesh_nr in range(len(self._submesh_devices)):
+                ttnn.copy_host_to_device_tensor(
+                    tt_prompt_embeds_list[submesh_nr],
+                    tt_prompt_embeds_device_list[submesh_nr],
+                )
+
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
@@ -636,12 +643,6 @@ class QwenImagePipeline:
                                 device=submesh_device if not traced else None,
                             )
                             tt_sigma_difference_list.append(tt_sigma_difference)
-
-                            # TODO: move out of the loop
-                            ttnn.copy_host_to_device_tensor(
-                                tt_prompt_embeds_list[submesh_nr],
-                                tt_prompt_embeds_device_list[submesh_nr],
-                            )
 
                         tt_latents_step_list = self._step(
                             timestep=tt_timestep_list,
