@@ -200,35 +200,49 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         uint32_t tiles_this_core = core_group_1.contains(logical_core) ? tiles_per_core_g1 : tiles_per_core_g2;
 
         // Neighbor physical coords (set to 0,0 if not applicable — won't be used)
-        // Chain neighbor coords: left (for row send), up (for col send)
-        uint32_t left_px = 0, left_py = 0;
-        uint32_t up_px = 0, up_py = 0;
+        // Chain flows left→right (row) then top→bottom (column) — with NOC_0 natural direction.
+        // Row chain: send to right neighbor. Column chain runs on rightmost column, sends down.
+        // Origin = bottom-right active core.
+        uint32_t right_px = 0, right_py = 0;
+        uint32_t down_px = 0, down_py = 0;
 
-        if (gx > 0) {
-            auto p = get_phys(gx - 1, gy);
-            left_px = p.x;
-            left_py = p.y;
-        }
-        if (gy > 0) {
-            auto p = get_phys(gx, gy - 1);
-            up_px = p.x;
-            up_py = p.y;
-        }
-
-        // Determine chain role based on active grid topology
-        // Check if the core at (gx+1, gy) is active (exists in the active set)
         uint32_t right_core_idx = (gx + 1) * num_cores_y + gy;
         bool has_right = (right_core_idx < num_cores);
         bool has_left = (gx > 0);
-        // Column chain: core (0, gy+1) must exist
-        bool col_has_below = (gx == 0 && (gy + 1) < num_cores_y && (gy + 1) < num_cores);
-        bool col_has_above = (gx == 0 && gy > 0);
 
-        uint32_t do_row_receive = has_right ? 1 : 0;
-        uint32_t do_row_send = has_left ? 1 : 0;
-        uint32_t do_col_receive = col_has_below ? 1 : 0;
-        uint32_t do_col_send = col_has_above ? 1 : 0;
-        uint32_t is_origin = (gx == 0 && gy == 0) ? 1 : 0;
+        if (has_right) {
+            auto p = get_phys(gx + 1, gy);
+            right_px = p.x;
+            right_py = p.y;
+        }
+
+        // Column chain: rightmost column. A core is the row leader (rightmost in its row)
+        // if it has no right neighbor.
+        bool is_row_end = !has_right;
+        // Column neighbor below: the rightmost core in row gy+1
+        // For a full-column case (all rows have same width), that's (max_gx, gy+1).
+        // For partial last column, row gy+1 might have fewer columns.
+        // The rightmost core in row gy+1: find max gx such that gx*num_cores_y + (gy+1) < num_cores.
+        bool col_has_below = false;
+        if (is_row_end && (gy + 1) < num_cores_y) {
+            // Find rightmost core in row gy+1
+            for (int gx2 = static_cast<int>(max_gx); gx2 >= 0; --gx2) {
+                uint32_t idx = gx2 * num_cores_y + (gy + 1);
+                if (idx < num_cores) {
+                    col_has_below = true;
+                    auto p = get_phys(gx2, gy + 1);
+                    down_px = p.x;
+                    down_py = p.y;
+                    break;
+                }
+            }
+        }
+        uint32_t do_row_receive = has_left ? 1 : 0;     // receive from left
+        uint32_t do_row_send = has_right ? 1 : 0;       // send to right
+        uint32_t do_col_receive = (is_row_end && gy > 0) ? 1 : 0;  // receive from above (row end only)
+        uint32_t do_col_send = col_has_below ? 1 : 0;   // send to below (row end only)
+        // Origin = bottom-right: row end with no core below
+        uint32_t is_origin = (is_row_end && !col_has_below) ? 1 : 0;
 
         // Reader runtime args
         SetRuntimeArgs(
@@ -244,10 +258,10 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
              do_col_receive,
              do_col_send,
              is_origin,
-             left_px,
-             left_py,
-             up_px,
-             up_py,
+             right_px,
+             right_py,
+             down_px,
+             down_py,
              bcast_sem_id,
              norm_scalar_sem_id,
              static_cast<uint32_t>(mcast_start.x),
