@@ -55,7 +55,8 @@ protected:
 
     std::optional<uint32_t> first_core_type_index(BinaryPlacement placement) const {
         for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
-            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            bool binary_in_config =
+                hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
             if ((placement == BinaryPlacement::InConfig && binary_in_config) ||
                 (placement == BinaryPlacement::FixedAddress && !binary_in_config)) {
                 return index;
@@ -68,7 +69,8 @@ protected:
         uint32_t nonbinary_size, uint32_t binary_size, BinaryPlacement placement) const {
         std::vector<ProgramSpec> specs(hal_.get_programmable_core_type_count());
         for (uint32_t index = 0; index < specs.size(); ++index) {
-            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            bool binary_in_config =
+                hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
             if ((placement == BinaryPlacement::InConfig && binary_in_config) ||
                 (placement == BinaryPlacement::FixedAddress && !binary_in_config)) {
                 specs[index] = {.nonbinary_size = nonbinary_size, .binary_size = binary_size};
@@ -92,7 +94,8 @@ protected:
             program_config.kernel_text_offset = specs[index].nonbinary_size;
             program_config.kernel_text_size = specs[index].binary_size;
 
-            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            bool binary_in_config =
+                hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
             program_config_sizes[index] =
                 specs[index].nonbinary_size + (binary_in_config ? specs[index].binary_size : 0);
         }
@@ -542,7 +545,8 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, SameProgramBinaryCached) {
     auto specs = make_program_specs(32, 16, BinaryPlacement::InConfig);
     auto shared_program = make_program(specs);
     std::vector<TraceNode> trace_nodes = {
-        make_trace_node(specs, SubDeviceId{0}, 1, shared_program), make_trace_node(specs, SubDeviceId{0}, 1, shared_program)};
+        make_trace_node(specs, SubDeviceId{0}, 1, shared_program),
+        make_trace_node(specs, SubDeviceId{0}, 1, shared_program)};
     auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
 
     auto allocator = make_allocator(256);
