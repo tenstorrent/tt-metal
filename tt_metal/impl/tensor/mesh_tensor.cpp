@@ -64,7 +64,7 @@ MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, Ten
     impl(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
 
 MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) {
-    TT_FATAL(other.impl != nullptr, "Cannot move from a default-constructed or moved-from MeshTensor.");
+    TT_FATAL(other.has_value(), "Cannot move from a default-constructed or moved-from MeshTensor.");
     impl = std::make_unique<MeshTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology));
 }
 
@@ -73,19 +73,21 @@ MeshTensor::~MeshTensor() = default;
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
 std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(has_value(), "MeshTensor is in default constructed state.");
     return impl->mesh_buffer();
 }
 
 distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
 
+bool MeshTensor::has_value() const { return impl != nullptr; }
+
 const TensorSpec& MeshTensor::tensor_spec() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(has_value(), "MeshTensor is in default constructed state.");
     return impl->spec();
 }
 
 const TensorTopology& MeshTensor::tensor_topology() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(has_value(), "MeshTensor is in default constructed state.");
     return impl->topology();
 }
 
@@ -128,7 +130,7 @@ std::size_t MeshTensor::element_size() const {
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
 void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(has_value(), "MeshTensor is in default constructed state.");
     impl->update_topology(std::move(tensor_topology));
 }
 
