@@ -1022,7 +1022,7 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
+        case UnaryOpType::LOGIT: return "eltwise_sfpu.cpp";
         case UnaryOpType::HARDSWISH:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return "hardswish_kernel_sfpu.cpp";

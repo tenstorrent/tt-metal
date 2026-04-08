@@ -103,7 +103,7 @@ ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_
 // clang-format off
 /**
 * Performs element-wise hardshrink operation on each element of a tile
-* in DST register at index tile_index. The DST register buffer must be in
+* in DST register at index idst. The DST register buffer must be in
 * acquired state via *acquire_dst* call. This call is blocking and is only
 * available on the compute engine.
 *
@@ -112,7 +112,7 @@ ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_
 * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
 * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
-* | param0          | The λ value for the Hardshrink formulation                                 | uint32   |                                                       | True     |
+* | param0          | The λ value for the Hardshrink formulation                                 | uint32_t |                                                       | True     |
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
