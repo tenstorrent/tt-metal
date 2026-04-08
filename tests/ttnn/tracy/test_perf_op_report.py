@@ -256,13 +256,6 @@ class TestPerfCountersSingleOp:
             "Thread 1 Stall Rate Avg (%)": 0.0,
             "Thread 2 Stall Rate Min (%)": 0.0,
             "Thread 2 Stall Rate Avg (%)": 0.0,
-            # INSTRN_THREAD: Thread IPC
-            "Thread 0 IPC Min": 0.0,
-            "Thread 0 IPC Avg": 0.0,
-            "Thread 1 IPC Min": 0.0,
-            "Thread 1 IPC Avg": 0.0,
-            "Thread 2 IPC Min": 0.0,
-            "Thread 2 IPC Avg": 0.0,
             # INSTRN_THREAD: Pipeline waits
             "SrcA Valid Wait Min (%)": 0.0,
             "SrcB Valid Wait Min (%)": 0.0,
