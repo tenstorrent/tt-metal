@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-04-09T19:20:00Z",
+  "agent": "ttnn-unary-sfpu-operation-implementation-notes",
+  "task": "Enrich softcap implementation notes with source code snippets",
+  "stage": "enrichment",
+  "status": "completed",
+  "files_processed": {
+    "new_files": [
+      "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_softcap.h",
+      "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_softcap.h",
+      "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h",
+      "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h",
+      "tt_metal/hw/inc/api/compute/eltwise_unary/softcap.h",
+      "tests/ttnn/unit_tests/operations/eltwise/test_softcap.py"
+    ],
+    "modified_files": [
+      "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h",
+      "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu_types.h",
+      "tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h",
+      "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp",
+      "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp",
+      "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp",
+      "ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp",
+      "ttnn/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp",
+      "ttnn/ttnn/operations/unary.py",
+      "ttnn/ttnn/experimental_loader/golden_functions.py"
+    ]
+  },
+  "sections_added": {
+    "new_files": [
+      "SFPU Compute Kernel (ckernel_sfpu_softcap.h) - with full source code for exp_21f and calculate_softcap",
+      "LLK Math Wrapper (llk_math_eltwise_unary_sfpu_softcap.h) - with initialization and dispatch",
+      "API Header (softcap.h) - with public C++ API and documentation",
+      "Python Test File (test_softcap.py) - with test cases for different input ranges"
+    ],
+    "modified_files": [
+      "SFPU Type Enum - showing softcap registration",
+      "SFPU Include Guard - showing conditional include",
+      "C++ Unary Op Type Enum - showing SOFTCAP entry",
+      "Utils Header - showing is_parametrized_type registration",
+      "Utils Implementation - showing macro definition and parameterized op handler",
+      "C++ Unary API - showing REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER macro",
+      "Nanobind Bindings - showing Python binding with full documentation",
+      "Python API - showing softcap registration",
+      "Golden Functions - showing golden function registration in both locations"
+    ]
+  },
+  "enrichment_details": {
+    "description": "Added comprehensive source code snippets to the implementation notes for all new and modified files",
+    "code_blocks_added": 10,
+    "documentation_enhanced": true,
+    "golden_functions_documented": true,
+    "dual_regime_algorithm_explained": true
+  }
+}
