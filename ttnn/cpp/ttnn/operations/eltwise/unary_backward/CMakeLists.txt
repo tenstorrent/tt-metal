@@ -24,9 +24,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${tanh_bw_kernels}
-            ${kernels}
+        FILES ${tanh_bw_kernels} ${kernels}
     PRIVATE
         unary_backward.cpp
         tanh_bw/device/tanh_bw_device_operation.cpp
