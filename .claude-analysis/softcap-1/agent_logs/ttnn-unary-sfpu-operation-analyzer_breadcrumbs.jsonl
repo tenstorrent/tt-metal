@@ -6,3 +6,5 @@
 {"event":"dispatch_info_found","details":"ATANH: compute_kernel=eltwise_sfpu.cpp, init=atanh_tile_init(), func=atanh_tile(idst), macro=SFPU_OP_ATANH_INCLUDE, approx_mode=false (default)","ts":"2026-04-09T19:49:29+00:00"}
 {"event":"read_unary_op_utils","details":"HARDTANH is parametrized type, but dispatch code is nuked. Need to find SFPU implementation from LLK layer.","ts":"2026-04-09T19:49:45+00:00"}
 {"event":"sfpu_kernel_read","details":"Read ckernel_sfpu_atanh.h (WH and BH identical), llk_math_eltwise_unary_sfpu_atanh.h, API header atanh.h, params dispatch","ts":"2026-04-09T19:50:15+00:00"}
+{"event":"verification_started","details":"Verifying all SFPU function names and instruction identifiers","ts":"2026-04-09T19:53:19+00:00"}
+{"event":"approx_mode_resolved","details":"APPROX=false for SINH. Generated as constexpr bool in genfiles.cpp:394 from math_approx_mode. get_op_approx_mode() returns false (default case). sinh_tile_init() and sinh_tile() use APPROX as template arg, which means APPROXIMATION_MODE=false in the SFPU kernel.","ts":"2026-04-09T19:53:41+00:00"}
