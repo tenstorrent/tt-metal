@@ -210,9 +210,9 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 }
             }
 
-            if (dedup_key_to_offset.at(key) != std::numeric_limits<uint64_t>::max()) {
+            if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
                 // Shards whose coordinates differ only along replicated dimensions are identical.
-                shard_buffer_offset = dedup_key_to_offset.at(key);
+                shard_buffer_offset = dedup_key_to_offset[key];
             } else if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
                 // If two shards share the same buffer, they are identical.
                 shard_buffer_offset = it->second;
@@ -222,7 +222,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             }
 
             buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
-            dedup_key_to_offset.at(key) = shard_buffer_offset;
+            dedup_key_to_offset[key] = shard_buffer_offset;
 
             auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
             auto mesh_coord_offset = to_flatbuffer(coord, builder);
