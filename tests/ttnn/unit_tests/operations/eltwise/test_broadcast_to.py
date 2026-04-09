@@ -8,7 +8,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.common.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from functools import reduce
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -93,8 +93,10 @@ def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memo
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
     if dtype_pt == torch.int32 or dtype_pt == torch.uint32 or dtype_pt == torch.uint16:
-        # Cast output to same dtype for comparison (ttnn.to_torch may return different dtype)
         assert torch.equal(torch_result.to(output.dtype), output), "Integer tensors not equal"
+    elif dtype_pt == torch.float32:
+        assert_with_pcc(torch_result, output, 0.9999)
+        assert_with_ulp(torch_result, output, 0)
     else:
         assert_with_pcc(torch_result, output, 0.9999)
 
