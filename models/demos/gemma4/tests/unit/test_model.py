@@ -6,6 +6,7 @@
 Uses HuggingFace Gemma4 classes as reference for PCC comparison.
 """
 
+import pytest
 import torch
 from loguru import logger
 
@@ -363,3 +364,79 @@ def test_full_model(device):
     )
 
     assert passing, f"Full model PCC too low: {pcc_msg}"
+
+
+# ── N300 (TP=2) Tests ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_single_layer_model_n300(mesh_device):
+    """Single-layer model with TP=2 on N300, PCC vs HF reference."""
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
+    hf_text_config = base_config
+    hf_model = _create_hf_model(hf_text_config)
+    model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
+    tt_state = _hf_model_state_to_tt_state(hf_model)
+
+    seq_len = 32
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
+    ccl_manager = CCLManager(mesh_device, num_links=1)
+
+    tt_model = Gemma4Model(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=1,
+        num_layers=1,
+    )
+
+    tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
+
+    # HF reference
+    hf_rope = Gemma4TextRotaryEmbedding(hf_text_config)
+    pos_ids = torch.arange(seq_len).unsqueeze(0)
+    layer_type = hf_text_config.layer_types[0]
+    cos, sin = hf_rope(torch.randn(1, seq_len, model_args.hidden_size), pos_ids, layer_type=layer_type)
+    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    with torch.no_grad():
+        hf_logits = hf_model(tokens, position_embeddings=(cos, sin), attention_mask=causal_mask)
+    logger.info(f"HF logits shape: {hf_logits.shape}")
+
+    # TT forward
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    tt_tokens = ttnn.from_torch(
+        tokens.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
+    tt_embeds = tt_model.embed_tokens(tt_tokens)
+    tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
+    tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx=0)
+    tt_logits = tt_model(
+        tt_embeds,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=None,
+        page_table=None,
+        kv_caches=None,
+        is_decode=False,
+    )
+    tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.90)
+    logger.info(f"N300 single-layer PCC: {pcc_msg}")
+    assert passing, f"N300 single-layer model PCC too low: {pcc_msg}"
