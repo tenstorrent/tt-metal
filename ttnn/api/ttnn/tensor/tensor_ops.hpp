@@ -53,6 +53,8 @@ void copy_to_host(
     std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor to_layout(const Tensor& input_tensor, tt::tt_metal::Layout target_layout);
+Tensor to_row_major_layout(const Tensor& input_tensor);
+Tensor to_tile_layout(const Tensor& input_tensor, const Tile& tile = Tile{});
 
 Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 

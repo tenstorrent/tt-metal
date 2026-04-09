@@ -145,7 +145,9 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
+RowMajorPageConfig::RowMajorPageConfig(const Tile& /*tile*/) {
+    // tile parameter is ignored for RowMajor layout — kept for backward compatibility.
+}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
@@ -209,7 +211,10 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+Tile RowMajorPageConfig::get_tile() const {
+    TT_THROW("get_tile() called on RowMajorPageConfig — tile is not a property of row-major layout. "
+             "This indicates tile-smuggling via RowMajorPageConfig that needs to be removed.");
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 

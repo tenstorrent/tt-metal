@@ -252,7 +252,7 @@ Tensor create_tt_tensor_from_host_data(
                                     device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
 
         if (can_borrow) {
-            return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
+            return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin());
         }
 
         return Tensor::from_span(

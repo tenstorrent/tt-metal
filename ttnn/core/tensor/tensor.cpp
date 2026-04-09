@@ -216,12 +216,11 @@ template <typename T>
 Tensor Tensor::from_borrowed_data(
     ttsl::Span<T> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile) {
+    tt::tt_metal::MemoryPin buffer_pin) {
     size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR);
 }
 
 template <typename T>
@@ -347,33 +346,27 @@ template Tensor Tensor::from_span<uint32_t>(
 template Tensor Tensor::from_borrowed_data<float>(
     ttsl::Span<float> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<bfloat16>(
     ttsl::Span<bfloat16> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<int32_t>(
     ttsl::Span<int32_t> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
     ttsl::Span<uint8_t> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint16_t>(
     ttsl::Span<uint16_t> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
     ttsl::Span<uint32_t> buffer,
     const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
     const TensorSpec& spec,
@@ -438,6 +431,10 @@ Tensor Tensor::extract_shard(const CoreCoord& core) const {
 Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
 Tensor Tensor::to_layout(Layout target_layout) const { return tt::tt_metal::to_layout(*this, target_layout); }
+
+Tensor Tensor::to_row_major_layout() const { return tt::tt_metal::to_row_major_layout(*this); }
+
+Tensor Tensor::to_tile_layout(const Tile& tile) const { return tt::tt_metal::to_tile_layout(*this, tile); }
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 

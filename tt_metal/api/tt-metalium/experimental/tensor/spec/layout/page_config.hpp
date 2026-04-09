@@ -18,7 +18,9 @@ namespace tt::tt_metal {
 
 class RowMajorPageConfig {
 public:
-    RowMajorPageConfig(const Tile& tile = Tile());
+    RowMajorPageConfig() = default;
+    // Deprecated: tile parameter is ignored for RowMajor layout.
+    explicit RowMajorPageConfig(const Tile& tile);
 
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
@@ -30,7 +32,7 @@ public:
         const std::optional<Shape2D>& physical_shard_size) const;
     size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
 
-    const Tile& get_tile() const;
+    Tile get_tile() const;
 
     Alignment get_required_shard_shape_alignment() const;
     Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
@@ -38,13 +40,8 @@ public:
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile_); }
-
-private:
-    // This is currently needed for compatibility reasons.
-    // Each time tile is specified, a warning will be issued. This should be removed soon.
-    Tile tile_;
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 class TilePageConfig {

@@ -1110,6 +1110,18 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_layout_impl<T>(tensor, target_layout); });
 }
 
+HostTensor to_row_major_layout(const HostTensor& tensor) {
+    return to_layout(tensor, Layout::ROW_MAJOR);
+}
+
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& /*tile*/) {
+    // For the host-side conversion, the tile parameter affects the TensorSpec
+    // but the actual conversion logic is the same as to_layout(TILE).
+    // The tile info is already embedded in the tensor spec for host tensors.
+    // TODO: Use the explicit tile param to construct the output spec properly.
+    return to_layout(tensor, Layout::TILE);
+}
+
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================

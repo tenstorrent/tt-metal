@@ -125,6 +125,8 @@ void copy_to_device(
 // ======================================================================================
 
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
+HostTensor to_row_major_layout(const HostTensor& tensor);
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile = Tile{});
 
 // ======================================================================================
 //                                  .pad() and .unpad()

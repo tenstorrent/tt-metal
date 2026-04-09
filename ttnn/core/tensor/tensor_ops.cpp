@@ -166,6 +166,24 @@ Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
     return output;
 }
 
+Tensor to_row_major_layout(const Tensor& input_tensor) {
+    GraphTracker::instance().track_function_start("Tensor::to_row_major_layout", input_tensor);
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_row_major_layout conversion");
+    Tensor output = Tensor(tensor_impl::to_row_major_layout(input_tensor.host_tensor()));
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
+Tensor to_tile_layout(const Tensor& input_tensor, const Tile& tile) {
+    GraphTracker::instance().track_function_start("Tensor::to_tile_layout", input_tensor);
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_tile_layout conversion");
+    Tensor output = Tensor(tensor_impl::to_tile_layout(input_tensor.host_tensor(), tile));
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
 Tensor pad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
