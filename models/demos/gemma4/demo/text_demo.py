@@ -527,6 +527,7 @@ def test_demo_full_model(device, model_path):
     logger.info(f"Full model output: {results[0]}")
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_demo_full_model_n300(mesh_device, model_path):
     """Full model demo on N300 (TP=2) — PLI on-device, decode tracing."""

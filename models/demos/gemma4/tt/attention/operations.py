@@ -15,8 +15,6 @@ Handles:
 - scaling=1.0 (no 1/sqrt(d_k))
 """
 
-from loguru import logger
-
 import ttnn
 
 from .weights import AttentionWeights
@@ -127,65 +125,17 @@ def apply_output_projection(tensor, weights: AttentionWeights):
     return out
 
 
-_allreduce_count = 0
-
-
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1.
-
-    Uses reduce_scatter + all_gather (composite path) matching
-    tt_transformers/tt/ccl.py tt_all_reduce exactly.
-    """
+    """Apply tensor-parallel allreduce if TP > 1."""
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
-    global _allreduce_count
-    _allreduce_count += 1
-    call_id = _allreduce_count
-
-    num_links = ccl_manager.get_num_links()
-    topology = ccl_manager.topology
-    dim = 3
-
-    logger.info(
-        f"all_reduce #{call_id}: shape={tensor.shape}, dtype={tensor.dtype}, "
-        f"num_links={num_links}, topology={topology}, dim={dim}"
-    )
-
-    input_mem_cfg = tensor.memory_config()
-
-    reduced = ttnn.experimental.reduce_scatter_minimal_async(
+    result = ttnn.all_reduce(
         tensor,
-        persistent_output_buffers=None,
-        dim=dim,
-        multi_device_global_semaphore=ccl_manager.get_and_cycle_rs_semaphore_handles(),
-        barrier_semaphore=ccl_manager.get_and_cycle_barrier_semaphore_handle(),
-        num_links=num_links,
+        cluster_axis=mesh_config.tp_axis,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=topology,
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
-        subdevice_id=ccl_manager.ccl_sub_device_id,
     )
     tensor.deallocate(True)
-
-    gathered = ttnn.experimental.all_gather_async(
-        reduced,
-        persistent_output_buffer=None,
-        dim=dim,
-        multi_device_global_semaphore=ccl_manager.get_and_cycle_ag_semaphore_handles(),
-        num_links=num_links,
-        topology=topology,
-        memory_config=input_mem_cfg,
-        barrier_semaphore=ccl_manager.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
-        subdevice_id=ccl_manager.ccl_sub_device_id,
-    )
-    reduced.deallocate(True)
-
-    logger.info(f"all_reduce #{call_id} done: shape={gathered.shape}")
-    return gathered
+    return result
