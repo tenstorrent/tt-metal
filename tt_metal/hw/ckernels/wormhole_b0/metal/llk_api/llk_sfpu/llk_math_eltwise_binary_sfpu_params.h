@@ -4,4 +4,4 @@
 
 #pragma once
 
-// Stub: mul_int_sfpu dependencies were nuked
+// Stub: nuked operation
