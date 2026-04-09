@@ -15,6 +15,8 @@ Handles:
 - scaling=1.0 (no 1/sqrt(d_k))
 """
 
+from loguru import logger
+
 import ttnn
 
 from .weights import AttentionWeights
@@ -130,11 +132,17 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
+    logger.debug(
+        f"all_reduce: shape={tensor.shape}, dtype={tensor.dtype}, "
+        f"layout={tensor.layout}, memory={tensor.memory_config()}, "
+        f"num_links=1, topology=Linear"
+    )
     result = ttnn.all_reduce(
         tensor,
         num_links=1,
         topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    logger.debug(f"all_reduce done: shape={result.shape}")
     tensor.deallocate(True)
     return result

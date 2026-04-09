@@ -384,11 +384,20 @@ class Gemma4Model:
 
         # All-gather if TP > 1 to reconstruct full output dim
         if tp > 1:
+            logger.debug(
+                f"pli all_gather embed: shape={pli_embed.shape}, dtype={pli_embed.dtype}, "
+                f"layout={pli_embed.layout}, num_links=1, dim=-1, topology=Linear"
+            )
             pli_embed = ttnn.all_gather(
                 pli_embed,
                 num_links=1,
                 dim=-1,
                 topology=ttnn.Topology.Linear,
+            )
+            logger.debug(f"pli all_gather embed done: shape={pli_embed.shape}")
+            logger.debug(
+                f"pli all_gather proj: shape={pli_proj.shape}, dtype={pli_proj.dtype}, "
+                f"layout={pli_proj.layout}, num_links=1, dim=-1, topology=Linear"
             )
             pli_proj = ttnn.all_gather(
                 pli_proj,
@@ -396,6 +405,7 @@ class Gemma4Model:
                 dim=-1,
                 topology=ttnn.Topology.Linear,
             )
+            logger.debug(f"pli all_gather proj done: shape={pli_proj.shape}")
 
         # 3. Reshape to [1, 1, full_n_layers, pli_size] for per-vector RMSNorm
         pli_proj = ttnn.reshape(pli_proj, (1, 1, full_n_layers_pli, pli_size))
