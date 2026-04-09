@@ -214,7 +214,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     pack_reconfig_data_format(cb_out);
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(cb_max);
-    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(cb_in, cb_max, cb_out);
+    sub_bcast_cols_init_short(cb_in, cb_max);
 #else
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
