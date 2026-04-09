@@ -17,20 +17,11 @@ on:
         type: string
         default: ""
         description: "Pre-built CI Build Docker image tag"
-      do-full-scan:
-        required: true
-        type: string
-        description: "Whether to do a full scan or incremental"
-      merge-base:
-        required: false
-        type: string
-        default: ""
-        description: "Merge base commit for incremental scans"
       prereq-targets:
         required: false
         type: string
         default: ""
-        description: "Prerequisite targets to build without analysis (space-separated, built after switching to current ref but before restoring shim)"
+        description: "Prerequisite targets to build without analysis (space-separated)"
       scan-targets:
         required: false
         type: string
@@ -39,7 +30,7 @@ on:
 
 jobs:
   clang-tidy:
-    name: 🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}
+    name: "\U0001F916 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}"
     timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
@@ -89,7 +80,7 @@ jobs:
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
-        # Unlike ccache, ctcache is writable from ALL non-fork refs (including PR branches)
+        # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
@@ -143,71 +134,30 @@ jobs:
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
-      - name: Check out baseline
-        if: ${{ inputs.do-full-scan != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.merge-base }}
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
-
-      - name: Create shim
+      # Shim approach: cmake always sees the same command text ("./clang-tidy-shim;...")
+      # so Ninja never force-rebuilds TUs just because the analysis tool changed.
+      # During prereq builds the shim is a no-op; for analysis it delegates to ctcache.
+      - name: Create shim (no-op for prereq builds)
         run: |
-          # Use a script rather than a symlink so we can overwrite it later (with the ctcache
-          # wrapper) without changing the command text that Ninja tracks for incremental builds.
           cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
           exec /usr/bin/true "$@"
           SHIMEOF
           chmod +x ./clang-tidy-shim
 
-      - name: 🔧 CMake configure
+      - name: "\U0001F527 CMake configure"
         run: |
           CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
           cmake --preset clang-tidy \
             -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
             -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
 
-      - name: Prepare baseline ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🛠️ Baseline Build
-        if: ${{ inputs.do-full-scan != 'true' }}
-        timeout-minutes: 60
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: false
-
       - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          ccache -z
+        run: ccache -z
 
       - name: Build prerequisite targets (without analysis)
         if: ${{ inputs.prereq-targets != '' }}
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: |
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
           for target in ${{ inputs.prereq-targets }}; do
@@ -215,17 +165,17 @@ jobs:
             cmake --build --preset clang-tidy --target "$target"
           done
 
-      - name: Restore shim
+      - name: Activate analysis shim
         run: |
           # Overwrite the no-op shim with the real analysis wrapper.
-          # We keep the filename ./clang-tidy-shim unchanged so Ninja doesn't force-rebuild every TU.
+          # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
           if command -v clang-tidy-cache &>/dev/null; then
             cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
           exec clang-tidy-cache --directories_with_clang_tidy=/work clang-tidy-20 "$@"
           SHIMEOF
             chmod +x ./clang-tidy-shim
-            echo "ctcache shim active (results cached in Redis namespace ${CTCACHE_REDIS_NAMESPACE:-/ctcache})"
+            echo "ctcache shim active (namespace: ${CTCACHE_REDIS_NAMESPACE:-/ctcache})"
           else
             cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
@@ -235,7 +185,7 @@ jobs:
             echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
           fi
 
-      - name: 🔍 Analyze code with clang-tidy
+      - name: "\U0001F50D Analyze code with clang-tidy"
         timeout-minutes: 120
         run: |
           if [ -n "${{ inputs.scan-targets }}" ]; then
@@ -249,7 +199,8 @@ jobs:
             cmake --build --preset clang-tidy
           fi
 
-      - name: Publish Ccache summary
+      - name: Publish ccache summary
+        if: always()
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -259,6 +210,15 @@ jobs:
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
+          {
+            echo '## ctcache Summary'
+            if command -v clang-tidy-cache &>/dev/null; then
+              echo '```'
+              clang-tidy-cache --show-stats 2>/dev/null || echo "stats unavailable"
+              echo '```'
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
           python3 - << 'PYEOF'
           import os, redis, sys
           try:
@@ -270,14 +230,10 @@ jobs:
                   socket_connect_timeout=2,
               )
               ns = os.environ.get("CTCACHE_REDIS_NAMESPACE", "/ctcache")
-              count = r.dbsize()
-              print(f"## ctcache Summary")
-              print(f"Namespace: `{ns}`")
-              print(f"Total keys in Redis DB: {count}")
+              # Count only keys in our namespace
+              keys = r.keys(f"{ns}*")
+              print(f"Redis namespace: {ns}")
+              print(f"Cached entries: {len(keys)}")
           except Exception as e:
-              print(f"ctcache stats unavailable: {e}")
+              print(f"ctcache Redis stats unavailable: {e}")
           PYEOF
-          # Also print clang-tidy-cache stats if available
-          if command -v clang-tidy-cache &>/dev/null; then
-            clang-tidy-cache --show-stats 2>/dev/null || true
-          fi

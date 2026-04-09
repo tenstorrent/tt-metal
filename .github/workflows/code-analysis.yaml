@@ -76,7 +76,6 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
-      merge-base: ${{ steps.compute-outputs.outputs.merge-base }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -93,6 +92,7 @@ jobs:
       - id: compute-outputs
         shell: bash
         run: |
+          # Full scan on main or when .clang-tidy config changed
           if [[ "${{ github.ref_name }}" == "main" ]] || \
              [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
             do_full_scan="true"
@@ -100,6 +100,7 @@ jobs:
             do_full_scan="false"
           fi
 
+          # Skip scan entirely if no code/cmake changes and not a full scan
           if [[ "$do_full_scan" == "true" ]] || \
              [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
              [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
@@ -108,17 +109,10 @@ jobs:
             do_scan="false"
           fi
 
-          merge_base=""
-          if [[ "$do_full_scan" != "true" ]]; then
-            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
-            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
-          fi
-
           echo "Do a scan: $do_scan"
           echo "Do a full scan: $do_full_scan"
           echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
           echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
-          echo "merge-base=$merge_base" >> "$GITHUB_OUTPUT"
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -131,9 +125,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
-  # Full scan: single job that analyzes everything
+  # Full scan: single job that analyzes everything (main, config changes)
   clang-tidy-full:
-    name: 🤖 Clang Tidy (Full)
+    name: "\U0001F916 Clang Tidy (Full)"
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -148,14 +142,12 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'true'
-      merge-base: ''
       prereq-targets: ''
       scan-targets: ''
 
-  # Incremental scan: parallel jobs for different targets
+  # Incremental scan: parallel jobs for different targets (PR branches)
   clang-tidy-incremental-tt-metal:
-    name: 🤖 Clang Tidy (Metalium)
+    name: "\U0001F916 Clang Tidy (Metalium)"
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -170,13 +162,11 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
-      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
 
   clang-tidy-incremental-ttnn:
-    name: 🤖 Clang Tidy (TTNN)
+    name: "\U0001F916 Clang Tidy (TTNN)"
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -191,13 +181,11 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
-      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
 
   clang-tidy-incremental-tt-train:
-    name: 🤖 Clang Tidy (tt-train)
+    name: "\U0001F916 Clang Tidy (tt-train)"
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -212,13 +200,11 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
-      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
 
   clang-tidy-incremental-catchall:
-    name: 🤖 Clang Tidy (catchall)
+    name: "\U0001F916 Clang Tidy (catchall)"
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -233,7 +219,5 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
-      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
