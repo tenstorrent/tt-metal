@@ -34,4 +34,5 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # Install Claude Code (native installer); symlink into PATH
 ############################################
 RUN curl -fsSL https://claude.ai/install.sh | bash \
- && ln -s /root/.local/bin/claude /usr/local/bin/claude || true
+ && [ -x /root/.local/bin/claude ] \
+ && ln -sf /root/.local/bin/claude /usr/local/bin/claude
