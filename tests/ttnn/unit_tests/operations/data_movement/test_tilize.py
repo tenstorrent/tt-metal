@@ -272,6 +272,10 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     torch_input_tensor = torch.rand(shape, dtype=torch_dtype)
 
     dram_cores = device.dram_grid_size().x
+
+    if shape[2] % dram_cores != 0:
+        pytest.skip(f"Shape width {shape[2]} is not evenly divisible by {dram_cores} DRAM cores")
+
     # Calculate shard_shape by dividing last dimension by number of DRAM cores
     shard_shape = (shape[1], shape[2] // dram_cores)
 
