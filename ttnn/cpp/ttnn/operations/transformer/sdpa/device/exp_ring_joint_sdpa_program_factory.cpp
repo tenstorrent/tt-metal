@@ -557,29 +557,13 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                             .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
     CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K and V input CBs.
-    // Fabric writer columns get overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
-    // compute and writer can pop independently from the same address space.
-    // Non-fabric columns get single-handle CBs to avoid the unused second handle blocking
-    // space reclamation.
-    // CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
-    // CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    // K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
+    // compute and MUX writer can pop independently from the same L1 address space.
     {
-        // DANGEROUS
-        // K input: non-fabric cores (single handle)
-        // auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-        //                         .set_page_size(tt::CBIndex::c_1, k_tile_size);
-        // CreateCircularBuffer(program, core_grid, c_in1_config);
-        // K input: fabric cores (overlapping handles for compute + writer)
         uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
         tt::tt_metal::create_cb(k_cbs, program, core_grid, k_tile_size, k_tiles, k_df);
     }
     {
-        // V input: non-fabric cores (single handle)
-        // auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-        //                         .set_page_size(tt::CBIndex::c_2, v_tile_size);
-        // CreateCircularBuffer(program, core_grid, c_in2_config);
-        // V input: fabric cores (overlapping handles for compute + writer)
         uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
         tt::tt_metal::create_cb(v_cbs, program, core_grid, v_tile_size, v_tiles, v_df);
     }
@@ -689,10 +673,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
 
         // Signal CB (c_12): compute signals writer when the last K-chunk starts (for multi-Q).
-        // Needed so the writer knows when to drain accumulators to DRAM; avoids UB from
-        // cb_reserve_back on an unallocated CB (introduced by compute_streaming.hpp in
-        // upstream commit 19a05c2fb0).  Fabric-writer cores already have c_12 allocated as the
-        // AG-scratch CB, so only create it here for non-fabric cores.
+        // Needed so the writer knows when to drain accumulators to DRAM.
         constexpr uint32_t signal_page_size = 16;
         auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
                                    .set_page_size(tt::CBIndex::c_12, signal_page_size);
@@ -1071,12 +1052,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                // const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                // noc_async_write_multicast (non-loopback) never writes to self, so the
-                // hardware generates num_receivers acks regardless of injector position.
-                // Using chain_size when injector is inside the rect would over-count by 1,
-                // causing noc_async_write_barrier to hang on the missing ack.
+                // noc_async_write_multicast (non-loopback) never writes to self, so
+                // num_dests must be num_receivers (chain_size - 1), not chain_size.
                 const uint32_t mcast_num_dests = num_receivers;
 
                 auto& injector_chain = core_chain_info[injector_idx];
@@ -1215,21 +1192,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         fabric_writer_range,
         tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
 
-    // K/V staging scratch CB and packet header CB for all-gather on fabric writer cores
-    // const tt::DataFormat ag_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    // const uint32_t ag_cb_pages = 3 * ag_packet_size_in_pages;
-    // tt::tt_metal::CreateCircularBuffer(
-    //     program,
-    //     fabric_writer_range,
-    //     tt::tt_metal::CircularBufferConfig(ag_cb_pages * ag_page_size, {{ag_kv_scratch_cb_id, ag_df}})
-    //         .set_page_size(ag_kv_scratch_cb_id, ag_page_size));
-    // const uint32_t ag_pkt_hdr_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    // tt::tt_metal::CreateCircularBuffer(
-    //     program,
-    //     fabric_writer_range,
-    //     tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
-    //         .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
-
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
@@ -1273,7 +1235,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     // Track the RT arg offset for all-gather args on fabric writer master cores
     uint32_t writer_fabric_ag_rt_offset = 0;
-    bool ag_rt_offset_set = false;
 
     // Track the RT arg offset for per-link semaphore addresses in reader args
     uint32_t reader_per_link_sem_rt_offset = 0;
@@ -1438,9 +1399,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
             // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler
             if (link_in_range) {
-                if (!ag_rt_offset_set) {
+                if (writer_fabric_ag_rt_offset == 0) {
                     writer_fabric_ag_rt_offset = writer_args.size();
-                    ag_rt_offset_set = true;
                 }
 
                 const uint32_t out_ready_sem_addr = args.semaphore[link].address();
