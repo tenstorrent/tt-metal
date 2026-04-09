@@ -4,12 +4,11 @@
 
 // Ring SDPA topology helpers shared between compute and dataflow kernels.
 // Contains the single-source-of-truth sequential ring_id assignment state machine
-// used by RingSDPAOpIndexer, RingSDPAOpReceiver, and pre-scan helpers.
+// used by RingSDPAOpIndexer and pre-scan helpers.
 
 #pragma once
 
 #include <cstdint>
-#include "api/debug/dprint.h"
 
 /**
  * Sequential single-direction ring_id sequencer.
