@@ -133,6 +133,7 @@ def turbo_quant_quantize(
     x: "ttnn.Tensor",
     setup: TTNNTurboQuantSetup,
     memory_config=None,
+    skip_rotation: bool = False,
 ) -> tuple["ttnn.Tensor", "ttnn.Tensor"]:
     """Quantize a KV tensor on device using TurboQuant.
 
@@ -140,6 +141,8 @@ def turbo_quant_quantize(
         x: Input tensor [batch, heads, seq, head_dim] in BF16 on device.
         setup: Precomputed rotation matrix and codebook on device.
         memory_config: Output memory config (default: DRAM).
+        skip_rotation: If True, skip the rotation step (input already in rotated space,
+                       e.g. when Π has been absorbed into the projection weights).
 
     Returns:
         (indices, norms) where:
@@ -150,9 +153,11 @@ def turbo_quant_quantize(
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # Step 1: Rotate — y = x @ Π
-    # x: [batch, heads, seq, 128], rotation: [1, 1, 128, 128]
-    y = ttnn.matmul(x, setup.rotation, memory_config=memory_config)
+    # Step 1: Rotate — y = x @ Π  (skip if rotation absorbed into weights)
+    if skip_rotation:
+        y = x
+    else:
+        y = ttnn.matmul(x, setup.rotation, memory_config=memory_config)
 
     # Step 2: L2 norm — norms = sqrt(sum(y^2, dim=-1, keepdim=True))
     y_sq = ttnn.square(y)
@@ -492,18 +497,19 @@ class TTNNTurboQuantCache:
         ]
         del zero_norms
 
-    def quantize(self, x: "ttnn.Tensor") -> tuple["ttnn.Tensor", "ttnn.Tensor"]:
+    def quantize(self, x: "ttnn.Tensor", skip_rotation: bool = False) -> tuple["ttnn.Tensor", "ttnn.Tensor"]:
         """Quantize a KV tensor on device.
 
         Args:
             x: BF16 tensor [batch, heads, seq, head_dim] on device.
+            skip_rotation: If True, skip the rotation step (already in rotated space).
 
         Returns:
             (values_bf16, norms_bf16) on device.
             If cache_centroids=True: values are pre-gathered centroid floats.
             Otherwise: values are integer indices as BF16 (0..2^b-1).
         """
-        idx_uint32, norms = turbo_quant_quantize(x, self.setup)
+        idx_uint32, norms = turbo_quant_quantize(x, self.setup, skip_rotation=skip_rotation)
         idx_bf16 = ttnn.typecast(idx_uint32, ttnn.bfloat16)
         ttnn.deallocate(idx_uint32)
 
@@ -690,8 +696,9 @@ class TTNNTurboQuantCache:
             _own_pos_tt = False
 
         # Step 1: Quantize new token on device.
+        # When rotation is absorbed into W_v, V is already in rotated space → skip V rotation.
         k_idx_bf16, k_norms_new = self.quantize(k_heads)
-        v_idx_bf16, v_norms_new = self.quantize(v_heads)
+        v_idx_bf16, v_norms_new = self.quantize(v_heads, skip_rotation=getattr(self, "rotation_absorbed", False))
 
         # Step 2: Scatter indices and norms on device.
         _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -788,6 +795,49 @@ class TTNNTurboQuantCache:
         self.setup.deallocate()
         for t in self.k_indices_dev + self.v_indices_dev + self.k_norms_dev + self.v_norms_dev:
             ttnn.deallocate(t)
+
+
+def absorb_rotation_into_state_dict(state_dict, rotation_cpu, n_layers=32, n_q_heads=32, n_kv_heads=8, head_dim=128):
+    """Absorb TurboQuant rotation into W_v and W_o in the CPU state_dict.
+
+    Must be called BEFORE model creation so the weights are loaded with the
+    rotation already baked in (preserving the model's sharded memory configs).
+
+    After loading with the modified state_dict:
+      - V comes out of the QKV projection already in rotated space
+      - W_o includes Π^T, so post_rotate_output is unnecessary
+      - K rotation and Q pre-rotation remain (RoPE dependency)
+
+    Args:
+        state_dict: CPU state_dict (modified in-place).
+        rotation_cpu: Rotation matrix Π [head_dim, head_dim] as float32 CPU tensor.
+        n_layers: Number of transformer layers.
+        n_q_heads: Number of query heads.
+        n_kv_heads: Number of KV heads.
+        head_dim: Head dimension.
+    """
+    rotation_t_cpu = rotation_cpu.t().contiguous()
+
+    for layer_idx in range(n_layers):
+        prefix = f"layers.{layer_idx}.attention"
+
+        # --- W_v: rotate output space so V comes out pre-rotated ---
+        # State dict shape: [n_kv_heads * head_dim, dim] = [out, in]
+        wv_key = f"{prefix}.wv.weight"
+        wv = state_dict[wv_key].float()  # [1024, 4096]
+        wv_heads = wv.reshape(n_kv_heads, head_dim, -1)  # [8, 128, 4096]
+        wv_heads = rotation_t_cpu @ wv_heads  # Π^T @ each head's [128, 4096] block
+        state_dict[wv_key] = wv_heads.reshape_as(wv).to(state_dict[wv_key].dtype)
+
+        # --- W_o: absorb Π^T so output is automatically de-rotated ---
+        # State dict shape: [dim, n_q_heads * head_dim] = [out, in]
+        wo_key = f"{prefix}.wo.weight"
+        wo = state_dict[wo_key].float()  # [4096, 4096]
+        wo_cols = wo.reshape(-1, n_q_heads, head_dim)  # [4096, 32, 128]
+        wo_cols = wo_cols @ rotation_cpu  # each head's [4096, 128] @ Π
+        state_dict[wo_key] = wo_cols.reshape_as(wo).to(state_dict[wo_key].dtype)
+
+    print(f"  Absorbed rotation into W_v and W_o for {n_layers} layers")
 
 
 def validate_against_cpu_reference(

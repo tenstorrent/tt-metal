@@ -742,9 +742,10 @@ class Attention(LightweightModule):
             ttnn.deallocate(v_dram)
 
             # B3 optimisation: compute SDPA in rotated coordinate space.
-            # This eliminates 2 large [max_seq, D] × [D, D] matmuls per layer,
-            # replacing them with 2 tiny [1, D] × [D, D] matmuls on Q and output.
             use_rotated = getattr(turbo_quant_cache, "use_rotated_sdpa", True)
+            # When rotation is absorbed into W_v/W_o, V is already rotated and
+            # post-rotation is handled by W_o. Only K rotation + Q pre-rotation remain.
+            rotation_absorbed = getattr(turbo_quant_cache, "rotation_absorbed", False)
 
             if use_rotated:
                 keys, values = turbo_quant_cache.update_and_dequantize_rotated(
@@ -786,7 +787,8 @@ class Attention(LightweightModule):
             ttnn.deallocate(values)
 
             # Post-rotate output back to original space: out' = out × Πᵀ
-            if use_rotated:
+            # Skip if Π^T is already absorbed into W_o.
+            if use_rotated and not rotation_absorbed:
                 attn_output_1G4D = turbo_quant_cache.post_rotate_output(attn_output_1G4D)
         else:
             if kv_cache:
