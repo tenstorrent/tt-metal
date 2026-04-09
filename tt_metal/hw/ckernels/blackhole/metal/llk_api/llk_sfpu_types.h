@@ -10,4 +10,5 @@ enum class SfpuType {
     swish,
     atanh,
     sinh,
+    rrelu,
 };

@@ -10,3 +10,11 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-09T10:12:32+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"frac","background":true,"ts":"2026-04-09T10:12:32+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"where_tss","background":true,"ts":"2026-04-09T10:12:32+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"swish","status":"ok","commit":"149b1ab3ee","ts":"2026-04-09T10:21:14+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"frac","status":"ok","commit":"d5044dee1c","ts":"2026-04-09T10:21:14+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardshrink","status":"ok","commit":"fb94abf14e","ts":"2026-04-09T10:21:14+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"where_tss","status":"ok","commit":"de71169a22","ts":"2026-04-09T10:21:14+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","status":"ok","commit":"de71169a22","ts":"2026-04-09T10:21:14+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","duration_s":518,"analyzers_completed":5,"analyzers_failed":0,"ts":"2026-04-09T10:21:18+00:00"}
+{"event":"phase_start","phase":3,"phase_name":"Implementation","iteration":1,"ts":"2026-04-09T10:21:28+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementor","phase":3,"ts":"2026-04-09T10:21:28+00:00"}
