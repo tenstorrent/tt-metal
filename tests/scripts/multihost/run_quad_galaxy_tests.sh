@@ -64,6 +64,7 @@ _resolve_deepseekv3_cache() {
 
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+    export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
     # heuristic to extract only 2 first hosts from the hostfile
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
@@ -79,6 +80,10 @@ setup_dual_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
+        exit 1
+    fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
         echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
@@ -91,6 +96,7 @@ setup_dual_galaxy_env() {
 
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+    export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
     # heuristic to extract only 4 first hosts from the hostfile
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 4 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
@@ -100,6 +106,10 @@ setup_quad_galaxy_env() {
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
+        exit 1
+    fi
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
