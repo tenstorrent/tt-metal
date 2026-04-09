@@ -366,14 +366,21 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        CHUNK_SIZE = 65536
+        CHUNK_SIZE = 1024
+        # CHUNK_SIZE = 2048
+        # CHUNK_SIZE = 4096
+        # CHUNK_SIZE = 8192
+        # CHUNK_SIZE = 16384
+        # CHUNK_SIZE = 32768
+        # CHUNK_SIZE = 65536
         cos_dim = rope_tensors["cos_matrix"].shape[3]
         sin_dim = rope_tensors["sin_matrix"].shape[3]
         logits = []
         hidden_for_mtp = []
         for i in range(0, x.shape[2], CHUNK_SIZE):
-            start = i * CHUNK_SIZE
-            end = min((i + 1) * CHUNK_SIZE, x.shape[2])
+            start = i
+            end = min(i + CHUNK_SIZE, x.shape[2])
+            logger.info(f"start-end: {start} - {end}")
             x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
             rope_chunk = {
                 "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
@@ -383,10 +390,16 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
                 x_chunk, user_id, cfg, rope_chunk, page_tables, return_hidden
             )
+            ttnn.deallocate(x_chunk)
+            ttnn.deallocate(rope_chunk["cos_matrix"])
+            ttnn.deallocate(rope_chunk["sin_matrix"])
             logits.append(logits_chunk)
             if len(hidden_for_mtp_chunk) > 0:
                 hidden_for_mtp.append(hidden_for_mtp_chunk)
-        logits = ttnn.concat(logits, dim=2)
+        logits_chunks = logits
+        logits = ttnn.concat(logits_chunks, dim=2)
+        for logits_chunk in logits_chunks:
+            ttnn.deallocate(logits_chunk)
         if len(hidden_for_mtp) == 0:
             return logits
         hidden_for_mtp = ttnn.concat(hidden_for_mtp, dim=2)

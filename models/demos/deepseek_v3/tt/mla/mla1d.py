@@ -1465,6 +1465,7 @@ class MLA1D(AbstractModule):
         # Paged Update Cache
 
         cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
+        ttnn.deallocate(tt_kvpe)
 
         # Q Rope + Nope
 
@@ -1623,12 +1624,12 @@ class MLA1D(AbstractModule):
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
-        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after linear")
+        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after linear ttq")
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
-        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after reshape")
+        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after reshape ttq")
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))
-        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after permute")
+        _print_memory_stats(device, "_fwd_prefill_output_from_q_and_kvpe after permute ttq")
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
@@ -1718,7 +1719,7 @@ class MLA1D(AbstractModule):
 
             return v_out_chunk
 
-        WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "2048"))
+        WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "1024"))
         assert WKV_B2_AG_SEQ_CHUNK_SIZE > 0, (
             "DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE must be > 0, " f"got {WKV_B2_AG_SEQ_CHUNK_SIZE}"
         )
@@ -2252,6 +2253,7 @@ class MLA1D(AbstractModule):
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [1, bsz, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
+        ttnn.deallocate(tt_q)
 
         # Q Nope: wkv_b1
         # 1,32,16,192 L1 interleaved
@@ -2281,8 +2283,12 @@ class MLA1D(AbstractModule):
         # Concat Q Nope and Q Rope
         # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
         if pad_rows:
+            tt_q_unsliced = tt_q
             tt_q = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, tt_q.shape[-1]])
+            ttnn.deallocate(tt_q_unsliced)
         # 1,32,16,576 L1 interleaved
         return tt_q
 
@@ -2321,6 +2327,7 @@ class MLA1D(AbstractModule):
             attn_out, 1, 2, memory_config=cfg["wkv_b2_in0_memory_config"]
         )  # [1, num_heads, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
+        ttnn.deallocate(attn_out)
 
         # Slice off padding from wkv_b2 output
 

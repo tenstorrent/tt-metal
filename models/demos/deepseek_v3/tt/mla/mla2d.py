@@ -224,12 +224,12 @@ class MLA2D(MLA1D):
             in_end = min(in_start + RS_SEQ_CHUNK_SIZE, seq_len_full)
 
             x_out_chunk = ttnn.slice(x_out, [0, 0, in_start, 0], [1, batch_size, in_end, model_dim])
-            x_rs_chunk = (
-                ttnn.experimental.reduce_scatter_minimal_async(
-                    x_out_chunk, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
-                )
-                * scale
+            x_rs_tmp = ttnn.experimental.reduce_scatter_minimal_async(
+                x_out_chunk, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
             )
+            ttnn.deallocate(x_out_chunk)
+            x_rs_chunk = x_rs_tmp * scale
+            ttnn.deallocate(x_rs_tmp)
 
             out_start = in_start // mesh_shape_0
             out_end = min(in_end // mesh_shape_0, rs_out_seq_len)
