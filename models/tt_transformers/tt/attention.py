@@ -783,8 +783,11 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(keys)
-            ttnn.deallocate(values)
+            # Don't deallocate if keys/values ARE the persistent cache tensors
+            # (cache_centroids mode returns the cache directly, no intermediate).
+            if not getattr(turbo_quant_cache, "cache_centroids", False):
+                ttnn.deallocate(keys)
+                ttnn.deallocate(values)
 
             # Post-rotate output back to original space: out' = out × Πᵀ
             # Skip if Π^T is already absorbed into W_o.

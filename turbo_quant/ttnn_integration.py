@@ -697,61 +697,94 @@ class TTNNTurboQuantCache:
 
         # Step 1: Quantize new token on device.
         # When rotation is absorbed into W_v, V is already in rotated space → skip V rotation.
-        k_idx_bf16, k_norms_new = self.quantize(k_heads)
-        v_idx_bf16, v_norms_new = self.quantize(v_heads, skip_rotation=getattr(self, "rotation_absorbed", False))
+        k_vals_bf16, k_norms_new = self.quantize(k_heads)
+        v_vals_bf16, v_norms_new = self.quantize(v_heads, skip_rotation=getattr(self, "rotation_absorbed", False))
 
-        # Step 2: Scatter indices and norms on device.
+        # Step 2: Scatter into on-device cache.
         _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-
-        # 2a: Scatter indices.
-        k_idx_scatter = ttnn.permute(k_idx_bf16, (2, 0, 1, 3))
-        v_idx_scatter = ttnn.permute(v_idx_bf16, (2, 0, 1, 3))
-        ttnn.deallocate(k_idx_bf16)
-        ttnn.deallocate(v_idx_bf16)
-
         _shard_spec_idx = ttnn.ShardSpec(_shard_grid, [32, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR)
         _shard_mem_idx = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_idx)
 
-        k_idx_sharded = ttnn.to_memory_config(k_idx_scatter, _shard_mem_idx)
-        v_idx_sharded = ttnn.to_memory_config(v_idx_scatter, _shard_mem_idx)
-        ttnn.deallocate(k_idx_scatter)
-        ttnn.deallocate(v_idx_scatter)
+        if self.cache_centroids:
+            # Pre-multiply centroids × norms NOW (on 1 token = tiny) and store the
+            # rescaled values.  Dequantize then becomes a no-op (just read the cache).
+            # This eliminates the full-cache mul that scales with max_seq_len.
+            k_rescaled = ttnn.mul(k_vals_bf16, k_norms_new)
+            v_rescaled = ttnn.mul(v_vals_bf16, v_norms_new)
+            ttnn.deallocate(k_vals_bf16)
+            ttnn.deallocate(v_vals_bf16)
+            ttnn.deallocate(k_norms_new)
+            ttnn.deallocate(v_norms_new)
 
-        ttnn.experimental.paged_update_cache(self.k_indices_dev[layer_idx], k_idx_sharded, update_idxs_tensor=pos_tt)
-        ttnn.experimental.paged_update_cache(self.v_indices_dev[layer_idx], v_idx_sharded, update_idxs_tensor=pos_tt)
-        ttnn.deallocate(k_idx_sharded)
-        ttnn.deallocate(v_idx_sharded)
+            k_scatter = ttnn.permute(k_rescaled, (2, 0, 1, 3))
+            v_scatter = ttnn.permute(v_rescaled, (2, 0, 1, 3))
+            ttnn.deallocate(k_rescaled)
+            ttnn.deallocate(v_rescaled)
 
-        # 2b: Scatter norms.
-        k_norms_scatter = ttnn.permute(k_norms_new, (2, 0, 1, 3))
-        v_norms_scatter = ttnn.permute(v_norms_new, (2, 0, 1, 3))
-        ttnn.deallocate(k_norms_new)
-        ttnn.deallocate(v_norms_new)
+            k_sharded = ttnn.to_memory_config(k_scatter, _shard_mem_idx)
+            v_sharded = ttnn.to_memory_config(v_scatter, _shard_mem_idx)
+            ttnn.deallocate(k_scatter)
+            ttnn.deallocate(v_scatter)
 
-        _shard_spec_norms = ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
-        _shard_mem_norms = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_norms
-        )
+            ttnn.experimental.paged_update_cache(self.k_indices_dev[layer_idx], k_sharded, update_idxs_tensor=pos_tt)
+            ttnn.experimental.paged_update_cache(self.v_indices_dev[layer_idx], v_sharded, update_idxs_tensor=pos_tt)
+            ttnn.deallocate(k_sharded)
+            ttnn.deallocate(v_sharded)
+            # No norms scatter needed — norms are already baked into the cached values.
+        else:
+            # Legacy path: scatter indices and norms separately.
+            k_idx_scatter = ttnn.permute(k_vals_bf16, (2, 0, 1, 3))
+            v_idx_scatter = ttnn.permute(v_vals_bf16, (2, 0, 1, 3))
+            ttnn.deallocate(k_vals_bf16)
+            ttnn.deallocate(v_vals_bf16)
 
-        k_norms_sharded = ttnn.to_memory_config(k_norms_scatter, _shard_mem_norms)
-        v_norms_sharded = ttnn.to_memory_config(v_norms_scatter, _shard_mem_norms)
-        ttnn.deallocate(k_norms_scatter)
-        ttnn.deallocate(v_norms_scatter)
+            k_idx_sharded = ttnn.to_memory_config(k_idx_scatter, _shard_mem_idx)
+            v_idx_sharded = ttnn.to_memory_config(v_idx_scatter, _shard_mem_idx)
+            ttnn.deallocate(k_idx_scatter)
+            ttnn.deallocate(v_idx_scatter)
 
-        ttnn.experimental.paged_update_cache(self.k_norms_dev[layer_idx], k_norms_sharded, update_idxs_tensor=pos_tt)
-        ttnn.experimental.paged_update_cache(self.v_norms_dev[layer_idx], v_norms_sharded, update_idxs_tensor=pos_tt)
-        ttnn.deallocate(k_norms_sharded)
-        ttnn.deallocate(v_norms_sharded)
+            ttnn.experimental.paged_update_cache(
+                self.k_indices_dev[layer_idx], k_idx_sharded, update_idxs_tensor=pos_tt
+            )
+            ttnn.experimental.paged_update_cache(
+                self.v_indices_dev[layer_idx], v_idx_sharded, update_idxs_tensor=pos_tt
+            )
+            ttnn.deallocate(k_idx_sharded)
+            ttnn.deallocate(v_idx_sharded)
+
+            _shard_spec_norms = ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+            _shard_mem_norms = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_norms
+            )
+
+            k_norms_scatter = ttnn.permute(k_norms_new, (2, 0, 1, 3))
+            v_norms_scatter = ttnn.permute(v_norms_new, (2, 0, 1, 3))
+            ttnn.deallocate(k_norms_new)
+            ttnn.deallocate(v_norms_new)
+
+            k_norms_sharded = ttnn.to_memory_config(k_norms_scatter, _shard_mem_norms)
+            v_norms_sharded = ttnn.to_memory_config(v_norms_scatter, _shard_mem_norms)
+            ttnn.deallocate(k_norms_scatter)
+            ttnn.deallocate(v_norms_scatter)
+
+            ttnn.experimental.paged_update_cache(
+                self.k_norms_dev[layer_idx], k_norms_sharded, update_idxs_tensor=pos_tt
+            )
+            ttnn.experimental.paged_update_cache(
+                self.v_norms_dev[layer_idx], v_norms_sharded, update_idxs_tensor=pos_tt
+            )
+            ttnn.deallocate(k_norms_sharded)
+            ttnn.deallocate(v_norms_sharded)
 
         if _own_pos_tt:
             ttnn.deallocate(pos_tt)
 
         # Step 3: Dequantize in ROTATED space (no inverse rotation matmul).
         if self.cache_centroids:
-            # Cache stores pre-gathered centroid values → just mul by norms.
-            # Single DRAM pass instead of typecast + gather + mul (3 passes).
-            k_rot = ttnn.mul(self.k_indices_dev[layer_idx], self.k_norms_dev[layer_idx])
-            v_rot = ttnn.mul(self.v_indices_dev[layer_idx], self.v_norms_dev[layer_idx])
+            # Cache stores pre-rescaled centroid×norm values → just read directly.
+            # No per-step mul over the full cache → cost is O(1), not O(max_seq).
+            k_rot = self.k_indices_dev[layer_idx]
+            v_rot = self.v_indices_dev[layer_idx]
         else:
             k_idx = self.k_indices_dev[layer_idx]
             v_idx = self.v_indices_dev[layer_idx]
