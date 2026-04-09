@@ -274,6 +274,7 @@ class ImagePooling(LightweightModule):
         query: ttnn.Tensor,
         key_value: ttnn.Tensor,
         attn_mask: ttnn.Tensor = None,
+        debug_stats: bool = True,
     ) -> ttnn.Tensor:
         """
         Forward pass through cross-attention pooling.
@@ -287,12 +288,30 @@ class ImagePooling(LightweightModule):
             key_value: Key/Value tensor of shape [1, 1, pool_size, input_dim]
                        (gathered patch features)
             attn_mask: Optional attention mask [1, 1, 1, pool_size]
+            debug_stats: Log intermediate stats (disabled during trace capture)
 
         Returns:
             Pooled features of shape [1, 1, num_queries, hidden_dim]
         """
+        from loguru import logger
+
+        def _get_stats(tensor, name):
+            try:
+                mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if self.is_mesh_device else None
+                t = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+                if self.is_mesh_device:
+                    t = t[0]
+                t = t.float()
+                return f"{name}: shape={list(t.shape)}, mean={t.mean():.4f}, std={t.std():.4f}, min={t.min():.4f}, max={t.max():.4f}"
+            except Exception as e:
+                return f"{name}: stats error - {e}"
+
         num_queries = query.shape[-2]
         pool_size = key_value.shape[-2]
+
+        if debug_stats:
+            logger.info(_get_stats(query, "ImagePooling query input"))
+            logger.info(_get_stats(key_value, "ImagePooling kv input"))
 
         # Q projection (column-parallel: each device computes local heads)
         q = ttnn.linear(
@@ -320,6 +339,11 @@ class ImagePooling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v = v + self.bv
+
+        if debug_stats:
+            logger.info(_get_stats(q, "ImagePooling q after wq+bq"))
+            logger.info(_get_stats(k, "ImagePooling k after wk+bk"))
+            logger.info(_get_stats(v, "ImagePooling v after wv+bv"))
 
         # Reshape Q, K, V for multi-head attention using LOCAL heads
         # Note: Using ttnn ops for head splitting
@@ -360,6 +384,9 @@ class ImagePooling(LightweightModule):
 
         # Scale
         attn_weights = ttnn.mul(attn_weights, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if debug_stats:
+            logger.info(_get_stats(attn_weights, "ImagePooling attn_weights (after scale)"))
 
         # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
         if attn_mask is not None:
@@ -409,5 +436,8 @@ class ImagePooling(LightweightModule):
 
         # Add output bias (replicated, added after all_reduce)
         output = output + self.bo
+
+        if debug_stats:
+            logger.info(_get_stats(output, "ImagePooling final output"))
 
         return output
