@@ -15,12 +15,8 @@ pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize(
-    "h", [24, 32, 384]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 64, 1024]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 32, 384])
+@pytest.mark.parametrize("w", [42, 64, 1024])
 def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
@@ -41,9 +37,7 @@ def test_rms_norm(device, batch_size, h, w):
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize(
-    "h", [24, 128]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 128])
 @pytest.mark.parametrize("w", [32, 4096])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
@@ -83,12 +77,8 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize(
-    "h", [24, 2048]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 4022]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4022])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     torch.manual_seed(0)

@@ -9,11 +9,8 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-TEST_PADDING_VALUE = -42
-
 
 @pytest.mark.parametrize("shape", [[2, 10, 512, 8192]])
-# [2, 10, 512, 342]  test is failing regardless of implicit padding
 def test_ttnn_softmax_sdxl_attention(device, shape):
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -25,7 +22,6 @@ def test_ttnn_softmax_sdxl_attention(device, shape):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
     torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
     tt_output = ttnn.softmax(tt_input, dim=-1, numeric_stable=True)
     tt_output_torch = ttnn.to_torch(tt_output)

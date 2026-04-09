@@ -31,11 +31,7 @@ def test_softmax(device, inplace, dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [
-        (3, 64, 128, 96),
-        (1, 64, 32, 32),
-        (1, 64, 24, 42),
-    ]  # (1,64,32,24) failing regarless of implicit padding stating that ZeroDivisionError: integer division or modulo by zero (#31983) w needs to be >32
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -76,11 +72,7 @@ def test_softmax_with_program_cache(device, inplace):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [
-        (3, 64, 128, 96),
-        (1, 64, 32, 32),
-        (1, 64, 24, 42),
-    ]  # when w >32 regardless of implicit padding test is passing (#31983)
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -109,11 +101,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [
-        (3, 64, 128, 96),
-        (1, 64, 32, 32),
-        (1, 64, 24, 42),
-    ]  # when w >32 regardless of implicit padding test is passing (#31983)
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()

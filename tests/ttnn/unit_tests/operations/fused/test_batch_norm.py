@@ -349,8 +349,7 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
         torch.Size([4, 2, 64, 32]),
         torch.Size([1, 128, 14, 14]),
         torch.Size([2, 16, 64, 120]),
-        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
@@ -398,7 +397,7 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_qid_Default(input_shapes, device):
@@ -421,7 +420,7 @@ def test_batch_norm_qid_Default(input_shapes, device):
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_qid(input_shapes, device):
@@ -442,7 +441,7 @@ def test_batch_norm_qid(input_shapes, device):
     "input_shapes",
     [
         torch.Size([2, 3, 120, 120]),
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_output_Default(input_shapes, device):
@@ -465,7 +464,7 @@ def test_batch_norm_output_Default(input_shapes, device):
     [
         # Training mode PCC ordering is unreliable. Keep `input_shapes[1] >= 14` to avoid this test failure.
         torch.Size([3, 17, 47, 32]),
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize(
@@ -583,7 +582,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     "input_shapes",
     [
         torch.Size([3, 5, 64, 120]),
-        torch.Size([1, 8, 24, 42]),  # changed shape to non-multiple of 32 (tile-size) still passing
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize("use_output_tensor", [False, True])

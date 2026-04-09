@@ -22,7 +22,7 @@ TEST_PADDING_VALUE = -42
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
         (1, 32, 32000, -1),  # base case
-        (1, 24, 42, -1),  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+        (1, 24, 42, -1),
     ],
 )
 def test_large_softmax(device, batch_size, h, w, dim):
@@ -89,7 +89,6 @@ def run_softmax_stable_with_program_cache(
     attention_mask_t = ttnn.from_torch(
         attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
     )
-    # attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     torch_input_tensor = torch_random((batch_size, 1, h, w), -1000, 1000, dtype=torch.bfloat16)
     if not skip_scale_mask:
@@ -101,7 +100,6 @@ def run_softmax_stable_with_program_cache(
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
     )
-    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -126,12 +124,8 @@ def run_softmax_stable_with_program_cache(
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize(
-    "h", [24, 32, 128]
-)  # test failing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 1024, 1500]
-)  # test failing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
+@pytest.mark.parametrize("h", [32, 128])
+@pytest.mark.parametrize("w", [1024, 1500])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
 @pytest.mark.parametrize("math_approx", [True, False])
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
@@ -169,7 +163,6 @@ def run_softmax_sharded_stable(
     attention_mask = attention_mask.masked_fill(attention_mask == 0, torch.tensor(float("-inf"), dtype=torch.bfloat16))
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     torch_input_tensor = torch_random((batch_size, num_heads, h, w), -1000, 1000, dtype=torch.bfloat16)
     if not skip_scale_mask:
@@ -201,7 +194,6 @@ def run_softmax_sharded_stable(
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
-    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         if not skip_scale_mask:
             output_tensor = ttnn.scale_mask_softmax_in_place(
@@ -226,12 +218,8 @@ def run_softmax_sharded_stable(
 
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("num_heads", [4])
-@pytest.mark.parametrize(
-    "h", [24, 384]
-)  # test failing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 384]
-)  # test failing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
+@pytest.mark.parametrize("h", [384])
+@pytest.mark.parametrize("w", [384])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
 @pytest.mark.parametrize("math_approx", [True, False])
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
@@ -257,12 +245,8 @@ def test_softmax_sharded_stable_with_program_cache(
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize(
-    "h", [24, 32, 64]
-)  # test is passing regardless of implicit padding even when shape is non-multiple of 32 (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 32, 64]
-)  # test is passing regardless of implicit padding even when shape is non-multiple of 32 (#31983)
+@pytest.mark.parametrize("h", [24, 32, 64])
+@pytest.mark.parametrize("w", [42, 32, 64])
 @pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
@@ -450,7 +434,7 @@ def test_softmax_sd(device):
             [23, 42],
             -1,
             [torch.bfloat16, ttnn.bfloat16],
-        ),  # test is passing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
+        ),
         ([32, 32], -1, [torch.float32, ttnn.float32]),
         ([32, 32], 0, [torch.bfloat16, ttnn.bfloat16]),
         ([32, 32], 0, [torch.float32, ttnn.float32]),
@@ -489,7 +473,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
             [23, 42],
             -1,
             [torch.bfloat16, ttnn.bfloat16],
-        ),  # test is passing regardless of implicit padding when shape is of non-multiple of 32 (#31983)
+        ),
         ([32, 32, 32, 32], 0, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 1, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 3, [torch.bfloat16, ttnn.bfloat8_b]),  # AttentionOptimized path

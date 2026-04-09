@@ -59,12 +59,8 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
-@pytest.mark.parametrize(
-    "h", [32, 42]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [24, 64]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [32, 42])
+@pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm(device, h, w, use_welford, dtype):
@@ -83,12 +79,8 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [32, 42]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [24, 64]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [32, 42])
+@pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -147,12 +139,8 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [24, 32]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 64, 127, 519]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 32])
+@pytest.mark.parametrize("w", [42, 64, 127, 519])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -189,12 +177,8 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [2, 42]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [24, 512]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [2, 42])
+@pytest.mark.parametrize("w", [24, 512])
 def test_layer_norm_with_tile_layout(device, h, w):
     torch.manual_seed(0)
     dtype = torch.bfloat16
@@ -234,12 +218,8 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [24, 1024, 2080]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 3200, 4128]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 1024, 2080])
+@pytest.mark.parametrize("w", [42, 3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm(device, h, w, use_welford, dtype):
@@ -259,12 +239,8 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [24, 2048]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 4096]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -294,12 +270,8 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [24, 2048]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 4096]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -325,12 +297,8 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h", [24, 2048]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "w", [42, 4096]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -354,9 +322,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "h, w", [(24, 42), (2048, 2048)]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 @pytest.mark.parametrize("legacy_rsqrt", [True, False])
 def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_reduction, legacy_rsqrt):
@@ -472,12 +438,8 @@ def test_l1_interleaved(device, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize(
-    "dim_a", [24, 2048, 3072, 4096]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
-@pytest.mark.parametrize(
-    "dim_b", [32, 2048, 3072, 4096]
-)  # test is passing even on non-multiple of 32 regardless of implicit padding (#31983)
+@pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])
+@pytest.mark.parametrize("dim_b", [32, 2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
     torch.manual_seed(0)

@@ -7,13 +7,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-TEST_PADDING_VALUE = -42
-
 
 def test_group_norm_large_ex_external_cb(device):
     torch.manual_seed(0)
-    # shape = (1, 1, 1280 * 720, 256)  # [N, 1, H*W, C]
-    # shape = (1, 1, 1280 * 720, 257) # test is failing on this shape regardless of implicit padding (#31983)
+    shape = (1, 1, 1280 * 720, 256)  # [N, 1, H*W, C]
     num_groups = 32
     eps = 1e-5
 
@@ -31,7 +28,6 @@ def test_group_norm_large_ex_external_cb(device):
     ).permute(0, 2, 3, 1)
 
     input_tensor_tt = ttnn.from_torch(input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-    # ttnn.fill_implicit_tile_padding(input_tensor_tt, TEST_PADDING_VALUE)
     w_tt = ttnn.from_torch(weight_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     b_tt = ttnn.from_torch(bias_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 

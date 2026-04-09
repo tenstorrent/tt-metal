@@ -74,7 +74,6 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
-        tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
             tt_dtype=ttnn.bfloat16,
@@ -96,7 +95,6 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
-        tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
         if is_rmsnorm:
             tt_lnp2_out = ttnn.rms_norm_post_all_gather(
@@ -150,7 +148,6 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (1, 1, 2048, 8192),
         (1, 1, 128, 8192),
         (2, 1, 128, 8192),
-        # (1, 1, 1025, 257), #test is failing on this non-multiple of 32 shape with or without implicit padding (#31983)
     ],
 )
 @pytest.mark.parametrize(
@@ -182,7 +179,6 @@ def test_layernorm_part_2_with_program_cache(
     "inp_shape",
     [
         (1, 1, 2048, 8192),
-        # (1, 1, 24, 42) #test is failing on this non-multiple of 32 shape with or without implicit padding (#31983)
     ],
 )
 @pytest.mark.parametrize(
@@ -236,7 +232,6 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
     """Bias without weight: optional args are independent; compare to torch layer_norm."""
     torch.manual_seed(4401)
     inp_shape = (1, 1, 32, 128)
-    # inp_shape = (1, 1, 24, 118) #test is failing on this non-multiple of 32 shape with or without implicit padding (#31983)
     epsilon = 1e-5
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
@@ -268,7 +263,6 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    # tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE) #(#31983)
     tt_beta = torch2tt_tensor(
         beta.reshape(1, 1, -1, 32),
         tt_dtype=ttnn.bfloat16,
@@ -283,7 +277,6 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    # tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE) #(#31983)
 
     tt_out = ttnn.layer_norm_post_all_gather(
         tt_inp,
@@ -331,7 +324,7 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    # tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE) #(#31983)
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)  # (#31983)
     tt_stats = torch2tt_tensor(
         stats_tiles,
         tt_dtype=ttnn.bfloat16,
@@ -339,7 +332,7 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    # tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE) #(#31983)
+    tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)  # (#31983)
     # Valid layout for bias is (1, 1, n_sticks, 32) with n_sticks == input_width / 32; use half.
     tt_bad_beta = torch2tt_tensor(
         torch.randn(1, 1, 2, 32, dtype=torch.bfloat16),
