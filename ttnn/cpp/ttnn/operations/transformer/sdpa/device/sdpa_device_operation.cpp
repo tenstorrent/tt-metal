@@ -396,7 +396,8 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         tensors.attn_mask,
         page_table_for_hash,
         tensors.attention_sink,
-        attrs.use_mla);
+        attrs.use_mla,
+        attrs.softcap);
     return hash;
 }
 
@@ -498,7 +499,8 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<float> softcap) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -512,6 +514,7 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
+            .softcap = softcap,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

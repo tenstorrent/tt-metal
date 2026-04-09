@@ -22,6 +22,7 @@ struct SDPAParams {
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
+    std::optional<float> softcap;  // logit soft-capping value (e.g. 50.0 for Gemma 4)
 };
 
 struct SDPAInputs {

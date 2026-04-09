@@ -480,7 +480,22 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         float f;
         uint32_t u;
     } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    // When softcap is active, sub_exp_block uses cap as its scale:
+    //   exp((tanh(QK * scale/cap) - max) * cap) = softmax(cap * tanh(QK * scale/cap))
+    // The scale/cap multiply is applied separately via scalar CB before tanh.
+    const bool use_softcap = operation_attributes.softcap.has_value() && operation_attributes.softcap.value() != 0.0f;
+    const float scale_val = scale.value_or(1.0f);
+    const float softcap_val = operation_attributes.softcap.value_or(0.0f);
+
+    // When softcap is active, sub_exp_block uses cap as its scale:
+    //   exp((tanh(QK * scale/cap) - max) * cap) = softmax(cap * tanh(QK * scale/cap))
+    // The scale/cap multiply is applied separately via scalar CB before tanh.
+    scale_union.f = use_softcap ? softcap_val : scale_val;
+
+    // inv_softcap = scale / cap, packed as bfloat16 for scalar CB multiply before tanh
+    class bfloat16 bfloat_inv_softcap_scalar(use_softcap ? (scale_val / softcap_val) : 0.0f);
+    uint32_t packed_inv_softcap_scalar =
+        pack_two_bfloat16_into_uint32({bfloat_inv_softcap_scalar, bfloat_inv_softcap_scalar});
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
@@ -628,6 +643,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    if (use_softcap) {
+        defines["USE_SOFTCAP"] = "1";
+        defines["PACKED_INV_SOFTCAP_SCALAR"] = std::to_string(packed_inv_softcap_scalar);
+        const uint32_t softcap_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
+        defines["SOFTCAP_GRANULARITY"] = std::to_string(softcap_granularity);
+    }
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
         (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
@@ -746,6 +767,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_4, im_df}})
                                           .set_page_size(tt::CBIndex::c_4, im_tile_size);
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
+
+    // Softcap inverse scalar buffer (c_10) for scale/cap multiply before tanh
+    if (use_softcap) {
+        auto c_in10_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_10, scalar_df}})
+                                 .set_page_size(tt::CBIndex::c_10, scalar_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in10_config);
     }
 
     // cb_qk_im

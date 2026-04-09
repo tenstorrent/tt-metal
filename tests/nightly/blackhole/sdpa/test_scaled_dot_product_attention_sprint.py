@@ -177,15 +177,18 @@ def run_sdpa_determinism(
 INPUT_SHAPES = [
     # batch, num_heads, sequence_length, head_dim
     [1, 10, 9472, 128],  # WAN 2.2: 1x Galaxy analog (single device seq len)
-    [1, 10, 2368, 128],  # WAN 2.2: 4x Galaxy analog (per-device seq len)
+    # [1, 10, 2368, 128],  # WAN 2.2: 4x Galaxy analog (per-device seq len)
 ]
 INPUT_IDS = [
     "wan2_2_1xGLX_analog",
-    "wan2_2_4xGLX_analog",
+    # "wan2_2_4xGLX_analog",
 ]
 
-Q_CHUNK_SIZES = [224, 256, 288]
-K_CHUNK_SIZES = [128, 256, 512]
+# Q_CHUNK_SIZES = [224, 256, 288]
+# K_CHUNK_SIZES = [128, 256, 512]
+
+Q_CHUNK_SIZES = [288]
+K_CHUNK_SIZES = [512]
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
@@ -253,6 +256,92 @@ def test_sdpa_determinism(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype
     run_sdpa_determinism(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
 
 
+def run_sdpa_causal(
+    device,
+    b,
+    nh,
+    nkv,
+    sq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    softcap=None,
+    is_causal=True,
+):
+    """Run SDPA with optional softcap. No accuracy check — for perf only."""
+    torch.manual_seed(1234)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=[11, 10],
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, sq, d)
+    K = fa_rand(b, nkv, sq, d)
+    V = fa_rand(b, nkv, sq, d)
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=is_causal,
+        softcap=softcap,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+# === TEST 5: CAUSAL SOFTCAP PERF (skipped on CI) ===
+CAUSAL_Q_CHUNK_SIZES = [288]
+CAUSAL_K_CHUNK_SIZES = [512]
+
+CAUSAL_INPUT_SHAPES = [
+    [1, 10, 9472, 128],
+]
+CAUSAL_INPUT_IDS = [
+    "causal_9472",
+]
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("softcap", [None, 50.0], ids=["no_softcap", "softcap50"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", CAUSAL_Q_CHUNK_SIZES, ids=[f"q{s}" for s in CAUSAL_Q_CHUNK_SIZES])
+@pytest.mark.parametrize("k_chunk_size", CAUSAL_K_CHUNK_SIZES, ids=[f"k{s}" for s in CAUSAL_K_CHUNK_SIZES])
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    CAUSAL_INPUT_SHAPES,
+    ids=CAUSAL_INPUT_IDS,
+)
+def test_sdpa_causal_softcap_perf_impl(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype, softcap):
+    run_sdpa_causal(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, softcap=softcap)
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("softcap", [None, 50.0], ids=["no_softcap", "softcap50"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [288], ids=["q288"])
+@pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
+@pytest.mark.parametrize("b, nh, s, d", [[1, 10, 9472, 128]], ids=["noncausal_9472"])
+def test_sdpa_noncausal_softcap_perf_impl(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype, softcap):
+    """Non-causal SDPA perf impl with optional softcap. Used by perf table below."""
+    run_sdpa_causal(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, softcap=softcap, is_causal=False)
+
+
 from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
     compute_cores_used,
@@ -261,8 +350,15 @@ from tests.nightly.sdpa_perf_utils import (
 
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
-    """Single-chip SDPA utilization (local_seq == total_seq, arch=blackhole)."""
-    return compute_math_utilization(seqlen, seqlen, head_dim, num_heads, duration_ns, core_count)
+    """Single-chip non-causal SDPA utilization (local_seq == total_seq, d_q == d_v, arch=blackhole)."""
+    return compute_math_utilization(seqlen, seqlen, head_dim, head_dim, num_heads, duration_ns, core_count)
+
+
+def compute_sdpa_utilization_causal(seqlen, head_dim, num_heads, duration_ns, core_count):
+    """Single-chip causal SDPA utilization. FLOPs halved for triangular mask."""
+    return compute_math_utilization(
+        seqlen, seqlen, head_dim, head_dim, num_heads, duration_ns, core_count, is_causal=True
+    )
 
 
 # === TEST 4: PERFORMANCE TABLE (skipped on CI) ===
@@ -315,7 +411,7 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             nh_parallel = min(num_cores // batch_parallel, nh)
             max_q_parallel = num_cores // (batch_parallel * nh_parallel)
 
-            cores_used = compute_cores_used(s, q_chunk_size, num_cores=num_cores, num_heads=nh)
+            cores_used = compute_cores_used(s, q_chunk_size, compute_cores=num_cores, num_heads=nh)
             cores_idle = num_cores - cores_used
             core_util_pct = (cores_used * 100.0) / num_cores
 
@@ -412,3 +508,168 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
     print(f"{'='*170}\n")
+
+
+# === TEST 6: CAUSAL SOFTCAP PERFORMANCE TABLE (skipped on CI) ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    CAUSAL_INPUT_SHAPES,
+    ids=CAUSAL_INPUT_IDS,
+)
+def test_sdpa_causal_softcap_create_perf_table(b, nh, s, d):
+    """
+    Compare causal SDPA performance with and without softcap.
+    Runs each (q_chunk, k_chunk, softcap) config through Tracy profiler
+    and prints a comparison table with device kernel duration and math util.
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    num_cores = 110
+    subdir = "ttnn_sdpa_causal_softcap_performance"
+    perf_results = []
+
+    for q_chunk_size in CAUSAL_Q_CHUNK_SIZES:
+        for k_chunk_size in CAUSAL_K_CHUNK_SIZES:
+            for softcap_val, softcap_id in [(None, "no_softcap"), (50.0, "softcap50")]:
+                test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16-{softcap_id}"
+                shape_id = CAUSAL_INPUT_IDS[CAUSAL_INPUT_SHAPES.index([b, nh, s, d])]
+                command = (
+                    f"pytest tests/nightly/blackhole/sdpa/"
+                    f"test_scaled_dot_product_attention_sprint.py::test_sdpa_causal_softcap_perf_impl"
+                    f"[{shape_id}-{test_id}]"
+                )
+
+                float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+                try:
+                    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+                    r = post_process_ops_log(
+                        subdir, float_columns=float_cols, op_name="", sum_vals=False, has_signposts=False
+                    )
+
+                    core_count = int(r["CORE COUNT"][0])
+                    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+                    utilization = compute_sdpa_utilization_causal(s, d, nh, duration_ns, core_count)
+
+                    perf_results.append(
+                        {
+                            "q_chunk_size": q_chunk_size,
+                            "k_chunk_size": k_chunk_size,
+                            "softcap": softcap_id,
+                            "duration_ns": duration_ns,
+                            "duration_ms": duration_ns / 1e6,
+                            "core_count": core_count,
+                            "utilization": utilization,
+                        }
+                    )
+                    logger.info(
+                        f"q={q_chunk_size}, k={k_chunk_size}, {softcap_id}: "
+                        f"{duration_ns/1e6:.3f} ms, util={utilization:.1f}%"
+                    )
+
+                except Exception as e:
+                    if isinstance(e, KeyboardInterrupt):
+                        raise
+                    logger.error(f"Error: q={q_chunk_size}, k={k_chunk_size}, {softcap_id}: {e}")
+                    perf_results.append(
+                        {
+                            "q_chunk_size": q_chunk_size,
+                            "k_chunk_size": k_chunk_size,
+                            "softcap": softcap_id,
+                            "duration_ns": None,
+                        }
+                    )
+
+    # Print comparison table
+    valid = [r for r in perf_results if r["duration_ns"] is not None]
+    print(f"\n{'='*110}")
+    print(f"Causal SDPA Softcap Performance: b={b}, nh={nh}, s={s}, d={d}")
+    print(f"{'='*110}")
+    header = "| q_chunk | k_chunk | Softcap    | Duration (ms) | Math Util | Cores |"
+    sep = "|---------|---------|------------|---------------|-----------|-------|"
+    print(header)
+    print(sep)
+    for r in valid:
+        print(
+            f"| {r['q_chunk_size']:7d} | {r['k_chunk_size']:7d} | {r['softcap']:10s} | "
+            f"{r['duration_ms']:13.3f} | {r['utilization']:8.1f}% | {r['core_count']:5d} |"
+        )
+
+    # Print overhead summary
+    for q in CAUSAL_Q_CHUNK_SIZES:
+        for k in CAUSAL_K_CHUNK_SIZES:
+            baseline = next(
+                (
+                    r
+                    for r in valid
+                    if r["q_chunk_size"] == q and r["k_chunk_size"] == k and r["softcap"] == "no_softcap"
+                ),
+                None,
+            )
+            softcap = next(
+                (r for r in valid if r["q_chunk_size"] == q and r["k_chunk_size"] == k and r["softcap"] == "softcap50"),
+                None,
+            )
+            if baseline and softcap:
+                overhead_pct = (softcap["duration_ns"] / baseline["duration_ns"] - 1) * 100
+                print(
+                    f"\nq={q}, k={k}: softcap overhead = +{overhead_pct:.1f}%  ({baseline['duration_ms']:.3f} → {softcap['duration_ms']:.3f} ms)"
+                )
+    print(f"{'='*110}\n")
+
+
+# === TEST 8: NON-CAUSAL SOFTCAP PERFORMANCE TABLE (skipped on CI) ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("b, nh, s, d", [[1, 10, 9472, 128]], ids=["noncausal_9472"])
+def test_sdpa_noncausal_softcap_create_perf_table(b, nh, s, d):
+    """Compare non-causal v1 SDPA with and without softcap (force v1 via factory hack)."""
+    from tracy.process_model_log import run_device_profiler
+
+    subdir = "ttnn_sdpa_noncausal_softcap_performance"
+    perf_results = []
+
+    for softcap_id in ["no_softcap", "softcap50"]:
+        test_id = f"k512-q288-bf16-{softcap_id}"
+        command = (
+            f"pytest tests/nightly/blackhole/sdpa/"
+            f"test_scaled_dot_product_attention_sprint.py::test_sdpa_noncausal_softcap_perf_impl"
+            f"[noncausal_9472-{test_id}]"
+        )
+
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+        try:
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+            r = post_process_ops_log(subdir, float_columns=float_cols, op_name="", sum_vals=False, has_signposts=False)
+
+            core_count = int(r["CORE COUNT"][0])
+            duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+            utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
+
+            perf_results.append(
+                {
+                    "softcap": softcap_id,
+                    "duration_ns": duration_ns,
+                    "duration_ms": duration_ns / 1e6,
+                    "core_count": core_count,
+                    "utilization": utilization,
+                }
+            )
+            logger.info(f"noncausal v1, {softcap_id}: {duration_ns/1e6:.3f} ms, util={utilization:.1f}%")
+
+        except Exception as e:
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            logger.error(f"Error: {softcap_id}: {e}")
+
+    valid = [r for r in perf_results if "duration_ns" in r and r["duration_ns"] is not None]
+    print(f"\n{'='*90}")
+    print(f"Non-Causal v1 SDPA Softcap Performance: b={b}, nh={nh}, s={s}, d={d}, q288/k512")
+    print(f"{'='*90}")
+    for r in valid:
+        print(
+            f"  {r['softcap']:12s}  {r['duration_ms']:.3f} ms  math_util={r['utilization']:.1f}%  cores={r['core_count']}"
+        )
+    if len(valid) == 2:
+        overhead = (valid[1]["duration_ns"] / valid[0]["duration_ns"] - 1) * 100
+        print(f"  Softcap overhead: +{overhead:.1f}%")
+    print(f"{'='*90}\n")

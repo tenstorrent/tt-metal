@@ -628,6 +628,80 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
+def reference_sdpa_softcap(Q, K, V, softcap, is_causal=True):
+    """Manual SDPA with softcap for reference: softcap * tanh(scores / softcap)."""
+    scale = 1.0 / math.sqrt(Q.shape[-1])
+    scores = torch.matmul(Q, K.transpose(-2, -1)) * scale
+    scores = softcap * torch.tanh(scores / softcap)
+    if is_causal:
+        L, S = scores.shape[-2], scores.shape[-1]
+        mask = torch.triu(torch.ones(L, S, dtype=torch.bool, device=scores.device), diagonal=1)
+        scores = scores.masked_fill(mask, float("-inf"))
+    attn_weights = torch.softmax(scores, dim=-1)
+    return torch.matmul(attn_weights, V)
+
+
+def run_test_sdpa_softcap(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, softcap):
+    torch.manual_seed(1234)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_out = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        softcap=softcap,
+    )
+    tt_out = ttnn.to_torch(tt_out)[:, :, :s, :]
+
+    # GQA expansion for reference
+    K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    gt = reference_sdpa_softcap(Q, K_repeated, V_repeated, softcap, is_causal=True)
+
+    out_pass, out_pcc = comp_pcc(gt, tt_out, 0.994)
+    logger.debug(f"softcap={softcap} python vs pytorch: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_out) ** 2).mean()).item()
+    logger.debug(f"softcap={softcap} rmse: {rmse}")
+    assert out_pass, f"PCC {out_pcc} below threshold 0.994"
+
+
+@pytest.mark.parametrize("softcap", [50.0], ids=["cap50"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
+@pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 8, 1, 2048, 128],),
+)
+def test_sdpa_softcap(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, softcap):
+    """Test SDPA with logit soft-capping (Gemma 4 style)."""
+    run_test_sdpa_softcap(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, softcap)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])

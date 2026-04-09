@@ -292,6 +292,43 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 }
 
 /**
+ * In-place tanh on all tiles in a CB, processed in batches of SOFTCAP_GRANULARITY.
+ * Batch size adapts to DST register file size (8 for bf16, 4 for fp32 accum)
+ * via the SOFTCAP_GRANULARITY define set by the factory.
+ */
+void tanh_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+#ifdef SOFTCAP_GRANULARITY
+    constexpr uint32_t max_batch = SOFTCAP_GRANULARITY;
+#else
+    constexpr uint32_t max_batch = 1;
+#endif
+    const uint32_t batch = (num_tiles < max_batch) ? num_tiles : max_batch;
+    const uint32_t num_batches = (num_tiles >= max_batch) ? (num_tiles / max_batch) : 1;
+
+    cb_wait_front(in_cb, num_tiles);
+    copy_tile_to_dst_init_short(in_cb);
+    tanh_tile_init<true>();
+
+    for (uint32_t b = 0; b < num_batches; ++b) {
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < batch; ++j) {
+            copy_tile(in_cb, j, j);
+            tanh_tile<true>(j);
+        }
+        tile_regs_commit();
+
+        cb_pop_front(in_cb, batch);
+        cb_reserve_back(in_cb, batch);
+        tile_regs_wait();
+        for (uint32_t j = 0; j < batch; ++j) {
+            pack_tile(j, in_cb);
+        }
+        cb_push_back(in_cb, batch);
+        tile_regs_release();
+    }
+}
+
+/**
  * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
  */
 template <
@@ -1592,7 +1629,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool use_softcap = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1763,6 +1801,29 @@ void sdpa_inner_loop(
              * where we fuse the scaling into exp both in exp(x - max) and exp(prev_max - cur_max).
              * This gives us scaling for free on the performance-critical exp(x - max) computation.
              */
+
+            /**
+             * Logits softcap: QK = tanh(QK * scale / cap) * cap
+             *
+             * Program factory sets:
+             *   scale_fp32 = cap (fused into sub_exp_block)
+             *   cb_inv_softcap_scalar (c_10) = packed bfloat16(scale / cap)
+             *
+             * Step 1: QK *= scale/cap  (via scalar CB multiply)
+             * Step 2: QK = tanh(QK)    (in-place)
+             * Then sub_exp with scale=cap: exp((tanh(QK*s/c) - max) * cap)
+             * = softmax(cap * tanh(QK * scale / cap))  ✓
+             */
+            if constexpr (use_softcap) {
+                constexpr uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
+                constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_10;
+
+                // QK *= scale / cap
+                mul_block_bcast_scalar_inplace<cb_inv_softcap_scalar, qk_tiles>(cb_qk_im);
+
+                // QK = tanh(QK) in-place (batched)
+                tanh_block_inplace(cb_qk_im, qk_tiles);
+            }
 
             bool apply_mask = false;
             if (sdpa_type == RING && !is_causal) {
@@ -2061,7 +2122,8 @@ template <
     bool use_padded_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool use_softcap = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2117,7 +2179,8 @@ void sdpa_standard(
         false,  // use_joint_mask (not used)
         is_chunked,
         scale_fp32,
-        sliding_window_size>(
+        sliding_window_size,
+        use_softcap>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
