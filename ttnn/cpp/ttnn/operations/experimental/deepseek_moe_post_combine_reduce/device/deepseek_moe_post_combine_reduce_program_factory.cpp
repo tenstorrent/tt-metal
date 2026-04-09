@@ -8,10 +8,18 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::experimental::prim {
 
-DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostCombineReduceProgramFactory::create(
+namespace {
+
+struct CreatedProgram {
+    tt::tt_metal::Program program;
+    DeepseekMoEPostCombineReduceProgramFactory::shared_variables_t shared_variables;
+};
+
+CreatedProgram create_program(
     const DeepseekMoEPostCombineReduceParams& operation_attributes,
     const DeepseekMoEPostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
@@ -178,7 +186,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         token_start += REQUIRED_TOKENS_PER_CORE;
     }
 
-    return cached_program_t{
+    return CreatedProgram{
         std::move(program),
         {
             .reader_kernel_id = reader_kernel_id,
@@ -189,27 +197,47 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         }};
 }
 
+}  // namespace
+
+DeepseekMoEPostCombineReduceProgramFactory::cached_mesh_workload_t
+DeepseekMoEPostCombineReduceProgramFactory::create_mesh_workload(
+    const DeepseekMoEPostCombineReduceParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const DeepseekMoEPostCombineReduceInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto result = create_program(operation_attributes, tensor_args, tensor_return_value);
+        auto coord_range = ttnn::MeshCoordinateRange(coord);
+        mesh_workload.add_program(coord_range, std::move(result.program));
+        shared_variables.emplace(coord_range, std::move(result.shared_variables));
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
 void DeepseekMoEPostCombineReduceProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    cached_mesh_workload_t& cached_workload,
     [[maybe_unused]] const DeepseekMoEPostCombineReduceParams& operation_attributes,
     const DeepseekMoEPostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
-
     auto* combine_buffer = tensor_args.combine_output.buffer();
     auto* weight_buffer = tensor_args.weights.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    for (const auto& core : cores) {
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_runtime_args[0] = combine_buffer->address();
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& svars = cached_workload.shared_variables.at(range);
 
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_runtime_args[0] = weight_buffer->address();
-        writer_runtime_args[1] = output_buffer->address();
+        for (const auto& core : svars.cores) {
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, svars.reader_kernel_id, core);
+            reader_runtime_args[0] = combine_buffer->address();
+
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, svars.writer_kernel_id, core);
+            writer_runtime_args[0] = weight_buffer->address();
+            writer_runtime_args[1] = output_buffer->address();
+        }
     }
 }
 
