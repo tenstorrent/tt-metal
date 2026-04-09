@@ -65,6 +65,15 @@ def _golden_function_frac(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 
+def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=1.0 / 3.0, training=False, **kwargs):
+    import torch
+
+    return torch.nn.functional.rrelu(input_tensor_a, lower=lower, upper=upper, training=training)
+
+
+ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)
+
+
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:

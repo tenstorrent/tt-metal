@@ -11,7 +11,7 @@
 | Phase | Description | Status | Duration | Issues |
 |-------|-------------|--------|----------|--------|
 | 1 | Reference Discovery | ok | ~403s | None |
-| 2 | Reference Analysis | pending | - | - |
+| 2 | Reference Analysis | ok | ~463s | None - all 5/5 succeeded |
 | 3 | Implementation | pending | - | - |
 | 4 | Testing & Debugging | pending | - | - |
 | 5 | Documentation | pending | - | - |

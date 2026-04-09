@@ -1977,6 +1977,56 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies Randomized Leaky ReLU (RReLU) element-wise.
+
+            .. math::
+                \text{{rrelu}}(x) = \begin{{cases}} x & \text{{if }} x \geq 0 \\ ax & \text{{if }} x < 0 \end{{cases}}
+
+            where *a* is sampled uniformly from :math:`\mathcal{{U}}(\text{{lower}}, \text{{upper}})` during
+            training, and :math:`a = (\text{{lower}} + \text{{upper}}) / 2` during evaluation.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of the uniform distribution. Defaults to `0.125`.
+                upper (float, optional): upper bound of the uniform distribution. Defaults to `0.3333333432674408`.
+                training (bool, optional): if True, use random slope. Defaults to `False`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            ttnn::overload_t(
+                &ttnn::rrelu,
+                nb::arg("input_tensor"),
+                nb::kw_only(),
+                nb::arg("lower") = 0.125f,
+                nb::arg("upper") = 0.3333333432674408f,
+                nb::arg("training") = false,
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("output_tensor") = nb::none()));
+    }
 }
 
 }  // namespace ttnn::operations::unary
