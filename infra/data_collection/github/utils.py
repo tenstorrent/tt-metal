@@ -12,9 +12,8 @@ import yaml
 from loguru import logger
 
 from infra.data_collection.github.workflows import is_job_hanging_from_job_log
-from infra.data_collection.models import InfraErrorV1, TestErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
-from infra.data_collection.models import CodeQualityErrorV1
 
 
 def get_datetime_from_github_datetime(github_datetime):
@@ -139,14 +138,9 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
     # If failure occurred in clang-tidy step, classify as code quality failure
     for step in github_job.get("steps", []):
         step_name = step.get("name", "")
-        step_status = step.get("status", "")
         step_conclusion = step.get("conclusion", "")
 
-        is_clang_tidy_failure = (
-            "analyze code with clang-tidy" in step_name.lower()
-            and step_status in ("completed", "cancelled")
-            and step_conclusion == "failure"
-        )
+        is_clang_tidy_failure = "analyze code with clang-tidy" in step_name.lower() and step_conclusion == "failure"
 
         if is_clang_tidy_failure:
             return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
