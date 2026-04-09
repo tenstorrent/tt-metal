@@ -14,9 +14,9 @@
 | 1 | Reference Discovery | ok | 401s | none |
 | 2 | Reference Analysis | ok | 1097s | none |
 | 3 | Implementation | ok | 1143s | none |
-| 4 | Testing & Debugging | pending | - | - |
-| 5 | Documentation | pending | - | - |
-| 6 | Self-Reflection | pending | - | - |
+| 4 | Testing & Debugging | ok | 1132s | stale includes in eltwise_sfpu.cpp fixed by tester |
+| 5 | Documentation | ok | ~60s | none |
+| 6 | Self-Reflection | ok | 518s | none |
 
 ## Issues
 (will be populated as issues arise)
