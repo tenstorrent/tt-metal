@@ -18,10 +18,10 @@ MODEL_ID = "suno/bark-small"
 
 SEMANTIC_VOCAB_SIZE = 10_000
 SEMANTIC_PAD_TOKEN = 10_000
-TEXT_ENCODING_OFFSET = 10_048
-SEMANTIC_INFER_TOKEN = 129_599
-COARSE_SEMANTIC_PAD_TOKEN = 12_048
-COARSE_INFER_TOKEN = 12_050
+TEXT_ENCODING_OFFSET = 10_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+SEMANTIC_INFER_TOKEN = 129_599  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+COARSE_SEMANTIC_PAD_TOKEN = 12_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+COARSE_INFER_TOKEN = 12_050  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
 CODEBOOK_SIZE = 1024
 N_COARSE_CODEBOOKS = 2
 
