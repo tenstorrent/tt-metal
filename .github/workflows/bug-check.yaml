@@ -15,11 +15,23 @@ jobs:
         github.event.comment.author_association == 'OWNER'
       )
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     outputs:
       pr-number: ${{ steps.parse.outputs.pr-number }}
       subcommand: ${{ steps.parse.outputs.subcommand }}
       rule-id: ${{ steps.parse.outputs.rule-id }}
     steps:
+      - name: Acknowledge command
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
+            --method POST \
+            -f content='eyes'
+
       - name: Parse subcommand from comment
         id: parse
         env:
@@ -60,6 +72,25 @@ jobs:
       security-events: write
 
     steps:
+      - name: Post running notice
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+          SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
+          RULE_ID: ${{ needs.parse-comment.outputs.rule-id }}
+        run: |
+          if [ "$SUBCOMMAND" = "list-rules" ]; then
+            NOTICE="**Bug Checker** — listing available rules…"
+          elif [ "$SUBCOMMAND" = "dry-run" ]; then
+            NOTICE="**Bug Checker** — running dry-run (no LLM calls)…"
+          elif [ "$SUBCOMMAND" = "check-rule" ]; then
+            NOTICE="**Bug Checker** — running rule \`$RULE_ID\`…"
+          else
+            NOTICE="**Bug Checker** — scanning PR for known bug patterns…"
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$NOTICE"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
