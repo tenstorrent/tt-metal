@@ -22,6 +22,8 @@ Owner:
     tt-vjovanovic
 """
 
+import os
+
 from triage import ScriptConfig, log_check_risc, run_script
 from callstack_provider import run as get_callstack_provider, CallstackProvider, CallstacksData
 from run_checks import run as get_run_checks
@@ -31,6 +33,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "callstack_provider"],
+    disabled=os.environ.get("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS") == "1",
 )
 
 
