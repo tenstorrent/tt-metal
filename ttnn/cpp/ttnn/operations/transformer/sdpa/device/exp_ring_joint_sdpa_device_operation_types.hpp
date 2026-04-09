@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/global_semaphore.hpp>
