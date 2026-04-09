@@ -695,4 +695,157 @@ TEST_F(
                              << min_pcc << ")";
 }
 
+// =========================================================================
+// Commit 3: non-tile-aligned sub-matrix, transpose_k sharded cells, bf8 variant
+//
+// These cells exercise:
+//   - The non-tile-aligned sequence cases that trigger the refined FATAL added by
+//     the previous commit on this branch (cells 15-17). The op should reject the
+//     call regardless of layout, because the address-arithmetic in the sharded
+//     reader doesn't handle non-tile-aligned source offsets.
+//   - The seq=197 ViT case from #41526 with the same num_w_cores=6 / num_h_cores=8
+//     grid the existing Python regression test uses. With the refined FATAL it is
+//     REJECTED at the validator (the original repro behavior — silent corruption —
+//     can no longer be observed without temporarily disabling the FATAL).
+//   - transpose_key=true on the sharded path (cell 18) — the BERT-style attention
+//     case for sharded inputs.
+//   - bf8 dtype variant of the SD U-Net case (cell 19) — confirms the layout
+//     finding is dtype-independent and matches the precise dtype the production
+//     model uses.
+// =========================================================================
+
+// Cell 15: SD U-Net shape with non-tile-aligned seq, GROUPED. The refined FATAL
+// (sequence_size_padded != sequence_size) should reject this call regardless of
+// layout. seq=49 -> padded 64, so sequence_size_padded=64 != sequence_size=49.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutHeightSharded__seq49_unaligned__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            (void)run_block_sharded_to_height_sharded_cell(
+                device_,
+                /*batch=*/2,
+                /*seq=*/49,
+                /*n_q=*/8,
+                /*n_kv=*/8,
+                /*head_dim=*/64,
+                /*transpose_k=*/false,
+                DataType::BFLOAT16,
+                QkvLayout::GROUPED,
+                /*num_w_cores=*/8,
+                /*num_h_cores=*/2);
+        },
+        std::exception);
+}
+
+// Cell 16: same as Cell 15 but CONCATENATED. The refined FATAL fires before the
+// kernel runs, so the layout doesn't matter — REJECTED in both cases.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedConcatenated__OutHeightSharded__seq49_unaligned__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            (void)run_block_sharded_to_height_sharded_cell(
+                device_,
+                /*batch=*/2,
+                /*seq=*/49,
+                /*n_q=*/8,
+                /*n_kv=*/8,
+                /*head_dim=*/64,
+                /*transpose_k=*/false,
+                DataType::BFLOAT16,
+                QkvLayout::CONCATENATED,
+                /*num_w_cores=*/8,
+                /*num_h_cores=*/2);
+        },
+        std::exception);
+}
+
+// Cell 17: the canonical bug repro from #41526 — ViT seq=197, num_heads=12,
+// head_size=64, BLOCK_SHARDED -> HEIGHT_SHARDED, with the same grid the Python
+// regression test in tests/ttnn/.../test_transformer.py uses
+// (num_w_cores=num_heads/2=6, num_h_cores=batch=8). With the refined FATAL on this
+// branch the op rejects the call. Without the FATAL the kernel would silently
+// produce PCC ~0.08 (the original bug). Skipped at runtime if the 6x8 grid is not
+// supported on this hardware.
+TEST_F(SplitQkvMatrixTest, MHA_12H_64D__InBlockSharded__OutHeightSharded__seq197_unaligned__bf16__REJECTED) {
+    bool threw = false;
+    try {
+        (void)run_block_sharded_to_height_sharded_cell(
+            device_,
+            /*batch=*/8,
+            /*seq=*/197,
+            /*n_q=*/12,
+            /*n_kv=*/12,
+            /*head_dim=*/64,
+            /*transpose_k=*/false,
+            DataType::BFLOAT16,
+            // Layout doesn't matter — refined FATAL fires before the kernel runs.
+            QkvLayout::CONCATENATED,
+            /*num_w_cores=*/6,
+            /*num_h_cores=*/8);
+    } catch (const std::exception& e) {
+        threw = true;
+        log_debug(tt::LogTest, "MHA_12H_64D seq=197 REJECTED as expected: {}", e.what());
+    }
+    if (!threw) {
+        FAIL() << "Expected refined FATAL to reject non-tile-aligned sharded input (seq=197 padded to 224), "
+                  "but the call returned without throwing. Either the FATAL was removed or the validation "
+                  "was bypassed.";
+    }
+}
+
+// Cell 18: transpose_k=true on the sharded path (BERT-style attention).
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutHeightSharded__seq64_aligned__bf16__TransposeK) {
+    auto pcc = run_block_sharded_to_height_sharded_cell(
+        device_,
+        /*batch=*/2,
+        /*seq=*/64,
+        /*n_q=*/8,
+        /*n_kv=*/8,
+        /*head_dim=*/64,
+        /*transpose_k=*/true,
+        DataType::BFLOAT16,
+        QkvLayout::GROUPED,
+        /*num_w_cores=*/8,
+        /*num_h_cores=*/2);
+    log_debug(
+        tt::LogTest,
+        "MHA_8H_64D BlockSharded(grouped)->HeightSharded seq=64 transpose_k: q={:.6f} k={:.6f} v={:.6f}",
+        pcc.q,
+        pcc.k,
+        pcc.v);
+    EXPECT_GE(pcc.q, kDefaultPccThreshold) << "Q PCC " << pcc.q;
+    EXPECT_GE(pcc.k, kDefaultPccThreshold) << "K PCC " << pcc.k;
+    EXPECT_GE(pcc.v, kDefaultPccThreshold) << "V PCC " << pcc.v;
+}
+
+// Cell 19: BFLOAT8_B variant of the SD U-Net case. Production SD U-Net uses bf8
+// throughout (see dtype=ttnn.bfloat8_b in stable_diffusion/wormhole/tt/
+// ttnn_functional_cross_attention.py). This test confirms the layout finding is
+// dtype-independent: the kernel correctly handles GROUPED bf8 input, just like
+// the bf16 case in cell 6.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutHeightSharded__seq64_aligned__bf8) {
+    auto pcc = run_block_sharded_to_height_sharded_cell(
+        device_,
+        /*batch=*/2,
+        /*seq=*/64,
+        /*n_q=*/8,
+        /*n_kv=*/8,
+        /*head_dim=*/64,
+        /*transpose_k=*/false,
+        DataType::BFLOAT8_B,
+        QkvLayout::GROUPED,
+        /*num_w_cores=*/8,
+        /*num_h_cores=*/2);
+    log_debug(
+        tt::LogTest,
+        "MHA_8H_64D BlockSharded(grouped)->HeightSharded seq=64 bf8: q={:.6f} k={:.6f} v={:.6f}",
+        pcc.q,
+        pcc.k,
+        pcc.v);
+    // bf8 has slightly more quantization noise than bf16; loosen the threshold a bit
+    // for the bf8 cells (still well above the corruption floor of ~0.1).
+    constexpr float kBf8PccThreshold = 0.97f;
+    EXPECT_GE(pcc.q, kBf8PccThreshold) << "Q PCC " << pcc.q;
+    EXPECT_GE(pcc.k, kBf8PccThreshold) << "K PCC " << pcc.k;
+    EXPECT_GE(pcc.v, kBf8PccThreshold) << "V PCC " << pcc.v;
+}
+
 }  // namespace ttnn::operations::transformer::test
