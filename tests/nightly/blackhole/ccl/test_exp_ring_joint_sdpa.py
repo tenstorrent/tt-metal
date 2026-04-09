@@ -195,10 +195,11 @@ def run_exp_ring_joint_sdpa_nightly(
             pytest.skip(f"num_heads ({nh}) must be divisible by TP size ({tp_size})")
 
         # Hardcoded grid sizes to handle firmware differences
+        # Add column for CCL MUX
         if is_galaxy:
-            sdpa_compute_grid = (GALAXY_SDPA_COLS, GALAXY_GRID_ROWS)
+            sdpa_compute_grid = (GALAXY_SDPA_COLS + 1, GALAXY_GRID_ROWS)
         else:
-            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS, NON_GALAXY_GRID_ROWS)
+            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS + 1, NON_GALAXY_GRID_ROWS)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
 

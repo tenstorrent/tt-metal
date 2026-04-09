@@ -264,26 +264,42 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
 
+    // Grid layout:
+    //   user_grid:        Full grid from program_config (or device default). Contains SDPA workers + fabric MUX.
+    //   sdpa_grid:        user_grid[:,:-1] — all columns except the last. SDPA workers (some are MUX writers).
+    //   fabric_mux_col:   user_grid.x - 1 — last column reserved for fabric MUX kernel.
+    //   sdpa_writer_range:  sdpa_grid columns 0..(sdpa_grid.x-3) — non-MUX SDPA writer cores.
+    //   mux_writer_range:   sdpa_grid columns (sdpa_grid.x-2)..(sdpa_grid.x-1) — MUX fabric writer cores (2 links).
     const auto device_grid = mesh_device->compute_with_storage_grid_size();
-    CoreCoord grid_size = {device_grid.x - 1, device_grid.y};
+    CoreCoord user_grid =
+        args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
+    CoreCoord sdpa_grid = {user_grid.x - 1, user_grid.y};
+
+    TT_FATAL(
+        user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
+        "user_grid ({}x{}) exceeds device grid ({}x{}).",
+        user_grid.x,
+        user_grid.y,
+        device_grid.x,
+        device_grid.y);
+    TT_FATAL(
+        sdpa_grid.x >= 3,
+        "SDPA grid must have at least 3 columns (1+ pure SDPA + 2 MUX writers). "
+        "user_grid has {} cols, sdpa_grid has {} cols.",
+        user_grid.x,
+        sdpa_grid.x);
+
     bool exp_approx_mode =
         args.program_config.has_value()
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    uint32_t num_cores = grid_size.x * grid_size.y;
+    auto sdpa_grid_range = CoreRange({0, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
+    uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
 
-    log_debug(tt::LogOp, "num_cores: {}", num_cores);
-    log_debug(
-        tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
-    log_debug(tt::LogOp, "grid_size: {}", grid_size);
-
-    TT_FATAL(
-        num_cores <= mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y,
-        "Provided grid must not contain more cores than the device. Got {} cores, expected at most {} cores.",
-        num_cores,
-        mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y);
+    log_debug(tt::LogOp, "user_grid: {}", user_grid);
+    log_debug(tt::LogOp, "sdpa_grid: {}", sdpa_grid);
+    log_debug(tt::LogOp, "num_sdpa_cores: {}", num_sdpa_cores);
 
     /**
      * This parallelization scheme is efficient because it divides the global work,
@@ -291,28 +307,28 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
      *
      */
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
-    const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
+    const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_sdpa_cores);
 
     // Exp ring joint SDPA constraints: single Q-chunk per core, one head per row.
     TT_FATAL(
         max_q_per_core == 1,
         "Exp ring joint SDPA requires exactly 1 Q-chunk per core. Got max_q_per_core={} "
-        "(total_q_chunks={}, num_cores={}). Increase grid size or reduce sequence length.",
+        "(total_q_chunks={}, num_sdpa_cores={}). Increase grid size or reduce sequence length.",
         max_q_per_core,
         all_heads_num_q_chunks,
-        num_cores);
+        num_sdpa_cores);
     TT_FATAL(
-        num_q_chunks <= grid_size.x,
+        num_q_chunks <= sdpa_grid.x,
         "Exp ring joint SDPA requires one head per row (all Q-chunks of a head on the same row). "
         "Got num_q_chunks={} but grid has only {} columns.",
         num_q_chunks,
-        grid_size.x);
+        sdpa_grid.x);
     TT_FATAL(
-        B * NH <= grid_size.y,
+        B * NH <= sdpa_grid.y,
         "Exp ring joint SDPA requires one head per row. "
         "Got B*NH={} but grid has only {} rows.",
         B * NH,
-        grid_size.y);
+        sdpa_grid.y);
 
     const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
 
@@ -445,9 +461,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
      */
-    auto sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
+    auto sender_semaphore_id = CreateSemaphore(program, sdpa_grid_range, INVALID);
+    auto receiver_semaphore_id = CreateSemaphore(program, sdpa_grid_range, INVALID);
+    auto valid_semaphore_id = CreateSemaphore(program, sdpa_grid_range, VALID);
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
     const auto sem_args_offset = reader_compile_time_args.size();
@@ -577,16 +593,16 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
                             .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in0_config);
     // K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
     // compute and MUX writer can pop independently from the same L1 address space.
     {
         uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
-        tt::tt_metal::create_cb(k_cbs, program, core_grid, k_tile_size, k_tiles, k_df);
+        tt::tt_metal::create_cb(k_cbs, program, sdpa_grid_range, k_tile_size, k_tiles, k_df);
     }
     {
         uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
-        tt::tt_metal::create_cb(v_cbs, program, core_grid, v_tile_size, v_tiles, v_df);
+        tt::tt_metal::create_cb(v_cbs, program, sdpa_grid_range, v_tile_size, v_tiles, v_df);
     }
 
     // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
@@ -594,90 +610,90 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         auto c_in3_config =
             CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
                 .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
+        CreateCircularBuffer(program, sdpa_grid_range, c_in3_config);
     }
 
     // scale input
     auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
                             .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in4_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in4_config);
 
     // identity scale input
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in5_config);
 
     // stats input
     auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in6_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in6_config);
 
     // previous block output as input
     auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
                             .set_page_size(tt::CBIndex::c_7, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in7_config);
 
     // column identity input
     auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
                             .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in8_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_in8_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
                                   .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed0_config);
 
     // cb_out_im
     auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
                                   .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed1_config);
 
     // cb_out_accumulate_im
     auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
                                   .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed2_config);
 
     // cb_cur_max
     auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
                                   .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed3_config);
 
     // cb_prev_max
     auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
                                   .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed4_config);
 
     // cb_cur_sum
     auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
                                   .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed5_config);
 
     // cb_prev_sum
     auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
                                   .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed6_config);
 
     // cb_exp_max_diff
     auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
                                   .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_intermed7_config);
 
     // Output
     auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out0_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_out0_config);
 
     // stats output
     auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out1_config);
+    CreateCircularBuffer(program, sdpa_grid_range, c_out1_config);
 
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
     if (use_streaming_compute) {
         auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
                                           .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+        CreateCircularBuffer(program, sdpa_grid_range, c_recip_scratch_config);
     }
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
@@ -687,11 +703,11 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         auto c_sum_out_config =
             CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
                 .set_page_size(tt::CBIndex::c_10, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_out_config);
+        CreateCircularBuffer(program, sdpa_grid_range, c_sum_out_config);
 
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_in_config);
+        CreateCircularBuffer(program, sdpa_grid_range, c_sum_in_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -744,23 +760,23 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         uint32_t mcast_sender_wait = 0;
     };
 
-    std::vector<CoreWork> core_work(num_cores);
-    std::vector<CoreChainInfo> core_chain_info(num_cores);
+    std::vector<CoreWork> core_work(num_sdpa_cores);
+    std::vector<CoreChainInfo> core_chain_info(num_sdpa_cores);
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+    const uint32_t base_chunks_per_core = (num_sdpa_cores == 0) ? 0 : (total_q_chunks / num_sdpa_cores);
+    const uint32_t extra_chunks = (num_sdpa_cores == 0) ? 0 : (total_q_chunks % num_sdpa_cores);
 
     log_debug(
         tt::LogOp,
         "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
         "base_chunks_per_core={} (+{} extras)",
-        grid_size.x,
-        grid_size.y,
-        num_cores,
+        sdpa_grid.x,
+        sdpa_grid.y,
+        num_sdpa_cores,
         B,
         NH,
         num_q_chunks,
@@ -779,8 +795,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
     };
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+    for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
+        CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
         if (next_global_chunk >= total_q_chunks) {
             chunk_count = 0;
@@ -887,7 +903,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // Log chain summary
     {
         uint32_t num_chains = 0;
-        std::vector<uint32_t> chain_len_counts(num_cores + 1, 0);
+        std::vector<uint32_t> chain_len_counts(num_sdpa_cores + 1, 0);
         for (uint32_t hi = 0; hi < total_heads; ++hi) {
             const auto& segs = head_segments[hi];
             const uint32_t batch_id = hi / NH, head_id = hi % NH;
@@ -904,7 +920,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             }
         }
         std::string hist_str;
-        for (uint32_t len = 2; len <= num_cores; ++len) {
+        for (uint32_t len = 2; len <= num_sdpa_cores; ++len) {
             if (chain_len_counts[len] > 0) {
                 hist_str += std::to_string(chain_len_counts[len]) + "x" + std::to_string(len) + "-core ";
             }
@@ -967,7 +983,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             }
 
             bool has_gap = false;
-            for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            for (uint32_t ci = 0; ci < num_sdpa_cores; ++ci) {
                 const auto& phys = core_work[ci].physical_core;
                 if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
                     bool in_chain = false;
@@ -1137,7 +1153,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     // Map (batch * NH + head) -> injector physical coordinates for MUX writer signaling
     std::unordered_map<uint32_t, CoreCoord> injector_physical_by_head;
-    for (uint32_t ci = 0; ci < num_cores; ++ci) {
+    for (uint32_t ci = 0; ci < num_sdpa_cores; ++ci) {
         if (core_chain_info[ci].is_injector) {
             uint32_t head_key = core_chain_info[ci].batch * NH + core_chain_info[ci].head;
             injector_physical_by_head[head_key] = core_work[ci].physical_core;
@@ -1148,12 +1164,10 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // MUX cores are placed at the last x coordinate of the full device grid.
     // Backward MUX: first y (0) and last y (device_y - 1).
     // Forward MUX:  middle y - 1 and middle y.
-    const uint32_t device_x = mesh_device->compute_with_storage_grid_size().x;
-    const uint32_t device_y = mesh_device->compute_with_storage_grid_size().y;
-    const uint32_t mux_x = device_x - 1;
-    const uint32_t mid_y = device_y / 2;
-    const std::vector<CoreCoord> mux_backward_logical_cores = {{mux_x, 0}, {mux_x, device_y - 1}};
-    const std::vector<CoreCoord> mux_forward_logical_cores = {{mux_x, mid_y - 1}, {mux_x, mid_y}};
+    const uint32_t fabric_mux_col = user_grid.x - 1;  // Last column of user_grid
+    const uint32_t mid_y = sdpa_grid.y / 2;
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{fabric_mux_col, 0}, {fabric_mux_col, sdpa_grid.y - 1}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{fabric_mux_col, mid_y - 1}, {fabric_mux_col, mid_y}};
 
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -1173,20 +1187,20 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
-        core_grid,
+        sdpa_grid_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
-    // Non-fabric writer: columns 0..(grid_size.x-3)
-    // grid_size.x-2 and grid_size.x-1 are fabric MUX client columns
-    CoreRange non_fabric_writer_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
+    // Non-fabric writer: columns 0..(sdpa_grid.x-3)
+    // sdpa_grid.x-2 and sdpa_grid.x-1 are fabric MUX client columns
+    CoreRange sdpa_writer_range({0, 0}, {sdpa_grid.x - 3, sdpa_grid.y - 1});
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
-        non_fabric_writer_range,
+        sdpa_writer_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
-    // Fabric writer: columns grid_size.x-2 and grid_size.x-1 (backward and forward MUX clients)
-    CoreRange fabric_writer_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
+    CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     auto writer_fabric_compile_time_args = writer_compile_time_args;
     fabric_mux_connection_ct_args(args.num_workers_per_link, mux_kernel_config, writer_fabric_compile_time_args);
 
@@ -1207,13 +1221,13 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     auto writer_fabric_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
-        fabric_writer_range,
+        mux_writer_range,
         tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
-        core_grid,
+        sdpa_grid_range,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -1224,12 +1238,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // Build backward and forward termination master core sets (1 per link per direction)
     // Backward masters: row 0 of both MUX client columns (top half = backward direction).
     // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
-    // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
+    // Link is determined by column: col sdpa_grid.x-2 = link 0, col sdpa_grid.x-1 = link 1.
     std::vector<CoreCoord> ag_backward_master_cores, ag_forward_master_cores;
     std::set<CoreRange> ag_backward_master_ranges, ag_forward_master_ranges;
     for (uint32_t col_offset = 0; col_offset < 2; ++col_offset) {
-        CoreCoord bwd_master = {grid_size.x - 2 + col_offset, 0};
-        CoreCoord fwd_master = {grid_size.x - 2 + col_offset, args.num_workers_per_link};
+        CoreCoord bwd_master = {sdpa_grid.x - 2 + col_offset, 0};
+        CoreCoord fwd_master = {sdpa_grid.x - 2 + col_offset, args.num_workers_per_link};
         ag_backward_master_cores.push_back(bwd_master);
         ag_forward_master_cores.push_back(fwd_master);
         ag_backward_master_ranges.insert(CoreRange(bwd_master));
@@ -1241,8 +1255,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // workers in each direction group.  This ensures every core (both term-masters
     // and non-masters) has the same number of semaphores allocated before
     // fabric_mux_connection_rt_args runs, keeping termination_sync IDs consistent.
-    CoreRange all_backward_clients({grid_size.x - 2, 0}, {grid_size.x - 1, args.num_workers_per_link - 1});
-    CoreRange all_forward_clients({grid_size.x - 2, args.num_workers_per_link}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRange all_backward_clients({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, args.num_workers_per_link - 1});
+    CoreRange all_forward_clients({sdpa_grid.x - 2, args.num_workers_per_link}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     // K/V tensor shape info for all-gather RT args
     const auto& ag_input_shape = input_tensor_k.padded_shape();
     const auto& ag_output_shape = gathered_input_tensor_k.padded_shape();
@@ -1258,8 +1272,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     uint32_t reader_per_link_sem_rt_offset = 0;
 
     // Set reader rt args
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+    for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
+        CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
@@ -1325,12 +1339,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_sender_wait);
 
         // Determine if this core's writer has a valid MUX connection (for reader-side forwarding)
-        const bool is_mux_client = (core.x >= grid_size.x - 2);
+        const bool is_mux_writer = (core.x >= sdpa_grid.x - 2);
         bool is_mux_writer_valid = false;
-        if (is_mux_client) {
+        if (is_mux_writer) {
             const uint32_t half_within_col = core.y / args.num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
-            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
+            const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
             if (link_in_range) {
@@ -1366,12 +1380,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         writer_args.push_back(device_index);
         writer_args.push_back(direction);
 
-        if (is_mux_client) {
+        if (is_mux_writer) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
-            // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
+            // Link is determined by column: col sdpa_grid.x-2 = link 0, col sdpa_grid.x-1 = link 1.
             const uint32_t half_within_col = core.y / args.num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
-            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
+            const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
             const uint32_t worker_idx = core.y % args.num_workers_per_link;
             const bool is_term_master = (worker_idx == 0);
             const CoreCoord termination_master_logical = {core.x, half_within_col * args.num_workers_per_link};
@@ -1518,8 +1532,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     return cached_program_t{
         std::move(program),
-        {.num_cores = num_cores,
-         .grid_size = grid_size,
+        {.num_sdpa_cores = num_sdpa_cores,
+         .sdpa_grid = sdpa_grid,
          .reader_kernels_id = reader_kernels_id,
          .writer_kernels_id = writer_kernels_id,
          .writer_fabric_kernels_id = writer_fabric_kernels_id,
@@ -1568,8 +1582,8 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
         auto& writer_fabric_args_by_core = GetRuntimeArgs(program, shared_vars.writer_fabric_kernels_id);
 
-        for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-            CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+        for (uint32_t i = 0; i < shared_vars.num_sdpa_cores; ++i) {
+            CoreCoord core = {i % shared_vars.sdpa_grid.x, i / shared_vars.sdpa_grid.x};
 
             auto& reader_args = reader_args_by_core[core.x][core.y];
 
@@ -1592,8 +1606,8 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
             }
 
             // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
-            const bool is_fabric_client = (core.x >= shared_vars.grid_size.x - 2);
-            if (is_fabric_client) {
+            const bool is_mux_writer = (core.x >= shared_vars.sdpa_grid.x - 2);
+            if (is_mux_writer) {
                 auto& writer_args = writer_fabric_args_by_core[core.x][core.y];
                 writer_args[0] = out_addr;
                 writer_args[1] = joint_out_addr;
@@ -1601,7 +1615,7 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                 // Update addresses for MUX writers with link_in_range
                 if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
                     writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
-                    const uint32_t link = (core.x == shared_vars.grid_size.x - 1) ? 1 : 0;
+                    const uint32_t link = (core.x == shared_vars.sdpa_grid.x - 1) ? 1 : 0;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = args.semaphore[link].address();
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 7] = gathered_k_addr;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 8] = gathered_v_addr;

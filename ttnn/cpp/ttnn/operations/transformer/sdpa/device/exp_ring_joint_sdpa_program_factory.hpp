@@ -15,8 +15,8 @@
 namespace ttnn::prim {
 
 struct ExpRingJointSDPASharedVariables {
-    uint32_t num_cores = 0;
-    tt::tt_metal::CoreCoord grid_size;
+    uint32_t num_sdpa_cores = 0;
+    tt::tt_metal::CoreCoord sdpa_grid;
     tt::tt_metal::KernelHandle reader_kernels_id{};
     tt::tt_metal::KernelHandle writer_kernels_id{};  // non-fabric: columns 0..grid_size.x-3
     tt::tt_metal::KernelHandle

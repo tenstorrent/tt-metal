@@ -215,6 +215,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         DH,
         tt::constants::TILE_WIDTH);
 
+    TT_FATAL(args.num_links == 2, "Exp ring joint SDPA requires exactly 2 links. Got {}.", args.num_links);
+    TT_FATAL(args.topology == ttnn::ccl::Topology::Ring, "Exp ring joint SDPA requires Ring topology.");
+
     const auto device_grid = input_tensor_q.device()->compute_with_storage_grid_size();
     TT_FATAL(
         device_grid.x >= 3,
