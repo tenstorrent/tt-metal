@@ -54,6 +54,54 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 
 namespace ttnn::transformer {
 
+// Implementation notes — see issue #41718 and the matrix test in
+// tests/ttnn/unit_tests/gtests/test_split_qkv_heads_matrix.cpp.
+//
+// QKV LAYOUT CONVENTION (implicit, not validated):
+//
+// Two QKV input layouts exist in the framework:
+//
+//   CONCATENATED — what nn.Linear(d, 3d) produces by default. Per (batch, seq) row:
+//     [Q_h0, Q_h1, ..., Q_h(n_q-1), K_h0, ..., K_h(n_kv-1), V_h0, ..., V_hn]
+//
+//   GROUPED — what the existing sharded `experimental::create_qkv_heads` reader
+//   expects. Per (batch, seq) row, with n = n_q / n_kv Q heads per KV group:
+//     [Q_g0_h0,...,Q_g0_h(n-1), K_g0, V_g0, Q_g1_h0,..., K_g1, V_g1, ...]
+//
+// The two paths in this op handle different layouts:
+//   - The interleaved path (`experimental::nlp_create_qkv_heads`) reads Q, then K,
+//     then V — i.e. CONCATENATED layout.
+//   - The sharded path (`experimental::create_qkv_heads`, used below) reads
+//     [Q heads per group, K, V] per group — i.e. GROUPED layout.
+//
+// Both production callers of the sharded path explicitly repack their nn.Linear
+// QKV weights into GROUPED layout to match what the kernel expects:
+//   - SD U-Net cross-attention: see `concatenate_qkv()` in
+//     models/demos/vision/generative/stable_diffusion/wormhole/tt/ttnn_functional_cross_attention.py:81-117
+//   - ViT WH: see the `query_key_value` weight construction in
+//     models/demos/vision/classification/vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py:559-566
+//
+// The "19-month silent corruption" claim in #41718 turned out to be wrong for
+// both production models — they were correctly using grouped weights the whole
+// time. The actual original-bug case from #41526 is tt-mlir greedy optimizer at
+// opt_level=2 feeding CONCATENATED layout to the sharded kernel; this is reliably
+// reproduced by Cell 13 of the matrix test (PCC ~ 0.1 vs CPU reference).
+//
+// ADDITIONAL CONSTRAINT (the `sequence_size_padded == sequence_size` FATAL below):
+//
+// The sharded reader's address arithmetic at stride `block_wt_size_bytes` per seq
+// tile assumes a tile-aligned sequence dimension. For non-tile-aligned seq lengths
+// (e.g. ViT seq=197) it produces silent corruption regardless of layout. Reject
+// those cases at validation time so callers see a clear error instead of garbage.
+//
+// LIMITATION OF THE CURRENT FIX:
+//
+// The refined FATAL only catches non-tile-aligned cases. A caller that feeds
+// CONCATENATED layout with a tile-aligned sequence length (e.g. seq=64 like the
+// SD U-Net case) is not caught and the kernel silently corrupts the output.
+// Cell 13 of the matrix test demonstrates this. The proper long-term fix is an
+// explicit `qkv_layout` parameter on this op so the convention is part of the API
+// and not a kernel-comment-level convention. Tracked in the comments of #41718.
 std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const Tensor& input_tensor,
     const std::optional<Tensor>& input_tensor_kv,
