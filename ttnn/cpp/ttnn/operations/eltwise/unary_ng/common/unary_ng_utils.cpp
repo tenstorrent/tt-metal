@@ -5,6 +5,8 @@
 #include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <mutex>
+
 namespace ttnn::operations::unary_ng {
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
@@ -60,6 +62,30 @@ std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, con
 
     if (!is_native_L1_sharding(input_spec, output_spec.memory_config()) || is_uneven(output_spec)) {
         return std::nullopt;
+    }
+
+    // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
+    // for the sharded CB-aliasing path to work (it requires whole-tile pages).
+    // Fall back to the interleaved path otherwise.
+    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        auto is_shard_tile_aligned = [](const TensorSpec& spec) {
+            const auto& shard = *get_shard_spec(spec);
+            const auto tile_hw = spec.tile().get_tile_hw();
+            const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
+            return shard_elements % tile_hw == 0;
+        };
+
+        if ((input_sharded && !is_shard_tile_aligned(input_spec)) ||
+            (output_sharded && !is_shard_tile_aligned(output_spec))) {
+            static std::once_flag warn_flag;
+            std::call_once(warn_flag, [] {
+                log_warning(
+                    tt::LogOp,
+                    "UnaryNg: ROW_MAJOR shard element count is not tile-aligned; "
+                    "falling back to interleaved path");
+            });
+            return std::nullopt;
+        }
     }
 
     TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have shard spec when using native sharded path");
