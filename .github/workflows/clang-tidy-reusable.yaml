@@ -173,7 +173,7 @@ jobs:
           if command -v clang-tidy-cache &>/dev/null; then
             cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
-          exec clang-tidy-cache --directories_with_clang_tidy=/work clang-tidy-20 "$@"
+          exec clang-tidy-cache clang-tidy-20 "$@"
           SHIMEOF
             chmod +x ./clang-tidy-shim
             echo "ctcache shim active (namespace: ${CTCACHE_REDIS_NAMESPACE:-/ctcache})"
