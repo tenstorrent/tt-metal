@@ -173,6 +173,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::RRELU: return "eltwise_sfpu_rrelu.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }
