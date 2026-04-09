@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
-from models.common.utility_functions import skip_for_slow_dispatch, skip_for_blackhole
+from models.common.utility_functions import skip_for_slow_dispatch
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
