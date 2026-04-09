@@ -1,6 +1,6 @@
 # Migrating tt-llk branches to tt-metal
 
-This guide applies once the `tt-llk` submodule is absorbed into `tt-metal` as a regular subdirectory at `tt_metal/third_party/tt_llk/`. If you have an unmerged tt-llk branch, follow this guide to migrate your changes into a tt-metal PR.
+This guide applies once the `tt-llk` submodule is absorbed into `tt-metal` as a regular subdirectory at `tt_metal/tt-llk/`. If you have an unmerged tt-llk branch, follow this guide to migrate your changes into a tt-metal PR.
 
 ## Prerequisites
 
@@ -34,10 +34,10 @@ cd path/to/tt-metal
 git checkout main && git pull
 git checkout -b my-feature
 
-git apply --directory=tt_metal/third_party/tt_llk /tmp/my-feature.patch
+git apply --directory=tt_metal/tt-llk /tmp/my-feature.patch
 ```
 
-The `--directory` flag prepends `tt_metal/third_party/tt_llk/` to every path in the patch automatically, and no manual path editing is required. Since you rebased in step 1, this should apply without conflicts.
+The `--directory` flag prepends `tt_metal/tt-llk/` to every path in the patch automatically, and no manual path editing is required. Since you rebased in step 1, this should apply without conflicts.
 
 ### 4. Commit and push
 
@@ -69,7 +69,7 @@ There is no need to go back to the tt-llk repo or regenerate the patch. After th
 To verify the patch applies without modifying any files:
 
 ```bash
-git apply --directory=tt_metal/third_party/tt_llk --check /tmp/my-feature.patch
+git apply --directory=tt_metal/tt-llk --check /tmp/my-feature.patch
 ```
 
 ### Patch doesn't apply cleanly
@@ -77,7 +77,7 @@ git apply --directory=tt_metal/third_party/tt_llk --check /tmp/my-feature.patch
 If you skipped the rebase step or the absorbed commit has diverged, add `--3way` to fall back to a three-way merge:
 
 ```bash
-git apply --3way --directory=tt_metal/third_party/tt_llk /tmp/my-feature.patch
+git apply --3way --directory=tt_metal/tt-llk /tmp/my-feature.patch
 ```
 
 Resolve any conflicts, then `git add` the resolved files and commit.
