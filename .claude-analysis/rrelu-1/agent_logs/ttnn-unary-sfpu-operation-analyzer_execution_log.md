@@ -95,3 +95,31 @@ Analyzed the SFPU kernel implementation for the `hardtanh` unary operation (`Una
 - `.claude-analysis/rrelu-1/hardtanh_analysis.md`
 
 ### Status: SUCCESS
+
+---
+
+## Operation: dropout
+## Date: 2026-04-09
+
+### Summary
+Analyzed the SFPU kernel implementation for the `dropout` operation. Dropout is a non-standard unary operation -- it does NOT use `UnaryProgramFactory` or `SFPU_OP_CHAIN_0` dispatch. It has its own dedicated experimental program factory (`DropoutProgramFactory`) and standalone compute kernel.
+
+### Key Findings
+- **Kernel style**: B_raw_TTI -- uses raw `TTI_` instructions with CC manipulation via SFPIADD
+- **Algorithm**: Element-wise stochastic dropout with inverted scaling:
+  1. Load element from DEST, multiply by scale factor (`1/(1-p)`)
+  2. Generate pseudorandom uint32 via SFPMOV PRNG mode (instr_mod1=8, lreg_c=9)
+  3. Clear sign bit (SFPSETSGN) to make unsigned for comparison
+  4. Integer subtract probability - rand (SFPIADD with CC inversion)
+  5. Conditionally zero elements where probability >= rand (CC-guarded SFPMOV)
+  6. Reset CC (SFPENCC) and store result
+- **Non-standard dispatch**: Own program factory, own compute kernel. The API header (`dropout.h`) was removed in deep-nuke.
+- **PRNG initialization**: `init_prng_seed(seed)` writes to PRNG_SEED config register + 600 SFPNOP wait
+- **APPROXIMATION_MODE**: Template parameter declared but never referenced in function body
+- **Address mode**: No explicit addr_mod_t configuration in the kernel itself; relies on standard ADDR_MOD_7 from caller
+- **Architecture**: WH and BH implementations are identical
+
+### Files Produced
+- `.claude-analysis/rrelu-1/dropout_analysis.md`
+
+### Status: SUCCESS
