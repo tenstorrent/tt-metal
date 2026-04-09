@@ -37,7 +37,12 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_softcap(uint32_t param0) {
-    const float cap = std::bit_cast<float>(param0);
+    union {
+        uint32_t u;
+        float f;
+    } conv;
+    conv.u = param0;
+    const float cap = conv.f;
     const float recip_cap = 1.0f / cap;
 
     // Region 1 polynomial coefficients (tanh(u) = u * (p0 + u² * (p1 + u² * p2)))
