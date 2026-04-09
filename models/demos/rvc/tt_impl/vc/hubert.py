@@ -394,6 +394,7 @@ class HubertModel:
 
     def __call__(self, source: ttnn.Tensor, output_layer: int) -> ttnn.Tensor:
         x = self.feature_extractor(source)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x = self.layer_norm(x)
 
         if self.post_extract_proj is not None:

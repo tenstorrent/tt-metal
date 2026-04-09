@@ -25,11 +25,11 @@ PARAMS_TO_CONFIG_VALUES = {
     (1, 256, 96): (100_000, 32),
     (256, 256, 3): (20_000, 32),
     (256, 256, 7): (20_000, 32),
-    (256, 256, 11): (20_000, 32),
+    (256, 256, 11): (10_000, 32),
     (1, 128, 16): (100_000, 32),
     (128, 128, 3): (90_000, 32),
     (128, 128, 7): (90_000, 32),
-    (128, 128, 11): (90_000, 32 * 16),
+    (128, 128, 11): (90_000, 32),
     (1, 64, 8): (200_000, 32),
     (64, 64, 3): (200_000, 32),
     (64, 64, 7): (200_000, 32),
@@ -192,6 +192,16 @@ def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_si
     return (slice_num, act_block_h_override)
 
 
+def get_shard_strategy_for_conv(batch_size, input_length, in_channels):
+    nhw = batch_size * input_length
+    if nhw >= 4 * in_channels:
+        return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    elif in_channels >= 4 * nhw:
+        return ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    else:
+        return ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+
 def get_conv_configs(
     input_length, conv1d_config: Conv1dConfiguration, device: ttnn.Device
 ) -> tuple[ttnn.Conv2dConfig, ttnn.Conv2dSliceConfig, ttnn.DeviceComputeKernelConfig]:
@@ -203,12 +213,22 @@ def get_conv_configs(
     slice_config = (
         ttnn.Conv2dSliceConfig(num_slices=slice_num, slice_type=ttnn.Op2DDRAMSliceWidth) if slice_num > 1 else None
     )
+    # if conv1d_config.kernel_size == 128:
+    #     slice_config = ttnn.Conv2dSliceConfig(num_slices=slice_num, slice_type=ttnn.Op2DDRAMSliceWidth)
+    #     shard_layout = None
 
     act_block_w_div = 1
+    if slice_config is None:
+        shard_layout = get_shard_strategy_for_conv(
+            batch_size=1, input_length=input_length, in_channels=conv1d_config.in_channels
+        )
+    else:
+        shard_layout = None
+
     return (
         ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             output_layout=conv1d_config.output_layout,
             deallocate_activation=conv1d_config.deallocate_input,
             # deallocate_activation=conv1d_config.deallocate_activation,
@@ -352,6 +372,8 @@ class Conv1d:
             compute_config=compute_config,
             slice_config=slice_config,
         )
+        if out.shape[2] > output_length_from_input_length(input_length, self.configuration):
+            out = out[:, :, : output_length_from_input_length(input_length, self.configuration), :]
         return ttnn.squeeze(out, dim=1)
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
