@@ -1977,6 +1977,55 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies Randomized Leaky ReLU (RReLU) element-wise.
+
+            .. math::
+                \text{{rrelu}}(x) = \begin{{cases}} x & \text{{if }} x \geq 0 \\ a \cdot x & \text{{if }} x < 0 \end{{cases}}
+
+            In evaluation mode, ``a = (lower + upper) / 2``.
+            In training mode, ``a`` is sampled from ``Uniform(lower, upper)`` per element.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of the uniform distribution. Defaults to ``1/8``.
+                upper (float, optional): upper bound of the uniform distribution. Defaults to ``1/3``.
+                training (bool, optional): whether in training mode. Defaults to ``False``.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            &ttnn::rrelu,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 1.0f / 3.0f,
+            nb::arg("training") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary
