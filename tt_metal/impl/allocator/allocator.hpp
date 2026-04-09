@@ -74,6 +74,10 @@ public:
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
+    // Reset peak allocated bytes watermark for the given buffer type.
+    // After reset, peak tracks from the current allocation level.
+    void reset_peak_allocated_bytes(const BufferType& buffer_type);
+
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
     void begin_dram_high_water_mark_tracking();

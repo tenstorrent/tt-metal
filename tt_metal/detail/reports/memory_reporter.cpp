@@ -169,11 +169,16 @@ MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferTy
         .total_bytes_allocated_per_bank = stats.total_allocated_bytes,
         .total_bytes_free_per_bank = stats.total_free_bytes,
         .largest_contiguous_bytes_free_per_bank = stats.largest_free_block_bytes,
+        .peak_bytes_allocated_per_bank = stats.peak_allocated_bytes,
         .block_table = device->allocator_impl()->get_memory_block_table(buffer_type)};
 }
 
 MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type) {
     return MemoryReporter::inst().get_memory_view(device, buffer_type);
+}
+
+void ResetPeakMemoryAllocated(IDevice* device, const BufferType& buffer_type) {
+    device->allocator()->reset_peak_allocated_bytes(buffer_type);
 }
 
 bool MemoryReporter::enabled() { return is_enabled_; }
