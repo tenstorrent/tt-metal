@@ -99,7 +99,7 @@ class TtSDXLPipeline(LightweightModule):
         else:
             prev_throttle = os.environ.pop("TT_MM_THROTTLE_PERF", None)
             if prev_throttle is not None:
-                logger.warning(f"Throttle level was {prev_throttle}, unseting it for blackhole")
+                logger.warning(f"Throttle level was {prev_throttle}, unsetting it for blackhole")
 
         if pipeline_config.is_galaxy:
             grid_override = os.environ.get("TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE")
