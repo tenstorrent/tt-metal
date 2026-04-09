@@ -1,11 +1,51 @@
 # Execution Log: ttnn-unary-sfpu-operation-analyzer
 
-## Session Summary (tanhshrink)
+## Session Summary (hardshrink)
+- **Operation**: hardshrink
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/softcap-1/hardshrink_analysis.md`
+
+## Execution Steps
+
+1. **Initialize** - Set up breadcrumbs, checked for naming collisions (none found)
+2. **Dispatch resolution** - Read `unary_op_utils.cpp` to find HARDSHRINK handling:
+   - HARDSHRINK is NOT in `get_op_init_and_func_default` or `get_op_init_and_func_parameterized` (nuked)
+   - `get_op_approx_mode()`: falls through to `default: return false`
+   - `get_compute_kernel_path()`: falls through to `default: return "eltwise_sfpu.cpp"` (nuked; original would return a hardshrink-specific kernel path)
+3. **Compute kernel discovery** - Found two dedicated compute kernel files:
+   - `hardshrink_kernel.cpp`: FPU binary_dest_reuse_tiles approach
+   - `hardshrink_kernel_sfpu.cpp`: SFPU add/sub/mul_binary_tile approach
+4. **Program factory analysis** - Read `unary_program_factory.cpp`:
+   - HARDSHRINK gets a `cb_tmp0` (c_1) circular buffer for intermediate result
+   - Lambda parameter packed via `pack_scalar_runtime_arg` as `packed_scalar1`
+   - Compute kernel receives packed_scalar1 as runtime arg 0
+5. **API header trace** - Read `eltwise_binary_sfpu.h`: `add_binary_tile` -> `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>`, similar for sub/mul
+6. **Core SFPU kernel read** - Read all core implementations:
+   - `ckernel_sfpu_comp.h` (WH and BH): comparison functions `_calculate_zero_comp_` with `apply_zero_comp` specializations for less_than_zero and greater_than_zero
+   - `ckernel_sfpu_fill.h`: simple scalar broadcast loop
+   - `ckernel_sfpu_binary.h`: binary arithmetic using SFPMAD
+7. **LLK dispatch read** - Read both unary and binary params dispatch: standard RC mode, 4 faces, SETRWC between faces
+8. **Address mode check** - Confirmed ADDR_MOD_7 with all-zero increments for both unary and binary SFPU ops
+9. **Identifier verification** - Verified all function names (`_calculate_comp_`, `_calculate_zero_comp_`, `_calculate_fill_`, `_calculate_sfpu_binary_`) and file paths exist via grep
+10. **Analysis written** - Wrote `hardshrink_analysis.md` with all required sections
+
+## Key Findings
+- Hardshrink is a composite operation implementing `x if |x| > lambda, 0 otherwise` via `a * 1(a + lambda < 0) + a * 1(a - lambda > 0)`
+- Uses a dedicated custom compute kernel (not the standard `SFPU_OP_CHAIN_0` dispatch)
+- Two-pass algorithm: pass 1 computes negative indicator mask * input, pass 2 computes positive indicator mask * input, then sums
+- SFPU comparison (ltz/gtz) uses SFPI abstractions (v_if/v_else/v_endif) mapped to SFPSETCC/SFPENCC/SFPCOMPC
+- Binary arithmetic uses SFPMAD (no dedicated add instruction -- add = mad(a, 1.0, b))
+- cb_tmp0 (c_1) is required for intermediate storage between passes
+- WH and BH core SFPU implementations are identical
+
+---
+
+## Previous Session Summary (tanhshrink)
 - **Operation**: tanhshrink
 - **Status**: SUCCESS
 - **Output file**: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
 
-## Execution Steps
+## Previous Execution Steps (tanhshrink)
 
 1. **Initialize** - Set up breadcrumbs, created output directory, checked for naming collisions (none found)
 2. **Dispatch resolution** - Read `unary_op_utils.cpp` to find TANHSHRINK handling:
@@ -29,7 +69,7 @@
 10. **Identifier verification** - All function names and file paths verified via grep/ls
 11. **Analysis written** - Wrote `tanhshrink_analysis.md` with all required sections
 
-## Key Findings
+## Previous Key Findings (tanhshrink)
 - Tanhshrink is a composite operation: `x - tanh(x)`
 - Uses a dedicated compute kernel (not the standard `SFPU_OP_CHAIN_0` dispatch)
 - The tanh SFPU core implementation was nuked; only the API declaration survives
