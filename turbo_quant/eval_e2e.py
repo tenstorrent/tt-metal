@@ -114,7 +114,11 @@ def main():
     # allocated but bypassed when tq_cache is active.
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
-    paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
+    # TQ uses BF16 paged cache (2× BFP8). Use fewer blocks to fit in DRAM.
+    # 1024 blocks × 32 = 32K tokens for baseline BFP8.
+    # 512 blocks × 32 = 16K tokens for TQ BF16 (same total DRAM).
+    tq_max_blocks = 512 if not args.no_turbo_quant else 1024
+    paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=tq_max_blocks)
     print("Loading TT model (paged attention, block_size=32)...")
     tt_model = Transformer(
         args=model_args,
@@ -139,25 +143,46 @@ def main():
     if args.no_turbo_quant:
         print("  (--no-turbo-quant: using standard BFP8 paged_update_cache path)")
     else:
+        # Replace BFP8 layer_past with BF16 for TQ pre-rescaled values.
+        # BFP8 destroys centroid×norm precision; BF16 preserves it exactly.
+        # Memory: 2× per element vs BFP8, but paged allocation = O(filled).
+        # Free ALL BFP8 caches first to make room for BF16 caches.
+        print("  Replacing BFP8 layer_past with BF16 paged cache...")
+        lp_shape = None
         for layer in tt_model.layers:
+            attn = layer.attention
+            if hasattr(attn, "layer_past") and attn.layer_past is not None:
+                lp_shape = list(attn.layer_past[0].shape)
+                for t in attn.layer_past:
+                    ttnn.deallocate(t)
+                attn.layer_past = None
+
+        # Now allocate BF16 caches (BFP8 DRAM is freed).
+        for layer in tt_model.layers:
+            layer.attention.layer_past = [
+                ttnn.from_torch(
+                    torch.zeros(lp_shape, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in range(2)  # K, V
+            ]
+
+            # Attach TQ setup (rotation matrix + codebook only, no separate cache).
             tq = TTNNTurboQuantCache(
                 mesh_device,
                 num_layers=1,
                 num_kv_heads=n_local_kv_heads,
                 head_dim=model_args.head_dim,
-                max_seq_len=model_args.max_seq_len,
+                max_seq_len=32,  # minimal — TQ no longer manages its own cache
                 bits=args.bits,
+                memory_efficient=False,  # pre-rescale for BF16 paged cache
             )
             if absorb_rotation:
                 tq.rotation_absorbed = True
-            layer.attention.tq_cache = tq
-
-            # Free the model's paged layer_past — TQ uses its own cache.
-            # This reclaims ~1GB+ at long seqlens.
-            if hasattr(layer.attention, "layer_past"):
-                for t in layer.attention.layer_past:
-                    ttnn.deallocate(t)
-                layer.attention.layer_past = None
+            attn.tq_cache = tq
 
     # ------------------------------------------------------------------ #
     # Prepare initial inputs                                               #
