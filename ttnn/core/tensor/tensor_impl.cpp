@@ -677,9 +677,6 @@ void copy_as_distributed_tensor(
 
 void copy_to_device(
     distributed::MeshCommandQueue& command_queue, const HostTensor& host_tensor, MeshTensor& device_tensor) {
-    // TODO: bring this back?
-    // TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
-
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
