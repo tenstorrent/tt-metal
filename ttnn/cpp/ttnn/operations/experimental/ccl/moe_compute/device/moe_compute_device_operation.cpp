@@ -81,7 +81,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tilize_per_expert_total_tokens_sharded_memory_config);
+            tilize_per_expert_total_tokens_sharded_memory_config));
 
     // Output 1: Expert activation tensor
     // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]

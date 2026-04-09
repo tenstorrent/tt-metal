@@ -409,11 +409,11 @@ MoEComputeMeshWorkloadFactory::create_at(
      */
     uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
     [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_0;
-    uint32_t matmul_writer_cb_id = tt::CBIndex::c_1
+    uint32_t matmul_writer_cb_id = tt::CBIndex::c_1;
 
-        // after determining the total number of tokens for each expert, this buffer will store the total number of
-        // tokens for each expert to pass to the other kernels
-        uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_2;
+    // after determining the total number of tokens for each expert, this buffer will store the total number of
+    // tokens for each expert to pass to the other kernels
+    uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_2;
 
     // All cores (not just Tilize and Matmul)
     const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
@@ -440,7 +440,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle matmul_writer_cb_handle = std::get<1>(matmul_writer_cb);
 
-    auto tt::tt_metal::create_cb(
+    // global tensor backed CB to communicate active tokens per expert
+    const auto expert_token_cb = tt::tt_metal::create_cb(
         per_expert_total_tokens_cb_id,
         program,
         all_worker_cores_range_set,
@@ -448,6 +449,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         1,
         tt::tt_metal::datatype_to_dataformat_converter(tilize_per_expert_total_tokens_output_tensor.dtype()),
         tilize_per_expert_total_tokens_output_tensor.buffer());
+    const auto expert_tokens_cb_handle = std::get<1>(expert_token_cb);
 
     //-------------------------------------------------------------------------
     // Tilize CBs
@@ -637,11 +639,11 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_1, tt::DataFormat::Bfp4_b, true, 14 * 6},
-        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
-        {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 12},
-        {"cb_w2c_md", tt::CBIndex::c_5, tt::DataFormat::UInt32, false, 2},
+        {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
+        {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
+        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 6 * 12},
+        {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
 
     std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles;
@@ -1202,6 +1204,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          .matmul_writer_cb_handle = matmul_writer_cb_handle,
          .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
          .combine_data_cb_handle = combine_data_cb_handle,
+         .expert_tokens_cb_handle = expert_tokens_cb_handle,
          .combine_cores = combine_cores,
          .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore}}};
 }
@@ -1228,6 +1231,9 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
 
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.matmul_writer_cb_handle, *tilize_output_tensor.buffer());
+
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.expert_tokens_cb_handle, *tilize_per_expert_total_tokens_output_tensor.buffer());
 
         //-------------------------------------------------------------------------
         // Tilize
