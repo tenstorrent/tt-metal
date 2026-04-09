@@ -121,7 +121,24 @@ def _calculate_correct_fan(shape, mode: _FanMode) -> int:
 
 
 def calculate_gain(nonlinearity: _NonlinearityType, param: int | float | None = None) -> float:
-    """Return the recommended gain value for the given nonlinearity function."""
+    """Return the recommended gain value for the given nonlinearity function.
+
+    ================= ====================================================
+    nonlinearity      gain
+    ================= ====================================================
+    linear / conv*    1
+    sigmoid           1
+    tanh              5/3
+    relu              sqrt(2)
+    leaky_relu        sqrt(2 / (1 + negative_slope^2))
+    selu              3/4
+    ================= ====================================================
+
+    Args:
+        nonlinearity: the non-linear function name.
+        param: optional parameter for the non-linear function (e.g. negative
+            slope for leaky_relu, default 0.01).
+    """
     linear_fns = [
         "linear",
         "conv1d",
@@ -202,10 +219,61 @@ def normal(mean: float = 0.0, std: float = 1.0):
     return normal_init
 
 
+def _shard_shape(shape, layout, mesh_device):
+    """Compute per-device shape by dividing sharded dims by mesh axis size.
+
+    Args:
+        shape: the shape of the tensor.
+        layout: the layout of the tensor.
+        mesh_device: the mesh device.
+    """
+
+    from ttml.distributed.layout import Shard
+
+    mesh_shape = mesh_device.shape
+    shard = list(shape)
+    for mesh_axis, placement in enumerate(layout.placements):
+        if isinstance(placement, Shard):
+            dim = placement.dim if placement.dim >= 0 else len(shard) + placement.dim
+            axis_size = mesh_shape[mesh_axis]
+            assert (
+                shard[dim] % axis_size == 0
+            ), f"Shape dim {dim} ({shard[dim]}) not divisible by mesh axis {mesh_axis} size ({axis_size})"
+            shard[dim] //= axis_size
+    return shard
+
+
+def _on_device_fill(shape, fill_value, layout, mesh_device):
+    """Initialize a filled tensor directly on device (no host→device transfer).
+
+    Computes shard shape from layout, then uses ttnn.moreh_full to allocate
+    and fill on each device directly.
+
+    Args:
+        shape: global logical shape of the tensor.
+        fill_value: the value to fill the tensor with.
+        layout: the DistributedLayout (or None for replicate).
+        mesh_device: the mesh device.
+    """
+    resolved = _resolve_layout(layout, mesh_device)
+    shard = _shard_shape(shape, resolved, mesh_device)
+    tt = ttnn.moreh_full(
+        shard,
+        fill_value,
+        mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tensor = ttml.autograd.create_tensor(tt)
+    return _stamp_layout(tensor, resolved)
+
+
 def constant(val: float):
     """All elements set to val."""
 
-    def constant_init(shape, layout=None, mesh_device=None, **_kwargs):
+    def constant_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, val, layout, mesh_device)
         arr = np.full(shape, val, dtype=ml_dtypes.bfloat16)
         return _to_tensor(arr, layout, mesh_device)
 
@@ -215,7 +283,9 @@ def constant(val: float):
 def zeros():
     """All zeros."""
 
-    def zeros_init(shape, layout=None, mesh_device=None, **_kwargs):
+    def zeros_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, 0.0, layout, mesh_device)
         arr = np.zeros(shape, dtype=ml_dtypes.bfloat16)
         return _to_tensor(arr, layout, mesh_device)
 
@@ -225,7 +295,9 @@ def zeros():
 def ones():
     """All ones."""
 
-    def ones_init(shape, layout=None, mesh_device=None, **_kwargs):
+    def ones_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, 1.0, layout, mesh_device)
         arr = np.ones(shape, dtype=ml_dtypes.bfloat16)
         return _to_tensor(arr, layout, mesh_device)
 
@@ -233,7 +305,11 @@ def ones():
 
 
 def xavier_uniform(gain: float = 1.0):
-    """Xavier uniform initialization (Glorot 2010)."""
+    """Xavier uniform initialization (Glorot 2010).
+
+    Samples from U(-a, a) where a = gain * sqrt(6 / (fan_in + fan_out)).
+    Use ``calculate_gain`` to compute gain for a specific nonlinearity.
+    """
 
     def xavier_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
@@ -245,7 +321,11 @@ def xavier_uniform(gain: float = 1.0):
 
 
 def xavier_normal(gain: float = 1.0):
-    """Xavier normal initialization (Glorot 2010)."""
+    """Xavier normal initialization (Glorot 2010).
+
+    Samples from N(0, std^2) where std = gain * sqrt(2 / (fan_in + fan_out)).
+    Use ``calculate_gain`` to compute gain for a specific nonlinearity.
+    """
 
     def xavier_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
@@ -260,7 +340,15 @@ def kaiming_uniform(
     mode: _FanMode = "fan_in",
     nonlinearity: _NonlinearityType = "leaky_relu",
 ):
-    """Kaiming uniform initialization (He 2015)."""
+    """Kaiming uniform initialization (He 2015).
+
+    Args:
+        a: negative slope of the rectifier (only used with leaky_relu).
+        mode: "fan_in" preserves forward-pass variance,
+            "fan_out" preserves backward-pass variance.
+        nonlinearity: nonlinearity function name, recommended "relu" or
+            "leaky_relu".
+    """
 
     def kaiming_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan = _calculate_correct_fan(shape, mode)
@@ -277,7 +365,17 @@ def kaiming_normal(
     mode: _FanMode = "fan_in",
     nonlinearity: _NonlinearityType = "leaky_relu",
 ):
-    """Kaiming normal initialization (He 2015)."""
+    """Kaiming normal initialization (He 2015).
+
+    Samples from N(0, std^2) where std = gain / sqrt(fan).
+
+    Args:
+        a: negative slope of the rectifier (only used with leaky_relu).
+        mode: "fan_in" preserves forward-pass variance,
+            "fan_out" preserves backward-pass variance.
+        nonlinearity: nonlinearity function name, recommended "relu" or
+            "leaky_relu".
+    """
 
     def kaiming_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan = _calculate_correct_fan(shape, mode)
@@ -290,6 +388,10 @@ def kaiming_normal(
 
 # ---------------------------------------------------------------------------
 # In-place variants (fill existing tensor, return it)
+#
+# NOTE: Not truly in-place - each function allocates a new temporary tensor
+# via the corresponding factory variant and copies the values into the
+# existing tensor with set_value(). The temporary is freed after the call.
 # ---------------------------------------------------------------------------
 
 
@@ -343,7 +445,10 @@ def ones_(tensor):
 
 
 def xavier_uniform_(tensor, gain: float = 1.0):
-    """Fill tensor in-place using Xavier uniform initialization."""
+    """Fill tensor in-place using Xavier uniform initialization (Glorot 2010).
+
+    See ``xavier_uniform`` for details.
+    """
     inner = _unwrap_tensor(tensor)
     reinit_val = xavier_uniform(gain)(inner.shape())
     inner.set_value(reinit_val.get_value(_FULL_PRECISION))
@@ -351,7 +456,10 @@ def xavier_uniform_(tensor, gain: float = 1.0):
 
 
 def xavier_normal_(tensor, gain: float = 1.0):
-    """Fill tensor in-place using Xavier normal initialization."""
+    """Fill tensor in-place using Xavier normal initialization (Glorot 2010).
+
+    See ``xavier_normal`` for details.
+    """
     inner = _unwrap_tensor(tensor)
     reinit_val = xavier_normal(gain)(inner.shape())
     inner.set_value(reinit_val.get_value(_FULL_PRECISION))
@@ -364,7 +472,10 @@ def kaiming_uniform_(
     mode: _FanMode = "fan_in",
     nonlinearity: _NonlinearityType = "leaky_relu",
 ):
-    """Fill tensor in-place using Kaiming uniform initialization."""
+    """Fill tensor in-place using Kaiming uniform initialization (He 2015).
+
+    See ``kaiming_uniform`` for details.
+    """
     inner = _unwrap_tensor(tensor)
     reinit_val = kaiming_uniform(a, mode, nonlinearity)(inner.shape())
     inner.set_value(reinit_val.get_value(_FULL_PRECISION))
@@ -377,7 +488,10 @@ def kaiming_normal_(
     mode: _FanMode = "fan_in",
     nonlinearity: _NonlinearityType = "leaky_relu",
 ):
-    """Fill tensor in-place using Kaiming normal initialization."""
+    """Fill tensor in-place using Kaiming normal initialization (He 2015).
+
+    See ``kaiming_normal`` for details.
+    """
     inner = _unwrap_tensor(tensor)
     reinit_val = kaiming_normal(a, mode, nonlinearity)(inner.shape())
     inner.set_value(reinit_val.get_value(_FULL_PRECISION))
