@@ -20,18 +20,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-
-std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& scores_tensor,
-    const ttnn::Tensor& mapping_tensor,
-    uint32_t num_links,
-    std::optional<uint32_t> axis);
-
-}  // namespace detail
-
 struct AllToAllDispatchMetadataDeviceOperation {
     struct operation_attributes_t {
         const std::optional<std::vector<uint32_t>> shared_expert_ids;
