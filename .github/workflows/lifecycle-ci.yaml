@@ -1,0 +1,38 @@
+name: "(triage) Issue Lifecycle Manager"
+
+on:
+  workflow_dispatch:
+    inputs:
+      close-issues:
+        description: "Actually close resolved issues (false = dry-run)"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository containing the open auto-triage issues"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to check workflow run history against"
+        type: string
+        default: "tenstorrent/tt-metal"
+      consecutive-runs:
+        description: "Number of recent runs to evaluate per job"
+        type: string
+        default: "3"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  lifecycle:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/lifecycle-ci.yaml@ebanerjee/issue-lifecycle
+    with:
+      close-issues: ${{ inputs.close-issues }}
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      consecutive-runs: ${{ inputs.consecutive-runs }}
+    secrets:
+      GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
