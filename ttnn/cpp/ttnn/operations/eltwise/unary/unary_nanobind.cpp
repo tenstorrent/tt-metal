@@ -1977,6 +1977,53 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies the RReLU (Randomized Leaky ReLU) function element-wise.
+
+            In evaluation mode, computes x if x >= 0, slope * x if x < 0,
+            where slope = (lower + upper) / 2.
+
+            .. math::
+                \text{{rrelu}}(x) = \begin{{cases}} x & \text{{if }} x \geq 0 \\ \frac{{\text{{lower}} + \text{{upper}}}}{{2}} \cdot x & \text{{if }} x < 0 \end{{cases}}
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of the uniform distribution. Defaults to `0.125`.
+                upper (float, optional): upper bound of the uniform distribution. Defaults to `0.3333`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            &unary_two_float_5param_to_6param_wrapper<&ttnn::rrelu>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 1.0f / 8.0f,
+            nb::arg("upper") = 1.0f / 3.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary

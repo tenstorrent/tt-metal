@@ -294,6 +294,22 @@ inline Tensor hardtanh(
         sub_core_grids);
 }
 
+// rrelu: Randomized Leaky ReLU with lower/upper bounds
+inline Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower = 1.0f / 8.0f,
+    float upper = 1.0f / 3.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::RRELU, lower, upper}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
 // -----------------------------------------------------------------------------
 // Functions defined without macros (non-SFPU operations kept)
 // -----------------------------------------------------------------------------
