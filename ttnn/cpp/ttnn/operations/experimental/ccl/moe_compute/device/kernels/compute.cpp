@@ -47,17 +47,17 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
-    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;

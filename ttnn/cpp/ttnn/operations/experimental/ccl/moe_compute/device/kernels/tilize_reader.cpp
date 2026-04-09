@@ -844,13 +844,13 @@ void kernel_main() {
                 tilize_mcast_end_y,
                 metadata_ready_semaphore_addr);
 
-            // Flush writes since we change the local value of metadata_ready_semaphore when signalling
-            // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
-            noc_async_writes_flushed();
-
             // Multicast the value 1 to all non-drain tilize cores
             noc_semaphore_set_multicast(
                 metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
+
+            // Flush writes since we change the local value of metadata_ready_semaphore when signalling
+            // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
+            noc_async_writes_flushed();
         }
 
         /*
@@ -885,7 +885,7 @@ void kernel_main() {
             all_worker_cores_bounding_box_num_cores - 1);  // Exclude self
 
         // Ensure multicast completes before signaling semaphore
-        noc_async_writes_flushed();
+        noc_async_write_barrier();
 
         // == 3 ==
 
@@ -965,8 +965,8 @@ void kernel_main() {
 
         // write out per_expert_total_tokens_output_tensor
         // tensor is a single page
-        l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
-        noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
+        // l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+        // noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
 
         // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
         // (drain core only issued these writes)
