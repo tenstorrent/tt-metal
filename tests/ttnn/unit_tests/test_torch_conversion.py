@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import ttnn
 import pytest
 import numpy as np
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh, ShardTensor2dMesh
+from models.common.utility_functions import skip_for_slow_dispatch
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
@@ -852,6 +853,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     assert ttnn_tensor.layout == layout, f"Layout mismatch: expected {layout}, got {ttnn_tensor.layout}"
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -962,6 +964,7 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
     torch.testing.assert_close(torch_tensor, result.to(torch.int32))
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "ttnn_dtype,torch_dtype,ttnn_layout",
     [

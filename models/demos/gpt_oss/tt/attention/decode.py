@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -181,6 +181,11 @@ def decode_forward(
             ends=[1, 1, batch_size, hidden_size],
             steps=[1, 1, 1, 1],
         )
+        # Workaround: ttnn.slice on bf8 TILE produces a buffer with non-standard
+        # page layout under L1 fragmentation that CCL all_reduce misreads.
+        # DRAM round-trip normalizes the buffer. See #41640 for repro and root cause analysis.
+        tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
 
     # Tensor parallel all-reduce (AllBroadcast, ~80μs vs RS+AG ~138μs).
     if mesh_config.tp > 1:

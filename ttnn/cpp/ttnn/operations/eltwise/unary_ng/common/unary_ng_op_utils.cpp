@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -133,6 +133,8 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
+        case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
         case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
@@ -183,6 +185,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                         "FILL value {} out of range for UInt16",
                         as_int);
                     fill_val = static_cast<uint32_t>(as_int);
+                } else if (*input_dtype == DataType::INT32) {
+                    fill_val = static_cast<uint32_t>(static_cast<int32_t>(param0_raw));
                 } else {
                     fill_val = static_cast<uint32_t>(param0_raw);
                 }
@@ -209,7 +213,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (*input_dtype == DataType::INT32) {
                 return {
                     "relu_min_tile_init();",
-                    fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(params[0]))};
+                    fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {"relu_min_tile_init();", fmt::format("relu_min_tile({}, {:#x}u);", idst, as_uint(param0))};
         }
@@ -355,7 +359,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (*input_dtype == DataType::INT32) {
                 return {
                     fmt::format("{}_int32_tile_init();", prefix),
-                    fmt::format("{}_int32_tile({}, {}u);", prefix, idst, static_cast<uint32_t>(params[0]))};
+                    fmt::format("{}_int32_tile({}, {}u);", prefix, idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             if (*input_dtype == DataType::UINT32) {
                 return {
@@ -408,8 +412,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format(
                         "clamp_tile_int32({}, {}, {});",
                         idst,
-                        static_cast<uint32_t>(params[0]),
-                        static_cast<uint32_t>(params[1]))};
+                        static_cast<uint32_t>(static_cast<int32_t>(params[0])),
+                        static_cast<uint32_t>(static_cast<int32_t>(params[1])))};
             }
             return {
                 "clamp_tile_init();", fmt::format("clamp_tile({}, {}, {});", idst, as_uint(param0), as_uint(param1))};
@@ -433,6 +437,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("typecast_tile_init<{0}u, {1}u>();", src_fmt, dst_fmt),
                 fmt::format("typecast_tile<{1}u, {2}u>({0});", idst, src_fmt, dst_fmt)};
+        }
+        case UnaryOpType::POLYGAMMA: {
+            TT_ASSERT(params.size() == 2, "Expected polygamma to take 2 parameters (n, scale)");
+            float param1 = static_cast<float>(params[1]);
+            return {
+                "polygamma_tile_init();",
+                fmt::format("polygamma_tile({}, {:#x}u, {:#x}u);", idst, as_uint(param0), as_uint(param1))};
         }
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::LOGIT:
@@ -521,7 +532,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RELU: return make_with_int32("relu", idst, input_dtype);
         case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::SIGN: return make_simple("sign", idst);
-        case UnaryOpType::SIGNBIT: return make_with_int32("signbit", idst, input_dtype);
+        case UnaryOpType::SIGNBIT:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (*input_dtype == DataType::INT32) {
+                return {"signbit_tile_int32_init();", fmt::format("signbit_tile_int32({});", idst)};
+            }
+            return make_simple("signbit", idst);
         case UnaryOpType::SILU: return make_simple("silu", idst);
         case UnaryOpType::SIN: return make_simple("sin", idst);
         case UnaryOpType::SQUARE: {
@@ -578,6 +595,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::TANH: return make_simple("tanh", idst);
         case UnaryOpType::SIGMOID: return make_simple("sigmoid", idst);
         case UnaryOpType::HARDMISH: return make_simple("hardmish", idst);
+        case UnaryOpType::DIGAMMA: return make_simple("digamma", idst);
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LGAMMA:
         case UnaryOpType::TANHSHRINK:

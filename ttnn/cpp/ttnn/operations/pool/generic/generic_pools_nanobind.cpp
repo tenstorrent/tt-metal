@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,19 +74,19 @@ void bind_max_pool2d_operation(nb::module_& mod) {
     ttnn::bind_function<"max_pool2d">(
         mod,
         R"doc(
-        Applies a max pool convolution to the input tensor. The resulting output Tensor will contain the maximum
-        value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
-        should be on the device. Height, width and block sharding schemes are supported.
+        Applies max pooling to the input tensor. Each output element contains the maximum value within a
+        sliding kernel window per channel. The input tensor is expected to be in [NHW, C] or [N, H, W, C]
+        format and should be on the device. Height, width and block sharding schemes are supported.
 
         Args:
-            input_tensor_a (ttnn.Tensor): the tensor to be convolved.
-            batch_size (int): the number of batches (N in a [N, C, H, W] shaped tensor).
-            input_h (int): the height of the input tensor (H in a [N, C, H, W] shaped tensor).
-            input_w (int): the width of the input tensor (W in a [N, C, H, W] shaped tensor).
-            channels (int): the number of channels (C in a [N, C, H, W] shaped tensor).
+            input_tensor (ttnn.Tensor): the input tensor.
+            batch_size (int): the number of batches (N).
+            input_h (int): the height of the input tensor (H).
+            input_w (int): the width of the input tensor (W).
+            channels (int): the number of channels (C).
             kernel_size (List of [int]): the (h, w) size of the kernel window.
             stride (List of [int]): the (h, w) stride of the kernel window.
-            padding (List of [int]): the (h, w) padding of the input tensor.
+            padding (List of [int]): the (h, w) or (top, bottom, left, right) padding.
             dilation (List of [int]): the (h, w) dilation of the kernel window.
             ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
 
@@ -100,7 +100,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
 
         Returns:
-            ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
+            ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the output tensor, or a tuple of (values, indices) if return_indices is True.
         )doc",
         &max_pool2d_nanobind_wrapper,
         nb::arg("input_tensor"),
@@ -129,22 +129,22 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
     ttnn::bind_function<"avg_pool2d">(
         mod,
         R"doc(
-        Applies an average pool convolution to the input tensor. The resulting output Tensor will contain the average
-        value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
-        should be on the device. Height, width and block sharding schemes are supported.
+        Applies average pooling to the input tensor. Each output element contains the average value within a
+        sliding kernel window per channel. The input tensor is expected to be in [NHW, C] or [N, H, W, C]
+        format and should be on the device. Height, width and block sharding schemes are supported.
 
         Args:
-            input_tensor_a (ttnn.Tensor): the tensor to be convolved.
-            batch_size (int): the number of batches (N in a [N, C, H, W] shaped tensor).
-            input_h (int): the height of the input tensor (H in a [N, C, H, W] shaped tensor).
-            input_w (int): the width of the input tensor (W in a [N, C, H, W] shaped tensor).
-            channels (int): the number of channels (C in a [N, C, H, W] shaped tensor).
+            input_tensor (ttnn.Tensor): the input tensor.
+            batch_size (int): the number of batches (N).
+            input_h (int): the height of the input tensor (H).
+            input_w (int): the width of the input tensor (W).
+            channels (int): the number of channels (C).
             kernel_size (List of [int]): the (h, w) size of the kernel window.
             stride (List of [int]): the (h, w) stride of the kernel window.
-            padding (List of [int]): the (h, w) padding of the input tensor.
-            ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
+            padding (List of [int]): the (h, w) or (top, bottom, left, right) padding.
+            ceil_mode (bool): When True, uses 'ceiling' instead of 'floor' to compute output shape. Default: False.
             count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
-            divisor_override (int, optional): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
+            divisor_override (int, optional): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
@@ -156,7 +156,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the average pool convolved output tensor.
+            ttnn.Tensor: the output tensor.
         )doc",
         &ttnn::avg_pool2d,
         nb::arg("input_tensor"),

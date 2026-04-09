@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -290,6 +290,8 @@ TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs):
+    if ttnn.CONFIG.report_path is None:
+        return None
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
@@ -459,12 +461,10 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-        tracking = ttnn.graph.is_graph_capture_active()
-        if tracking:
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)
-
             ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
-
             input_tensors = get_all_tensors((function_args, function_kwargs))
             set_tensor_id(input_tensors)
 
@@ -480,10 +480,10 @@ class FastOperation:
                 raise TypeError(enhanced_msg) from e
             raise
         finally:
-            if tracking:
+            if recording:
                 ttnn.graph.track_function_end()
 
-        if tracking:
+        if recording:
             set_tensor_id(get_all_tensors(result), force=True)
             ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result))
 
@@ -652,9 +652,7 @@ class Operation:
                         self.python_fully_qualified_name, decorated_function
                     )
 
-                # Record Python I/O BEFORE set_tensor_id mutates tensor IDs.
-                # This ensures input_tensor_ids match the previous op's output_tensor_ids.
-                if ttnn.graph.is_graph_capture_active():
+                if ttnn.graph.is_python_io_recording_enabled():
                     ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
@@ -724,7 +722,7 @@ class Operation:
                 finally:
                     captured_graph = ttnn.graph.end_graph_capture()
 
-                if ttnn.graph.is_graph_capture_active():
+                if ttnn.graph.is_graph_capture_active() and ttnn.graph.is_python_io_recording_enabled():
                     ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output))
                     ttnn.graph.store_captured_graph(captured_graph)
 
@@ -743,8 +741,8 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
-        tracking = ttnn.graph.is_graph_capture_active()
-        if tracking:
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)
         try:
             if not OPERATION_CALL_STACK:
@@ -753,7 +751,7 @@ class Operation:
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
-            if tracking:
+            if recording:
                 ttnn.graph.track_function_end()
         return output
 

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv3d_device_operation.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "conv3d_program_factory.hpp"
+#include "ttnn/operation.hpp"
 #include <array>
 #include <cstdint>
 #include <tt-metalium/math.hpp>
@@ -247,6 +248,48 @@ ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
         bias_tensor.has_value());
 
     return hash;
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
+    uint32_t batch_size = input_shape[0];
+    uint32_t T_in = input_shape[1];
+    uint32_t H_in = input_shape[2];
+    uint32_t W_in = input_shape[3];
+    uint32_t C_in = input_shape[4];
+
+    uint32_t filter_t = args.kernel_size[0];
+    uint32_t filter_h = args.kernel_size[1];
+    uint32_t filter_w = args.kernel_size[2];
+
+    const CoreCoord compute_grid = output_tensor.device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
+
+    auto [T_out, H_out, W_out] =
+        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
+
+    // Calculate number of mul/add operations
+    int64_t num_mul_adds_per_elem =
+        static_cast<int64_t>(C_in) * filter_t * filter_h * filter_w * 2;  // 1 multiply and 1 add per element
+    int64_t num_mul_adds = num_mul_adds_per_elem * T_out * H_out * W_out * args.output_channels * batch_size;
+
+    int ideal_dev_clock_cycles = std::ceil(
+        (static_cast<float>(num_mul_adds) / static_cast<float>(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        static_cast<float>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(
+            get_math_fidelity(args.compute_kernel_config))));
+
+    Tensors input_tensors = {tensor_args.input_tensor, tensor_args.weight_tensor};
+    if (tensor_args.bias_tensor.has_value()) {
+        input_tensors.push_back(tensor_args.bias_tensor.value());
+    }
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        input_tensors, output_tensor, ideal_dev_clock_cycles);
+
+    return result;
 }
 
 }  // namespace ttnn::experimental::prim

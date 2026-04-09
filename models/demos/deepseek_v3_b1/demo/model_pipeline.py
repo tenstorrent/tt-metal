@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -57,7 +57,9 @@ class ModelPipeline:
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path)
+            if model_path is None:
+                raise ValueError("weights_mode='real' requires model_path")
+            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
@@ -95,12 +97,7 @@ class ModelPipeline:
             )
 
             if io_socket_descriptor_prefix is not None:
-                pipeline_block = self.pipeline._pipeline_block
-                if pipeline_block is None:
-                    raise RuntimeError(
-                        "Pipeline.setup_and_run() must complete before exporting host socket descriptors"
-                    )
-                pipeline_block.export_host_socket_descriptors(io_socket_descriptor_prefix)
+                self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 

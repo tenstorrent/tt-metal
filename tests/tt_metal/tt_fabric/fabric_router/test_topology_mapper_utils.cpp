@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -966,6 +966,81 @@ TEST_F(TopologyMapperUtilsTest, Pinning_NodeNotInMesh_Fails) {
 
     EXPECT_FALSE(result.success);
     EXPECT_THAT(result.error_message, ::testing::HasSubstr("not found"));
+}
+
+TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinningsAppliedFirst) {
+    // Two logical meshes (two 2-node chains) paired with two physical meshes of matching sizes so
+    // inter-mesh assignment is unique; rank bindings + pinnings constrain mesh pairing and intra-mesh placement.
+    using namespace ::tt::tt_fabric;
+
+    const MeshId lm0{0};
+    const MeshId lm1{1};
+    const MeshId pm0{0};
+    const MeshId pm1{1};
+
+    const std::vector<FabricNodeId> ln0 = {FabricNodeId(lm0, 0), FabricNodeId(lm0, 1)};
+    const std::vector<FabricNodeId> ln1 = {FabricNodeId(lm1, 0), FabricNodeId(lm1, 1)};
+
+    LogicalMultiMeshGraph logical;
+    logical.mesh_adjacency_graphs_[lm0] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(ln0));
+    logical.mesh_adjacency_graphs_[lm1] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(ln1));
+
+    AdjacencyGraph<MeshId>::AdjacencyMap mesh_level;
+    mesh_level[lm0] = {lm1};
+    mesh_level[lm1] = {lm0};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level);
+
+    const tt::tt_metal::AsicID a100{100};
+    const tt::tt_metal::AsicID a101{101};
+    const tt::tt_metal::AsicID a200{200};
+    const tt::tt_metal::AsicID a201{201};
+
+    PhysicalAdjacencyMap pa0;
+    pa0[a100] = {a101};
+    pa0[a101] = {a100};
+    PhysicalAdjacencyMap pa1;
+    pa1[a200] = {a201};
+    pa1[a201] = {a200};
+
+    PhysicalMultiMeshGraph physical;
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level);
+    physical.mesh_adjacency_graphs_[pm0] = AdjacencyGraph<tt::tt_metal::AsicID>(pa0);
+    physical.mesh_adjacency_graphs_[pm1] = AdjacencyGraph<tt::tt_metal::AsicID>(pa1);
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& node : ln0) {
+        fabric_node_id_to_mesh_rank[lm0][node] = rank0_;
+    }
+    for (const auto& node : ln1) {
+        fabric_node_id_to_mesh_rank[lm1][node] = rank0_;
+    }
+
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
+
+    TopologyMappingConfig config;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const AsicPosition pos100{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
+    const AsicPosition pos101{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
+    const AsicPosition pos200{tt::tt_metal::TrayID{2}, tt::tt_metal::ASICLocation{0}};
+    const AsicPosition pos201{tt::tt_metal::TrayID{2}, tt::tt_metal::ASICLocation{1}};
+    config.asic_positions[a100] = pos100;
+    config.asic_positions[a101] = pos101;
+    config.asic_positions[a200] = pos200;
+    config.asic_positions[a201] = pos201;
+
+    // Logical mesh 0 has no pinnings. It will be placed on the first available physical mesh, if the pinnings are
+    // applied only at the intra-mesh level. Pin logical mesh 1, such that it has to land on physical mesh 0. This
+    // will make sure we apply mesh-level pinnings before inter-mesh mapping.
+    config.pinnings.emplace_back(pos100, ln1[0]);
+
+    const auto result =
+        map_multi_mesh_to_physical(logical, physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+    EXPECT_EQ(result.fabric_node_to_asic.at(ln0[0]), a200);
 }
 
 // =============================================================================

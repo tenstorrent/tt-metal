@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,18 +17,22 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
-)
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
+    fuse_q_ab_kv_a,
+)
 
 
 @pytest.mark.parametrize(
@@ -94,7 +98,8 @@ def test_attention_block(
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
-    num_links = 1
+    num_links_bcast = 1
+    num_links_allreduce = 2
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -106,7 +111,9 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+    attention_block_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
 
     # ========================================================================
     # Configuration
@@ -301,7 +308,7 @@ def test_attention_block(
         (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
     )
 
-    # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
+    # DKV matmul weights (raw, unshuffled — fuse_q_ab_kv_a handles shard reordering)
     torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
@@ -372,24 +379,26 @@ def test_attention_block(
     torch_o_proj_weights = generate_mm_weights((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
-    # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
-    bdw = BlitzDecodeWeights(submesh)
-    (
-        matmul_weights_overlapped,
-        matmul2_weights_overlapped,
-        dkv_matmul_weights_overlapped,
-    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+    # weights as overlapped tensors sharing a single L1 buffer via fuse_q_ab_kv_a.
+    qab_kva = fuse_q_ab_kv_a(
         torch_matmul_weights,
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
+        submesh,
     )
+    matmul_weights_overlapped = qab_kva["q_a_proj"]
+    matmul2_weights_overlapped = qab_kva["q_b_proj"]
+    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
 
-    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_weights_overlapped, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(
+    kv_b12 = fuse_kv_b12(
         torch_matmul3_weights_flat,
         torch_kv_b2_proj_weights,
+        submesh,
     )
+    matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
+    kv_b2_overlapped = kv_b12["kv_b2_proj"]
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # After 3-phase CreateQHeads tilization:
@@ -491,21 +500,19 @@ def test_attention_block(
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
     # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    (
-        o_proj_overlapped,  # o_proj
-        _,  # gate_mm
-        gamma_overlapped,
-        rmsnorm2_gamma_overlapped,
-        dkv_rmsnorm_gamma_overlapped,
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = fuse_o_proj_gate_mm_norms(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_gamma,
         torch_rmsnorm2_gamma,
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
+        submesh,
     )
+    o_proj_overlapped = o_norms["o_proj"]
+    gamma_overlapped = o_norms["attn_norm"]
+    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
@@ -619,7 +626,7 @@ def test_attention_block(
     num_matmul1_cores = matmul1_grid.num_cores()  # 64
 
     # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
-    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    matmul2_grid = o_proj_cfg.o_proj.core_range_set
     num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # SDPA configuration (matching original sdpa_reduce_to_all test)
@@ -716,8 +723,9 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create CCL tensors and semaphores
+    # Create CCL tensors
     # ========================================================================
+    # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -821,6 +829,8 @@ def test_attention_block(
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
     # WIDTH_SHARDED across 2 forwarder cores, each gets half
     num_forwarders = 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
@@ -881,14 +891,15 @@ def test_attention_block(
             program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
-            attention_block_semaphores,
-            reduce_cluster_axis,
-            0,  # sdpa_cluster_axis
-            num_links,
-            epsilon,
-            use_fp32,
-            skip_ccl,
-            noc_mode,
+            attention_block_semaphores=attention_block_semaphores,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links_bcast=num_links_bcast,
+            num_links_allreduce=num_links_allreduce,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             fabric_config=device_params["fabric_config"],
         )
