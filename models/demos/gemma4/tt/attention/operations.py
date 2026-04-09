@@ -127,22 +127,29 @@ def apply_output_projection(tensor, weights: AttentionWeights):
     return out
 
 
+_allreduce_count = 0
+
+
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """Apply tensor-parallel allreduce if TP > 1."""
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
-    logger.debug(
-        f"all_reduce: shape={tensor.shape}, dtype={tensor.dtype}, "
+    global _allreduce_count
+    _allreduce_count += 1
+    call_id = _allreduce_count
+    logger.info(
+        f"all_reduce #{call_id}: shape={tensor.shape}, dtype={tensor.dtype}, "
         f"layout={tensor.layout}, memory={tensor.memory_config()}, "
-        f"num_links=1, topology=Linear"
+        f"num_links=1, topology=Linear, cluster_axis={mesh_config.tp_axis}"
     )
     result = ttnn.all_reduce(
         tensor,
+        cluster_axis=mesh_config.tp_axis,
         num_links=1,
         topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    logger.debug(f"all_reduce done: shape={result.shape}")
+    logger.info(f"all_reduce #{call_id} done: shape={result.shape}")
     tensor.deallocate(True)
     return result
