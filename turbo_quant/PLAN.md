@@ -533,34 +533,38 @@ Two sub-steps:
 
 **TurboQuant vs Baseline BFP8 (Wormhole N150, Llama-3.1-8B-Instruct):**
 
-| | max_seq=128 | max_seq=512 |
-|--|--|--|
-| Baseline BFP8 (no TurboQuant) | **37.0 ms/tok** | **37.7 ms/tok** |
-| TurboQuant 3-bit (B1+B2+B3) | 47.3 ms/tok | 54.4 ms/tok |
-| Overhead | +10.3ms (1.28×) | +16.7ms (1.44×) |
+| max_seq | Baseline BFP8 | TurboQuant 3-bit | Overhead |
+|---------|--------------|-----------------|----------|
+| 128 | 37.0 ms | **45.6 ms** | **1.23×** |
+| 512 | 37.7 ms | 48.0 ms | 1.27× |
+| 1024 | 37.7 ms | 50.1 ms | 1.33× |
+| 2048 | 37.8 ms | 53.6 ms | 1.42× |
+| 4096 | 37.7 ms | 60.7 ms | 1.61× |
+| 8192 | 37.7 ms | 74.8 ms | 1.98× |
+
+Baseline is flat (~37.7ms) because SDPA decode only reads filled positions.
+TurboQuant overhead grows linearly: the `mul(cached_centroids, norms)` dequantize
+processes the **entire** pre-allocated `[1, H, max_seq_padded, D]` cache every step,
+including unfilled positions. Fixing this scaling issue is the next optimization target.
 
 **Optimisation history:**
 
 ```
-A0   183ms/tok  baseline TurboQuant (before optimisation)
-A1   168ms/tok  indices on device via paged_update_cache
-A2   130ms/tok  norms on device, fixed shapes, no CPU roundtrips
-A2t   71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)
-B1+2  49/58ms   fused bucketize + gather kernels (1 op each vs 13+21)
-B1-3  47/54ms   + rotated-space SDPA (eliminates inverse rotation matmuls)
-base  37/38ms   baseline BFP8 (no TurboQuant)
+A0    183ms/tok  baseline TurboQuant (before optimisation)
+A1    168ms/tok  indices on device via paged_update_cache
+A2    130ms/tok  norms on device, fixed shapes, no CPU roundtrips
+A2t    71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)
+B1+2   47ms     fused bucketize + gather kernels
+centr  46ms     cache centroid values (gather at quantize time)
+absrb  45.6ms   absorb Π into W_v/W_o weights
+base   37.0ms   baseline BFP8 (no TurboQuant)
 ```
 
-Remaining overhead at seq=128 (~10ms) breakdown:
-- **Quantize** new token: rotation matmul + norm + fused bucketize ≈ 2ms
-- **Scatter** 4× paged_update_cache (K/V indices + norms) ≈ 2ms
-- **Dequantize** full cache: fused gather + mul over [1,8,128,128] ≈ 4ms
-- **Pre/post rotate** Q and output: 2× tiny matmuls ≈ 2ms
-
-The gap grows with sequence length because dequantize operates on the full
-`[1, H, max_seq, D]` cache every step. Bit-packing (E) would reduce DRAM
-bandwidth for the gather pass; a fused SDPA reader (future) would eliminate
-the separate dequantize pass entirely.
+Remaining overhead at seq=128 (~8.6ms) breakdown:
+- **K rotation + Q pre-rotation**: ~3ms (RoPE forces these to remain)
+- **Quantize** (norm + bucketize + gather on 1 token): ~2ms
+- **Scatter** (4× paged_update_cache): ~2ms
+- **Dequantize** mul (full cache × norms): ~1.5ms
 
 ---
 

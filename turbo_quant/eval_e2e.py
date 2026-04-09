@@ -105,13 +105,13 @@ def main():
     dtype = ttnn.bfloat8_b
     # When rotation is absorbed, use a separate weight cache dir so the modified
     # state_dict is actually used (default cache has un-rotated weights).
+    # When rotation is absorbed, use a sibling cache dir for the modified weights.
+    # The standard cache has un-rotated weights that would shadow our changes.
+    wcache = model_args.weight_cache_path(dtype)
     if absorb_rotation:
         from pathlib import Path
-        import tempfile
 
-        wcache = Path(tempfile.mkdtemp(prefix="tq_rotated_weights_"))
-    else:
-        wcache = model_args.weight_cache_path(dtype)
+        wcache = Path(str(wcache) + "_tq_rotated")
     print(f"Loading TT model{' (no weight cache — rotation absorbed)' if absorb_rotation else ''}...")
     tt_model = Transformer(
         args=model_args,
