@@ -6,7 +6,7 @@ Device profiling harness: compare rotary-embedding op time (HF vs mllama RoPE) v
 
 Runs once per parametrized demo phase (``prefill`` or ``decode``): 1 layer, seqlen 1024, 2 generated
 tokens, batch sizes 1 and 32 under `python -m tracy`, parses the ops CSV and captured demo logs (TTFT,
-decode tok/s/user), prints a Markdown table, and removes temp dirs on success.
+decode tok/s/user), logs a Markdown table (via loguru), and removes temp dirs on success.
 
 Set the model with env `HF_MODEL` only. Phase is selected via :func:`pytest.mark.parametrize` on
 ``rope_perf_mode`` (``prefill`` or ``decode``).
@@ -28,6 +28,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from loguru import logger
 
 # Subprocess owns the mesh; parent must not open UMD / hold the device (see test_device_perf.py
 # lines 23–26). Do not call ttnn.get_num_devices() here — it acquires CHIP_IN_USE and deadlocks the child.
@@ -285,8 +286,8 @@ def _run_tracy(
     timeout_sec: int | None = None,
 ) -> str:
     """
-    Run Tracy + pytest; capture combined stdout/stderr for parsing demo perf logs, and echo to the parent
-    console so ``pytest -s`` still shows child output.
+    Run Tracy + pytest; capture combined stdout/stderr for parsing demo perf logs, and log child output
+    with ``logger.info`` so ``pytest -s`` still shows it (via loguru sinks).
     """
     proc = subprocess.run(
         argv,
@@ -298,9 +299,9 @@ def _run_tracy(
         text=True,
     )
     if proc.stdout:
-        print(proc.stdout, end="")
+        logger.info(proc.stdout)
     if proc.stderr:
-        print(proc.stderr, end="", file=sys.stderr)
+        logger.info(proc.stderr)
     return (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
@@ -372,7 +373,7 @@ def test_rope_performance_comparison_table(rope_perf_mode: str):
     """
     Compare HF vs mllama RoPE device time for ``rope_perf_mode`` (prefill or decode), bs in {1, 32},
     1 layer, seqlen 1024, 2 generated tokens. Model from ``HF_MODEL`` env only.
-    Optional ``MESH_DEVICE`` is inherited by the Tracy subprocess. Prints a Markdown table (run pytest with -s).
+    Optional ``MESH_DEVICE`` is inherited by the Tracy subprocess. Logs a Markdown table (run pytest with -s).
     """
     hf_model = os.environ.get("HF_MODEL")
     assert (
@@ -429,11 +430,11 @@ def test_rope_performance_comparison_table(rope_perf_mode: str):
     md = _markdown_table(table_rows)
     mesh_device_env = os.environ.get("MESH_DEVICE")
     mesh_device_display = mesh_device_env if mesh_device_env else "(unset — demo mesh from available devices)"
-    print("\n### RoPE device time (HF vs mllama)\n")
-    print(f"`HF_MODEL`: `{hf_model}`")
-    print(f"`MESH_DEVICE`: `{mesh_device_display}`")
-    print(f"`rope_perf_mode`: `{rope_perf_mode}`")
-    print(
+    logger.info("\n### RoPE device time (HF vs mllama)\n")
+    logger.info(f"`HF_MODEL`: `{hf_model}`")
+    logger.info(f"`MESH_DEVICE`: `{mesh_device_display}`")
+    logger.info(f"`rope_perf_mode`: `{rope_perf_mode}`")
+    logger.info(
         "*Difference metrics (per table row; HF vs mllama):* "
         "`pct_diff_ttft_%` / `pct_diff_tok_s_u_%` / `pct_diff_rope_*` = 100 × (HF − mllama) / HF. "
         "For TTFT and RoPE (time), a positive % means HF uses more time than mllama. "
@@ -441,5 +442,5 @@ def test_rope_performance_comparison_table(rope_perf_mode: str):
         "`ratio_*` = HF / mllama. "
         "`delta_rope_max_mean_ns` = HF − mllama (aggregated RoPE max-mean ns).\n"
     )
-    print(md)
-    print()
+    logger.info(md)
+    logger.info("")
