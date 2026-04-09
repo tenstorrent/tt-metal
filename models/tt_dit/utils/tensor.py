@@ -363,16 +363,18 @@ def fast_device_to_host(
             f"{len(shards_by_coord)} unique coordinates"
         )
 
-    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None),
-    # the tensor must be replicated along that axis (size 1), otherwise we'd
-    # silently drop shards.
+    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None)
+    # and has more than one device, the tensor must be replicated along that
+    # axis — otherwise we'd silently drop unique shards.
+    placements = list(tt_tensor.tensor_topology().placements())
     for axis in range(len(concat_dims)):
         if concat_dims[axis] is None and mesh_shape[axis] > 1:
-            msg = (
-                f"concat_dims[{axis}] is None (no gather) but mesh_shape[{axis}]={mesh_shape[axis]} > 1. "
-                f"This would drop shards. Either gather along this axis or ensure the tensor is replicated."
-            )
-            raise ValueError(msg)
+            if not isinstance(placements[axis], ttnn.PlacementReplicate):
+                msg = (
+                    f"concat_dims[{axis}] is None (no gather) but mesh axis {axis} "
+                    f"(size {mesh_shape[axis]}) is not replicated — this would drop shards."
+                )
+                raise ValueError(msg)
 
     # Reassemble from 2D mesh using explicit coordinate lookup.
     if concat_dims[0] is not None and concat_dims[1] is not None:
