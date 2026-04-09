@@ -227,6 +227,7 @@ from ttnn.types import (
     corerange_to_cores,
     get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -482,7 +483,11 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+
+# Expose disaggregation in experimental namespace
+experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

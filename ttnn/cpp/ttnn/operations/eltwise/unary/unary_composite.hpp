@@ -9,7 +9,6 @@
 
 namespace ttnn {
 
-Tensor digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);

@@ -2,6 +2,8 @@
 
 `generate_rank_bindings` must be run under an **MPI** launcher. It performs physical-system discovery and topology mapping, then writes **`rank_bindings.yaml`**, a **`rankfile`**, and optionally **`phase2_mock_mapping.yaml`** under an output directory (rank 0 only).
 
+**`tt-run` (auto allocation mode):** For application launches, you normally do **not** call this binary directly. Use **`tt-run --mesh-graph-descriptor <mgd> --hosts …`** (real cluster) or **`--mock-cluster-rank-binding …`** (mock); `tt-run` runs `generate_rank_bindings` as **Phase 1** (or reuses a cache under `generated/ttrun/<cache_id>/`). See [ttnn/ttnn/distributed/README_ttrun.md](../../ttnn/ttnn/distributed/README_ttrun.md).
+
 ---
 
 ## Prerequisites
