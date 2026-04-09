@@ -113,6 +113,9 @@ CpuQkvSplitResult cpu_split_qkv_reference(
     uint32_t head_dim,
     bool transpose_k,
     QkvLayout layout) {
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
+    TT_FATAL(num_q_heads > 0, "num_q_heads must be > 0");
+    TT_FATAL(head_dim > 0, "head_dim must be > 0");
     TT_FATAL(
         num_q_heads % num_kv_heads == 0,
         "num_q_heads {} must be divisible by num_kv_heads {}",
@@ -483,8 +486,10 @@ TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InDramInterleaved__OutDramInterleaved__se
 //
 // These tests verify that:
 //   - With GROUPED input + tile-aligned seq: PCC ≈ 1.0 (the kernel works as designed)
-//   - With CONCATENATED input + tile-aligned seq: PCC ≈ 0.1 (the layout-mismatch bug
-//     reveals itself even on tile-aligned seq lengths — see Cells 13-14)
+//   - With CONCATENATED input + tile-aligned seq: REJECTED at validation time by the
+//     `qkv_layout` TT_FATAL added in commit 6 of this branch (see Cells 13-14).
+//     Before that commit, the kernel silently produced PCC ≈ 0.1 — the bug the
+//     framework was missing for ~19 months.
 //
 // Grid choice: num_w_cores = num_kv_heads (so each shard width is exactly
 // (n_q/n_kv + 2) * head_dim — what the existing create_qkv_heads validator expects).

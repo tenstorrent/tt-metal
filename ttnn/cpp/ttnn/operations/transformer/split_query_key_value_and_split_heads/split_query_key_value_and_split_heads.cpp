@@ -230,6 +230,10 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
 
     // Resolve effective qkv_layout. The default preserves pre-#41718 behavior:
     // sharded inputs default to GROUPED, interleaved inputs default to CONCATENATED.
+    // Note: when input_tensor_kv is provided (separate Q/KV path) the inference
+    // looks at the Q tensor's sharding only. That is fine because the separate-KV
+    // path always falls through to the interleaved nlp_create_qkv_heads code path
+    // below — it never goes through the GROUPED-layout sharded reader.
     const QkvLayout effective_layout =
         qkv_layout.value_or(input_tensor.is_sharded() ? QkvLayout::GROUPED : QkvLayout::CONCATENATED);
 
