@@ -14,6 +14,7 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_ce/all_gather_ce_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.hpp"
@@ -44,6 +45,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_all_gather_minimal_matmul_async(mod);
     ccl::bind_llama_all_gather_matmul_async(mod);
     ccl::bind_all_gather_async(mod);
+    ccl::bind_all_gather_ce(mod);
     ccl::bind_strided_all_gather_async(mod);
     ccl::bind_all_to_all_async(mod);
     ccl::bind_all_to_all_async_generic(mod);

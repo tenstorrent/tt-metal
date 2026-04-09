@@ -73,7 +73,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const char* reader_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_reader.cpp",
+    const char* writer_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp");
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(

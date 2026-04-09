@@ -96,6 +96,15 @@ autograd::TensorPtr sharded_cross_entropy_loss(
                 static_cast<float>(k * local_V + v);
         }
     }
+    // Upload the full [tp_size,1,1,local_V] table, then split it along dim 0: TP device k
+    // keeps only row k, shaped [1,1,1,local_V]. That row lists the global token id for
+    // each local logit column on that device (column j is id k*local_V + j).
+    //
+    // Downstream we compare targets [B,1,S,1] to that row with element-wise equality and
+    // broadcasting. For one (batch, seq) position, at most one device sees a match: the
+    // device that actually holds the logit for that target id. Every other device gets
+    // all-false along local_V. We cast the boolean mask to float so we can multiply logits
+    // and subtract it from softmax in the backward (standard cross-entropy gradient).
     const auto vocab_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0U, cluster_axis);
     auto vocab_range = core::from_vector<float, ttnn::DataType::FLOAT32>(
         vocab_range_cpu, ttnn::Shape({tp_size, 1U, 1U, local_V}), device, ttnn::Layout::TILE, vocab_mapper.get());

@@ -230,7 +230,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const char* reader_kernel_path,
+    const char* writer_kernel_path) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -556,8 +558,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "minimal_default_reader.cpp",
+        reader_kernel_path,
         sender_worker_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
 
@@ -607,8 +608,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "minimal_default_writer.cpp",
+        writer_kernel_path,
         sender_worker_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
