@@ -83,6 +83,21 @@ Tensor view(
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
+/**
+ * Forcefully reinterpret the device memory of input_tensor with new_spec and new_topology.
+ *
+ * This function provides minimal checks and is extremely error prone. Thus should be used with extreme caution.
+ * Reading the content of the Tensor after reinterpretation should be considered as undefined behavior.
+ *
+ * A proposal for a safer alternative is described in #38093.
+ *
+ * This function should not be considered as part of the general public API and will be unstable.
+ */
+Tensor unchecked_force_reinterpret(
+    const Tensor& input_tensor,
+    const tt::tt_metal::TensorSpec& new_spec,
+    const tt::tt_metal::TensorTopology& new_topology);
+
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
 
 std::string to_string(const Tensor& tensor);
