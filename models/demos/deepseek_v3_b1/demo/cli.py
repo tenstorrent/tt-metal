@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
-        io_socket_descriptor_prefix = "deepseek_v3_b1"
+        io_socket_descriptor_prefix = "deepseek"
     print("Running demo")
     run_demo(
         prompts=[args.prompt_1, args.prompt_2],

@@ -82,6 +82,7 @@ class ModelPipeline:
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             enable_mtp=True,
+            io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
@@ -101,9 +102,6 @@ class ModelPipeline:
                 read_fn=self.pipeline.read_output,
                 batch_size=1,
             )
-
-            # if io_socket_descriptor_prefix is not None:
-            #     self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
