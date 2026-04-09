@@ -83,6 +83,8 @@ jobs:
           | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
 
           Rules are matched by **file path globs** and **PR labels** — only rules relevant to your changes will run. Each rule is an independent LLM analysis; no state is shared between rules.
+
+          **Rules are defined in** [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules) and registered in [`.github/bug_checker/manifest.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/bug_checker/manifest.yaml).
           HELPEOF
           | sed 's/^          //')"
 
