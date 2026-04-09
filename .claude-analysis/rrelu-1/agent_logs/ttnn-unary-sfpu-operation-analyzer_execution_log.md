@@ -157,3 +157,50 @@ Analyzed the SFPU kernel implementation for the `DROPOUT` operation. This is a n
 ## Output (dropout)
 - **Analysis file**: `.claude-analysis/rrelu-1/dropout_analysis.md`
 - **Commit**: `7730652612`
+
+---
+
+## Session Info (hardtanh)
+- **Operation**: hardtanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-09
+- **Status**: SUCCESS
+
+## Summary (hardtanh)
+Analyzed the SFPU kernel implementation for the `HARDTANH` unary operation on a deeply-nuked codebase. The core SFPU implementation (`ckernel_sfpu_hardtanh.h`) survives intact in tt_llk for both Wormhole B0 and Blackhole. Upper dispatch layers (compute API header, Metal LLK dispatch, TTNN dispatch case) were deleted by the deep nuke.
+
+## Key Findings (hardtanh)
+- **Formula**: `clamp(x, low, high)` with defaults low=-1, high=1
+- **API signature**: `hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1)` + `hardtanh_tile_init()` (from Doxygen docs)
+- **Kernel style**: Pure SFPI abstraction (Style A) using `vFloat`, `dst_reg`, `v_if`/`v_endif`
+- **Algorithm**: Additive offset clamping technique -- shifts comparison bounds to zero to exploit efficient LT0/GTE0 condition codes
+- **Parameters**: 3 FP16_B uint32_t values encoding `-low`, `low-high`, and `high`
+- **Approximation mode**: `false` (APPROXIMATION_MODE template parameter is completely unused -- no branch on it)
+- **SFPU instructions per iteration**: 11 (SFPLOAD, 3x SFPMAD, 2x SFPSETCC, 2x SFPLOADI for 0.0, 2x SFPCOMPC, SFPSTORE)
+- **Address mode**: ADDR_MOD_7 with dest.incr=0 (standard for most unary SFPU ops)
+- **WH/BH parity**: Core SFPU kernel is byte-for-byte identical on both architectures
+
+## Execution Timeline (hardtanh)
+1. Read unary_op_utils.hpp/.cpp -- confirmed HARDTANH in enum, is_parametrized_type returns true, but dispatch cases nuked
+2. Read DEEP_NUKE_MANIFEST.md -- confirmed hardtanh dispatch/API/LLK/ckernel deleted, tt_llk primitive survives
+3. Read ckernel_sfpu_hardtanh.h (WH+BH) -- confirmed identical, analyzed additive offset algorithm
+4. Read ckernel_sfpu_clamp.h for comparison -- different approach (direct comparison)
+5. Read llk_math_eltwise_unary_sfpu_params.h (WH+BH) -- confirmed face iteration dispatch
+6. Read llk_math_eltwise_unary_sfpu.h (WH+BH) -- confirmed ADDR_MOD_7 for hardtanh
+7. Read sfpi_fp16.h for s2vFloat16b semantics (uint32_t pass-through for pre-encoded FP16_B)
+8. Read sfpi.h for v_if/v_endif instruction mapping (SFPSETCC/SFPCOMPC)
+9. Read llk_math_eltwise_unary_sfpu_macros.h -- identified SFPU_UNARY_THREE_PARAM_KERNEL_FN as likely dispatch macro
+10. Verified all function names and file paths via grep
+11. Wrote hardtanh_analysis.md with algorithm derivation and parameter encoding analysis
+
+## Verification Results (hardtanh)
+- `_calculate_hardtanh_`: FOUND in wh+bh ckernel_sfpu_hardtanh.h
+- `_llk_math_eltwise_unary_sfpu_params_`: FOUND in wh+bh llk_math_eltwise_unary_sfpu_params.h
+- `_llk_math_eltwise_unary_sfpu_init_`: FOUND in wh+bh llk_math_eltwise_unary_sfpu.h
+- `eltwise_unary_sfpu_configure_addrmod`: FOUND in wh+bh llk_math_eltwise_unary_sfpu.h
+- `SFPU_UNARY_THREE_PARAM_KERNEL_FN`: FOUND in llk_math_eltwise_unary_sfpu_macros.h
+- `SfpuType::hardtanh`: FOUND in llk_sfpu_types.h
+- All file paths: verified existing
+
+## Output (hardtanh)
+- **Analysis file**: `.claude-analysis/rrelu-1/hardtanh_analysis.md`
