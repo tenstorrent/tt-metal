@@ -247,9 +247,17 @@ void enqueue_mesh_workload(
     // Record a host-visible completion event after the workload so buffers referenced by
     // this op cannot be deallocated and immediately reused while the device is still using
     // their addresses on this CQ.
-    auto completion_event = mesh_cq.enqueue_record_event_to_host();
-    detail::track_completion_event_on_tensors(tensor_args, completion_event);
-    detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
+    //
+    // Skip during trace capture: enqueue_record_event_to_host() TT_FATALs when trace_id is
+    // set ("Event Synchronization is not supported during trace capture"). Buffer lifetime
+    // during trace execution is managed by the trace infrastructure, which keeps all captured
+    // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
+    // occur during capture.
+    if (!mesh_cq.trace_id().has_value()) {
+        auto completion_event = mesh_cq.enqueue_record_event_to_host();
+        detail::track_completion_event_on_tensors(tensor_args, completion_event);
+        detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
+    }
 
     TracyOpMeshWorkload(
         mesh_device,
