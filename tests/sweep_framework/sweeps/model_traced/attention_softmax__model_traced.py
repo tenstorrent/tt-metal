@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
@@ -111,8 +111,9 @@ def run(
         shape_b = tuple(mask_shape) if mask_shape else shape_a
 
     # Get head_size from op_kwargs if provided (traced configs provide it as a kwarg),
-    # otherwise fall back to scalar or arg1 (V2 loader stores positional args as argN)
-    raw_hs = scalar if scalar is not None else kwargs.get("arg1", None)
+    # otherwise fall back to scalar or positional arg1
+    pos_args = extract_positional_args(kwargs)
+    raw_hs = scalar if scalar is not None else pos_args.get(1, None)
     head_size = op_kwargs.get("head_size", int(raw_hs) if raw_hs is not None else None)
 
     # Generate input tensor — use small range to avoid BFLOAT8_B precision issues with softmax.
