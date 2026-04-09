@@ -10,7 +10,7 @@ only tensor-address slots on repeat launches.
 
 **Fusion build cache** (``_BUILD_CACHE``): collision-free tuple key
 ``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
-Cache lookup never accesses :attr:`DeferredOpDescriptor.descriptor`.
+Cache lookup never accesses :attr:`OpDescriptor.descriptor`.
 
 The cache stores only the fused ``ProgramDescriptor``, semaphores, kernel labels,
 and an output-source map — **no IO tensors**. On a cache hit, a fresh
@@ -486,7 +486,7 @@ class FusedOp:
     def refresh_merged_io(self, ops: List) -> None:
         """Copy merged IO from *ops* (flatten order) into this fused op's lists in place.
 
-        Branch ``OpDescriptor`` / ``DeferredOpDescriptor`` instances must be the
+        Branch ``OpDescriptor`` instances must be the
         same objects as at ``build()`` time. Update their ``input_tensors`` /
         ``output_tensors`` before calling.
 
@@ -636,6 +636,7 @@ class Sequential:
         self._items = all_items
         self._run_fused: Optional[FusedOp] = None
         self._run_called = False
+        self._descriptor_names: tuple = ()
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -771,6 +772,7 @@ class Parallel:
         self._items = all_items
         self._run_fused: Optional[FusedOp] = None
         self._run_called = False
+        self._descriptor_names: tuple = ()
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
