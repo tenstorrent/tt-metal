@@ -29,18 +29,19 @@ FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out) {
     untilize_uninit(cb_in);
 }
 
-// Tilize num_valid_tiles from cb_in to cb_out.
-// Always pops NUM_TILES_IN_TILIZED_CHUNK from cb_in since compute_ht produces a full 32-tile chunk.
+// Tilize the full 32-tile block from cb_in to cb_out, but only push num_valid_tiles.
+// The tilize must always process the full NUM_TILES_IN_TILIZED_CHUNK block to correctly
+// reconstruct the tile layout from row-major format (inverse of untilize_block(32)).
 FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_valid_tiles) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    tilize_init(cb_in, num_valid_tiles, cb_out);
+    tilize_init(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
 
     cb_wait_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
     cb_reserve_back(cb_out, num_valid_tiles);
 
-    tilize_block(cb_in, num_valid_tiles, cb_out);
+    tilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
 
     cb_push_back(cb_out, num_valid_tiles);
     cb_pop_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
