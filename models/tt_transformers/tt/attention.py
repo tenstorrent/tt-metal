@@ -726,52 +726,80 @@ class Attention(LightweightModule):
         # KV update
         ###
         if turbo_quant_cache is not None and not kv_cache:
-            # TurboQuant path: quantize new K/V on device, scatter indices + norms into
-            # on-device cache (no host transfer), dequantize full cache back to BF16.
-            # k_heads_1BKD is [1, batch, kv_heads, head_dim]; permute to
-            # [batch, kv_heads, 1, head_dim] for the cache API.
-            # nlp_create_qkv_heads_decode outputs L1-sharded tensors; permute
-            # requires interleaved layout so move to DRAM first.
+            # TurboQuant preprocessing: quantize + pre-rescale K/V, then let the
+            # standard paged scatter + paged SDPA handle the rest.
+            # Requires BF16 paged layer_past (BFP8 destroys pre-rescaled values).
+            rotation_absorbed = getattr(turbo_quant_cache, "rotation_absorbed", False)
+
+            # Move to DRAM for matmul/SFPU ops, permute for TQ quantize API.
+            orig_mem = k_heads_1BKD.memory_config()
             k_dram = ttnn.to_memory_config(k_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             v_dram = ttnn.to_memory_config(v_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(k_heads_1BKD)
             ttnn.deallocate(v_heads_1BKD)
+
             k_for_tq = ttnn.permute(k_dram, (1, 2, 0, 3))
             v_for_tq = ttnn.permute(v_dram, (1, 2, 0, 3))
             ttnn.deallocate(k_dram)
             ttnn.deallocate(v_dram)
 
-            # B3 optimisation: compute SDPA in rotated coordinate space.
-            use_rotated = getattr(turbo_quant_cache, "use_rotated_sdpa", True)
-            # When rotation is absorbed into W_v/W_o, V is already rotated and
-            # post-rotation is handled by W_o. Only K rotation + Q pre-rotation remain.
-            rotation_absorbed = getattr(turbo_quant_cache, "rotation_absorbed", False)
-
-            if use_rotated:
-                keys, values = turbo_quant_cache.update_and_dequantize_rotated(
-                    k_for_tq,
-                    v_for_tq,
-                    layer_idx=0,
-                    current_pos=current_pos,
-                )
-                # Pre-rotate Q: Q' = Q × Π  (tiny matmul on 1 token)
-                q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
-            else:
-                keys, values = turbo_quant_cache.update_and_dequantize(
-                    k_for_tq,
-                    v_for_tq,
-                    layer_idx=0,
-                    current_pos=current_pos,
-                )
-
+            # Quantize + pre-rescale: centroid_value × norm (tiny, 1 token).
+            k_rescaled, _ = turbo_quant_cache.quantize(k_for_tq)
+            v_rescaled, _ = turbo_quant_cache.quantize(v_for_tq, skip_rotation=rotation_absorbed)
             ttnn.deallocate(k_for_tq)
             ttnn.deallocate(v_for_tq)
 
-            # NOTE: Varying the batch size will result in slightly different outputs.
-            # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
-            # This is because the SDPA op in decode mode has different number of reductions depending on batch size
-            # Which leads to slightly different outputs from attention (due to accumulated errors)
-            sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
+            # Permute back to [1, batch, heads, dim] and re-shard for paged_update_cache.
+            k_heads_1BKD = ttnn.permute(k_rescaled, (2, 0, 1, 3))
+            v_heads_1BKD = ttnn.permute(v_rescaled, (2, 0, 1, 3))
+            ttnn.deallocate(k_rescaled)
+            ttnn.deallocate(v_rescaled)
+            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, orig_mem)
+            v_heads_1BKD = ttnn.to_memory_config(v_heads_1BKD, orig_mem)
+
+            # Pre-rotate Q for rotated-space SDPA.
+            q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
+
+        # Standard scatter + SDPA path (paged or non-paged).
+        # With TQ: K/V are pre-rescaled centroid×norm values in BF16 paged cache.
+        # Without TQ: K/V are raw attention heads in BFP8 paged cache.
+        if kv_cache:
+            keys = kv_cache[0]
+            values = kv_cache[1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
+
+        # Disable fused QK update when TQ modifies K/V shapes (different memory config).
+        if self.use_qk_fused and turbo_quant_cache is None:
+            ttnn.experimental.paged_fused_update_cache(
+                keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+            ttnn.experimental.paged_update_cache(
+                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+        ttnn.deallocate(k_heads_1BKD)
+        ttnn.deallocate(v_heads_1BKD)
+
+        sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
+        if page_table:
+            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q_heads_1BQD,
+                keys,
+                values,
+                page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                sliding_window_size=self.sliding_window,
+                program_config=sdpa_decode_prog_cfg,
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -783,71 +811,6 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            # Don't deallocate if keys/values ARE the persistent cache tensors
-            # (cache_centroids mode returns the cache directly, no intermediate).
-            if not getattr(turbo_quant_cache, "cache_centroids", False):
-                ttnn.deallocate(keys)
-                ttnn.deallocate(values)
-
-            # Post-rotate output back to original space: out' = out × Πᵀ
-            # Skip if Π^T is already absorbed into W_o.
-            if use_rotated and not rotation_absorbed:
-                attn_output_1G4D = turbo_quant_cache.post_rotate_output(attn_output_1G4D)
-        else:
-            if kv_cache:
-                keys = kv_cache[0]
-                values = kv_cache[1]
-            else:
-                keys = self.layer_past[0]
-                values = self.layer_past[1]
-
-            # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
-            # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-            # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-
-            if self.use_qk_fused:
-                ttnn.experimental.paged_fused_update_cache(
-                    keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-                )
-            else:
-                ttnn.experimental.paged_update_cache(
-                    keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-                )
-                ttnn.experimental.paged_update_cache(
-                    values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-                )
-            ttnn.deallocate(k_heads_1BKD)
-            ttnn.deallocate(v_heads_1BKD)
-            # NOTE: Varying the batch size will result in slightly different outputs.
-            # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
-            # This is because the SDPA op in decode mode has different number of reductions depending on batch size
-            # Which leads to slightly different outputs from attention (due to accumulated errors)
-            sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
-            if page_table:
-                attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    q_heads_1BQD,
-                    keys,
-                    values,
-                    page_table_tensor=page_table,
-                    cur_pos_tensor=current_pos,
-                    scale=self.scale,
-                    sliding_window_size=self.sliding_window,
-                    program_config=sdpa_decode_prog_cfg,
-                    compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-                    q_heads_1BQD,
-                    keys,
-                    values,
-                    cur_pos_tensor=current_pos,
-                    scale=self.scale,
-                    sliding_window_size=self.sliding_window,
-                    program_config=sdpa_decode_prog_cfg,
-                    compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
-                )
 
         ttnn.deallocate(q_heads_1BQD)
         attn_output_11BH = ttnn.to_memory_config(
