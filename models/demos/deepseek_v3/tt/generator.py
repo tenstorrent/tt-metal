@@ -842,6 +842,10 @@ class DeepseekGenerator(WarmupForwardMixin):
             layout=ttnn.TILE_LAYOUT,
         )
 
+    def _tt_position_idxs(self, positions: torch.Tensor, *, on_host: bool = False) -> ttnn.Tensor:
+        """Build decode position tensors with the row-sharded layout DeepSeek expects."""
+        return self.rope_setup.get_position_idxs_tensor(positions.to(torch.int32), on_host=on_host)
+
     def _normalize_hidden_host_for_mtp(self, hidden: torch.Tensor) -> torch.Tensor:
         hidden_size = int(self.hf_config.hidden_size)
 
@@ -994,13 +998,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Generate rotation matrices from rot_idxs (all ttnn ops)
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
 
-        # Create TTNN position tensor
-        tt_positions = ttnn.from_torch(
-            positions,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            dtype=ttnn.int32,
-        )
+        # Keep traced and non-traced decode on the same position tensor layout.
+        tt_positions = self._tt_position_idxs(positions)
 
         if isinstance(page_tables, tuple):
             page_tables_to_use = page_tables
@@ -1092,12 +1091,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_hidden = hidden_states
 
         tt_tokens = self._tt_from_tokens_step(tokens_step)
-        tt_positions = ttnn.from_torch(
-            positions.to(torch.int32),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            dtype=ttnn.int32,
-        )
+        tt_positions = self._tt_position_idxs(positions)
 
         rot_idxs = self.rope_setup.get_rot_idxs(positions)
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
@@ -2481,12 +2475,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self._mtp_verify_trace_tokens is None:
             self._mtp_verify_trace_tokens = self._tt_from_tokens_step(init_tokens)
         if self._mtp_verify_trace_positions is None:
-            self._mtp_verify_trace_positions = ttnn.from_torch(
-                positions,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
+            self._mtp_verify_trace_positions = self._tt_position_idxs(positions)
         if self._mtp_verify_trace_rot_idxs is None:
             self._mtp_verify_trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
         if self._mtp_verify_trace_page_tables is None:
@@ -2518,12 +2507,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             ttnn.copy_host_to_device_tensor(host_tokens, self._mtp_verify_trace_tokens)
 
-            host_positions = ttnn.from_torch(
-                positions.to(torch.int32),
-                device=None,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
+            host_positions = self._tt_position_idxs(positions, on_host=True)
             ttnn.copy_host_to_device_tensor(host_positions, self._mtp_verify_trace_positions)
 
             host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
@@ -2591,12 +2575,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self._mtp_predict_trace_tokens is None:
             self._mtp_predict_trace_tokens = self._tt_from_tokens_step(tokens_step)
         if self._mtp_predict_trace_positions is None:
-            self._mtp_predict_trace_positions = ttnn.from_torch(
-                positions.to(torch.int32),
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
+            self._mtp_predict_trace_positions = self._tt_position_idxs(positions)
         if self._mtp_predict_trace_rot_idxs is None:
             self._mtp_predict_trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
         if self._mtp_predict_trace_page_table is None:
@@ -2638,12 +2617,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             ttnn.copy_host_to_device_tensor(host_tokens, self._mtp_predict_trace_tokens)
 
-            host_positions = ttnn.from_torch(
-                positions.to(torch.int32),
-                device=None,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
+            host_positions = self._tt_position_idxs(positions, on_host=True)
             ttnn.copy_host_to_device_tensor(host_positions, self._mtp_predict_trace_positions)
 
             host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
@@ -2679,12 +2653,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # 2) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
-        self._trace_positions = ttnn.from_torch(
-            positions,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            dtype=ttnn.int32,
-        )
+        self._trace_positions = self._tt_position_idxs(positions)
 
         self._trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
 
@@ -2779,12 +2748,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
 
-            host_positions = ttnn.from_torch(
-                start_pos,
-                device=None,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
+            host_positions = self._tt_position_idxs(start_pos, on_host=True)
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
 
