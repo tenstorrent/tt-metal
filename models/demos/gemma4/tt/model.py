@@ -388,15 +388,13 @@ class Gemma4Model:
                 pli_embed,
                 num_links=1,
                 dim=-1,
-                topology=ttnn.Topology.Ring,
-                cluster_axis=self.mesh_config.tp_axis,
+                topology=ttnn.Topology.Linear,
             )
             pli_proj = ttnn.all_gather(
                 pli_proj,
                 num_links=1,
                 dim=-1,
-                topology=ttnn.Topology.Ring,
-                cluster_axis=self.mesh_config.tp_axis,
+                topology=ttnn.Topology.Linear,
             )
 
         # 3. Reshape to [1, 1, full_n_layers, pli_size] for per-vector RMSNorm

@@ -126,41 +126,15 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1.
-
-    Uses reduce_scatter_minimal_async for N300 (1-D mesh), following tt_transformers pattern.
-    """
+    """Apply tensor-parallel allreduce if TP > 1."""
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
-    num_links = ccl_manager.num_links if ccl_manager else 1
-    # reduce_scatter + all_gather = all_reduce for N300 (1-D mesh)
-    # Parameters match tt_transformers/tt/ccl.py pattern
-    reduced = ttnn.experimental.reduce_scatter_minimal_async(
+    result = ttnn.all_reduce(
         tensor,
-        persistent_output_buffers=None,
-        dim=3,
-        multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        num_links=num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=1,
         topology=ttnn.Topology.Linear,
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tensor.deallocate(True)
-
-    gathered = ttnn.experimental.all_gather_async(
-        reduced,
-        persistent_output_buffer=None,
-        dim=3,
-        multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-        num_links=num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=ttnn.Topology.Linear,
-    )
-    reduced.deallocate(True)
-
-    return gathered
+    return result
