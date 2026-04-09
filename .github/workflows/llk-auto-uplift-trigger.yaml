@@ -64,14 +64,20 @@ jobs:
       old-sha: ${{ steps.update.outputs.old-sha }}
       new-sha: ${{ steps.update.outputs.new-sha }}
     steps:
-      - name: Setup
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Setup
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
           token: ${{ secrets.LLK_UPLIFT_PAT }}
           fetch-depth: 0
           ref: main
           clean: true
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Configure git
         run: |

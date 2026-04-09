@@ -161,12 +161,18 @@ jobs:
             : > /work/coverage/coverage.info
           fi
 
-      - name: Checkout repository for Codecov mapping
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Checkout repository for Codecov mapping
+        uses: ./.github/actions/checkout
         if: ${{ inputs.upload-coverage }}
         with:
           submodules: recursive
           fetch-depth: 1
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -198,7 +204,7 @@ jobs:
           name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
-          working-directory: /work
+          working-directory: ${{ github.workspace }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}

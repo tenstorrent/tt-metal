@@ -808,7 +808,7 @@ jobs:
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -822,13 +822,18 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -840,7 +845,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ttnn-operations-master-json
-          path: docker-job/model_tracer/traced_operations/
+          path: model_tracer/traced_operations/
+
       - name: Run ttnn sweeps generation (single sweep)
         if: >-
           needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
@@ -866,7 +872,77 @@ jobs:
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-vectors
+          name: sweeps-vectors-${{ matrix.generate_mode }}
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
+  ttnn-generate-sweeps-ccl:
+    # Generates CCL sweep vectors on n300-llmbox - ONLY for Nightly/Comprehensive runs
+    # This job is skipped for Lead Models, Model Traced, and single sweep runs (they don't use CCL)
+    name: Generate CCL Sweep Vectors (n300-llmbox)
+    needs: [build-artifact]
+    if: |
+      always() &&
+      needs.build-artifact.result == 'success' &&
+      (
+        (github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')
+      )
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 30
+    runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
+    steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
+          submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+      - name: ⬇️  Setup Job
+        uses: ./.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run ttnn sweeps generation (CCL modules only)
+        run: |
+          # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
+          # Use single-line Python command to avoid YAML parsing issues with multiline strings
+          NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
+            echo "Error: Failed to compute non-CCL modules"
+            exit 1
+          }
+          if [[ -z "$NON_CCL_MODULES" ]]; then
+            echo "Error: No non-CCL modules found - this would skip all modules"
+            exit 1
+          fi
+          SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors-ccl_only
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
 
@@ -938,7 +1014,7 @@ jobs:
         TRACY_NO_INVARIANT_CHECK: 1
         TTNN_OPS_DATABASE_URL: ${{ (needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
@@ -956,13 +1032,18 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1184,20 +1265,25 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: ubuntu-latest
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

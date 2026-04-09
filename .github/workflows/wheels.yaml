@@ -68,13 +68,19 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: ${{ (startsWith(inputs.ref || github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: 📦 Restore CPM source cache
         uses: actions/cache@v4
