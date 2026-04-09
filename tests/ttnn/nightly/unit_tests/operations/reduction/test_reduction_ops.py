@@ -517,6 +517,9 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
     if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
         pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
 
+    if op == "min" and shape == (3, 4, 8, 56, 33) and dim in ((-2, -1), (0, -2, -1), -2):
+        pytest.xfail("Issue #40854: ttnn.min produces incorrect results for certain tensor shapes and dimensions")
+
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
