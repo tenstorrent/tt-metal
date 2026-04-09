@@ -133,10 +133,9 @@ public:
     // Getters:
 
     /**
-     * If MeshTensor is in a default constructed state.
-     * This will be true for a default constructed MeshTensor or a MeshTensor in a move-from state.
+     * Returns true if MeshTensor owns device memory (not default-constructed or moved-from).
      */
-    bool has_value() const;
+    bool is_initialized() const;
 
     const TensorSpec& tensor_spec() const;
 
