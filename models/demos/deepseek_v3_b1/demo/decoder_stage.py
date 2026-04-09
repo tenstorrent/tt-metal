@@ -70,15 +70,15 @@ class DecoderStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
         gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
         shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
         aggregator_core = shard_cores_list[0]
 
-        stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        stage_entry_device = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
 
@@ -92,6 +92,8 @@ class DecoderStage(StageKind):
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            my_stage_idx=my_stage_idx,
+            stage_to_rank=ctx.stage_to_rank,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -182,10 +184,10 @@ class DecoderStage(StageKind):
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        sender_coord = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
         available_cores = ttnn.num_cores_to_corerangeset(
@@ -249,7 +251,7 @@ class DecoderStage(StageKind):
 
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 
-        logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
+        logger.info(f"[rank={my_stage_idx}] {type(self).__name__} setup complete")
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])

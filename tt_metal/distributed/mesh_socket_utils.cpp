@@ -186,7 +186,21 @@ Tag generate_descriptor_exchange_tag(tt_fabric::MeshId peer_mesh_id, std::option
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
     return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_mesh_id]++)};
 }
+
 }  // namespace
+
+Tag generate_same_mesh_exchange_tag(
+    Rank sender_rank, Rank receiver_rank, std::optional<DistributedContextId> context_id) {
+    // For same-mesh sockets, the per-mesh_id counter used by
+    // generate_descriptor_exchange_tag diverges across ranks because each rank
+    // creates a different number of local create_socket_pair calls that bump the
+    // same counter.  Instead, key the counter on the (sender_rank, receiver_rank)
+    // pair so both sides deterministically produce the same tag.
+    static std::unordered_map<DistributedContextId, std::unordered_map<uint64_t, uint32_t>> exchange_tags;
+    DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
+    uint64_t pair_key = (static_cast<uint64_t>(*sender_rank) << 32) | static_cast<uint64_t>(*receiver_rank);
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][pair_key]++)};
+}
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {

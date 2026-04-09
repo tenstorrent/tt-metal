@@ -298,31 +298,57 @@ class PipelineConfiguration:
     def num_stages(self) -> int:
         return len(self._stage_factories)
 
-    def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
-        """Create a Pipeline for this process's stage (determined by mesh_id)."""
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        stage = self._stage_factories[my_mesh_id](mesh_device)
-        return Pipeline(mesh_device, stage)
+    def build_pipeline(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        my_stage_idx: int | None = None,
+        stage_to_rank: dict[int, int] | None = None,
+    ) -> Pipeline:
+        """Create a Pipeline for this process's stage.
+
+        Args:
+            mesh_device: The MeshDevice (or submesh) for this stage.
+            my_stage_idx: Which stage this process runs. Defaults to
+                ``mesh_device.get_system_mesh_id()`` for backwards compatibility.
+            stage_to_rank: Mapping from stage index to MPI rank. When omitted,
+                the identity mapping ``{i: i}`` is assumed (stage 0 on rank 0, etc.).
+        """
+        if my_stage_idx is None:
+            my_stage_idx = mesh_device.get_system_mesh_id()
+        stage = self._stage_factories[my_stage_idx](mesh_device)
+        return Pipeline(mesh_device, stage, my_stage_idx, stage_to_rank=stage_to_rank)
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        my_stage_idx: int,
+        stage_to_rank: dict[int, int] | None = None,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
-        self._my_mesh_id = mesh_device.get_system_mesh_id()
+        self._my_stage_idx = my_stage_idx
         self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
-            my_mesh_id=self._my_mesh_id,
+            my_stage_idx=self._my_stage_idx,
+            stage_to_rank=stage_to_rank,
         )
         self._pipeline_block: PipelineBlock | None = None
 
     @property
     def my_mesh_id(self) -> int:
-        return self._my_mesh_id
+        """Backwards-compatible alias for my_stage_idx."""
+        return self._my_stage_idx
+
+    @property
+    def my_stage_idx(self) -> int:
+        return self._my_stage_idx
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""

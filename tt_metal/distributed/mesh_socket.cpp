@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -93,9 +94,13 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    // These ranks belong to the global distributed context. Use them to ensure
-    // that the hosts they correspond to own socket connection coordinates.
-    validate_device_ownership(sender_rank, receiver_rank, config_);
+    // Skip coordinate validation for same-mesh sockets: coordinates are in
+    // submesh-local space which doesn't match the parent-mesh coord range
+    // returned by get_coord_range.  Role correctness is enforced by the
+    // rank-based check in the constructor.
+    if (config_.sender_mesh_id.value() != config_.receiver_mesh_id.value()) {
+        validate_device_ownership(sender_rank, receiver_rank, config_);
+    }
 }
 
 void MeshSocket::process_mesh_ids() {
@@ -174,24 +179,41 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
-    if (!(local_mesh_binding[0] == config_.sender_mesh_id.value() ||
-          local_mesh_binding[0] == config_.receiver_mesh_id.value())) {
-        log_warning(
-            LogMetal,
-            "Creating a null socket on Mesh ID {} with sender Mesh ID {} and receiver Mesh ID {}.",
-            *local_mesh_binding[0],
-            *config_.sender_mesh_id.value(),
-            *config_.receiver_mesh_id.value());
-        return;
-    }
-    TT_FATAL(
-        config_.sender_mesh_id.value() != config_.receiver_mesh_id.value(),
-        "{} must only be used for communication between different host ranks, not within the same rank.",
-        __func__);
+    std::cout << "sender mesh id: " << *config_.sender_mesh_id.value()
+              << " receiver mesh id: " << *config_.receiver_mesh_id.value() << std::endl;
+    bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
+    bool is_sender;
 
-    bool is_sender = local_mesh_binding[0] == config_.sender_mesh_id.value();
-    // Allocate config buffers on both the sender and receiver meshes (even if the current host does not open a
-    // connection)
+    if (same_mesh) {
+        auto current_rank = *context->rank();
+        auto sender_rank_val = *config_.sender_rank;
+        auto receiver_rank_val = *config_.receiver_rank;
+        if (current_rank != sender_rank_val && current_rank != receiver_rank_val) {
+            log_warning(
+                LogMetal,
+                "Creating a null same-mesh socket on rank {} (sender={}, receiver={}).",
+                current_rank,
+                sender_rank_val,
+                receiver_rank_val);
+            return;
+        }
+        is_sender = (current_rank == sender_rank_val);
+        std::cout << "sender rank: " << sender_rank_val << " receiver rank: " << receiver_rank_val
+                  << " is sender: " << is_sender << std::endl;
+    } else {
+        if (!(local_mesh_binding[0] == config_.sender_mesh_id.value() ||
+              local_mesh_binding[0] == config_.receiver_mesh_id.value())) {
+            log_warning(
+                LogMetal,
+                "Creating a null socket on Mesh ID {} with sender Mesh ID {} and receiver Mesh ID {}.",
+                *local_mesh_binding[0],
+                *config_.sender_mesh_id.value(),
+                *config_.receiver_mesh_id.value());
+            return;
+        }
+        is_sender = local_mesh_binding[0] == config_.sender_mesh_id.value();
+    }
+
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config_, socket_endpoint_type_);
@@ -200,34 +222,137 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         config_buffer_ = create_socket_config_buffer(device, config_, socket_endpoint_type_);
         data_buffer_ = create_socket_data_buffer(device, config_);
     }
+    std::cout << " connecting with peer" << std::endl;
     this->connect_with_peer(context);
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
+    bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
+    auto my_rank = *context->rank();
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
-    // Convention:
-    //  - Sender Endpoint sends its descriptor first, then receives the peer's descriptor.
-    //  - Receiver Endpoint receives the peer's descriptor first, then sends its own descriptor.
-    // Asymmetry ensures that the blocking send/recv do not deadlock.
-    if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
-        forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-        remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-            local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-        fabric_node_id_map_ = generate_fabric_node_id_map(config_);
-    } else {
-        remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-            local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-        forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-        fabric_node_id_map_ = generate_fabric_node_id_map(config_);
-    }
-    write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
-    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
-    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
-    // Barrier across all sender and receiver ranks. This ensures that the downstream workloads using this socket
-    // will start after the socket is initialized across all hosts.
-    execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
+    if (same_mesh) {
+        // Override tag: the per-mesh_id counter diverges across ranks because each
+        // rank creates different numbers of local socket pairs.  Use a deterministic
+        // tag keyed on the (sender_rank, receiver_rank) pair instead.
+        local_endpoint_desc.exchange_tag =
+            generate_same_mesh_exchange_tag(config_.sender_rank, config_.receiver_rank, context->id());
+
+        Rank peer_rank =
+            (socket_endpoint_type_ == SocketEndpoint::SENDER) ? config_.receiver_rank : config_.sender_rank;
+
+        std::cout << "[rank " << my_rank << "] connect_with_peer same_mesh: I am "
+                  << (socket_endpoint_type_ == SocketEndpoint::SENDER ? "SENDER" : "RECEIVER")
+                  << ", peer_rank=" << *peer_rank << ", tag=" << *local_endpoint_desc.exchange_tag << std::endl;
+
+        auto serialized_local = serialize_to_bytes(local_endpoint_desc);
+        int local_size = static_cast<int>(serialized_local.size());
+
+        if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
+            std::cout << "[rank " << my_rank << "] SENDER: sending size " << local_size << " to rank " << *peer_rank
+                      << std::endl;
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_size), sizeof(local_size)),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] SENDER: sending payload" << std::endl;
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] SENDER: waiting for peer size" << std::endl;
+            int remote_size = 0;
+            execute_with_timeout([&]() {
+                context->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&remote_size), sizeof(remote_size)),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] SENDER: recv'd size " << remote_size << ", waiting for payload"
+                      << std::endl;
+            std::vector<uint8_t> serialized_remote(remote_size);
+            execute_with_timeout([&]() {
+                context->recv(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] SENDER: handshake complete" << std::endl;
+            remote_endpoint_desc = deserialize_from_bytes(serialized_remote);
+        } else {
+            std::cout << "[rank " << my_rank << "] RECEIVER: waiting for size from rank " << *peer_rank << std::endl;
+            int remote_size = 0;
+            execute_with_timeout([&]() {
+                context->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&remote_size), sizeof(remote_size)),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] RECEIVER: recv'd size " << remote_size << ", waiting for payload"
+                      << std::endl;
+            std::vector<uint8_t> serialized_remote(remote_size);
+            execute_with_timeout([&]() {
+                context->recv(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] RECEIVER: sending size " << local_size << std::endl;
+            remote_endpoint_desc = deserialize_from_bytes(serialized_remote);
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_size), sizeof(local_size)),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] RECEIVER: sending payload" << std::endl;
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                    peer_rank,
+                    local_endpoint_desc.exchange_tag);
+            });
+            std::cout << "[rank " << my_rank << "] RECEIVER: handshake complete" << std::endl;
+        }
+
+        std::cout << "[rank " << my_rank << "] generating fabric_node_id_map" << std::endl;
+        fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+        std::cout << "[rank " << my_rank << "] writing socket configs" << std::endl;
+        write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
+
+        std::cout << "[rank " << my_rank << "] barrier between sender=" << *config_.sender_rank
+                  << " and receiver=" << *config_.receiver_rank << std::endl;
+        execute_with_timeout(
+            [&]() { barrier_across_send_recv_ranks({config_.sender_rank}, {config_.receiver_rank}, context); });
+        std::cout << "[rank " << my_rank << "] connect_with_peer done" << std::endl;
+    } else {
+        // Cross-mesh socket: use the existing multi-rank handshake protocol
+        if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
+            forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
+            remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+        } else {
+            remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
+            forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+        }
+        write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
+
+        std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
+        std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
+        execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
+    }
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(

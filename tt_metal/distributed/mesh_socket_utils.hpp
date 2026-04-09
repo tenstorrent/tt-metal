@@ -56,6 +56,11 @@ void write_socket_configs(
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 
+multihost::Tag generate_same_mesh_exchange_tag(
+    multihost::Rank sender_rank,
+    multihost::Rank receiver_rank,
+    std::optional<multihost::DistributedContextId> context_id = std::nullopt);
+
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
