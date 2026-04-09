@@ -1,0 +1,8 @@
+{"ts":"2026-04-09T19:49:01+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"sinh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-09T19:49:04+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"atanh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"analysis_started","details":"Beginning SFPU kernel analysis for atanh operation","ts":"2026-04-09T19:49:07+00:00"}
+{"ts":"2026-04-09T19:49:19+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"read_dispatch_config","details":"SINH uses eltwise_sfpu.cpp compute kernel, SFPU_OP_CHAIN_0 expands to sinh_tile(0), init is sinh_tile_init(), macro SFPU_OP_SINH_INCLUDE=1, approx_mode=false (default case)","ts":"2026-04-09T19:49:22+00:00"}
+{"event":"dispatch_info_found","details":"ATANH: compute_kernel=eltwise_sfpu.cpp, init=atanh_tile_init(), func=atanh_tile(idst), macro=SFPU_OP_ATANH_INCLUDE, approx_mode=false (default)","ts":"2026-04-09T19:49:29+00:00"}
+{"event":"read_unary_op_utils","details":"HARDTANH is parametrized type, but dispatch code is nuked. Need to find SFPU implementation from LLK layer.","ts":"2026-04-09T19:49:45+00:00"}
+{"event":"sfpu_kernel_read","details":"Read ckernel_sfpu_atanh.h (WH and BH identical), llk_math_eltwise_unary_sfpu_atanh.h, API header atanh.h, params dispatch","ts":"2026-04-09T19:50:15+00:00"}
