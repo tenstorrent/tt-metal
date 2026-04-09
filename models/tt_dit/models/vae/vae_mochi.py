@@ -583,23 +583,15 @@ class ResBlock(Module):
         logical_h,
         logical_w,
         dump_dir=None,
-        dbg_ref_intermediates=None,
-        dbg_save_intermediates=None,
     ):
         """GroupNorm+silu on all-gathered spatial data for a single T-chunk.
 
         Args:
             x_4d_rm: (batch_size, H_full, W_full, C) in ROW_MAJOR layout
             batch_size: number of frames in this chunk
-            dbg_ref_intermediates: if set, dict of {step: torch_tensor} from reference run to compare against
-            dbg_save_intermediates: if set, dict to populate with {step: torch_tensor} from this run
         Returns:
             (batch_size, H_full, W_full, C) in ROW_MAJOR layout
         """
-        import os
-
-        chunk_debug = os.environ.get("CHUNK_DEBUG", "0") == "1"
-
         needs_h_unpad = logical_h > 0 and H_full > logical_h
         needs_w_unpad = logical_w > 0 and W_full > logical_w
 
@@ -613,33 +605,9 @@ class ResBlock(Module):
             norm_h, norm_w = H_full, W_full
 
         x_tiled = ttnn.reshape(x_rm, [batch_size, 1, norm_h * norm_w, C])
-
-        if dbg_save_intermediates is not None:
-            dbg_save_intermediates["pre_tilize"] = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-        if dbg_ref_intermediates is not None and "pre_tilize" in dbg_ref_intermediates:
-            chunk_t = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-            ref_t = dbg_ref_intermediates["pre_tilize"]
-            diff = (chunk_t - ref_t).abs()
-            match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-            logger.info(f"[CHUNK_DEBUG]   pre_tilize (RM): {match} shape={list(chunk_t.shape)}")
-
         ttnn.deallocate(x_rm)
 
         x_tiled = ttnn.tilize_with_zero_padding(x_tiled, use_multicore=True)
-
-        if dbg_save_intermediates is not None:
-            # Read back through RM to avoid TILE readback issues
-            x_rm_dbg = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
-            dbg_save_intermediates["post_tilize"] = ttnn.to_torch(ttnn.get_device_tensors(x_rm_dbg)[0]).float()
-            ttnn.deallocate(x_rm_dbg)
-        if dbg_ref_intermediates is not None and "post_tilize" in dbg_ref_intermediates:
-            x_rm_dbg = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
-            chunk_t = ttnn.to_torch(ttnn.get_device_tensors(x_rm_dbg)[0]).float()
-            ttnn.deallocate(x_rm_dbg)
-            ref_t = dbg_ref_intermediates["post_tilize"]
-            diff = (chunk_t - ref_t).abs()
-            match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-            logger.info(f"[CHUNK_DEBUG]   post_tilize (via RM): {match} shape={list(chunk_t.shape)}")
 
         HW = norm_h * norm_w
         num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
@@ -656,25 +624,7 @@ class ResBlock(Module):
             dump_tag=dump_tag,
         )
 
-        if dbg_save_intermediates is not None:
-            dbg_save_intermediates["post_norm"] = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-        if dbg_ref_intermediates is not None and "post_norm" in dbg_ref_intermediates:
-            chunk_t = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-            ref_t = dbg_ref_intermediates["post_norm"]
-            diff = (chunk_t - ref_t).abs()
-            match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-            logger.info(f"[CHUNK_DEBUG]   post_norm: {match}")
-
         x_tiled = ttnn.silu(x_tiled, output_tensor=x_tiled)
-
-        if dbg_save_intermediates is not None:
-            dbg_save_intermediates["post_silu"] = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-        if dbg_ref_intermediates is not None and "post_silu" in dbg_ref_intermediates:
-            chunk_t = ttnn.to_torch(ttnn.get_device_tensors(x_tiled)[0]).float()
-            ref_t = dbg_ref_intermediates["post_silu"]
-            diff = (chunk_t - ref_t).abs()
-            match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-            logger.info(f"[CHUNK_DEBUG]   post_silu: {match}")
 
         x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x_tiled)
@@ -690,33 +640,6 @@ class ResBlock(Module):
                 last_row = x_rm[:, norm_h - 1 : norm_h, :, :]
                 x_rm = ttnn.concat([x_rm] + [last_row] * pad_h, dim=1)
         return x_rm
-
-    @staticmethod
-    def _dbg_pcc(label, a_tt, b_tt):
-        """Compare two ttnn tensors from device 0, print PCC per frame."""
-        a = ttnn.to_torch(ttnn.get_device_tensors(a_tt)[0]).float()
-        b = ttnn.to_torch(ttnn.get_device_tensors(b_tt)[0]).float()
-        if a.shape != b.shape:
-            logger.info(f"[DBG] {label}: SHAPE MISMATCH {list(a.shape)} vs {list(b.shape)}")
-            return
-        # Overall PCC
-        af, bf = a.flatten(), b.flatten()
-        overall_pcc = torch.corrcoef(torch.stack([af.double(), bf.double()]))[0, 1].item() * 100
-        diff = (a - b).abs()
-        logger.info(
-            f"[DBG] {label}: shape={list(a.shape)} PCC={overall_pcc:.6f}% "
-            f"max_diff={diff.max():.8f} mean_diff={diff.mean():.8f} "
-            f"#diff={(diff > 0).sum().item()}/{diff.numel()}"
-        )
-        # Per-frame if 4D+ with T > 1
-        if a.dim() >= 2 and a.shape[0] > 1:
-            for t in range(min(a.shape[0], 3)):
-                fa, fb = a[t].flatten().double(), b[t].flatten().double()
-                fpcc = torch.corrcoef(torch.stack([fa, fb]))[0, 1].item() * 100
-                fdiff = (a[t] - b[t]).abs()
-                logger.info(
-                    f"[DBG]   t={t}: PCC={fpcc:.6f}% max_diff={fdiff.max():.8f} #diff={(fdiff > 0).sum().item()}"
-                )
 
     def _gather_norm_partition(self, x_4d, norm, N, T, H, W, C, logical_h, logical_w, dump_dir=None):
         """All-gather → GroupNorm+silu → mesh_partition, with T-chunking to limit peak memory.
@@ -745,7 +668,6 @@ class ResBlock(Module):
         import os
 
         max_bytes = int(os.environ.get("CHUNK_MAX_BYTES", 1 * 1024 * 1024 * 1024))  # 1 GB default
-        chunk_debug = os.environ.get("CHUNK_DEBUG", "0") == "1"
         num_chunks = max(1, (gathered_bytes + max_bytes - 1) // max_bytes)
         chunk_nt = (NT + num_chunks - 1) // num_chunks
         # Round up to ensure each chunk is the same size (except possibly the last)
@@ -777,7 +699,7 @@ class ResBlock(Module):
             f"norm_HW={norm_HW} logical_h={logical_h} logical_w={logical_w}"
         )
 
-        if num_chunks == 1 and not chunk_debug:
+        if num_chunks == 1:
             # No chunking needed — original path
             logger.info(f"[GATHER] Non-chunked path: C={C} NT={NT} gathered_bytes={gathered_bytes/1e9:.3f}GB")
             x_gathered = self._all_gather_hw(x_4d, N, T, H, W, C)
@@ -786,43 +708,6 @@ class ResBlock(Module):
             )
             x_normed = ttnn.reshape(x_normed, [N, T, H_full, W_full, C])
             return self._partition_hw(x_normed, N, T, H, W, C)
-
-        if chunk_debug:
-            # ---- DEBUG MODE: run non-chunked path, save intermediates, then run chunked ----
-            logger.info("[CHUNK_DEBUG] Running non-chunked reference path first")
-            x_4d_ref = ttnn.clone(x_4d)
-            ref_gathered = self._all_gather_hw(x_4d_ref, N, T, H, W, C)
-            # Save gathered reference per-frame for comparison
-            ref_gathered_torch = ttnn.to_torch(ttnn.get_device_tensors(ref_gathered)[0]).float()
-            logger.info(f"[CHUNK_DEBUG] ref_gathered shape={list(ref_gathered_torch.shape)}")
-
-            ref_intermediates = {}
-            ref_normed = self._norm_silu_spatial_chunk(
-                ref_gathered,
-                norm,
-                NT,
-                H_full,
-                W_full,
-                C,
-                logical_h,
-                logical_w,
-                dbg_save_intermediates=ref_intermediates,
-            )
-            ref_normed_torch = ttnn.to_torch(ttnn.get_device_tensors(ref_normed)[0]).float()
-            logger.info(
-                f"[CHUNK_DEBUG] ref_normed shape={list(ref_normed_torch.shape)}, "
-                f"saved intermediates: {list(ref_intermediates.keys())}"
-            )
-            # Build per-frame reference slices for chunk comparison
-            ref_per_frame = {}
-            for key, val in ref_intermediates.items():
-                for t_idx in range(NT):
-                    ref_per_frame[(t_idx, key)] = val[t_idx : t_idx + 1]
-            ttnn.deallocate(ref_normed)
-
-            chunk_nt = max(1, min_norm_batch)  # Force maximum chunking
-            num_chunks = max(1, (NT + chunk_nt - 1) // chunk_nt)
-            logger.info(f"[CHUNK_DEBUG] Now running chunked path with chunk_nt={chunk_nt}")
 
         logger.info(
             f"[CHUNK] T-chunking gather+norm: NT={NT}, {num_chunks} chunks of {chunk_nt}, "
@@ -841,19 +726,6 @@ class ResBlock(Module):
             # Gather spatial dims for this chunk
             x_chunk = self._all_gather_hw(x_chunk, 1, bs, H, W, C)
 
-            if chunk_debug:
-                # Compare gathered chunk vs reference slice
-                chunk_g = ttnn.to_torch(ttnn.get_device_tensors(x_chunk)[0]).float()
-                ref_g_slice = ref_gathered_torch[start:end]
-                diff = (chunk_g - ref_g_slice).abs()
-                match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-                logger.info(f"[CHUNK_DEBUG] chunk[{start}:{end}] after gather: {match}")
-
-            # Norm + silu — pass per-frame reference intermediates for detailed comparison
-            dbg_ref = None
-            if chunk_debug and bs == 1 and start in (0, 1, 2, 7, 8):
-                dbg_ref = {k: ref_per_frame[(start, k)] for k in ref_intermediates if (start, k) in ref_per_frame}
-                logger.info(f"[CHUNK_DEBUG] chunk[{start}:{end}] detailed step comparison:")
             x_chunk = self._norm_silu_spatial_chunk(
                 x_chunk,
                 norm,
@@ -863,16 +735,7 @@ class ResBlock(Module):
                 C,
                 logical_h,
                 logical_w,
-                dbg_ref_intermediates=dbg_ref,
             )
-
-            if chunk_debug:
-                # Compare final normed chunk vs reference slice
-                chunk_n = ttnn.to_torch(ttnn.get_device_tensors(x_chunk)[0]).float()
-                ref_n_slice = ref_normed_torch[start:end]
-                diff = (chunk_n - ref_n_slice).abs()
-                match = "EXACT" if diff.max() == 0 else f"max_diff={diff.max():.8f} #diff={(diff > 0).sum().item()}"
-                logger.info(f"[CHUNK_DEBUG] chunk[{start}:{end}] after norm+silu: {match}")
 
             # Partition back to per-device spatial size (mesh_partition only, no neighbor_pad)
             x_chunk = ttnn.reshape(x_chunk, [1, bs, H_full, W_full, C])
@@ -927,10 +790,6 @@ class ResBlock(Module):
                 padding_mode="replicate",
             )
         x_partitioned = ttnn.unsqueeze(x_partitioned, 0)  # Restore N dim → (1, T, H+pad, W+pad, C)
-
-        if chunk_debug:
-            self._dbg_pcc("final_chunked_vs_ref", x_partitioned, ref_result)
-            ttnn.deallocate(ref_result)
 
         return x_partitioned
 
@@ -1420,43 +1279,14 @@ class MochiVAEDecoder(Module):
         Returns:
             Output tensor in NTHWC layout
         """
-        import os
-
-        decoder_debug = os.environ.get("DECODER_DEBUG", "0") == "1"
-        early_return = os.environ.get("DECODER_EARLY_RETURN", "")
-
-        w_factor = self.parallel_config.w_parallel.factor
-        h_factor = self.parallel_config.h_parallel.factor
-
-        def _log_stats(tag, t):
-            if not decoder_debug:
-                return
-            devs = ttnn.get_device_tensors(t)
-            for di, dev in enumerate(devs):
-                dev_t = ttnn.to_torch(dev).float()
-                h_idx = di // w_factor if w_factor > 1 else 0
-                w_idx = di % w_factor if w_factor > 1 else 0
-                logger.info(
-                    f"[DEC_DEBUG] {tag} dev[{di}] coord=({h_idx},{w_idx}): shape={list(dev_t.shape)} "
-                    f"mean={dev_t.mean():.6f} std={dev_t.std():.6f} "
-                    f"min={dev_t.min():.6f} max={dev_t.max():.6f} "
-                    f"has_nan={dev_t.isnan().any().item()} has_inf={dev_t.isinf().any().item()}"
-                )
-
         # Initial projection
         x_NTHWC = self.input_proj(x_NTHWC)
-        _log_stats("input_proj", x_NTHWC)
-        if early_return == "input_proj":
-            return x_NTHWC
 
         # First set of residual blocks
         for i, block in enumerate(self.first_blocks):
             x_res_NTHWC = block(x_NTHWC, logical_h, logical_w)
             ttnn.deallocate(x_NTHWC)
             x_NTHWC = x_res_NTHWC
-            _log_stats(f"first_block[{i}]", x_NTHWC)
-        if early_return == "first_blocks":
-            return x_NTHWC
 
         # Upsampling blocks
         for i, block in enumerate(self.up_blocks):
@@ -1468,16 +1298,12 @@ class MochiVAEDecoder(Module):
                 logical_h *= block.spatial_expansion
             if logical_w > 0:
                 logical_w *= block.spatial_expansion
-            _log_stats(f"up_block[{i}] (logical_h={logical_h}, logical_w={logical_w})", x_NTHWC)
-            if early_return == f"up_block_{i}":
-                return x_NTHWC
 
         # Last set of residual blocks
         for i, block in enumerate(self.last_blocks):
             x_res_NTHWC = block(x_NTHWC, logical_h, logical_w)
             ttnn.deallocate(x_NTHWC)
             x_NTHWC = x_res_NTHWC
-            _log_stats(f"last_block[{i}]", x_NTHWC)
 
         # Apply output nonlinearity if needed
         if self.output_nonlinearity == "silu":
