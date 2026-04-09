@@ -1704,6 +1704,250 @@ class TestDeepSeekV3:
 
 
 # ===========================================================================
+# TestPersistentMode
+# ===========================================================================
+
+
+class TestPersistentMode:
+    """End-to-end persistent mode: build once, update() inputs, run() repeatedly."""
+
+    @stress_test_program_cache
+    def test_persistent_parallel_pcc(self, device):
+        """Persistent Parallel Q/KV norms: 20 iterations with different random data.
+
+        Uses the full persistent API: descriptors created without activation,
+        named kwargs on Parallel, update() + run() each iteration.
+        """
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        q_cores = cores(0, 0, 3, 3)
+        kv_cores = cores(5, 0, 6, 7)
+        q_shard_w, kv_shard_w = 96, 32
+        q_total_w, kv_total_w = 16 * q_shard_w, 16 * kv_shard_w
+
+        q_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(4, 4),
+            subblock_w=q_shard_w // 32,
+            block_h=1,
+            block_w=q_shard_w // 32,
+            inplace=False,
+        )
+        kv_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        kv_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(2, 8),
+            subblock_w=kv_shard_w // 32,
+            block_h=1,
+            block_w=kv_shard_w // 32,
+            inplace=False,
+        )
+
+        # Persistent setup: weights + descriptors created once (no activation)
+        torch_q_w = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
+        torch_kv_w = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
+        tt_q_w = ttnn.from_torch(torch_q_w, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_kv_w = ttnn.from_torch(torch_kv_w, device=device, layout=ttnn.TILE_LAYOUT)
+
+        fused = Parallel(
+            q=rms_norm.rms_norm(
+                weight=tt_q_w,
+                epsilon=1e-5,
+                memory_config=q_mem,
+                core_range_set=q_cores,
+                program_config=q_pc,
+            ),
+            kv=rms_norm.rms_norm(
+                weight=tt_kv_w,
+                epsilon=1e-5,
+                memory_config=kv_mem,
+                core_range_set=kv_cores,
+                program_config=kv_pc,
+            ),
+        )
+
+        # 20 iterations with different random activations
+        for i in range(20):
+            torch.manual_seed(i)
+            torch_q_in = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
+            tt_q_in = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
+            tt_kv_in = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
+
+            fused.q.update(tt_q_in)
+            fused.kv.update(tt_kv_in)
+            [out_q, out_kv] = fused.run()
+
+            check_pcc(
+                torch_rms_norm(torch_q_in.float(), torch_q_w.float()),
+                out_q,
+                pcc=0.98,
+                label=f"Q persistent iter {i}",
+            )
+            check_pcc(
+                torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()),
+                out_kv,
+                pcc=0.98,
+                label=f"KV persistent iter {i}",
+            )
+
+    @stress_test_program_cache
+    def test_persistent_sequential_pcc(self, device):
+        """Persistent Sequential LN→RMS: 10 iterations with different random data.
+
+        Only the first op's activation is updated — the intermediate tensor
+        (LN output → RMS input) is managed by the fused kernel.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        cr = cores(0, 0)
+        cc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=False,
+        )
+
+        torch.manual_seed(42)
+        hidden = 128
+        torch_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w1 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w0 = tt(torch_w0, device)
+        tt_w1 = tt(torch_w1, device)
+
+        # Persistent setup: no activation yet
+        ln_desc = layer_norm.layer_norm(
+            weight=tt_w0,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        rms_desc = rms_norm.rms_norm(
+            weight=tt_w1,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        fused = Sequential(ln=ln_desc, rms=rms_desc)
+
+        for i in range(10):
+            torch.manual_seed(i + 100)
+            torch_in = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+            tt_in = tt(torch_in, device)
+
+            fused.ln.update(tt_in)
+            # RMS input comes from LN output — handled internally by fusion.
+            # For a Sequential, the second op's input is the first op's output.
+            # On first call, update() materializes the LN descriptor. The RMS
+            # descriptor also needs materialization — its input is LN's output.
+            # We must wire rms's input to ln's output for the cold build.
+            if i == 0:
+                fused.rms.update(fused.ln.output_tensors[0])
+            [out] = fused.run(results=[rms_desc])
+
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_in.float(), torch_w0.float()),
+                torch_w1.float(),
+            )
+            check_pcc(golden, out, pcc=0.97, label=f"Sequential persistent iter {i}")
+
+    @stress_test_program_cache
+    def test_persistent_binary_tree_inline(self, device):
+        """3-level binary tree (stem→2 mid→4 leaves) using inline descriptors
+        with named kwargs, exercised through stress_test_program_cache.
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1] / RMS [2-3]
+                      → RMS [4-7] → RMS [4-5] / RMS [6-7]
+
+        Uses named kwargs at every level so names are hoisted to top.
+        Verifies PCC on all 4 leaf outputs.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = make_multi_norm_tensors(device)
+        wt = t["tt_weights"]
+
+        def rms(inp, cr, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cr, weight=wt[wi], epsilon=1e-5)
+
+        root = rms(t["tt_input"], cores(0, 0, 7, 0), 0)
+        left = rms(root.output_tensors[0], cores(0, 0, 3, 0), 1)
+        right = rms(root.output_tensors[0], cores(4, 0, 7, 0), 2)
+        ll = rms(left.output_tensors[0], cores(0, 0, 1, 0), 3)
+        lr = rms(left.output_tensors[0], cores(2, 0, 3, 0), 4)
+        rl = rms(right.output_tensors[0], cores(4, 0, 5, 0), 5)
+        rr = rms(right.output_tensors[0], cores(6, 0, 7, 0), 6)
+
+        fused = Sequential(
+            root=root,
+            branches=Parallel(
+                left_path=Sequential(left=left, left_leaves=Parallel(ll=ll, lr=lr)),
+                right_path=Sequential(right=right, right_leaves=Parallel(rl=rl, rr=rr)),
+            ),
+        )
+
+        # Verify all names are hoisted
+        assert hasattr(fused, "root")
+        assert hasattr(fused, "ll")
+        assert hasattr(fused, "rr")
+
+        fused.run()
+
+        ws = t["torch_weights"]
+        g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
+        g_left = torch_rms_norm(g_root, ws[1].float())
+        g_right = torch_rms_norm(g_root, ws[2].float())
+        goldens = [
+            torch_rms_norm(g_left, ws[3].float()),
+            torch_rms_norm(g_left, ws[4].float()),
+            torch_rms_norm(g_right, ws[5].float()),
+            torch_rms_norm(g_right, ws[6].float()),
+        ]
+        for desc, golden, label in zip([fused.ll, fused.lr, fused.rl, fused.rr], goldens, ["LL", "LR", "RL", "RR"]):
+            check_pcc(golden, desc.output_tensors[0], label=f"tree {label}")
+
+    @stress_test_program_cache
+    def test_persistent_matmul_deferred(self, device):
+        """Matmul with deferred inputs: build once, update both inputs, run."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        M, K, N = 32, 64, 32
+        torch_a = torch.rand(1, 1, M, K, dtype=torch.bfloat16)
+        torch_b = torch.rand(1, 1, K, N, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+        # Inline matmul first (for reference)
+        inline_desc = matmul_desc(tt_a, tt_b)
+        inline_desc.launch()
+        ref_out = ttnn.to_torch(inline_desc.output_tensors[0])
+
+        # Deferred matmul
+        deferred = matmul_desc()
+        assert deferred.program_cache_key is None
+        deferred.update(tt_a, tt_b)
+        assert deferred.program_cache_key is not None
+        deferred.launch()
+        deferred_out = ttnn.to_torch(deferred.output_tensors[0])
+
+        golden = torch_a.float() @ torch_b.float()
+        _, pcc_inline = comp_pcc(golden, ref_out, pcc=0.98)
+        _, pcc_deferred = comp_pcc(golden, deferred_out, pcc=0.98)
+        assert pcc_inline > 0.98, f"Inline matmul PCC: {pcc_inline}"
+        assert pcc_deferred > 0.98, f"Deferred matmul PCC: {pcc_deferred}"
+
+
+# ===========================================================================
 # TestAsymmetricBarrier
 # ===========================================================================
 
