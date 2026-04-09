@@ -296,6 +296,14 @@ class TTNNPagedAttentionKVCache(Cache):
         if isinstance(value_states, ttnn.Tensor):
             value_states = ttnn.to_torch(value_states)
 
+        if self._is_on_device:
+            # Running totals are maintained by paged_fill_on_device /
+            # paged_update_on_device. HuggingFace still calls ``Cache.update`` after
+            # forward; using ``key_states.shape[2]`` here would reset layer length
+            # to the *current* slice (1 on decode) and corrupt ``get_seq_length``,
+            # breaking ``past_seen_tokens`` / RoPE positions in the model body.
+            return key_states, value_states
+
         seq_len = key_states.shape[2]
         self._seq_lengths[layer_idx] = seq_len
         if layer_idx == 0:

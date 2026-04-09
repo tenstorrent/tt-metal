@@ -13,6 +13,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
@@ -29,6 +30,79 @@ from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+
+
+def fast_greedy_generate(model, input_ids, attention_mask, max_new_tokens, past_key_values, mesh_device):
+    """Greedy decode that avoids the __torch_dispatch__ overhead on logits.
+
+    model.generate() routes every torch op on the logits TorchTTNNTensor through
+    __torch_dispatch__ → dispatch_to_torch_wrapper → _unwrap_to_torch.  With a
+    ~160k-token vocabulary, the accumulated Python-overhead of those dozens of
+    dispatch calls per step × N steps dominates total runtime.
+
+    This loop instead accesses outputs.logits.ttnn_tensor directly and calls
+    to_torch_auto_compose exactly once per step, then does CPU argmax on the
+    resulting small (trimmed) tensor.
+    """
+    torch_device = torch.device("cpu")
+    vocab_size = int(getattr(model.config, "vocab_size", 0)) or 0
+
+    eos_token_ids: set[int] = set()
+    for src in (
+        model.config.eos_token_id,
+        getattr(getattr(model, "generation_config", None), "eos_token_id", None),
+    ):
+        if src is None:
+            continue
+        if isinstance(src, (list, tuple)):
+            eos_token_ids.update(int(x) for x in src)
+        else:
+            eos_token_ids.add(int(src))
+
+    model_kwargs: dict = {
+        "attention_mask": attention_mask,
+        "past_key_values": past_key_values,
+        "use_cache": True,
+    }
+    model_kwargs = model._get_initial_cache_position(input_ids.shape[-1], torch_device, model_kwargs)
+
+    generated = input_ids.clone()
+
+    for _ in range(max_new_tokens):
+        model_inputs = model.prepare_inputs_for_generation(generated, **model_kwargs)
+        with torch.no_grad():
+            outputs = model(**model_inputs, return_dict=True)
+
+        # One device→host transfer per step — bypass __torch_dispatch__ entirely.
+        tt_logits = getattr(outputs.logits, "ttnn_tensor", None)
+        if tt_logits is not None:
+            logits_cpu = to_torch_auto_compose(tt_logits, device=mesh_device).float()
+            # Shape may be [1,1,V] or [1,V]; normalise to 2-D [batch, V].
+            logits_last = logits_cpu.reshape(-1, logits_cpu.shape[-1])[-1:, :]
+            if vocab_size:
+                logits_last = logits_last[:, :vocab_size]
+            next_token = int(torch.argmax(logits_last, dim=-1).item())
+        else:
+            logits_last = outputs.logits[:, -1, :]
+            if vocab_size:
+                logits_last = logits_last[:, :vocab_size]
+            next_token = int(torch.argmax(logits_last, dim=-1).item())
+
+        model_kwargs = model._update_model_kwargs_for_generation(
+            outputs,
+            model_kwargs,
+            is_encoder_decoder=getattr(model.config, "is_encoder_decoder", False),
+        )
+
+        generated = torch.cat(
+            [generated, torch.tensor([[next_token]], dtype=input_ids.dtype, device=torch_device)],
+            dim=-1,
+        )
+
+        if next_token in eos_token_ids:
+            break
+
+    return generated
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -134,14 +208,20 @@ def test_ling_mini_2_0(mesh_device):
     torch.set_grad_enabled(False)
 
     # Warmup run without trace
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
+    outputs = fast_greedy_generate(
+        model, inputs["input_ids"], inputs.get("attention_mask"), 2, paged_cache, mesh_device
+    )
     paged_cache.reset()
     # Actual run with trace
-    outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_cache)
+    outputs = fast_greedy_generate(
+        model, inputs["input_ids"], inputs.get("attention_mask"), 4, paged_cache, mesh_device
+    )
     paged_cache.reset()
 
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)
+    outputs = fast_greedy_generate(
+        model, inputs["input_ids"], inputs.get("attention_mask"), 128, paged_cache, mesh_device
+    )
 
     decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
     print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")

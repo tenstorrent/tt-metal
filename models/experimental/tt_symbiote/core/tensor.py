@@ -70,6 +70,28 @@ class TorchTTNNTensor(torch.Tensor):
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         return TorchTTNNTensor(self.elem.bool())
 
+    def float(self):
+        # Keep the tensor on device — avoids a full device→host transfer for dtype
+        # cast ops such as `logits.float()` that appear in model forward methods.
+        # The dtype hint (float32) is applied when the tensor is eventually pulled
+        # to host via to_torch.
+        if self.ttnn_tensor is not None:
+            return TorchTTNNTensor(self.ttnn_tensor, dtype=torch.float32)
+        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        return TorchTTNNTensor(self.elem.float())
+
+    def half(self):
+        if self.ttnn_tensor is not None:
+            return TorchTTNNTensor(self.ttnn_tensor, dtype=torch.float16)
+        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        return TorchTTNNTensor(self.elem.half())
+
+    def bfloat16(self):
+        if self.ttnn_tensor is not None:
+            return TorchTTNNTensor(self.ttnn_tensor, dtype=torch.bfloat16)
+        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        return TorchTTNNTensor(self.elem.bfloat16())
+
     @property
     def to_ttnn(self):
         return TENSOR_RUN_IMPLEMENTATION.to_ttnn(self)
