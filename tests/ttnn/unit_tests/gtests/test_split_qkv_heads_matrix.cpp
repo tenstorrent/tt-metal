@@ -810,9 +810,10 @@ TEST_F(SplitQkvMatrixTest, MHA_12H_64D__InBlockShardedConcatenated__OutHeightSha
         const std::string msg(e.what());
         if (msg.find("Illegal kernel placement") != std::string::npos ||
             msg.find("dispatch core") != std::string::npos ||
-            msg.find("Kernels cannot be placed on dispatch cores") != std::string::npos) {
+            msg.find("Kernels cannot be placed on dispatch cores") != std::string::npos ||
+            msg.find("exceeds device compute grid") != std::string::npos) {
             GTEST_SKIP() << "12-wide BLOCK_SHARDED grid not supported on this hardware "
-                            "(dispatch-core placement constraint): "
+                            "(grid-size or dispatch-core placement constraint): "
                          << e.what();
         }
         // Otherwise we expect this to be the qkv_layout FATAL — log it and pass.
