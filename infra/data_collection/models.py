@@ -19,3 +19,7 @@ class TestErrorV1(enum.Enum):
     PY_TEST_FAILURE = enum.auto()
     CPP_TEST_FAILURE = enum.auto()
     UNKNOWN_TEST_FAILURE = enum.auto()
+
+
+class CodeQualityErrorV1(enum.Enum):
+    CLANG_TIDY_VIOLATION = enum.auto()
