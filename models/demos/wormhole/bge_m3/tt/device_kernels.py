@@ -34,6 +34,15 @@ def max_wo_mm_chunk_seq_len(_mesh_device: ttnn.MeshDevice | None) -> int:
 
 
 def bge_m3_matmul_compute_kernel_config(mesh_device: ttnn.MeshDevice) -> ttnn.WormholeComputeKernelConfig:
+    """Return a compute kernel config for matmul operations in BGE-M3.
+
+    Selects math fidelity from device architecture:
+
+    - **Blackhole:** HiFi4 (better accuracy for long sequences).
+    - **Wormhole:** HiFi2 (avoids known matmul quirks with HiFi4 + FP32 on Wormhole).
+
+    Always enables FP32 destination accumulation and L1 packer accumulation.
+    """
     fidelity = ttnn.MathFidelity.HiFi4 if ttnn_is_blackhole(mesh_device) else ttnn.MathFidelity.HiFi2
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
@@ -45,6 +54,15 @@ def bge_m3_matmul_compute_kernel_config(mesh_device: ttnn.MeshDevice) -> ttnn.Wo
 
 
 def bge_m3_sdpa_compute_kernel_config(mesh_device: ttnn.MeshDevice) -> ttnn.WormholeComputeKernelConfig:
+    """Return the compute kernel config for scaled dot-product attention (SDPA) in BGE-M3.
+
+    Math fidelity is architecture-specific:
+
+    - **Blackhole:** HiFi4 for tighter precision.
+    - **Wormhole:** HiFi2 for compatibility and stability.
+
+    FP32 destination accumulation and L1 packer accumulation are always enabled.
+    """
     sdpa_fidelity = ttnn.MathFidelity.HiFi4 if ttnn_is_blackhole(mesh_device) else ttnn.MathFidelity.HiFi2
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
@@ -56,7 +74,15 @@ def bge_m3_sdpa_compute_kernel_config(mesh_device: ttnn.MeshDevice) -> ttnn.Worm
 
 
 def bge_m3_layernorm_compute_kernel_config(mesh_device: ttnn.MeshDevice) -> ttnn.WormholeComputeKernelConfig:
-    # Match ttnn layer_norm default (layernorm.cpp: HiFi4, approx off, fp32 acc).
+    """Return the compute kernel config for LayerNorm in BGE-M3 on the given mesh device.
+
+    Matches ``ttnn`` layer_norm defaults in Metal (``layernorm.cpp``):
+
+    - HiFi4 math fidelity
+    - Approximate math off
+    - FP32 destination accumulator enabled
+    - L1 packer accumulation enabled
+    """
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
