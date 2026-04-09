@@ -5,6 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <bit>
+#include <cstdint>
 #include <optional>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -21,6 +22,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -39,6 +41,28 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] const T param0_raw = params[0];
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
+        case UnaryOpType::RRELU: {
+            float lower = param0;
+            float upper = static_cast<float>(params[1]);
+            float training = static_cast<float>(params[2]);
+            // Convert float to bfloat16 format (upper 16 bits of float32)
+            auto to_bf16 = [](float val) -> uint32_t { return std::bit_cast<uint32_t>(val) >> 16; };
+            if (training == 0.0f) {
+                // Eval mode: pre-compute slope = (lower + upper) / 2
+                float slope = (lower + upper) * 0.5f;
+                uint32_t slope_bf16 = to_bf16(slope);
+                return {
+                    "rrelu_tile_init();",
+                    fmt::format("rrelu_eval_tile({}, 0x{:x}u);", idst, slope_bf16)};
+            } else {
+                // Training mode: pass lower and upper bounds in bfloat16
+                uint32_t lower_bf16 = to_bf16(lower);
+                uint32_t upper_bf16 = to_bf16(upper);
+                return {
+                    "rrelu_tile_init();",
+                    fmt::format("rrelu_train_tile({}, 0x{:x}u, 0x{:x}u);", idst, lower_bf16, upper_bf16)};
+            }
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }
@@ -166,6 +190,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::RRELU: return "eltwise_sfpu_rrelu.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }

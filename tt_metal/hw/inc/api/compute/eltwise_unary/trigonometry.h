@@ -1,0 +1,1 @@
+// Stub - nuked op header
