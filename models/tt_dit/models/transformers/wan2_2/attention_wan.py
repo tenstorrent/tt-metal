@@ -42,6 +42,7 @@ class WanAttention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_self: bool = True,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -122,7 +123,8 @@ class WanAttention(Module):
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+        ring_sdpa_chunk_size = chunk_lookup.get(
             (
                 is_blackhole(),
                 self.parallel_config.sequence_parallel.factor,
