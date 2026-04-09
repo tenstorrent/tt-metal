@@ -9,12 +9,22 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
-from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
+from models.tt_transformers.tt.common import (
+    Mode,
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import (
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+    MathFidelitySetting,
+)
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.model_config import OpGroup
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -23,8 +33,6 @@ ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
     """Power-of-2 token K-chunk for paged decode SDPA (Metal requires multiple of 32)."""
-    # 256 fits Wormhole N150 L1 for Gemma3 paged decode; 512+ commonly hits circular-buffer clash
-    # (program.cpp static CB vs L1). Larger chunks only move HF mismatch boundaries—they are not a root fix.
     default = 256
     raw = os.environ.get("GEMMA3_SDPA_DECODE_K_CHUNK", "").strip()
     if not raw:
@@ -93,17 +101,37 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
-        # On N150/N300, padded per-device vocab is 262400//2 = 131200 (> legacy 64k cap). TTSampling
-        # uses uint32 indices when local vocab exceeds uint16; allow device sampling for this shard size.
         self.device_sampling_max_per_device_vocab = 192 * 1024
-        if os.environ.get("GEMMA3_FORCE_HOST_SAMPLING", "").lower() in ("1", "true", "yes"):
-            self.device_sampling_max_per_device_vocab = 64 * 1024
+
+        # Prefill QKV uses minimal_matmul for seq_len > 128. On Wormhole B0, HiFi4 + 8×8×8 blocks exceed L1 once
+        # multimodal prefill length and device-side sampling buffers are resident (program.cpp CB vs L1 clash).
+        if is_wormhole_b0():
             logger.info(
-                "GEMMA3_FORCE_HOST_SAMPLING: device_sampling_max_per_device_vocab=64k → Transformer uses host sampling"
+                "Gemma3 on Wormhole B0: HiFi2_FP16 for LI_QKV_PREFILL/LI_O_PREFILL to shrink prefill matmul CBs."
             )
+            for layer_id in range(self.n_layers):
+                opts = self.optimizations.decoder_optimizations[layer_id]
+                opts._opt_settings["OpFidelity"].update(
+                    {
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                    }
+                )
 
     @lru_cache(maxsize=None)
-    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+        """Smaller minimal_matmul tiles on WH B0 to avoid L1 circular-buffer clashes during long prefill."""
+        if mode == Mode.PREFILL and seq_len > 128 and is_wormhole_b0():
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
+    @lru_cache(maxsize=None)
+    def get_attn_sdpa_decode_program_config(self, prefetcher=None):
         """Gemma3-only decode SDPA config.
 
         ``k_chunk_size=0`` uses ``get_dynamic_Sk_chunk_t()``, which jumps 4→8 tiles at cur_pos 127→128
@@ -162,6 +190,11 @@ class ModelArgs(TTModelArgs):
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
         return to_warmup_seq_lens
 
+    def supports_decode_trace(self) -> bool:
+        # Decode trace capture stalls after the compile (no-trace) run on Blackhole (e.g. P150)
+        # inside _capture_decode_trace_text (between "Done Compiling Model" and "Done Capturing Decode Trace").
+        return not is_blackhole()
+
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
             # for gemma we have different default supported seq lens than in tt_transformers
@@ -170,6 +203,7 @@ class ModelArgs(TTModelArgs):
             "N300": [],
             "T3K": [],
             "TG": [],
+            "P150": [],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
