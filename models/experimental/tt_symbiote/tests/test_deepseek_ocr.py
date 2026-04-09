@@ -25,7 +25,7 @@ from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNIma
 from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from tqdm import tqdm
 
 # --- HuggingFace model compatibility patches ---
@@ -56,7 +56,11 @@ if not hasattr(DynamicCache, "get_usable_length"):
     DynamicCache.get_usable_length = _get_usable_length
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 245760, "trace_region_size": 200000000, "num_command_queues": 1}],
+    indirect=True,
+)
 def test_deepseek_ocr(device):
     """Test DeepSeek-OCR model with TTNN acceleration."""
 
@@ -142,3 +146,4 @@ def test_deepseek_ocr(device):
 
     print(f"\nResults saved to {run_dir}/")
     print(res)
+    TracedRun.release_all()

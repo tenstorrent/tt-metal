@@ -897,6 +897,7 @@ class TTNNSAMBlock(TTNNModule):
         return x
 
 
+@trace_enabled
 class TTNNImageEncoderViT(TTNNModule):
     """TTNN SAM ImageEncoderViT: patch_embed, pos_embed, blocks, neck, net_2, net_3.
     Input NCHW, output BCHW.
@@ -1150,6 +1151,7 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         return embeddings
 
 
+@trace_enabled
 class TTNNVitModel(TTNNModule):
     """Vision Transformer Model using TTNN operations."""
 

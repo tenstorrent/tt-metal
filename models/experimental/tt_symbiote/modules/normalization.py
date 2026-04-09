@@ -8,9 +8,10 @@ from torch import nn
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
+@trace_enabled
 class TTNNLayerNorm(TTNNModule):
     """TTNN-accelerated LayerNorm."""
 
@@ -66,6 +67,7 @@ class DeepseekV2RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
+@trace_enabled
 class TTNNRMSNorm(TTNNModule):
     @classmethod
     def from_torch(cls, rms_norm: DeepseekV2RMSNorm):

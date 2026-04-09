@@ -8,8 +8,10 @@ import torch
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
+@trace_enabled
 class TTNNSilu(TTNNModule):
     """TTNN-accelerated SiLU activation function."""
 
@@ -40,6 +42,7 @@ class TTNNReLU(TTNNModule):
         return tt_output
 
 
+@trace_enabled
 class TTNNGelu(TTNNModule):
     """TTNN-accelerated GELU activation function."""
 

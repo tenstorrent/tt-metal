@@ -1683,10 +1683,7 @@ def _to_torch_for_fallback(tensor):
     return tensor
 
 
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
-
-
-@trace_enabled
+# @trace_enabled
 class TTNNDeepseekV2MoE(TTNNModule):
     """TTNN symbiote for DeepSeek V2 MoE.
     Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
