@@ -4,7 +4,7 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 
 ## How It Works
 
-1. A PR is targeted (via `/bug-check` comment or local CLI invocation).
+1. A PR is targeted (via `/bug-check run` comment or local CLI invocation).
 2. The tool loads all rules from `.github/bug_checker/manifest.yaml`.
 3. Rules are filtered to only those matching the PR's changed files (path globs) or labels.
 4. Each matching rule is sent to Claude along with the PR diff. Claude analyzes the diff against the bug pattern described in the rule's markdown file.
@@ -113,7 +113,7 @@ Each rule runs in its own isolated LLM session — no state is shared between ru
 
 ### GitHub Actions (primary)
 
-Comment `/bug-check` on any PR. The workflow at `.github/workflows/bug-check.yaml` runs the checker and posts findings as inline comments.
+Comment `/bug-check run` on any PR. The workflow at `.github/workflows/bug-check.yaml` runs the checker and posts findings as inline comments. Comment `/bug-check` (bare) to see all available subcommands.
 
 ### Local CLI
 
