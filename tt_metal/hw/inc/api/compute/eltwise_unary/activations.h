@@ -107,6 +107,8 @@ ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_
 * acquired state via *acquire_dst* call. This call is blocking and is only
 * available on the compute engine.
 *
+* Formula: hardshrink(x, λ) = x if |x| > λ, else 0
+*
 * Return value: None
 *
 * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
