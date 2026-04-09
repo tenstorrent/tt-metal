@@ -4,8 +4,10 @@
 
 import os
 
+from ttnn.device import is_blackhole as ttnn_is_blackhole
+from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
+
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 class ModelArgs:
@@ -40,7 +42,7 @@ class ModelArgs:
         self.tile_size = 32
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        self.prefill_len_cutoff = 512 if is_blackhole() else 1024
+        self.prefill_len_cutoff = 512 if ttnn_is_blackhole(mesh_device) else 1024
 
         self.dummy_weights = dummy_weights
         self.cache_hf = cache_hf
@@ -264,14 +266,14 @@ def determine_device_name(mesh_device):
     if num_devices == 0:
         return "CPU", num_devices
 
-    if is_blackhole():
+    if ttnn_is_blackhole(mesh_device):
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
             8: "P150x8",
         }
-    elif is_wormhole_b0():
+    elif ttnn_is_wormhole_b0(mesh_device):
         dict_device_names = {
             1: "N150",
             2: "N300",
