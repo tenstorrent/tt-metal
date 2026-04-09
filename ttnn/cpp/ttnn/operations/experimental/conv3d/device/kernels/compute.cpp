@@ -43,38 +43,20 @@ void matmul_blocks(
     ckernel::BlockMatmulOp mm(mm_cfg);
     mm.init_short();
 
-    uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_index_offset = 0;
+    uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
+    uint32_t in0_index_subblock_offset = 0;
 
     reconfig_data_format(in1_cb, in0_cb);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
+        uint32_t in1_index_subblock_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                mm.matmul(in0_index, in1_index, dst_index);
-                in0_index++;
-                in1_index += N;
-            }
-            tile_regs_commit();
-
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            tile_regs_release();
-            cb_push_back(out_cb, out_subblock_num_tiles);
-            in1_index_offset += subblock_w;
+            mm.accumulate_and_pack(
+                in0_index_subblock_offset, in1_index_subblock_offset, in0_block_w, N, out_cb, out_subblock_num_tiles);
+            in1_index_subblock_offset += subblock_w;
         }
-        in0_index_offset += subblock_h * in0_block_w;
+        in0_index_subblock_offset += in0_subblock_num_tiles;
     }
 }
 

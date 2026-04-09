@@ -64,13 +64,7 @@ void kernel_main() {
 
                         cb_in1_obj.pop_front(onetile);
                     }
-                    tile_regs_commit();
-
-                    cb_intermed0_obj.reserve_back(onetile);
-                    tile_regs_wait();
-                    pack_tile(0, cb_intermed0);
-                    tile_regs_release();
-                    cb_intermed0_obj.push_back(onetile);
+                    mm.end_to_output(cb_intermed0, onetile);
 
                     // untilize tile and write to CBIndex::c_25 with reconfiguration
                     compute_kernel_lib::untilize<

@@ -330,7 +330,7 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     ckernel::TileMatmulOp mm(mm_cfg);
     mm.init();
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        tile_regs_acquire();
+        mm.begin_subblock();
         for (uint32_t kt = 0; kt < Kt; kt++) {
             cb_wait_front(cb_in0, onetile);
             cb_wait_front(cb_in1, onetile);

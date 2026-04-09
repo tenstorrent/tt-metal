@@ -5,7 +5,6 @@
 #pragma once
 
 #include "api/compute/matmul.h"
-#include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/cb_api.h"
@@ -35,11 +34,6 @@ struct MatmulOpConfig {
     // CB for storing partial accumulations when inner dim is blocked (num_blocks_inner > 1).
     // Set to 0 to disable spill/reload.
     uint32_t partials_cb_id = 0;
-
-    // --- Architecture-specific options ---
-    // When true, use matmul_block_no_mop (direct replay buffer) instead of matmul_block
-    // with MOP. Only effective on Blackhole. Used by SDPA streaming kernels.
-    bool use_no_mop = false;
 };
 
 // -------------------------------------------------------------------------
@@ -70,13 +64,6 @@ public:
 
     FORCE_INLINE void init_short() const {
         if constexpr (IsBlockMode) {
-#ifdef ARCH_BLACKHOLE
-            if (cfg_.use_no_mop) {
-                mm_no_mop_init_short(
-                    cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
-                return;
-            }
-#endif
             mm_block_init_short(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
         } else {
             mm_init_short(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose);
@@ -111,21 +98,6 @@ public:
 
     FORCE_INLINE void matmul(uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t dst_tile_index) const {
         if constexpr (IsBlockMode) {
-#ifdef ARCH_BLACKHOLE
-            if (cfg_.use_no_mop) {
-                matmul_block_no_mop(
-                    cfg_.in0_cb_id,
-                    cfg_.in1_cb_id,
-                    in0_tile_index,
-                    in1_tile_index,
-                    dst_tile_index,
-                    cfg_.transpose,
-                    cfg_.ct_dim,
-                    cfg_.rt_dim,
-                    cfg_.kt_dim);
-                return;
-            }
-#endif
             matmul_block(
                 cfg_.in0_cb_id,
                 cfg_.in1_cb_id,
@@ -200,6 +172,86 @@ public:
         }
     }
 
+    // Combines begin_subblock + optional reload + accumulate + end_to_output/partials.
+    // Replaces the standard subblock compute-and-pack pattern found in many kernels.
+    FORCE_INLINE void accumulate_and_pack(
+        uint32_t in0_index_start,
+        uint32_t in1_index_start,
+        uint32_t inner_dim,
+        uint32_t in1_stride,
+        uint32_t dest_cb_id,
+        uint32_t num_tiles,
+        bool reload = false) const {
+        begin_subblock();
+        if (reload) {
+            reload_partials(num_tiles);
+        }
+        accumulate(in0_index_start, in1_index_start, 0, inner_dim, in1_stride);
+        end_to_output(dest_cb_id, num_tiles);
+    }
+
+    // Computes one output tile by accumulating over inner_dim single tiles.
+    // Per-tile CB wait/pop on both inputs. Tile mode only.
+    // Replaces: acquire + for(K){wait/matmul/pop} + commit + reserve/pack/release/push
+    FORCE_INLINE void compute_one_tile(uint32_t inner_dim) const {
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < inner_dim; ++k) {
+            cb_wait_front(cfg_.in0_cb_id, 1);
+            cb_wait_front(cfg_.in1_cb_id, 1);
+            matmul(0, 0, 0);
+            cb_pop_front(cfg_.in0_cb_id, 1);
+            cb_pop_front(cfg_.in1_cb_id, 1);
+        }
+        tile_regs_commit();
+        cb_reserve_back(cfg_.out_cb_id, 1);
+        tile_regs_wait();
+        pack_tile(0, cfg_.out_cb_id);
+        tile_regs_release();
+        cb_push_back(cfg_.out_cb_id, 1);
+    }
+
+    // Computes a full inner block across subblocks with optional spill/reload.
+    // Handles the double subblock loop (in0_num_subblocks x in1_num_subblocks),
+    // CB wait/pop for the input block, and spill/reload between inner blocks.
+    // Replaces the standard blocked matmul inner loop found in many kernels.
+    FORCE_INLINE void compute_inner_block(
+        uint32_t in0_num_subblocks,
+        uint32_t in1_num_subblocks,
+        uint32_t in0_block_num_tiles,
+        uint32_t in1_block_num_tiles,
+        uint32_t in1_block_w,
+        bool enable_reload,
+        bool last_out) const {
+        static_assert(IsBlockMode, "compute_inner_block is only supported in block mode");
+        uint32_t out_subblock_num_tiles = cfg_.ct_dim * cfg_.rt_dim;
+        uint32_t in0_subblock_num_tiles = cfg_.rt_dim * cfg_.kt_dim;
+
+        cb_wait_front(cfg_.in0_cb_id, in0_block_num_tiles);
+        cb_wait_front(cfg_.in1_cb_id, in1_block_num_tiles);
+
+        uint32_t in0_index_subblock_offset = 0;
+        for (uint32_t in0_sub = 0; in0_sub < in0_num_subblocks; in0_sub++) {
+            uint32_t in1_index_subblock_offset = 0;
+            for (uint32_t in1_sub = 0; in1_sub < in1_num_subblocks; in1_sub++) {
+                begin_subblock();
+                if (enable_reload) {
+                    reload_partials(out_subblock_num_tiles);
+                }
+                accumulate(in0_index_subblock_offset, in1_index_subblock_offset, 0, cfg_.kt_dim, in1_block_w);
+                if (last_out) {
+                    end_to_output(cfg_.out_cb_id, out_subblock_num_tiles);
+                } else {
+                    end_to_partials(out_subblock_num_tiles);
+                }
+                in1_index_subblock_offset += cfg_.ct_dim;
+            }
+            in0_index_subblock_offset += in0_subblock_num_tiles;
+        }
+
+        cb_pop_front(cfg_.in0_cb_id, in0_block_num_tiles);
+        cb_pop_front(cfg_.in1_cb_id, in1_block_num_tiles);
+    }
+
     // -------------------------------------------------------------------------
     // Mode 3: Automatic -- full blocked matmul
     // -------------------------------------------------------------------------
@@ -215,77 +267,31 @@ public:
         uint32_t in1_block_num_tiles,
         uint32_t in1_block_w) const {
         if constexpr (!IsBlockMode) {
-            // Tile mode: simple nested loop
-            // num_blocks_h = Mt, num_blocks_w = Nt, num_blocks_inner = Kt
             for (uint32_t b = 0; b < batch; b++) {
                 for (uint32_t m = 0; m < num_blocks_h; m++) {
                     for (uint32_t n = 0; n < num_blocks_w; n++) {
-                        tile_regs_acquire();
-                        for (uint32_t k = 0; k < num_blocks_inner; k++) {
-                            cb_wait_front(cfg_.in0_cb_id, 1);
-                            cb_wait_front(cfg_.in1_cb_id, 1);
-                            matmul_tiles(cfg_.in0_cb_id, cfg_.in1_cb_id, 0, 0, 0);
-                            cb_pop_front(cfg_.in0_cb_id, 1);
-                            cb_pop_front(cfg_.in1_cb_id, 1);
-                        }
-                        tile_regs_commit();
-                        cb_reserve_back(cfg_.out_cb_id, 1);
-                        tile_regs_wait();
-                        pack_tile(0, cfg_.out_cb_id);
-                        tile_regs_release();
-                        cb_push_back(cfg_.out_cb_id, 1);
+                        compute_one_tile(num_blocks_inner);
                     }
                 }
             }
         } else {
-            // Block mode: full subblock loop with spill/reload
-            uint32_t out_subblock_num_tiles = cfg_.ct_dim * cfg_.rt_dim;
-            uint32_t in0_subblock_num_tiles = cfg_.rt_dim * cfg_.kt_dim;
-
             for (uint32_t b = 0; b < batch; b++) {
                 for (uint32_t bh = 0; bh < num_blocks_h; bh++) {
                     for (uint32_t bw = 0; bw < num_blocks_w; bw++) {
                         bool enable_reload = false;
                         for (uint32_t block_inner = 0; block_inner < num_blocks_inner; block_inner++) {
                             bool last_out = (block_inner == num_blocks_inner - 1);
-
-                            cb_wait_front(cfg_.in0_cb_id, in0_block_num_tiles);
-                            cb_wait_front(cfg_.in1_cb_id, in1_block_num_tiles);
-
-                            uint32_t in0_index_subblock_offset = 0;
-                            for (uint32_t in0_sub = 0; in0_sub < in0_num_subblocks; in0_sub++) {
-                                uint32_t in1_index_subblock_offset = 0;
-                                for (uint32_t in1_sub = 0; in1_sub < in1_num_subblocks; in1_sub++) {
-                                    begin_subblock();
-
-                                    if (enable_reload) {
-                                        reload_partials(out_subblock_num_tiles);
-                                    }
-
-                                    accumulate(
-                                        in0_index_subblock_offset,
-                                        in1_index_subblock_offset,
-                                        0,
-                                        cfg_.kt_dim,
-                                        in1_block_w);
-
-                                    if (last_out) {
-                                        end_to_output(cfg_.out_cb_id, out_subblock_num_tiles);
-                                    } else {
-                                        end_to_partials(out_subblock_num_tiles);
-                                    }
-
-                                    in1_index_subblock_offset += cfg_.ct_dim;
-                                }
-                                in0_index_subblock_offset += in0_subblock_num_tiles;
-                            }
-
+                            compute_inner_block(
+                                in0_num_subblocks,
+                                in1_num_subblocks,
+                                in0_block_num_tiles,
+                                in1_block_num_tiles,
+                                in1_block_w,
+                                enable_reload,
+                                last_out);
                             if (num_blocks_inner > 1) {
                                 enable_reload = true;
                             }
-
-                            cb_pop_front(cfg_.in0_cb_id, in0_block_num_tiles);
-                            cb_pop_front(cfg_.in1_cb_id, in1_block_num_tiles);
                         }
                     }
                 }
