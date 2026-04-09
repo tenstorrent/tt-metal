@@ -145,18 +145,20 @@ void kernel_main() {
 
     // Signal to the compute core that num_tokens_per_expert has arrived.
     // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
-    // - 0: address of semaphore used to send metadata (number of tokens per expert)
+    // - 0: address of L1 page (CB) used to send metadata (number of tokens per expert)
     // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
+
+    // Read per-expert token counts from CB
+    const auto num_tokens_per_expert_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_tokens_per_expert_addr);
+
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
-    cb_w2c_md_write_ptr[0] = get_semaphore(metadata_ready_semaphore_id);
+    cb_w2c_md_write_ptr[0] = num_tokens_per_expert_addr;
     cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
     cb_reserve_back(cb_w2c_md, 2);
     cb_push_back(cb_w2c_md, 2);
-
-    // Read per-expert token counts from CB
-    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];

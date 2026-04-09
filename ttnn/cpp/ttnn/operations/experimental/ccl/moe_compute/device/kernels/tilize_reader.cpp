@@ -844,13 +844,13 @@ void kernel_main() {
                 tilize_mcast_end_y,
                 metadata_ready_semaphore_addr);
 
-            // Multicast the value 1 to all non-drain tilize cores
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
-
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
             noc_async_writes_flushed();
+
+            // Multicast the value 1 to all non-drain tilize cores
+            noc_semaphore_set_multicast(
+                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
         }
 
         /*
