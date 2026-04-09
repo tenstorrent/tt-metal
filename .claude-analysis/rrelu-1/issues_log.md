@@ -13,9 +13,9 @@
 | 1 | Reference Discovery | ok | ~403s | None |
 | 2 | Reference Analysis | ok | ~463s | None - all 5/5 succeeded |
 | 3 | Implementation | ok | ~1183s | None |
-| 4 | Testing & Debugging | pending | - | - |
-| 5 | Documentation | pending | - | - |
-| 6 | Self-Reflection | pending | - | - |
+| 4 | Testing & Debugging | ok | ~108s | None - 6/6 PASSED first try |
+| 5 | Documentation | ok | ~30s | None |
+| 6 | Self-Reflection | ok | ~180s | None |
 
 ## Issues
 (will be populated as issues arise)
