@@ -127,7 +127,6 @@ class TtBarkModel:
             n_codes_total=hf_model.fine_acoustics.config.n_codes_total,
             n_codes_given=hf_model.fine_acoustics.config.n_codes_given,
         )
-        self.hf_fine = hf_model.fine_acoustics
 
         # --- EnCodec decoder ---
         self.codec_model = hf_model.codec_model
@@ -183,66 +182,67 @@ class TtBarkModel:
         infer_token = torch.tensor([[SEMANTIC_INFER_TOKEN]], dtype=torch.long)
         input_ids = torch.cat([input_ids, infer_token], dim=-1)
 
-        # Initial pre-fill (process entire prompt) — use DRAM to avoid L1 overflow with KV cache
-        gen_mem = ttnn.DRAM_MEMORY_CONFIG
-        logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
+        with torch.no_grad():
+            # Initial pre-fill (process entire prompt) — use DRAM to avoid L1 overflow with KV cache
+            gen_mem = ttnn.DRAM_MEMORY_CONFIG
+            logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
 
-        # --- Unified autoregressive loop with logits suppression on host ---
-        max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", None) or 768
-        generated_tokens = []
-        next_token_torch = None
-        tt_next_token = None
+            # --- Unified autoregressive loop with logits suppression on host ---
+            max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", None) or 768
+            generated_tokens = []
+            next_token_torch = None
+            tt_next_token = None
 
-        for step in range(max_new_tokens):
-            if step == 0:
-                # Use prefill logits
-                logits_torch = ttnn.to_torch(logits).squeeze(0)
-                ttnn.deallocate(logits)
-            else:
-                logits, layer_past = self.semantic_model(
-                    input_ids=tt_next_token,
-                    layer_past=layer_past,
-                    use_cache=True,
-                    memory_config=gen_mem,
+            for step in range(max_new_tokens):
+                if step == 0:
+                    # Use prefill logits
+                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    ttnn.deallocate(logits)
+                else:
+                    logits, layer_past = self.semantic_model(
+                        input_ids=tt_next_token,
+                        layer_past=layer_past,
+                        use_cache=True,
+                        memory_config=gen_mem,
+                    )
+                    ttnn.deallocate(tt_next_token)
+                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    ttnn.deallocate(logits)
+
+                last_logits = logits_torch[:, -1, :]
+                # Allow EOS at SEMANTIC_PAD_TOKEN (10000); suppress everything above it
+                last_logits[:, SEMANTIC_PAD_TOKEN + 1 :] = -float("inf")
+                next_token_torch = torch.argmax(last_logits, dim=-1)  # [1]
+
+                # EOS check BEFORE appending — EOS itself is never included in output
+                if next_token_torch.item() == SEMANTIC_PAD_TOKEN:
+                    break
+
+                generated_tokens.append(next_token_torch.unsqueeze(-1))
+                tt_next_token = ttnn.from_torch(
+                    next_token_torch.unsqueeze(0).to(torch.int32),
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+
+            if tt_next_token is not None:
                 ttnn.deallocate(tt_next_token)
-                logits_torch = ttnn.to_torch(logits).squeeze(0)
-                ttnn.deallocate(logits)
 
-            last_logits = logits_torch[:, -1, :]
-            # Allow EOS at SEMANTIC_PAD_TOKEN (10000); suppress everything above it
-            last_logits[:, SEMANTIC_PAD_TOKEN + 1 :] = -float("inf")
-            next_token_torch = torch.argmax(last_logits, dim=-1)  # [1]
-
-            # EOS check BEFORE appending — EOS itself is never included in output
-            if next_token_torch.item() == SEMANTIC_PAD_TOKEN:
-                break
-
-            generated_tokens.append(next_token_torch.unsqueeze(-1))
-            tt_next_token = ttnn.from_torch(
-                next_token_torch.unsqueeze(0).to(torch.int32),
-                dtype=ttnn.uint32,
-                device=self.device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-        if tt_next_token is not None:
-            ttnn.deallocate(tt_next_token)
-
-        # Deallocate KV cache tensors to free device memory
-        if layer_past is not None:
-            for past_k, past_v in layer_past:
-                try:
-                    ttnn.deallocate(past_k)
-                except Exception:
-                    pass
-                try:
-                    ttnn.deallocate(past_v)
-                except Exception:
-                    pass
+            # Deallocate KV cache tensors to free device memory
+            if layer_past is not None:
+                for past_k, past_v in layer_past:
+                    try:
+                        ttnn.deallocate(past_k)
+                    except Exception:
+                        pass
+                    try:
+                        ttnn.deallocate(past_v)
+                    except Exception:
+                        pass
 
         if not generated_tokens:
-            return torch.zeros((1, 1), dtype=torch.long)
+            return torch.empty((1, 0), dtype=torch.long)
         return torch.cat(generated_tokens, dim=-1)
 
     def generate_coarse_tokens(self, semantic_tokens: torch.Tensor) -> torch.Tensor:
@@ -274,73 +274,74 @@ class TtBarkModel:
         infer_token = torch.tensor([[COARSE_INFER_TOKEN]], dtype=torch.long)
         input_ids = torch.cat([input_ids, infer_token], dim=-1)
 
-        # Initial pre-fill — use DRAM to avoid L1 overflow with KV cache
-        gen_mem = ttnn.DRAM_MEMORY_CONFIG
-        logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
+        with torch.no_grad():
+            # Initial pre-fill — use DRAM to avoid L1 overflow with KV cache
+            gen_mem = ttnn.DRAM_MEMORY_CONFIG
+            logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
 
-        # --- Unified loop with alternating-codebook logits suppression on host ---
-        max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", None) or 768
-        generated_tokens = []
-        tt_next_token = None
+            # --- Unified loop with alternating-codebook logits suppression on host ---
+            max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", None) or 768
+            generated_tokens = []
+            tt_next_token = None
 
-        for step in range(max_new_tokens):
-            if step == 0:
-                logits_torch = ttnn.to_torch(logits).squeeze(0)
-                ttnn.deallocate(logits)
-            else:
-                logits, layer_past = self.coarse_model(
-                    input_ids=tt_next_token,
-                    layer_past=layer_past,
-                    use_cache=True,
-                    memory_config=gen_mem,
+            for step in range(max_new_tokens):
+                if step == 0:
+                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    ttnn.deallocate(logits)
+                else:
+                    logits, layer_past = self.coarse_model(
+                        input_ids=tt_next_token,
+                        layer_past=layer_past,
+                        use_cache=True,
+                        memory_config=gen_mem,
+                    )
+                    ttnn.deallocate(tt_next_token)
+                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    ttnn.deallocate(logits)
+
+                last_logits = logits_torch[:, -1, :]  # [1, vocab]
+
+                # Alternating codebook suppression — critical for correct coarse generation
+                codebook_idx = step % N_COARSE_CODEBOOKS
+                allowed_start = SEMANTIC_VOCAB_SIZE + codebook_idx * CODEBOOK_SIZE
+                allowed_end = allowed_start + CODEBOOK_SIZE
+                mask = torch.full_like(last_logits, -float("inf"))
+                mask[:, allowed_start:allowed_end] = 0.0
+                mask[:, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
+                next_token_torch = torch.argmax(last_logits + mask, dim=-1)
+
+                # EOS check — must only stop on full codebook pairs to prevent
+                # odd-length output that would crash Stage 3 reshape.
+                if next_token_torch.item() == COARSE_SEMANTIC_PAD_TOKEN:
+                    if step % N_COARSE_CODEBOOKS == 0 and len(generated_tokens) > 0:
+                        # EOS fired after codebook 0 of a new pair — pad with
+                        # a silence token for codebook 1 so the pair is complete.
+                        pad_cb1 = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
+                        generated_tokens.append(pad_cb1)
+                    break
+
+                generated_tokens.append(next_token_torch.unsqueeze(-1))
+                tt_next_token = ttnn.from_torch(
+                    next_token_torch.unsqueeze(0).to(torch.int32),
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+
+            if tt_next_token is not None:
                 ttnn.deallocate(tt_next_token)
-                logits_torch = ttnn.to_torch(logits).squeeze(0)
-                ttnn.deallocate(logits)
 
-            last_logits = logits_torch[:, -1, :]  # [1, vocab]
-
-            # Alternating codebook suppression — critical for correct coarse generation
-            codebook_idx = step % N_COARSE_CODEBOOKS
-            allowed_start = SEMANTIC_VOCAB_SIZE + codebook_idx * CODEBOOK_SIZE
-            allowed_end = allowed_start + CODEBOOK_SIZE
-            mask = torch.full_like(last_logits, -float("inf"))
-            mask[:, allowed_start:allowed_end] = 0.0
-            mask[:, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
-            next_token_torch = torch.argmax(last_logits + mask, dim=-1)
-
-            # EOS check — must only stop on full codebook pairs to prevent
-            # odd-length output that would crash Stage 3 reshape.
-            if next_token_torch.item() == COARSE_SEMANTIC_PAD_TOKEN:
-                if step % N_COARSE_CODEBOOKS == 0 and len(generated_tokens) > 0:
-                    # EOS fired after codebook 0 of a new pair — pad with
-                    # a silence token for codebook 1 so the pair is complete.
-                    pad_cb1 = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
-                    generated_tokens.append(pad_cb1)
-                break
-
-            generated_tokens.append(next_token_torch.unsqueeze(-1))
-            tt_next_token = ttnn.from_torch(
-                next_token_torch.unsqueeze(0).to(torch.int32),
-                dtype=ttnn.uint32,
-                device=self.device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-        if tt_next_token is not None:
-            ttnn.deallocate(tt_next_token)
-
-        # Deallocate KV cache tensors to free device memory
-        if layer_past is not None:
-            for past_k, past_v in layer_past:
-                try:
-                    ttnn.deallocate(past_k)
-                except Exception:
-                    pass
-                try:
-                    ttnn.deallocate(past_v)
-                except Exception:
-                    pass
+            # Deallocate KV cache tensors to free device memory
+            if layer_past is not None:
+                for past_k, past_v in layer_past:
+                    try:
+                        ttnn.deallocate(past_k)
+                    except Exception:
+                        pass
+                    try:
+                        ttnn.deallocate(past_v)
+                    except Exception:
+                        pass
 
         if not generated_tokens:
             print("WARNING: Coarse generation produced no tokens. Returning silence.")

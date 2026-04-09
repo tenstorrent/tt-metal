@@ -9,14 +9,13 @@ Coarse (Stage 2) generation to reduce total latency by starting coarse
 generation before semantic generation completes.
 
 Strategy:
-  - Semantic generation produces tokens autoregressively
-  - Once MIN_SEMANTIC_TOKENS are ready, coarse generation begins
-  - Semantic continues in background while coarse processes initial batch
+  - Semantic generation produces tokens autoregressively (full completion)
+  - Coarse generation starts after all semantic tokens are ready
+  - Timing data is used to estimate multi-device overlap opportunity
 
 Note: Full streaming overlap requires concurrent execution on separate
-devices or async scheduling. This module implements the simpler "early
-start" approach: generate a chunk of semantic tokens, begin coarse
-processing, then continue semantic generation.
+devices or async scheduling. This module implements sequential execution
+with timing analysis to estimate the benefit of overlap.
 
 Usage:
     from bark_pipeline_overlap import BarkStreamingPipeline
@@ -27,9 +26,6 @@ Usage:
 import time
 
 import numpy as np
-import torch
-
-import ttnn
 
 
 # Minimum semantic tokens to accumulate before starting coarse generation

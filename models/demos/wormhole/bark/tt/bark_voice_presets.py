@@ -43,15 +43,17 @@ _preset_cache: dict = {}
 def load_voice_preset(preset_name: str, cache: bool = True) -> Optional[str]:
     """Load a Bark voice preset for consistent speaker characteristics.
 
-    Uses the HuggingFace BarkProcessor to validate speaker presets.
-    The processor accepts the preset name string directly as ``voice_preset``.
+    Validates speaker presets against the local ``BUILTIN_PRESETS`` list.
+    The validated preset name string can be passed directly as ``voice_preset``
+    to BarkProcessor.
 
     Args:
         preset_name: Preset identifier (e.g. "v2/en_speaker_0").
-        cache: Whether to cache the validation result (default True).
+        cache: Whether to cache validated preset-name strings (default True).
 
     Returns:
-        Voice preset name string suitable for BarkProcessor, or None if invalid.
+        Validated voice preset name string suitable for ``voice_preset``,
+        or None if the preset is not in ``BUILTIN_PRESETS``.
     """
     if cache and preset_name in _preset_cache:
         return _preset_cache[preset_name]

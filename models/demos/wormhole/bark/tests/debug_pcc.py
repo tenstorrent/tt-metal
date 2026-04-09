@@ -68,23 +68,15 @@ def main():
         tt_model = TtBarkGPT(device, params, config, is_causal=True)
 
         # --- Manually step through TtBarkGPT.__call__ to get per-layer PCC ---
-        # Embedding
-        tt_input_ids = ttnn.from_torch(
-            input_ids.to(torch.int32), dtype=ttnn.uint32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+        # Embedding: TtBarkGPT keeps embeddings as CPU torch.nn.Embedding modules.
+        inputs_embeds_torch = tt_model.input_embeds(input_ids)
+        position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0)
+        pos_embeds_torch = tt_model.position_embeds(position_ids)
+        combined_torch = (inputs_embeds_torch + pos_embeds_torch).float()
+
+        tt_hidden = ttnn.from_torch(
+            combined_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        inputs_embeds = ttnn.embedding(tt_input_ids, tt_model.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-        print(f"TT input_embeds shape after embedding: {inputs_embeds.shape}")
-
-        inputs_embeds = ttnn.to_layout(inputs_embeds, ttnn.TILE_LAYOUT)
-        print(f"TT input_embeds shape after TILE: {inputs_embeds.shape}")
-
-        position_ids = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0)
-        tt_pos_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-        pos_embeds = ttnn.embedding(tt_pos_ids, tt_model.position_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-        print(f"TT pos_embeds shape: {pos_embeds.shape}")
-        pos_embeds = ttnn.to_layout(pos_embeds, ttnn.TILE_LAYOUT)
-
-        tt_hidden = ttnn.add(inputs_embeds, pos_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
         print(f"TT combined hidden shape: {tt_hidden.shape}")
 
         tt_hidden_torch = ttnn.to_torch(tt_hidden)
