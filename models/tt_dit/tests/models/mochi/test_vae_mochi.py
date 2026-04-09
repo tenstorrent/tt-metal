@@ -304,6 +304,118 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
         assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9998)
 
 
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("C", "T", "H_unpadded", "W_unpadded", "W_padded"),
+    [
+        # Decoder stage dims: after depth_to_spacetime doubling of initial 40x52
+        # (52 = pad_to_4(50)). W_padded includes the propagated padding, W_unpadded is logical.
+        pytest.param(512, 4, 80, 100, 104, id="dec_s512"),
+        pytest.param(256, 4, 160, 200, 208, id="dec_s256"),
+        pytest.param(128, 4, 320, 400, 416, id="dec_s128"),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_links",
+    [pytest.param(1, id="1link")],
+)
+@vae_device_config
+def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_padded, reset_seeds, num_links):
+    """Test resblock with decoder-actual dimensions that exercise W unpadding on 2D mesh.
+
+    In the decoder, depth_to_spacetime doubles both padded and logical dimensions.
+    This means later stages (C=512, 256, 128) have W_padded > W_unpadded (the
+    logical width). The standalone resblock test doesn't cover this because those
+    channels use clean W values that divide evenly by w_factor.
+    """
+    N = 1
+    block_args = resblock_args.copy()
+    block_args["channels"] = C
+    block_args["nonlinearity"] = "silu"
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    h_factor = vae_parallel_config.h_parallel.factor
+    w_factor = vae_parallel_config.w_parallel.factor
+    is_spatial = h_factor > 1 or w_factor > 1
+
+    if not is_spatial:
+        pytest.skip("No spatial parallelism on this topology; decoder-dims test not applicable")
+
+    # Pad H if needed
+    H_padded = get_padded_size(H_unpadded, h_factor) if H_unpadded % h_factor else H_unpadded
+
+    reference_model, tt_model = create_random_resblock_models(
+        mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        in_channels=C,
+        nonlinearity="silu",
+    )
+
+    # Create input at unpadded size (reference sees this)
+    torch_input = torch.randn(N, C, T, H_unpadded, W_unpadded)
+
+    # Build TT input at the padded size (as the decoder would provide).
+    # Pad in NCTHW layout (before permute) where W is the last dim, then permute.
+    tt_input_ncthw = torch_input.clone()
+    if H_padded > H_unpadded:
+        tt_input_ncthw = torch.nn.functional.pad(tt_input_ncthw, pad=(0, 0, 0, H_padded - H_unpadded))
+    if W_padded > W_unpadded:
+        # Edge-replicate the last W column (like the decoder's propagated padding)
+        last_col = tt_input_ncthw[:, :, :, :, W_unpadded - 1 : W_unpadded].expand(-1, -1, -1, -1, W_padded - W_unpadded)
+        tt_input_ncthw = torch.cat([tt_input_ncthw, last_col], dim=4)
+    tt_input = tt_input_ncthw.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    logger.info(
+        f"Decoder-dims test: C={C} T={T} H={H_unpadded}→{H_padded} W={W_unpadded}→{W_padded} "
+        f"per_device=({H_padded//h_factor}, {W_padded//w_factor}) "
+        f"logical_h={H_unpadded} logical_w={W_unpadded}"
+    )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    logical_h = H_unpadded if h_factor > 1 else 0
+    logical_w = W_unpadded if w_factor > 1 else 0
+
+    logger.info(f"TT input shape: {tt_input.shape}")
+    tt_output = tt_model(tt_input, logical_h, logical_w)
+    logger.info("End TtResBlock forward")
+
+    # Gather output
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H_unpadded, 0:W_unpadded]
+
+    # Reference model on unpadded input
+    logger.info("Run RefResBlock forward")
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefResBlock forward")
+
+    # Per-frame PCC check
+    logger.info("assert quality")
+    for i in range(T):
+        ref_slice = ref_output[:, :, i, :, :]
+        tt_slice = tt_output_torch[:, :, i, :, :]
+        pcc_val = torch.corrcoef(torch.stack([tt_slice.flatten().double(), ref_slice.flatten().double()]))[0, 1].item()
+        logger.info(f"  frame {i}: PCC={pcc_val*100:.4f}%")
+        assert_quality(ref_slice, tt_slice, pcc=0.9998)
+
+
 def create_random_causalupsampleblock_models(
     mesh_device,
     in_channels,
@@ -755,21 +867,65 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     tt_output = tt_model(tt_input, logical_h, logical_w)
     logger.info("End TtDecoder forward")
 
-    # Convert TT output to torch tensor
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
-
-    logger.info(f"TT Output shape {tt_output_torch.shape}")
-
     # Get reference output
     logger.info("Run RefDecoder forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)[0]
     logger.info("End RefDecoder forward")
 
+    # Convert TT output to torch tensor.  The decoder no longer does per-device
+    # padding slicing — the gathered tensor may have padding columns at the end.
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+
+    # Slice gathered output to the valid (unpadded) spatial dimensions.
+    H_out, W_out = ref_output.shape[3], ref_output.shape[4]
+    tt_output_torch = tt_output_torch[:, :, :, :H_out, :W_out]
+    logger.info(f"TT Output shape (after slicing) {tt_output_torch.shape}")
+
+    # Per-device PCC check: compare each device's output against the corresponding
+    # spatial slice of the reference to isolate gathering vs computation issues.
+    # Use per-device PADDED width (not logical) for global column mapping since
+    # padding is concentrated on the last device, not distributed uniformly.
+    if vae_parallel_config.h_parallel.factor > 1 or vae_parallel_config.w_parallel.factor > 1:
+        h_factor = vae_parallel_config.h_parallel.factor
+        w_factor = vae_parallel_config.w_parallel.factor
+        ref_NTHWC = ref_output.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+        T_out = ref_NTHWC.shape[1]
+        dev_tensors = ttnn.get_device_tensors(tt_output)
+        per_dev_h_padded = dev_tensors[0].shape[2]  # padded per-device H
+        per_dev_w_padded = dev_tensors[0].shape[3]  # padded per-device W
+        logger.info(
+            f"[PER_DEV_PCC] T_out={T_out}, H_out={H_out}, W_out={W_out}, "
+            f"per_dev_h_padded={per_dev_h_padded}, per_dev_w_padded={per_dev_w_padded}, "
+            f"num_devices={len(dev_tensors)}, per_dev_shape={dev_tensors[0].shape}"
+        )
+        for dev_idx, dev_t in enumerate(dev_tensors):
+            dev_torch = ttnn.to_torch(dev_t).float()
+            h_idx = dev_idx // w_factor
+            w_idx = dev_idx % w_factor
+            # Global column range for this device (using padded per-device width)
+            h_start = h_idx * per_dev_h_padded
+            w_start = w_idx * per_dev_w_padded
+            # Valid range: intersection of device range with reference range
+            h_valid = min(per_dev_h_padded, H_out - h_start) if h_start < H_out else 0
+            w_valid = min(per_dev_w_padded, W_out - w_start) if w_start < W_out else 0
+            if h_valid <= 0 or w_valid <= 0:
+                logger.info(f"[PER_DEV_PCC] dev[{dev_idx}] coord=({h_idx},{w_idx}): SKIP (no valid region)")
+                continue
+            tt_slice = dev_torch[:, :T_out, :h_valid, :w_valid, :]
+            ref_slice = ref_NTHWC[:, :T_out, h_start : h_start + h_valid, w_start : w_start + w_valid, :]
+            a, b = tt_slice.flatten().double(), ref_slice.flatten().double()
+            pcc_val = torch.corrcoef(torch.stack([a, b]))[0, 1].item() * 100
+            diff = (tt_slice - ref_slice.float()).abs()
+            logger.info(
+                f"[PER_DEV_PCC] dev[{dev_idx}] coord=({h_idx},{w_idx}): "
+                f"PCC={pcc_val:.4f}% max_diff={diff.max():.6f} "
+                f"h_range=[{h_start}:{h_start + h_valid}] w_range=[{w_start}:{w_start + w_valid}]"
+            )
 
     logger.info("assert quality")
     for i in range(ref_output.shape[2]):
