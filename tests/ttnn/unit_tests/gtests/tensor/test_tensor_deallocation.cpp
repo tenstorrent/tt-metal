@@ -130,6 +130,44 @@ TEST_F(DeallocateTest, MeshTensorGetterThrowsWhenDeallocated) {
     EXPECT_THROW(storage.get_mesh_tensor(), std::exception);
 }
 
+// Tombstone state (DeallocatedTombStone): MeshTensor is gone but spec/topology and a shared MeshBuffer are kept
+// so device-facing workarounds still work (https://github.com/tenstorrent/tt-metal/issues/40716).
+
+TEST_F(DeallocateTest, DeallocatedTombStoneMeshBufferLeakOwnershipNonNull) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage storage = tensor.device_storage();
+
+    storage.deallocate();
+    ASSERT_FALSE(storage.is_allocated());
+
+    auto mesh_buffer = storage.get_mesh_buffer_leak_ownership();
+    EXPECT_NE(mesh_buffer, nullptr) << "Tombstone should preserve MeshBuffer shared_ptr for leak-ownership access";
+}
+
+TEST_F(DeallocateTest, DeallocatedTombStoneDeviceBypassDeallocateCheckNonNull) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage storage = tensor.device_storage();
+
+    storage.deallocate();
+    ASSERT_FALSE(storage.is_allocated());
+
+    distributed::MeshDevice* device = storage.get_device_bypass_deallocate_check();
+    EXPECT_NE(device, nullptr) << "Tombstone should expose MeshDevice via preserved MeshBuffer";
+    EXPECT_EQ(device, mesh_device_.get()) << "Device pointer should match the tensor's mesh device";
+}
+
+TEST_F(DeallocateTest, DefaultConstructedThrowsForDeviceBypassDeallocateCheck) {
+    DeviceStorage storage;
+
+    EXPECT_THROW(storage.get_device_bypass_deallocate_check(), std::exception);
+}
+
+TEST_F(DeallocateTest, DefaultConstructedThrowsForMeshBufferLeakOwnership) {
+    DeviceStorage storage;
+
+    EXPECT_THROW(storage.get_mesh_buffer_leak_ownership(), std::exception);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace ttnn::distributed::test

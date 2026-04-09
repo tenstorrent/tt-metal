@@ -292,6 +292,71 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     EXPECT_EQ(partial_device_storage.get_coords()[3], (distributed::MeshCoordinate{1, 2}));
 }
 
+TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    std::vector<float> host_data(shape.volume());
+    std::iota(host_data.begin(), host_data.end(), 0);
+
+    Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
+    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
+    auto device_tensors = get_device_tensors(device_tensor);
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    const int num_shards = static_cast<int>(device_tensors.size());
+    const MeshShape expected_distribution_shape(num_shards);
+
+    for (int shard_dim : {0, 3}) {
+        auto combined = combine_device_tensors(device_tensors, shard_dim);
+        EXPECT_EQ(combined.tensor_topology().distribution_shape(), expected_distribution_shape);
+        EXPECT_EQ(
+            std::get<distributed::MeshMapperConfig::Shard>(combined.tensor_topology().placements()[0]).dim, shard_dim);
+    }
+}
+
+TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
+    tt::tt_metal::DeviceStorage storage;
+
+    EXPECT_THAT(([&]() { storage.get_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(([&]() { storage.get_mesh_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(([&]() { storage.get_mesh_tensor(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(([&]() { storage.get_tensor_spec(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(
+        ([&]() { storage.get_tensor_topology(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(
+        ([&]() { storage.get_mesh_buffer_leak_ownership(); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(
+        ([&]() { storage.get_device_bypass_deallocate_check(); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+
+    EXPECT_FALSE(storage.is_allocated());
+    EXPECT_TRUE(storage.is_uniform_storage());
+}
+
+TEST_F(MeshTensorTest2x4, CombineDeviceTensorsShardDimValidation) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
+    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
+    auto device_tensors = get_device_tensors(device_tensor);
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    EXPECT_THAT(
+        ([&]() {
+            const int invalid_shard_dim = static_cast<int>(shape.rank());
+            combine_device_tensors(std::vector<Tensor>{device_tensors[0]}, invalid_shard_dim);
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("shard_dim")));
+    EXPECT_THAT(
+        ([&]() { combine_device_tensors(std::vector<Tensor>{device_tensors[0]}, /*shard_dim=*/-1); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("shard_dim")));
+}
+
 struct MeshTensorWriteTestParams {
     ttnn::Shape shape;
 
