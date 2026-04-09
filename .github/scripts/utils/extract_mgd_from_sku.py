@@ -34,9 +34,7 @@ def main():
         sys.exit(1)
 
     if "mgd" not in skus[sku_name]:
-        print(
-            f"::error::SKU '{sku_name}' has no 'mgd' field", file=sys.stderr
-        )
+        print(f"::error::SKU '{sku_name}' has no 'mgd' field", file=sys.stderr)
         sys.exit(1)
 
     # Print MGD content with 4-space indentation
