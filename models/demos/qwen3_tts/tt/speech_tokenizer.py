@@ -783,7 +783,8 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # Concatenate rvq_first and rvq_rest to get 1024-dim embeddings
         if rvq_first_emb is not None and rvq_rest_emb is not None:
             # Both have projections: concat [batch, seq_len, 512] + [batch, seq_len, 512] = [batch, seq_len, 1024]
-            embeddings = torch.cat([rvq_first_emb, rvq_rest_emb], dim=-1)
+            # embeddings = torch.cat([rvq_first_emb, rvq_rest_emb], dim=-1)
+            embeddings = rvq_first_emb + rvq_rest_emb
         elif rvq_first_emb is not None:
             embeddings = rvq_first_emb
         elif rvq_rest_emb is not None:

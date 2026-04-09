@@ -391,8 +391,8 @@ class TestAttention:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        ttnn_output = attention(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
+        # ttnn_output= attention(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
+        ttnn_output, _ = attention(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
         ttnn_output_torch = ttnn_to_torch(ttnn_output).squeeze(1)  # [batch, seq_len, hidden_size]
 
         pcc = pearson_correlation(torch_output, ttnn_output_torch)
@@ -543,8 +543,8 @@ class TestDecoderLayer:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        ttnn_output = decoder_layer(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
+        # ttnn_output, = decoder_layer(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
+        ttnn_output, _ = decoder_layer(ttnn_input, cos_ttnn, sin_ttnn, trans_mat_ttnn)
         ttnn_output_torch = ttnn_to_torch(ttnn_output).squeeze(1)  # [batch, seq_len, hidden_size]
 
         pcc = pearson_correlation(torch_output, ttnn_output_torch)
@@ -676,7 +676,8 @@ class TestCodePredictor:
             )
 
         # Add LM heads
-        for g in range(num_code_groups):
+        # for g in range(num_code_groups):
+        for g in range(num_code_groups - 1):
             state_dict[f"talker.code_predictor.lm_head.{g}.weight"] = torch.randn(
                 vocab_size, hidden_size, dtype=torch.bfloat16
             )
@@ -694,7 +695,8 @@ class TestCodePredictor:
         )
 
         assert len(code_predictor.layers) == 2
-        assert len(code_predictor.lm_heads) == num_code_groups
+        # assert len(code_predictor.lm_heads) == num_code_groups
+        assert len(code_predictor.lm_heads) == num_code_groups - 1
         print(
             f"CodePredictor initialization: PASS (layers={len(code_predictor.layers)}, lm_heads={len(code_predictor.lm_heads)})"
         )
