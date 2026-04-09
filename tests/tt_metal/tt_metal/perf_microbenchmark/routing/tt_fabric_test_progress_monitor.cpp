@@ -211,7 +211,13 @@ void TestProgressMonitor::generate_hung_report(
 
         const bool is_complete = prog.current_packets >= prog.total_packets && prog.total_packets > 0;
         const bool is_hung = device_states_.contains(device_id) && device_states_.at(device_id).warned;
-        const char* status = is_complete ? "COMPLETED" : (is_hung ? "HUNG" : "IN PROGRESS");
+
+        const char* status = "IN PROGRESS";
+        if (is_complete) {
+            status = "COMPLETED";
+        } else if (is_hung) {
+            status = "HUNG";
+        }
         const double pct =
             prog.total_packets > 0 ? 100.0 * static_cast<double>(prog.current_packets) / prog.total_packets : 0.0;
 

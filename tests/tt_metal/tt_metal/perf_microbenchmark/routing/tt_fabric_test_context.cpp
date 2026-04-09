@@ -79,6 +79,8 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
 }
 
 void TestContext::wait_for_programs_with_progress() {
+    last_test_hung_ = false;
+
     if (!progress_config_.enabled) {
         fixture_->wait_for_programs();
         return;
@@ -94,8 +96,6 @@ void TestContext::wait_for_programs_with_progress() {
         "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
         progress_config_.poll_interval_seconds,
         progress_config_.hung_threshold_seconds);
-
-    last_test_hung_ = false;
     bool completed = monitor.poll_until_complete();
 
     if (!completed) {
