@@ -235,9 +235,8 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.BLACKHOLE
                 TestConfig.DATA_FORMAT_ENUM = BLACKHOLE_DATA_FORMAT_ENUM_VALUES
             case ChipArchitecture.QUASAR:
-                # until there is official support for quasar in SFPI fallback to BH
-                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-bh"
-                TestConfig.ARCH_COMPUTE = "-mcpu=tt-bh-tensix"
+                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
+                TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
