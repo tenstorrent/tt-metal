@@ -126,27 +126,37 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
+    """Apply tensor-parallel allreduce if TP > 1.
+
+    Uses reduce_scatter_minimal_async for N300 (1-D mesh), following tt_transformers pattern.
+    """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
     num_links = ccl_manager.num_links if ccl_manager else 1
-    tensor_allreduced = ttnn.all_reduce(
+    # reduce_scatter + all_gather = all_reduce for N300 (1-D mesh)
+    reduced = ttnn.experimental.reduce_scatter_minimal_async(
         tensor,
+        persistent_output_buffers=None,
+        dim=3,
+        multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         num_links=num_links,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=mesh_config.tp_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
     )
     tensor.deallocate(True)
-    tensor = tensor_allreduced
 
-    local_hidden = hidden_size // mesh_config.tp
-    padded_local_hidden = ((local_hidden + 31) // 32) * 32
-    if padded_local_hidden != local_hidden:
-        shape = tensor.shape
-        tensor_sliced = ttnn.slice(tensor, [0, 0, 0, 0], [shape[0], shape[1], shape[2], hidden_size], [1, 1, 1, 1])
-        tensor.deallocate(True)
-        tensor = tensor_sliced
+    gathered = ttnn.experimental.all_gather_async(
+        reduced,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+        num_links=num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+    )
+    reduced.deallocate(True)
 
-    return tensor
+    return gathered
