@@ -114,7 +114,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source tests/scripts/t3000/run_t3000_perf_tests.sh
-          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
           env python3 models/perf/merge_perf_results.py
       - name: Save environment data

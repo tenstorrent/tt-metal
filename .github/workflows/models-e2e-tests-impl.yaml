@@ -124,7 +124,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
