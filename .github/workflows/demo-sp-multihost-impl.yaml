@@ -101,7 +101,6 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: 90  # Overall timeout for the entire job
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
