@@ -137,11 +137,12 @@ void copy_to_host(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 HostTensor allocate_host_tensor_at_coords(
-    const MeshTensor& mesh_tensor, const std::vector<distributed::MeshCoordinate>& coords) {
+    const MeshTensor& mesh_tensor, std::span<const distributed::MeshCoordinate> coords) {
     auto* device = mesh_tensor.mesh_buffer_invariant_breaking()->device();
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+    std::vector<distributed::MeshCoordinate> coords_vec(coords.begin(), coords.end());
     distributed_host_buffer.emplace_shards(
-        coords,
+        coords_vec,
         [&](const distributed::MeshCoordinate&) {
             return tensor_impl::allocate_host_buffer(mesh_tensor.tensor_spec());
         },
