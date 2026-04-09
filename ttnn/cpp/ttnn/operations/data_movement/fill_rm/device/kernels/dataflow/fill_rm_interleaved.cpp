@@ -4,6 +4,9 @@
 
 #include <cstdlib>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Kernel args
@@ -30,6 +33,8 @@ void kernel_main() {
     // DEVICE_PRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
     // How many bytes along a row in the original tensor
     uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
     uint32_t num_bytes_per_tile_row = 64;
@@ -39,10 +44,10 @@ void kernel_main() {
     uint64_t replicate_dest_addr;
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    cb_reserve_back(cb_id_in0, 16);  // in this kernel we are not pushing anything into CBs, just using the space
-    cb_reserve_back(cb_id_in1, 16);
-    uint32_t l1_w_addr = get_write_ptr(cb_id_in0);
-    uint32_t l1_zeros_addr = get_write_ptr(cb_id_in1);
+    cb_in0.reserve_back(16);  // in this kernel we are not pushing anything into CBs, just using the space
+    cb_in1.reserve_back(16);
+    uint32_t l1_w_addr = cb_in0.get_write_ptr();
+    uint32_t l1_zeros_addr = cb_in1.get_write_ptr();
     uint32_t w;
     for (w = 0; w < fillW; w++) {
         reinterpret_cast<uint16_t*>(l1_w_addr)[w] = val_hi;
@@ -54,17 +59,19 @@ void kernel_main() {
         reinterpret_cast<uint16_t*>(l1_zeros_addr)[w] = val_lo;
     }
 
+    experimental::Noc noc;
     uint32_t nch_dst = 0;
     // input is NCH(Wt*32) unpadded RM
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t h = 0; h < H; h++) {
-            uint64_t dst_noc_addr = get_noc_addr(nch_dst, s0);
             if (h < fillH) {
-                noc_async_write(l1_w_addr, dst_noc_addr, (W << 1));  // TODO(AP): segment this write
+                noc.async_write(
+                    cb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             } else {
-                noc_async_write(l1_zeros_addr, dst_noc_addr, (W << 1));  // TODO(AP): segment this write
+                noc.async_write(
+                    cb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             }
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             nch_dst++;
         }  // h<paddedH
     }  // nc
