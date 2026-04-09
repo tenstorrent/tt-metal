@@ -45,6 +45,22 @@ PARAMS_TO_CONFIG_VALUES = {
 }
 
 
+def get_shard_strategy_for_conv(batch_size, input_length, in_channels):
+    nhw = batch_size * input_length * in_channels
+    # if nhw >= 4 * in_channels:
+    #     return ttnn.ShardStrategy.HEIGHT
+    # elif in_channels >= 4 * nhw:
+    #     return ttnn.ShardStrategy.WIDTH
+    # else:
+    #     return ttnn.ShardStrategy.BLOCK
+    if nhw >= 4 * in_channels:
+        return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    elif in_channels >= 4 * nhw:
+        return ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    else:
+        return ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+
 @dataclass(frozen=True)
 class Conv1dConfiguration:
     in_channels: int
@@ -133,10 +149,16 @@ def get_conv_configs(
     )
 
     act_block_w_div = 1
+    if slice_config is None:
+        shard_layout = get_shard_strategy_for_conv(
+            batch_size=1, input_length=input_length, in_channels=conv1d_config.in_channels
+        )
+    else:
+        shard_layout = None
     return (
         ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             output_layout=conv1d_config.output_layout,
             deallocate_activation=conv1d_config.deallocate_input,
             # deallocate_activation=conv1d_config.deallocate_activation,
