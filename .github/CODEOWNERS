@@ -89,7 +89,7 @@ tt_metal/impl/dataflow_buffer/ @abhullar-tt @arikTT @tenstorrent/codeowner-bypas
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @sidnadTT @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tt_metal/impl/debug/inspector/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
-tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
+tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass

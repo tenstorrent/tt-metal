@@ -10,21 +10,32 @@
 namespace ckernel {
 namespace sfpu {
 
-// hardmish(x) = x * clamp(x + 2.8, 0.0, 5.0) / 5
-//             = x * clamp(x + 2.8, 0.0, 5.0) * 0.2
+// hardmish(x) = x * clamp(x + 2, 0, 2) / 2
+//             = x * clamp(0.5 * x + 1.0, 0.0, 1.0)
+//
+// For finite x, the piecewise form is:
+//   x <= -2  =>  0         (scale clamped to 0)
+//   x >= 0   =>  x         (scale clamped to 1)
+//   else     =>  x*(x+2)/2 (quadratic)
+//
+// Non-finite inputs follow IEEE 754 operations above.
+// In particular, x = -inf clamps scale to 0, and (-inf) * 0 yields NaN.
+//
+// Constants 0.5 and 1.0 are exactly representable in IEEE 754.
+// Clamping to [0, 1] gives exact boundary values (0 or 1),
+// so the final multiply produces exact 0 or exact x at transitions.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = x + 2.8f;
+        sfpi::vFloat scale = x * 0.5f + 1.0f;
 
-        // sfpi::vec_min_max(a, b) puts min in a, max in b
         sfpi::vFloat low_bound = 0.0f;
-        sfpi::vFloat high_bound = 5.0f;
-        sfpi::vec_min_max(low_bound, a);   // a = max(a, 0.0)
-        sfpi::vec_min_max(a, high_bound);  // a = min(a, 5.0)
+        sfpi::vFloat high_bound = 1.0f;
+        sfpi::vec_min_max(low_bound, scale);   // scale = max(scale, 0.0)
+        sfpi::vec_min_max(scale, high_bound);  // scale = min(scale, 1.0)
 
-        sfpi::dst_reg[0] = x * a * 0.2f;
+        sfpi::dst_reg[0] = x * scale;
         sfpi::dst_reg++;
     }
 }
