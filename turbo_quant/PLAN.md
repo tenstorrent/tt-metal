@@ -531,34 +531,35 @@ Two sub-steps:
 
 ## Where We Are (2026-04-09)
 
-**TurboQuant vs Baseline BFP8 (Wormhole N150, Llama-3.1-8B-Instruct):**
+**Performance by bit-width (Wormhole N150, Llama-3.1-8B-Instruct, baseline BFP8 = 37ms):**
 
-| max_seq | Baseline BFP8 | TurboQuant 3-bit | Overhead |
-|---------|--------------|-----------------|----------|
-| 128 | 37.0 ms | **43.4 ms** | **1.17×** |
-| 512 | 37.7 ms | 44.7 ms | 1.19× |
-| 2048 | 37.8 ms | 44.7 ms | 1.18× |
-| 4096 | 37.7 ms | 44.7 ms | 1.19× |
-| 8192 | 37.7 ms | 44.7 ms | 1.19× |
+| Bits | seq=128 | seq=8192 | Overhead (128) | Overhead (8192) |
+|------|---------|---------|----------------|-----------------|
+| 1-bit | 42.5 ms | 43.7 ms | **1.15×** | 1.16× |
+| 2-bit | 42.8 ms | 44.0 ms | **1.15×** | 1.17× |
+| 3-bit | 43.5 ms | 44.7 ms | **1.17×** | 1.19× |
+| 4-bit | 44.7 ms | 46.0 ms | **1.21×** | 1.22× |
 
-Overhead is **flat at ~1.18×** across all sequence lengths.
+All bit widths are **flat across sequence lengths** (128 to 8192).
+Lower bits = fewer boundaries/centroids in fused kernels = faster.
 
-**Quality (3-bit, on-device):**
+**Quality by bit-width (real prefill, "What is the capital of France?"):**
 
-| Metric | Value | Paper theoretical |
-|--------|-------|-------------------|
-| MSE | **0.034** | 0.034 |
-| Cosine similarity | **0.999** | — |
-| Index match vs CPU | 99.2% | — |
+| Bits | Output | MSE (paper) | Correct? |
+|------|--------|-------------|----------|
+| 1-bit | "answer is Paris." | 0.36 | Degraded phrasing, correct answer |
+| 2-bit | "The capital of France is Paris." | 0.117 | Perfect |
+| 3-bit | "The capital of France is Paris." | **0.034** | Perfect |
+| 4-bit | "The capital of France is Paris." | 0.009 | Perfect |
 
-Quality matches the paper's theoretical bounds exactly. Fixed by removing
-a spurious UINT32 typecast that was destroying BF16 index precision (was
-MSE=0.489 before the fix).
+3-bit on-device MSE = **0.034** (matches paper's theoretical bound exactly).
+Cosine similarity = **0.999**. Fixed by removing UINT32 typecast that was
+destroying BF16 precision.
 
 **Optimisation history:**
 
 ```
-A0    183ms/tok  baseline TurboQuant (before optimisation)         4.2×
+A0    183ms/tok  baseline TurboQuant (before optimisation)         4.95×
 A1    168ms/tok  indices on device via paged_update_cache
 A2    130ms/tok  norms on device, fixed shapes, no CPU roundtrips
 A2t    71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)     1.92×
@@ -566,11 +567,11 @@ B1+2   47ms     fused bucketize + gather kernels                   1.27×
 centr  46ms     cache centroid values (gather at quantize time)
 absrb  45.6ms   absorb Π into W_v/W_o weights
 rescl  44.1ms   pre-rescale centroids×norms at scatter (O(1) dequant)
-quant  43.4ms   rsqrt norm + remove UINT32 typecast                1.17×
+quant  43.5ms   rsqrt norm + remove UINT32 typecast                1.17×
 base   37.0ms   baseline BFP8 (no TurboQuant)
 ```
 
-Remaining overhead (~6.4ms constant, independent of seq_len):
+Remaining overhead (~6.5ms constant, independent of seq_len):
 - **K rotation + Q pre-rotation**: ~4ms (32 layers × 2 matmuls, RoPE dependency)
 - **Quantize** (norm + bucketize + gather on 1 token): ~1.5ms
 - **Scatter** (2× paged_update_cache for K/V): ~1ms
