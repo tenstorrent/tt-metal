@@ -646,7 +646,7 @@ ALWI void max_reduce_with_indices_init() {
  *
  * Only 32x32 tile dimensions are supported
  *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
- *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM abd MAX only.
+ *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM and MAX only.
  *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
  *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
  *
