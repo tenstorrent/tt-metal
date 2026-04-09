@@ -54,8 +54,6 @@ jobs:
       matrix:
         default-cpp-tests:
           [[
-            # Runtime C++ tests (dispatch, distributed, eth, misc, tools, data_movement, legacy)
-            # have been moved to tests/pipeline_reorg/runtime_unit_tests.yaml
             { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true, hang-detection-timeout: 10.0 },
             { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast', nightly: true, auto-triage: true },
           ]]

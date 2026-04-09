@@ -1,5 +1,5 @@
-# This file defines the test matrix for the Runtime Galaxy unit tests.
-# These tests require Galaxy (6U topology) machines for WH and BH.
+# This file defines the test matrix for the Runtime integration tests.
+# These are multi-device tests that require BH multi-card or Galaxy topology machines.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -11,6 +11,70 @@
 #   team: The team that owns the test.
 
 # For max allowed timeout refer to .github/time_budget.yaml
+
+# =============================================================================
+# BH Multi-Card Tests
+# =============================================================================
+
+# --- Ethernet Tests (FD + SD + single AERISC) ---
+- name: bh_multicard_eth
+  cmd: |
+    ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_eth
+  skus:
+    bh_quietbox:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Debug Tools (mesh filters + single AERISC variants) ---
+- name: bh_multicard_debug_tools
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Dispatch (mesh filters + single AERISC variants) ---
+- name: bh_multicard_dispatch
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Sockets (distributed HD socket) ---
+- name: bh_multicard_sockets
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- System Health ---
+- name: bh_multicard_system_health
+  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_quietbox:
+      timeout: 5
+    bh_loudbox:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# Galaxy Tests
+# =============================================================================
 
 # --- Cluster Validation ---
 - name: galaxy_cluster_validation
@@ -46,7 +110,7 @@
   skus:
     wh_galaxy:
       timeout: 10
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Dispatch (Galaxy single-card + multi-CQ fixtures) ---
@@ -63,7 +127,7 @@
   skus:
     wh_galaxy:
       timeout: 15
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Device Tests (Galaxy/TG fixtures, SD + FD) ---
@@ -76,7 +140,7 @@
   skus:
     wh_galaxy:
       timeout: 10
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Distributed (DispatchContext SD) ---
@@ -89,5 +153,5 @@
   skus:
     wh_galaxy:
       timeout: 10
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

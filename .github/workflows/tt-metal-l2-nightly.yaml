@@ -353,9 +353,6 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  # Metal IOMMU Unit Tests — moved to runtime pipeline_reorg (runtime_unit_tests.yaml: runtime_iommu_pinned_memory)
-  # Slow Dispatch Unit Tests — moved to runtime pipeline_reorg (runtime_sd_unit_tests.yaml)
-  # Fast Dispatch Unit Tests — moved to runtime pipeline_reorg (runtime_fd_python_tests.yaml)
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]

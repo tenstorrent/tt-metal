@@ -104,26 +104,16 @@ scaleout:
 
 runtime:
   unit:
-    wh_n150_civ2: 102
-    bh_p150b_civ2: 97
+    wh_n150_civ2: 525
+    wh_n300_civ2: 105
+    bh_p150b_civ2: 520
     bh_p150b_civ2_viommu: 5
-  sd_unit:
-    wh_n150_civ2: 50
-    wh_n300_civ2: 50
-    bh_p150b_civ2: 50
     bh_p100a_civ2_viommu: 50
-  perf:
-    wh_n300_civ2: 55
     bh_p150_perf: 40
-  bh_multicard:
     bh_quietbox: 50
     bh_loudbox: 10
-  galaxy:
     wh_galaxy: 55
     bh_galaxy: 10
-  fd_python:
-    wh_n150_civ2: 360
-    bh_p150b_civ2: 360
 
 models:
   sanity:

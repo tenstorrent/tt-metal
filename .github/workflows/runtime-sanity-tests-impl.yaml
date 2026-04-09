@@ -1,4 +1,4 @@
-name: "[internal] Runtime Galaxy tests impl"
+name: "[internal] Runtime sanity tests impl"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_galaxy_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "galaxy"
+            "unit"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -46,7 +46,7 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-  runtime-galaxy-tests:
+  runtime-sanity-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false

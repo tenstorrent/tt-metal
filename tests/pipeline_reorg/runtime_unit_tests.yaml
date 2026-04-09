@@ -31,7 +31,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Core API Tests (includes kernel path validation) ---
@@ -45,7 +45,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Data Movement Tests ---
@@ -56,7 +56,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Context, Device, Misc, NOC, JIT Build ---
@@ -72,7 +72,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Integration Tests ---
@@ -83,7 +83,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- LLK + SFPI Tests ---
@@ -96,7 +96,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Debug Tools (DPrint, Watcher, Inspector, NOC Debugging, Clean Init) ---
@@ -111,7 +111,7 @@
       timeout: 12
     bh_p150b_civ2:
       timeout: 12
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Ethernet Tests ---
@@ -122,7 +122,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Legacy Tests ---
@@ -133,7 +133,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Distributed / Multi-Device Tests ---
@@ -144,7 +144,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
@@ -157,7 +157,7 @@
       timeout: 5
     bh_p150b_civ2_viommu:
       timeout: 5
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- FD2 Dispatch Tests (prefetcher + dispatcher) ---
@@ -170,5 +170,74 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U099A7FMKL2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# Slow Dispatch Tests (TT_METAL_SLOW_DISPATCH_MODE=1 set per-command)
+# =============================================================================
+
+# --- Core API Tests (SD) ---
+- name: runtime_sd_api
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Data Movement Tests (SD) ---
+- name: runtime_sd_data_movement
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Debug Tools, Device, Dispatch (SD) ---
+- name: runtime_sd_debug_tools_device_dispatch
+  cmd: |
+    export TT_METAL_SLOW_DISPATCH_MODE=1
+    ./build/test/tt_metal/unit_tests_debug_tools
+    ./build/test/tt_metal/unit_tests_inspector
+    ./build/test/tt_metal/unit_tests_device
+    ./build/test/tt_metal/unit_tests_dispatch
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- LLK Tests (SD) ---
+- name: runtime_sd_llk
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

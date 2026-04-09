@@ -15,28 +15,23 @@ on:
         type: boolean
         default: true
       # Test level selection
-      run-unit-tests:
-        description: "Run FD unit tests (single-chip)"
+      run-sanity-tests:
+        description: "Run sanity tests (quick dispatch + device + API health check)"
         required: false
         type: boolean
         default: true
-      run-sd-unit-tests:
-        description: "Run Slow Dispatch unit tests (single-chip)"
+      run-unit-tests:
+        description: "Run unit tests (single-chip C++ gtests, FD + SD)"
+        required: false
+        type: boolean
+        default: true
+      run-integration-tests:
+        description: "Run integration tests (BH multi-card + Galaxy)"
         required: false
         type: boolean
         default: true
       run-perf-tests:
         description: "Run dispatch performance tests"
-        required: false
-        type: boolean
-        default: true
-      run-bh-multicard-tests:
-        description: "Run BH multi-card runtime tests"
-        required: false
-        type: boolean
-        default: true
-      run-galaxy-tests:
-        description: "Run Galaxy runtime tests (WH + BH)"
         required: false
         type: boolean
         default: true
@@ -70,8 +65,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 6 * * *"
 
 jobs:
   build-artifact:
@@ -88,42 +81,54 @@ jobs:
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
+      sanity-skus: ${{ steps.resolve.outputs.sanity-skus }}
       unit-skus: ${{ steps.resolve.outputs.unit-skus }}
+      integration-skus: ${{ steps.resolve.outputs.integration-skus }}
       perf-skus: ${{ steps.resolve.outputs.perf-skus }}
-      bh-multicard-skus: ${{ steps.resolve.outputs.bh-multicard-skus }}
-      galaxy-skus: ${{ steps.resolve.outputs.galaxy-skus }}
     steps:
       - id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "sanity-skus=wh_n150_civ2,bh_p150b_civ2" >> "$GITHUB_OUTPUT"
             echo "unit-skus=wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu" >> "$GITHUB_OUTPUT"
+            echo "integration-skus=bh_quietbox,bh_loudbox,wh_galaxy,bh_galaxy" >> "$GITHUB_OUTPUT"
             echo "perf-skus=wh_n300_civ2,bh_p150_perf" >> "$GITHUB_OUTPUT"
-            echo "bh-multicard-skus=bh_quietbox,bh_loudbox" >> "$GITHUB_OUTPUT"
-            echo "galaxy-skus=wh_galaxy,bh_galaxy" >> "$GITHUB_OUTPUT"
           else
+            sanity_skus=""
             unit_skus=""
+            integration_skus=""
             perf_skus=""
-            bh_mc_skus=""
-            galaxy_skus=""
             if [[ "${{ inputs.wormhole }}" == "true" ]]; then
+              sanity_skus="wh_n150_civ2"
               unit_skus="wh_n150_civ2,wh_n300_civ2"
+              integration_skus="wh_galaxy"
               perf_skus="wh_n300_civ2"
-              galaxy_skus="wh_galaxy"
             fi
             if [[ "${{ inputs.blackhole }}" == "true" ]]; then
+              [ -n "$sanity_skus" ] && sanity_skus="${sanity_skus},"
+              sanity_skus="${sanity_skus}bh_p150b_civ2"
               [ -n "$unit_skus" ] && unit_skus="${unit_skus},"
               unit_skus="${unit_skus}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu"
+              [ -n "$integration_skus" ] && integration_skus="${integration_skus},"
+              integration_skus="${integration_skus}bh_quietbox,bh_loudbox,bh_galaxy"
               [ -n "$perf_skus" ] && perf_skus="${perf_skus},"
               perf_skus="${perf_skus}bh_p150_perf"
-              bh_mc_skus="bh_quietbox,bh_loudbox"
-              [ -n "$galaxy_skus" ] && galaxy_skus="${galaxy_skus},"
-              galaxy_skus="${galaxy_skus}bh_galaxy"
             fi
+            echo "sanity-skus=$sanity_skus" >> "$GITHUB_OUTPUT"
             echo "unit-skus=$unit_skus" >> "$GITHUB_OUTPUT"
+            echo "integration-skus=$integration_skus" >> "$GITHUB_OUTPUT"
             echo "perf-skus=$perf_skus" >> "$GITHUB_OUTPUT"
-            echo "bh-multicard-skus=$bh_mc_skus" >> "$GITHUB_OUTPUT"
-            echo "galaxy-skus=$galaxy_skus" >> "$GITHUB_OUTPUT"
           fi
+
+  runtime-sanity-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ github.event_name == 'schedule' || inputs.run-sanity-tests }}
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.sanity-skus }}
 
   runtime-unit-tests:
     needs: [build-artifact, resolve-skus]
@@ -135,15 +140,15 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.unit-skus }}
 
-  runtime-sd-unit-tests:
+  runtime-integration-tests:
     needs: [build-artifact, resolve-skus]
-    if: ${{ github.event_name == 'schedule' || inputs.run-sd-unit-tests }}
-    uses: ./.github/workflows/runtime-sd-unit-tests-impl.yaml
+    if: ${{ github.event_name == 'schedule' || inputs.run-integration-tests }}
+    uses: ./.github/workflows/runtime-integration-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.unit-skus }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.integration-skus }}
 
   runtime-perf-tests:
     needs: [build-artifact, resolve-skus]
@@ -154,26 +159,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.perf-skus }}
-
-  runtime-bh-multicard-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ (github.event_name == 'schedule' || inputs.run-bh-multicard-tests) && needs.resolve-skus.outputs.bh-multicard-skus != '' }}
-    uses: ./.github/workflows/runtime-bh-multicard-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.bh-multicard-skus }}
-
-  runtime-galaxy-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ (github.event_name == 'schedule' || inputs.run-galaxy-tests) && needs.resolve-skus.outputs.galaxy-skus != '' }}
-    uses: ./.github/workflows/runtime-galaxy-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.galaxy-skus }}
 
   runtime-fd-python-tests:
     needs: [build-artifact, resolve-skus]

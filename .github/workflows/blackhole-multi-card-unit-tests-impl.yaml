@@ -57,8 +57,6 @@ jobs:
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
             test-type: fast
-          # Sockets fast unit test — moved to runtime pipeline_reorg (runtime_bh_multicard_tests.yaml: bh_multicard_sockets)
-          # test_system_health — moved to runtime pipeline_reorg (runtime_bh_multicard_tests.yaml: bh_multicard_system_health)
           - name: Host IO fast unit test (viommu only)
             cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
             timeout: 10
@@ -68,8 +66,6 @@ jobs:
               TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
             test-type: fast
-          # Runtime eth/debug_tools/dispatch tests (single erisc + regular) moved to runtime pipeline_reorg
-          # (runtime_bh_multicard_tests.yaml: bh_multicard_eth, bh_multicard_debug_tools, bh_multicard_dispatch)
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
