@@ -84,7 +84,7 @@ jobs:
         # so repeated commits to a branch benefit from cached clang-tidy results.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          uv pip install --quiet clang-tidy-cache redis
+          uv pip install --quiet ctcache redis
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
           CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
