@@ -37,7 +37,9 @@ runs:
     - name: Generate SSH key
       shell: bash
       run: |
-        ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
+        if [ ! -f /home/runner/.ssh/id_ed25519 ]; then
+          ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
+        fi
         echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
     - name: Construct Environment manifest
       shell: bash
