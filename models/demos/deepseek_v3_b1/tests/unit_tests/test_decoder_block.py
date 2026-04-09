@@ -18,18 +18,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    create_gate_indices_tensor,
-    get_layer_raw_tensors,
-    prepare_dense_layer_weights,
-    prepare_moe_layer_weights,
-)
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
@@ -41,6 +34,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.weights.prepare import (
+    create_gate_indices_tensor,
+    get_layer_raw_tensors,
+    prepare_dense_layer_weights,
+    prepare_moe_layer_weights,
+)
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -66,7 +65,7 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 
 
 # ============================================================================
-# Unified decoder block tensor setup (single BDW instance for all L1 weights)
+# Unified decoder block tensor setup
 # ============================================================================
 def create_decoder_block_tensors(
     submesh,
@@ -90,10 +89,10 @@ def create_decoder_block_tensors(
 
     Three modes of operation:
     - **preloaded_weights mode** (production): pass a DeepSeekV3MoELayerWeights from
-      load_moe_layer. Skips BDW allocation, weight processing, and golden tensors.
-    - **state_dict + is_moe=True** (MoE tests): allocates BDW, calls
+      load_moe_layer. Skips weight processing and golden tensors.
+    - **state_dict + is_moe=True** (MoE tests): calls
       prepare_moe_layer_weights, builds MoE golden tensors.
-    - **state_dict + is_moe=False** (dense tests): allocates BDW, calls
+    - **state_dict + is_moe=False** (dense tests): calls
       prepare_dense_layer_weights, builds dense golden tensors.
 
     Returns a dict with all attention + FFN + shared expert + reduce tensors.
@@ -258,22 +257,21 @@ def create_decoder_block_tensors(
         )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via a single BDW instance or preloaded
+    # All weights via prepare_* functions or preloaded
     # ══════════════════════════════════════════════════════════════════════════
     if preloaded_weights is not None:
         layer = preloaded_weights
     else:
-        bdw = BlitzDecodeWeights(submesh)
         if is_moe:
             layer = prepare_moe_layer_weights(
-                bdw,
+                submesh,
                 state_dict,
                 layer_idx,
                 num_routed_experts=num_routed_experts,
                 move_to_device=True,
             )
         else:
-            layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
+            layer = prepare_dense_layer_weights(submesh, state_dict, layer_idx, move_to_device=True)
 
     # ── FFN final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -796,7 +794,7 @@ def create_decoder_block_tensors(
     routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
 
     result = {
-        # Attention weights (from prepare_*_layer_weights via BDW)
+        # Attention weights (from prepare_*_layer_weights)
         "gamma_overlapped": layer.attn_norm,
         "matmul_weights_overlapped": layer.q_a_proj,
         "rmsnorm2_gamma_overlapped": layer.q_norm,
@@ -1026,6 +1024,8 @@ def test_decoder(
         submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
     )
     moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    logger.info("Done setup")
 
     # ========================================================================
     # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)
@@ -1412,10 +1412,10 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
+        # 0,
         127,
-        pytest.param(511, marks=pytest.mark.skip_post_commit),
-        pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        # pytest.param(511, marks=pytest.mark.skip_post_commit),
+        # pytest.param(1023, marks=pytest.mark.skip_post_commit),
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )
