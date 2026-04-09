@@ -27,15 +27,21 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /work
+        working-directory: ${{ github.workspace }}
 
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
           fetch-depth: 500
           fetch-tags: true
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: 🔧 Configure git safe.directory
         run: |

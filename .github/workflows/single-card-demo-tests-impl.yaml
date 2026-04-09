@@ -181,7 +181,7 @@ jobs:
         HTTPS_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTPS_PROXY) || '' }}
         NO_PROXY: ${{ (matrix.test-group.civ2-compatible && env.NO_PROXY) || '' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: >-
@@ -191,13 +191,18 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -236,7 +241,7 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        uses: ./.github/actions/prepare-tracy-reports
         with:
           profiler-dir: /work/generated/profiler
           model-name: ${{ matrix.test-group.name }}

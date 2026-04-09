@@ -12,7 +12,7 @@ inputs:
   path:
     required: false
     description: Where to checkout
-    default: docker-job
+    default: .
   enable-watcher:
     description: 'Enable watcher'
     default: false
