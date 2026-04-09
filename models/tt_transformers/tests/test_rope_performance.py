@@ -307,14 +307,13 @@ def _run_tracy(
 def _run_tracy_demo(
     *,
     repo_root: Path,
-    hf_model: str,
     batch_size: int,
     use_hf_rope: bool,
     run_name: str,
     mode: str,
     timeout: int | None = None,
 ) -> tuple[list[dict[str, str]], str]:
-    env = _rope_perf_subprocess_env(hf_model=hf_model)
+    env = _rope_perf_subprocess_env()
 
     with TemporaryDirectory(prefix="rope_perf_") as tmp:
         pytest_cmd = rope_perf_pytest_argv(batch_size=batch_size, use_hf_rope=use_hf_rope, mode=mode, timeout=timeout)
@@ -324,7 +323,7 @@ def _run_tracy_demo(
         return load_rows(csv_path), captured_log
 
 
-def _rope_perf_subprocess_env(*, hf_model: str) -> dict[str, str]:
+def _rope_perf_subprocess_env() -> dict[str, str]:
     """Environment for the rope-perf demo subprocess (with or without Tracy).
 
     Starts from ``os.environ.copy()`` so ``MESH_DEVICE`` and other vars are inherited unchanged; only
@@ -332,22 +331,8 @@ def _rope_perf_subprocess_env(*, hf_model: str) -> dict[str, str]:
     device-perf test selection is applied via ``PYTEST_ADDOPTS`` (see module comment above).
     """
     env = os.environ.copy()
-    env["HF_MODEL"] = hf_model
-    env["TT_METAL_DEVICE_PROFILER"] = "1"
     env["PYTEST_ADDOPTS"] = PYTEST_ADDOPTS_DEVICE_PERF
     return env
-
-
-def _rope_perf_demo_modes(rope_perf_mode: str) -> tuple[str, ...]:
-    """Map ``rope_perf_mode`` / mode string to simple_text_demo ``--mode`` values (prefill and/or decode)."""
-    key = rope_perf_mode.strip().lower()
-    if key == "full":
-        return ("prefill", "decode")
-    if key == "prefill":
-        return ("prefill",)
-    if key == "decode":
-        return ("decode",)
-    raise ValueError(f"Invalid rope perf mode: {rope_perf_mode!r}")
 
 
 def _markdown_table(rows: list[dict[str, Any]]) -> str:
@@ -393,58 +378,53 @@ def test_rope_performance_comparison_table(rope_perf_mode: str):
     assert (
         hf_model is not None
     ), "HF_MODEL is not set, it needs to be set to a HuggingFace model name, for example: export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct"
-    demo_modes = _rope_perf_demo_modes(rope_perf_mode)
     model_id = model_display_id(hf_model)
-
     table_rows: list[dict[str, Any]] = []
-    for mode in demo_modes:
-        for batch_size in (1, 32):
-            base = f"ropeperf_{mode}_g2_sl1024_bs{batch_size}"
-            llama_rows, llama_log = _run_tracy_demo(
-                repo_root=REPO_ROOT,
-                hf_model=hf_model,
-                batch_size=batch_size,
-                use_hf_rope=False,
-                run_name=f"{base}_mllama",
-                mode=mode,
-                timeout=TIMEOUT_TEST,
-            )
-            hf_rows, hf_log = _run_tracy_demo(
-                repo_root=REPO_ROOT,
-                hf_model=hf_model,
-                batch_size=batch_size,
-                use_hf_rope=True,
-                run_name=f"{base}_hf",
-                mode=mode,
-                timeout=TIMEOUT_TEST,
-            )
-            lm, lmean = scalar_rope_time_ns(llama_rows)
-            hm, hmean = scalar_rope_time_ns(hf_rows)
-            hf_ttft_ms, hf_tok_s_u = parse_simple_text_demo_perf_log(hf_log)
-            ml_ttft_ms, ml_tok_s_u = parse_simple_text_demo_perf_log(llama_log)
-            table_rows.append(
-                {
-                    "model_id": model_id,
-                    "mode": mode,
-                    "gen_tok": 2,
-                    "batch_size": batch_size,
-                    "hf_ttft_ms": _fmt_float_opt(hf_ttft_ms, ndigits=2),
-                    "mllama_ttft_ms": _fmt_float_opt(ml_ttft_ms, ndigits=2),
-                    "pct_diff_ttft_%": _fmt_pct_diff(hf_ttft_ms, ml_ttft_ms),
-                    "ratio_ttft": _fmt_ratio_metric(hf_ttft_ms, ml_ttft_ms),
-                    "hf_tok_s_u": _fmt_float_opt(hf_tok_s_u, ndigits=2),
-                    "mllama_tok_s_u": _fmt_float_opt(ml_tok_s_u, ndigits=2),
-                    "pct_diff_tok_s_u_%": _fmt_pct_diff(hf_tok_s_u, ml_tok_s_u),
-                    "ratio_tok_s_u": _fmt_ratio_metric(hf_tok_s_u, ml_tok_s_u),
-                    "hf_rope_max_mean_ns": f"{hm:.0f}",
-                    "mllama_rope_max_mean_ns": f"{lm:.0f}",
-                    "delta_rope_max_mean_ns": f"{hm - lm:.0f}",
-                    "pct_diff_rope_max_%": f"{pct_diff(hm, lm):.2f}",
-                    "pct_diff_rope_mean_%": f"{pct_diff(hmean, lmean):.2f}",
-                    "ratio_rope_max": f"{ratio(hm, lm):.4f}",
-                    "ratio_rope_mean": f"{ratio(hmean, lmean):.4f}",
-                }
-            )
+    for batch_size in (1, 32):
+        base = f"ropeperf_{rope_perf_mode}_g2_sl1024_bs{batch_size}"
+        llama_rows, llama_log = _run_tracy_demo(
+            repo_root=REPO_ROOT,
+            batch_size=batch_size,
+            use_hf_rope=False,
+            run_name=f"{base}_mllama",
+            mode=rope_perf_mode,
+            timeout=TIMEOUT_TEST,
+        )
+        hf_rows, hf_log = _run_tracy_demo(
+            repo_root=REPO_ROOT,
+            batch_size=batch_size,
+            use_hf_rope=True,
+            run_name=f"{base}_hf",
+            mode=rope_perf_mode,
+            timeout=TIMEOUT_TEST,
+        )
+        lm, lmean = scalar_rope_time_ns(llama_rows)
+        hm, hmean = scalar_rope_time_ns(hf_rows)
+        hf_ttft_ms, hf_tok_s_u = parse_simple_text_demo_perf_log(hf_log)
+        ml_ttft_ms, ml_tok_s_u = parse_simple_text_demo_perf_log(llama_log)
+        table_rows.append(
+            {
+                "model_id": model_id,
+                "mode": rope_perf_mode,
+                "gen_tok": 2,
+                "batch_size": batch_size,
+                "hf_ttft_ms": _fmt_float_opt(hf_ttft_ms, ndigits=2),
+                "mllama_ttft_ms": _fmt_float_opt(ml_ttft_ms, ndigits=2),
+                "pct_diff_ttft_%": _fmt_pct_diff(hf_ttft_ms, ml_ttft_ms),
+                "ratio_ttft": _fmt_ratio_metric(hf_ttft_ms, ml_ttft_ms),
+                "hf_tok_s_u": _fmt_float_opt(hf_tok_s_u, ndigits=2),
+                "mllama_tok_s_u": _fmt_float_opt(ml_tok_s_u, ndigits=2),
+                "pct_diff_tok_s_u_%": _fmt_pct_diff(hf_tok_s_u, ml_tok_s_u),
+                "ratio_tok_s_u": _fmt_ratio_metric(hf_tok_s_u, ml_tok_s_u),
+                "hf_rope_max_mean_ns": f"{hm:.0f}",
+                "mllama_rope_max_mean_ns": f"{lm:.0f}",
+                "delta_rope_max_mean_ns": f"{hm - lm:.0f}",
+                "pct_diff_rope_max_%": f"{pct_diff(hm, lm):.2f}",
+                "pct_diff_rope_mean_%": f"{pct_diff(hmean, lmean):.2f}",
+                "ratio_rope_max": f"{ratio(hm, lm):.4f}",
+                "ratio_rope_mean": f"{ratio(hmean, lmean):.4f}",
+            }
+        )
 
     md = _markdown_table(table_rows)
     mesh_device_env = os.environ.get("MESH_DEVICE")
@@ -452,7 +432,7 @@ def test_rope_performance_comparison_table(rope_perf_mode: str):
     print("\n### RoPE device time (HF vs mllama)\n")
     print(f"`HF_MODEL`: `{hf_model}`")
     print(f"`MESH_DEVICE`: `{mesh_device_display}`")
-    print(f"`rope_perf_mode`: `{rope_perf_mode}` (demo phases: {', '.join(demo_modes)})\n")
+    print(f"`rope_perf_mode`: `{rope_perf_mode}`")
     print(
         "*Difference metrics (per table row; HF vs mllama):* "
         "`pct_diff_ttft_%` / `pct_diff_tok_s_u_%` / `pct_diff_rope_*` = 100 × (HF − mllama) / HF. "
