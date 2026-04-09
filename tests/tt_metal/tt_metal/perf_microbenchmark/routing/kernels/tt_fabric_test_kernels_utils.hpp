@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
