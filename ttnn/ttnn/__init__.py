@@ -436,20 +436,6 @@ from ttnn.operations.reduction import ReduceType
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
-from ttnn.operations.conv2d import (
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
 
 from ttnn.operations.pool import (
     prepare_grid_sample_grid,
