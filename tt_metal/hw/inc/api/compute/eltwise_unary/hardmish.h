@@ -13,10 +13,18 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs element-wise computation of hardmish(x) = x * (x + 2.8).clamp(0.0, 5.0) / 5 on each element of a tile
+ * Performs element-wise computation of hardmish(x) = x * clamp(x + 2, 0, 2) / 2
+ * (equivalently, x * clamp(0.5 * x + 1, 0, 1)) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ *
+ * For finite x, the piecewise form is:
+ *   x <= -2  =>  0           (scale clamped to 0)
+ *   x >= 0   =>  x           (scale clamped to 1)
+ *   else     =>  x*(x+2)/2   (quadratic)
+ *
+ * Non-finite inputs follow IEEE 754 semantics; in particular, x = -inf yields NaN.
  *
  * Return value: None
  *
