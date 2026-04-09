@@ -180,16 +180,33 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         padded_head_size);
 
     if (input_tensor.is_sharded()) {
+        // Issue #41526 / #41718: the sharded `create_qkv_heads` reader walks address
+        // arithmetic that assumes a tile-aligned sequence dimension. For non-tile-aligned
+        // seq lengths (e.g. ViT seq=197) this produces silent corruption (PCC ~0.08).
+        // For tile-aligned seq lengths the reader works correctly and the SD U-Net
+        // cross-attention path has been relying on it since 2024-08. PR #41550 added a
+        // blanket FATAL on any sharded input which broke the working SD U-Net path
+        // (#41718). Re-allow tile-aligned sharded inputs and only FATAL when the seq
+        // length would actually trigger the corruption.
+        TT_FATAL(
+            sequence_size_padded == sequence_size,
+            "Sharded input is not supported for split_query_key_value_and_split_heads when the "
+            "sequence length is not tile-aligned (sequence length = {}, padded to {}). The "
+            "sharded reader's address arithmetic assumes tile-aligned source offsets and produces "
+            "corrupted output (PCC ~0.08) otherwise. The caller should unshard the input before "
+            "calling this op, or pad the sequence dimension to a multiple of {}.",
+            sequence_size,
+            sequence_size_padded,
+            tt::constants::TILE_HEIGHT);
         TT_FATAL(
             !input_tensor_kv.has_value(),
-            "Invalid operation: KV tensor should not be provided when the input tensor is sharded. Please ensure that "
-            "the KV tensor is only used in non-sharded configurations.");
-
-        const auto input_tensor_4d = ttnn::experimental::view(
+            "Invalid operation: KV tensor should not be provided when the input tensor is sharded. "
+            "The KV tensor is only used in non-sharded configurations.");
+        const auto input_tensor_4d_sharded = ttnn::experimental::view(
             input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
-                input_tensor_4d,
+                input_tensor_4d_sharded,
                 num_heads,
                 num_kv_heads.value_or(num_heads),
                 transpose_key,
