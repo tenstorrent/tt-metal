@@ -11,8 +11,6 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
-
 #define APPROX false
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -20,7 +18,7 @@
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
-    const float default_acc_value = norm::kernel_util::generic::bit_cast<float>(get_compile_time_arg_val(0));
+    const uint32_t default_acc_value = get_compile_time_arg_val(0);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
@@ -49,7 +47,7 @@ void kernel_main() {
         reconfig_data_format(CB_ACC, CB_ACC);
 
         fill_tile_init();
-        fill_tile(DST_ACC, default_acc_value);
+        FILL_TILE(DST_ACC, default_acc_value);
 
         tile_regs_commit();
 

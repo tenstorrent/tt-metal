@@ -111,11 +111,13 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
         defines_kernel_args["BINARY_OP"] = operation_attributes.op == AccumulationOp::CUMSUM
                                                ? fmt::format("add_int_tile<{}>", acc_dataformat_name)
                                                : fmt::format("mul_int_tile<{}>", acc_dataformat_name);
+        defines_kernel_args["FILL_TILE"] = fmt::format("fill_tile_int<{}>", acc_dataformat_name);
     } else {
         defines_kernel_args["BINARY_OP_INIT"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile_init" : "mul_binary_tile_init";
         defines_kernel_args["BINARY_OP"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile" : "mul_binary_tile";
+        defines_kernel_args["FILL_TILE"] = "fill_tile_bitcast";
     }
 
     float default_acc_value = 0.f;
