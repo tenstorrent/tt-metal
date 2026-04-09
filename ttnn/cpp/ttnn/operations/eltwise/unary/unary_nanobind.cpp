@@ -1977,6 +1977,64 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies the Randomized Leaky ReLU (RReLU) function element-wise.
+
+            In eval mode (default), uses a fixed slope of (lower + upper) / 2.
+            In training mode, samples a random slope from Uniform(lower, upper) per element.
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \begin{{cases}} x & \text{{if }} x \geq 0 \\ a \cdot x & \text{{if }} x < 0 \end{{cases}}
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of the uniform distribution. Defaults to `0.125`.
+                upper (float, optional): upper bound of the uniform distribution. Defaults to `0.3333`.
+                training (bool, optional): if True, uses random per-element slopes. Defaults to `False`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        auto rrelu_wrapper = [](const Tensor& input_tensor,
+                                float lower,
+                                float upper,
+                                bool training,
+                                const std::optional<MemoryConfig>& memory_config,
+                                const std::optional<Tensor>& output_tensor) -> Tensor {
+            return ttnn::rrelu(input_tensor, lower, upper, training, memory_config, output_tensor, std::nullopt);
+        };
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            rrelu_wrapper,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 1.0f / 3.0f,
+            nb::arg("training") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary

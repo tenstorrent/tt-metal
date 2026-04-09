@@ -147,3 +147,17 @@ def _atanh_golden_function(input_tensor, *args, **kwargs):
 
 if hasattr(ttnn, "atanh"):
     ttnn.attach_golden_function(ttnn.atanh, _atanh_golden_function)
+
+
+def _rrelu_golden_function(input_tensor, *args, lower=0.125, upper=1.0 / 3.0, training=False, **kwargs):
+    import torch
+
+    if not training:
+        slope = (lower + upper) / 2.0
+        return torch.where(input_tensor >= 0, input_tensor, input_tensor * slope)
+    else:
+        return torch.nn.functional.rrelu(input_tensor, lower=lower, upper=upper, training=True)
+
+
+if hasattr(ttnn, "rrelu"):
+    ttnn.attach_golden_function(ttnn.rrelu, _rrelu_golden_function)
