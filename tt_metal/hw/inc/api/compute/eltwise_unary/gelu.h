@@ -11,7 +11,7 @@
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
@@ -73,4 +73,5 @@ ALWI void gelu_derivative_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu_derivative_polynomial, RC, fast_and_approx, idst));
 }
 
+#endif
 }  // namespace ckernel

@@ -12,7 +12,7 @@
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /************** ERF *****************/
 /**
  * Please refer to documentation for any_init.
@@ -65,5 +65,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, t
 ALWI void erfc_tile(uint32_t idst) {
     MATH(_llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_erfc<>, idst, (int)VectorMode::RC));
 }
+
+#endif
 
 }  // namespace ckernel
