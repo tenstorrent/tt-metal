@@ -278,6 +278,8 @@ class TtMoe(LightweightModule):
         seq_dim = x.shape[1]
         batch_dim = x.shape[0]
         weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
+        if weights.memory_config().buffer_type == ttnn.BufferType.L1:
+            weights = ttnn.to_memory_config(weights, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
 
         logger.debug(f"  weights.shape={weights.shape}")
