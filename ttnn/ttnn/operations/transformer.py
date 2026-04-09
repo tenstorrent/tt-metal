@@ -6,8 +6,6 @@ from typing import Optional
 
 import ttnn
 
-SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
-
 
 def _golden_function(
     input_tensor: ttnn.Tensor,

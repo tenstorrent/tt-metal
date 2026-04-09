@@ -443,8 +443,6 @@ from ttnn.operations.pool import (
 
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
-
 import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
