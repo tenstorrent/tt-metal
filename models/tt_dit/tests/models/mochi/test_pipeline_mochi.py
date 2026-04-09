@@ -157,7 +157,7 @@ def test_tt_mochi_pipeline(
         f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}"
     )
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
-    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
+    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {vae_tp_axis}")
 
     # Create parallel config
     parallel_config = DiTParallelConfig(
