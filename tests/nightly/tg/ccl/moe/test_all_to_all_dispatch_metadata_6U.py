@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from ttnn.experimental.moe.utils import cluster_distance, map_shared_experts
+from ttnn.experimental.moe_compute_utils import cluster_distance, map_shared_experts
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     get_mesh_mapper,
     gen_tensors,
@@ -884,7 +884,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (1, 2, 2),
+        (1, 40, 10),
     ],
     ids=[
         "decode",

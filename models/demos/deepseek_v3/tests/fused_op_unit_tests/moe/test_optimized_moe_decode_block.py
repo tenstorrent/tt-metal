@@ -8,12 +8,12 @@ import random
 import pytest
 import torch
 from loguru import logger
-from ttnn.experimental.moe.utils import (
+from ttnn.experimental.moe_compute_utils import (
     add_shared_expert_weights,
     get_shared_experts_per_device,
     map_shared_experts,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
 )
 
 import ttnn
@@ -105,12 +105,14 @@ def create_torch_prepared_compute_matmul_weight_tensors(
     torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
 ):
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
         torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
     )
 
     # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+    )
 
     return torch_w0_w1_reordered, torch_w2_reordered
 
@@ -338,17 +340,6 @@ def create_torch_dispatch_input_expert_scores_tensor(batch, seq, selected_expert
         torch_dispatch_input_expert_scores_tensor / torch_dispatch_input_expert_scores_tensor.sum(dim=-1, keepdim=True)
     )
 
-    # torch_dispatch_input_expert_scores_tensor = torch.ones_like(torch_dispatch_input_expert_scores_tensor)
-
-    #     iota = torch.arange(
-    #         1, selected_experts_k + 1, dtype=tt_to_torch_dtype(dtype)
-    #     )
-    #
-    #     torch_dispatch_input_expert_scores_tensor = iota.view(1, 1, 1, -1).expand(
-    #         batch, 1, seq, selected_experts_k
-    #     )
-
-    # [batch, 1, seq, selected_experts_k]
     return torch_dispatch_input_expert_scores_tensor
 
 
@@ -365,8 +356,6 @@ def gen_matmul_golden(torch_input_token, torch_w0, torch_w1, torch_w2):
 
     # [L, 1, 1, N] @ [L, 1, N, H] -> [L, 1, 1, H]
     torch_output_ref = torch_intermediate_ref @ torch_w2
-
-    # torch_output_ref=torch.ones_like(torch_output_ref)
 
     return torch_output_ref
 
@@ -485,7 +474,7 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
         torch_combine_golden, torch_combine_output, atol=ATOL_THRESHOLD, rtol=0
     )
     logger.info(f"Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
-    if False:  # not allclose_passed:
+    if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
         mask = (torch_combine_output - torch_combine_golden).abs() > ATOL_THRESHOLD
         logger.warning(

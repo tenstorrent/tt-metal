@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python utilities for general MoE models"""
+"""Python helper utilities for ttnn.experimental.moe_compute """
 
 from __future__ import annotations
 
@@ -251,7 +251,7 @@ def add_shared_expert_weights(
     return output_w0, output_w1, output_w2
 
 
-def prepare_w0_w1_tensor(
+def prepare_w0_w1_tensor_for_moe_compute(
     torch_w0: "torch.Tensor",
     torch_w1: "torch.Tensor",
     L: int,
@@ -261,7 +261,7 @@ def prepare_w0_w1_tensor(
     ring2cores: dict[int, tuple[tuple[int, int], int, bool]],
 ):
     """
-    Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
+    Prepare the w0_w1 tensor input for moe_compute by interleaving chunks of w0 and w1 width-wise.
 
     Args:
         torch_w0: Weight tensor of shape (L, E, K, N)
@@ -320,11 +320,11 @@ def prepare_w0_w1_tensor(
     return torch_w0_w1_paired
 
 
-def prepare_w2_tensor(
+def prepare_w2_tensor_for_moe_compute(
     torch_w2: "torch.Tensor", L: int, E: int, N: int, K: int, ring2cores: dict[int, tuple[tuple[int, int], int, bool]]
 ) -> "torch.Tensor":
     """
-    Prepare the w2 tensor by padding and reordering tiles.
+    Prepare the w2 tensor input for moe_compute by padding and reordering tiles.
 
     Args:
         torch_w2: Weight tensor of shape (L, E, N, K)

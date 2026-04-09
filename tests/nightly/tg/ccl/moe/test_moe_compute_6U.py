@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from ttnn.experimental.moe.utils import prepare_w0_w1_tensor, prepare_w2_tensor
+from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
@@ -1269,7 +1269,7 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
         torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
     )
 
@@ -1285,7 +1285,9 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+    )
 
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
