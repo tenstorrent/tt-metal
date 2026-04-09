@@ -17,7 +17,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params, ring_params, ring_params_8k
 
 DEVICE_PARAMS = {"trace_region_size": 120000000}
 
@@ -102,17 +102,6 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     return pipeline_cls, image_prompt, expected_metrics
 
 
-def create_fabric_router_config():
-    config = ttnn.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = 8192
-    return config
-
-
-device_params_8k = ring_params
-if is_blackhole():
-    device_params_8k.update({"fabric_router_config": create_fabric_router_config()})
-
-
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -124,8 +113,8 @@ if is_blackhole():
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",

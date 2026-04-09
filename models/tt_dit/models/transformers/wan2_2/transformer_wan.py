@@ -595,7 +595,7 @@ class WanTransformer3DModel(Module):
             - trans_mat
             - N
 
-        Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
+        Spatial input is a tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
         Spatial output is an fp32 ttnn.Tensor on device with same layout.
         """
         temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
