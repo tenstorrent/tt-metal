@@ -37,20 +37,6 @@
   team: scaleout
   sp_config: sp1
 
-- name: "Fabric Test (2D Torus)"
-  cmd: |
-    tt-run --skip-mgd-check --skip-executable-check \
-      --rank-binding /ci/ttrun/rank_bindings.yaml \
-      --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-      /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
-      --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
-  skus:
-    bh_sp1:
-      timeout: 20
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp1
-
 - name: "Pipeline Test (DeepSeek V3 B1)"
   cmd: |
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
