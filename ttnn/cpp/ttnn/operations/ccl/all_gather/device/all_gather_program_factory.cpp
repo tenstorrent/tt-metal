@@ -104,9 +104,6 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
 
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> no_fuse = std::nullopt;
 
-    // Number of buffers per EDM channel — must match the value baked into kernel compile-time args
-    constexpr uint32_t kEDMChannelBuffers = 4;
-
     // Build the program artifacts using the shared builder function
     auto all_gather_program_artifacts = build_all_gather_async_minimal_default_program_artifacts(
         program,
@@ -127,7 +124,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         no_fuse,  // never fusing with this
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
-        std::make_optional<uint32_t>(8),  // kernel compile args expect 8; kEDMChannelBuffers above is 4
+        operation_attributes.num_buffers_per_channel,
         first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
         false,        // reverse_order = false
         operation_attributes.sub_core_grid);
