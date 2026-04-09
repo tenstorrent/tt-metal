@@ -159,31 +159,22 @@ def turbo_quant_quantize(
     else:
         y = ttnn.matmul(x, setup.rotation, memory_config=memory_config)
 
-    # Step 2: L2 norm — norms = sqrt(sum(y^2, dim=-1, keepdim=True))
-    y_sq = ttnn.square(y)
+    # Step 2: L2 norm + normalize (4 ops instead of 5: rsqrt+mul replaces sqrt+add+div)
+    y_sq = ttnn.mul(y, y)
     norms_sq = ttnn.sum(y_sq, dim=-1, keepdim=True)  # [batch, heads, seq, 1]
     ttnn.deallocate(y_sq)
-    norms = ttnn.sqrt(norms_sq)  # [batch, heads, seq, 1]
-    ttnn.deallocate(norms_sq)
-
-    # Step 3: Normalize — y_hat = y / (norms + eps)
-    # Add small epsilon to avoid division by zero
-    norms_safe = ttnn.add(norms, 1e-10)
-    y_hat = ttnn.div(y, norms_safe)
-    ttnn.deallocate(norms_safe)
+    inv_norm = ttnn.rsqrt(norms_sq)  # 1/||y||
+    y_hat = ttnn.mul(y, inv_norm, memory_config=memory_config)  # y / ||y||
     ttnn.deallocate(y)
 
-    # Step 4: Bucketize — find which centroid bucket each coordinate belongs to
-    # Since TTNN has no native bucketize, use cascaded comparisons:
-    #   idx = sum(y_hat >= boundary_i for each boundary)
-    # For 3-bit: 7 boundaries → 7 comparisons + 7 additions
-    #
-    # This gives bucket index directly: if value exceeds k boundaries, it's in bucket k.
+    # Compute ||y|| from inv_norm for the rescale step (no extra sqrt needed).
+    norms = ttnn.reciprocal(inv_norm)
+    ttnn.deallocate(inv_norm)
+    ttnn.deallocate(norms_sq)
+
+    # Step 3: Bucketize — fused kernel, outputs BF16 indices directly.
     indices = _bucketize_on_device(y_hat, setup, memory_config)
     ttnn.deallocate(y_hat)
-
-    # Step 5: Cast indices to UINT32 (TTNN's supported integer type)
-    indices = ttnn.typecast(indices, dtype=ttnn.uint32)
 
     return indices, norms
 
@@ -232,7 +223,7 @@ def turbo_quant_dequantize(
     """Dequantize compressed KV tensor back to BF16 on device.
 
     Args:
-        indices: UINT32 tensor [batch, heads, seq, head_dim] with centroid indices.
+        indices: BF16 tensor [batch, heads, seq, head_dim] with centroid indices.
         norms: BF16 tensor [batch, heads, seq, 1] with L2 norms.
         setup: Precomputed rotation matrix and codebook on device.
         memory_config: Output memory config (default: DRAM).
@@ -244,11 +235,8 @@ def turbo_quant_dequantize(
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # Step 1: Gather centroids — y_hat = centroids[indices]
-    # ttnn.embedding: indices [*, seq_len] → output [*, seq_len, embedding_dim]
-    # But we need per-element lookup, not sequence embedding.
-    # Use a different approach: construct centroid values from indices via comparison + select
-    y_hat = _gather_centroids_on_device(indices, setup, memory_config)
+    # Step 1: Gather centroids from BF16 indices
+    y_hat = _gather_centroids_from_bf16(indices, setup, memory_config)
 
     # Step 2: Rescale — y = y_hat * norms
     y = ttnn.mul(y_hat, norms, memory_config=memory_config)
@@ -509,9 +497,7 @@ class TTNNTurboQuantCache:
             If cache_centroids=True: values are pre-gathered centroid floats.
             Otherwise: values are integer indices as BF16 (0..2^b-1).
         """
-        idx_uint32, norms = turbo_quant_quantize(x, self.setup, skip_rotation=skip_rotation)
-        idx_bf16 = ttnn.typecast(idx_uint32, ttnn.bfloat16)
-        ttnn.deallocate(idx_uint32)
+        idx_bf16, norms = turbo_quant_quantize(x, self.setup, skip_rotation=skip_rotation)
 
         if self.cache_centroids:
             # Gather centroids NOW (on 1 token = tiny) so we can store
