@@ -37,24 +37,24 @@ class Parameter:
     """
 
     def __init__(self, tensor_or_metadata: Any) -> None:
-        self.tensor = tensor_or_metadata
+        self.tensor_or_metadata = tensor_or_metadata
 
     @property
     def is_materialized(self) -> bool:
         """True if the tensor has been allocated on device."""
-        return not isinstance(self.tensor, TensorMetadata)
+        return not isinstance(self.tensor_or_metadata, TensorMetadata)
 
     @property
     def shape(self):
         """Return tensor shape (works for both metadata and materialized tensor)."""
-        if isinstance(self.tensor, TensorMetadata):
-            return self.tensor.shape
-        return tuple(self.tensor.shape())
+        if isinstance(self.tensor_or_metadata, TensorMetadata):
+            return self.tensor_or_metadata.shape
+        return tuple(self.tensor_or_metadata.shape())
 
     def __repr__(self) -> str:
-        if isinstance(self.tensor, TensorMetadata):
-            return f"Parameter(TensorMetadata(shape={self.tensor.shape}))"
-        return f"Parameter({self.tensor})"
+        if isinstance(self.tensor_or_metadata, TensorMetadata):
+            return f"Parameter(TensorMetadata(shape={self.tensor_or_metadata.shape}))"
+        return f"Parameter({self.tensor_or_metadata})"
 
 
 class Buffer:
