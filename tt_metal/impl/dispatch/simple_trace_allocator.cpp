@@ -186,7 +186,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         for (uint32_t index = 0; index < programmable_core_count; index++) {
             auto core_type = hal.get_programmable_core_type(index);
-            if (!hal.has_programmable_core_type(core_type)) {
+            if (!hal.has_programmable_core_type(core_type) || core_type == HalProgrammableCoreType::IDLE_ETH) {
                 continue;
             }
             ProgramConfig& program_config = node.program->get_program_config(index);
@@ -237,9 +237,11 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                     binary_addr = *res.second;
                     allocator.add_region(ExtraData::kBinary, pid, binary_addr);
                 }
-            } else if (!binary_in_config && binary_size > 0) {
+            } else if (!binary_in_config && !node.program->get_kernel_groups(index).empty()) {
                 // Binary goes to a fixed L1 address (not in the config buffer). Must sync with the
                 // previous program that used this fixed address before overwriting it.
+                // Note: binary_size (kernel_text_size) may be 0 here since the binary isn't tracked
+                // in the config buffer, so we check for kernel groups instead.
                 all_binaries_cached = false;
                 if (last_fixed_addr_sync_idx[index].has_value()) {
                     binary_sync_idx = merge_syncs(binary_sync_idx, last_fixed_addr_sync_idx[index]);
