@@ -1,0 +1,12 @@
+{"ts":"2026-04-09T08:54:39+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-generator","operation":"rrelu","input_files":[]}
+{"event":"pipeline_start","op_name":"rrelu","math_definition":"RReLU(x) = x if x >= 0, a * x if x < 0; Training: a ~ Uniform(lower, upper); Eval: a = (lower + upper) / 2","output_folder":".claude-analysis/rrelu-1","ts":"2026-04-09T08:54:45+00:00"}
+{"event":"phase_start","phase":1,"phase_name":"Reference Discovery","ts":"2026-04-09T08:55:03+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-reference-discoverer","phase":1,"ts":"2026-04-09T08:55:07+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-reference-discoverer","status":"ok","ts":"2026-04-09T09:01:58+00:00"}
+{"event":"phase_complete","phase":1,"phase_name":"Reference Discovery","status":"ok","references":["leaky_relu","prelu_sfpu","dropout","threshold","hardtanh"],"ts":"2026-04-09T09:01:58+00:00"}
+{"event":"phase_start","phase":2,"phase_name":"Reference Analysis","analyzer_count":5,"ts":"2026-04-09T09:02:16+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"leaky_relu","background":true,"ts":"2026-04-09T09:02:26+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"prelu_sfpu","background":true,"ts":"2026-04-09T09:02:27+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"dropout","background":true,"ts":"2026-04-09T09:02:27+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"threshold","background":true,"ts":"2026-04-09T09:02:27+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-09T09:02:27+00:00"}
