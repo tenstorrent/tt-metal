@@ -258,6 +258,17 @@ def run_conv2d_short_sweep(
         groups=groups,
     )
 
+    if conv_config is not None and conv_config.activation is not None:
+        act_str = str(conv_config.activation)
+        if "RELU" in act_str:
+            torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
+        elif "GELU" in act_str:
+            torch_out_golden_tensor = torch.nn.functional.gelu(torch_out_golden_tensor)
+        elif "SILU" in act_str:
+            torch_out_golden_tensor = torch.nn.functional.silu(torch_out_golden_tensor)
+        elif "SIGMOID" in act_str:
+            torch_out_golden_tensor = torch.sigmoid(torch_out_golden_tensor)
+
     tt_bias_tensor = None
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig()

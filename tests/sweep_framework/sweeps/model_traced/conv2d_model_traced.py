@@ -108,6 +108,9 @@ def run(
             ih = input_height or 4
             iw = input_width or 4
             g = groups or 1
+            has_bias = bool(
+                kwargs.get("bias_tensor_shape") and kwargs.get("bias_tensor_shape") not in (None, "None", "")
+            )
             input_specs = (
                 int(batch_size),
                 int(out_channels),
@@ -123,7 +126,7 @@ def run(
                 int(g),
                 int(dh),
                 int(dw),
-                False,
+                has_bias,
             )
         else:
             return [(False, "Cannot construct input_specs: missing batch_size/out_channels/in_channels"), 0.0]
@@ -161,25 +164,26 @@ def run(
     conv_config = None
     traced_conv_config = kwargs.get("conv_config")
     if traced_conv_config and isinstance(traced_conv_config, dict) and traced_conv_config.get("type") == "Conv2dConfig":
-        # Parse Conv2dConfig from string representation
         import re
 
         value_str = traced_conv_config.get("value", "")
         conv_config = ttnn.Conv2dConfig()
-        # Extract key=value pairs from the string repr
         bool_attrs = {
             "deallocate_activation",
             "reallocate_halo_output",
             "reshard_if_not_optimal",
             "override_sharding_config",
+            "override_output_sharding_config",
             "transpose_shards",
             "enable_act_double_buffer",
             "enable_weights_double_buffer",
             "enable_kernel_stride_folding",
             "enable_activation_reuse",
             "full_inner_dim",
+            "config_tensors_in_dram",
         }
         int_attrs = {"act_block_h_override", "act_block_w_div"}
+
         # Extract shard_layout
         sl_m = re.search(r"shard_layout=TensorMemoryLayout::(\w+)", value_str)
         if sl_m:
@@ -191,7 +195,44 @@ def run(
             sl_val = sl_map.get(sl_m.group(1))
             if sl_val:
                 conv_config.shard_layout = sl_val
-        # Extract boolean and integer attributes
+
+        # Extract weights_dtype
+        wdt_m = re.search(r"weights_dtype=DataType::(\w+)", value_str)
+        if wdt_m:
+            wdt_map = {
+                "BFLOAT8_B": ttnn.bfloat8_b,
+                "BFLOAT16": ttnn.bfloat16,
+                "BFLOAT4_B": ttnn.bfloat4_b,
+                "FLOAT32": ttnn.float32,
+            }
+            wdt_val = wdt_map.get(wdt_m.group(1))
+            if wdt_val:
+                conv_config.weights_dtype = wdt_val
+
+        # Extract output_layout
+        ol_m = re.search(r"output_layout=Layout::(\w+)", value_str)
+        if ol_m:
+            ol_map = {
+                "TILE": ttnn.TILE_LAYOUT,
+                "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+            }
+            ol_val = ol_map.get(ol_m.group(1))
+            if ol_val:
+                conv_config.output_layout = ol_val
+
+        # Extract activation (e.g. UnaryWithParam(op_type=UnaryOpType::RELU))
+        act_m = re.search(r"activation=UnaryWithParam\(op_type=UnaryOpType::(\w+)", value_str)
+        if act_m:
+            act_map = {
+                "RELU": ttnn.UnaryOpType.RELU,
+                "GELU": ttnn.UnaryOpType.GELU,
+                "SILU": ttnn.UnaryOpType.SILU,
+                "SIGMOID": ttnn.UnaryOpType.SIGMOID,
+            }
+            act_op = act_map.get(act_m.group(1))
+            if act_op:
+                conv_config.activation = ttnn.UnaryWithParam(act_op)
+
         for attr in bool_attrs:
             m = re.search(rf"{attr}=(\w+)", value_str)
             if m:
@@ -201,7 +242,6 @@ def run(
             if m:
                 setattr(conv_config, attr, int(m.group(1)))
     else:
-        # Fallback: build from individual flat kwargs
         conv_config_attrs = {
             "shard_layout": kwargs.get("shard_layout"),
             "act_block_h_override": kwargs.get("act_block_h_override"),
@@ -216,8 +256,8 @@ def run(
             "enable_kernel_stride_folding": kwargs.get("enable_kernel_stride_folding"),
             "enable_activation_reuse": kwargs.get("enable_activation_reuse"),
             "full_inner_dim": kwargs.get("full_inner_dim"),
+            "config_tensors_in_dram": kwargs.get("config_tensors_in_dram"),
         }
-        # Filter out None/absent values
         conv_config_attrs = {k: v for k, v in conv_config_attrs.items() if v is not None and v != "__ABSENT__"}
 
         if conv_config_attrs:
