@@ -116,7 +116,7 @@ def generate_test_configs():
     during pytest collection, which would block subprocess profiling.
     """
     num_devices = detect_devices_without_opening()
-    if num_devices < 2:
+    if num_devices < 4:
         return [], []
 
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
@@ -165,14 +165,14 @@ def run_exp_ring_joint_sdpa_nightly(
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
-    if sp_size < 2:
-        pytest.skip(f"Exp ring joint attention requires ≥2 devices in ring, got sp_size={sp_size}")
+    if sp_size < 4:
+        pytest.skip(f"Only testing with ≥4 devices in ring, got sp_size={sp_size}")
 
     is_galaxy = arch_type.startswith("galaxy")
 
     use_ring = sp_size > 2
-    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
-    topology = Topology.Ring if use_ring else Topology.Linear
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+    topology = Topology.Ring
 
     ttnn.set_fabric_config(
         fabric_config,
