@@ -190,8 +190,8 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 
 @pytest.mark.parametrize(
     "input_dtype",
-    (ttnn.bfloat16, ttnn.bfloat8_b),
-    ids=["BFLOAT16", "BFLOAT8_B"],
+    (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32),
+    ids=["BFLOAT16", "BFLOAT8_B", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "output_dtype",

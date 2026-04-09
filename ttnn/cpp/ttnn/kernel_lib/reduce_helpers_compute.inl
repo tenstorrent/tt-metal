@@ -229,7 +229,7 @@ ALWI void reduce(
     if constexpr (use_matmul) {
         reduce_mm_init_short(input_cb_id, scaler_cb_id);
     } else {
-        reduce_init<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, output_cb_id);
+        reduce_init<reduce_type, reduce_dim, true>(input_cb_id, scaler_cb_id, output_cb_id);
     }
     scaler_cb.wait_front(1);  // Wait for scaler tile
 
@@ -357,18 +357,18 @@ ALWI void reduce(
                         // One-at-a-time: wait/pop per tile
                         input_cb.wait_front(onetile);
                         if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
+                            { DeviceZoneScopedN("REDUCE-MATMUL-TILE"); reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx); }
                         } else {
-                            reduce_tile<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
+                            reduce_tile<reduce_type, reduce_dim, true>(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
                         }
                         input_cb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_cb_id, scaler_cb_id, wt, 0, dst_idx);
+                            { DeviceZoneScopedN("REDUCE-MATMUL-TILE"); reduce_matmul_tiles(input_cb_id, scaler_cb_id, wt, 0, dst_idx); }
                         } else {
-                            reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, wt, 0, dst_idx);
+                            { DeviceZoneScopedN("REDUCE-TILE"); reduce_tile<reduce_type, reduce_dim, true>(
+                                input_cb_id, scaler_cb_id, wt, 0, dst_idx); }
                         }
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         if constexpr (use_matmul) {

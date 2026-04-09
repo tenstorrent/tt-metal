@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "api/compute/reduce.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
