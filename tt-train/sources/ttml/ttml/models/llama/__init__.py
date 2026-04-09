@@ -75,22 +75,6 @@ class LlamaConfig:
             )
 
 
-def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
-    for name, tensor in parameters.items():
-        shape = tensor.shape()
-
-        if "weight" in name:
-            # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
-            tensor.assign(new_tensor)
-        elif "bias" in name:
-            # Re-initialize biases with 0
-            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
-            tensor.assign(new_tensor)
-
-
 class Llama(TransformerBase):
     def __init__(self, config: LlamaConfig, **kwargs):
         self.config = config
@@ -101,8 +85,6 @@ class Llama(TransformerBase):
         self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            # Share the Parameter object so lazy materialization runs once; assigning
-            # .tensor would copy TensorMetadata and break Embedding.forward (expects Parameter).
             self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
