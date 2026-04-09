@@ -90,9 +90,9 @@ def get_mpi_launcher() -> str:
     Prefers ``mpirun-ulfm`` from :func:`shutil.which` if found; otherwise logs and
     returns ``\"mpirun\"``.
     """
-    mpi_launcher = shutil.which("mpirun-ulfm")
+    mpi_launcher = shutil.which("mpirun")
     if not mpi_launcher:
-        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+        logger.warning(f"{TT_RUN_PREFIX} mpirun not found in PATH, falling back to mpirun")
         return "mpirun"
 
     return mpi_launcher
