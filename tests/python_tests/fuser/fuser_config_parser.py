@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Annotated, List, Union
 
+import pytest
 import yaml
 from helpers.llk_params import DestAccumulation
 from pydantic import (
@@ -33,7 +34,7 @@ if arch == ChipArchitecture.WORMHOLE:
 elif arch == ChipArchitecture.BLACKHOLE:
     from .blackhole.parser import OperationSchema
 else:
-    assert False, "Architecture is not supported"
+    pytest.skip("Architecture is not supported", allow_module_level=True)
 
 
 def format_validation_error(error: ValidationError) -> str:
