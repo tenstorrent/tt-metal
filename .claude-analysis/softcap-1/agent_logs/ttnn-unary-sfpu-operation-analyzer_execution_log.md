@@ -111,3 +111,34 @@ Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kern
 - All SFPI intrinsics verified present in ckernel_sfpu_sinh.h (addexp, exexp, exman9, setexp, setsgn, int32_to_float, float_to_fp16b, reinterpret, dst_reg, v_if, v_endif)
 - `_float_to_int32_positive_` confirmed NOT DEFINED anywhere in codebase (full repo grep returns only usage sites in ckernel_sfpu_sinh.h)
 - All file paths verified to exist (API header, LLK dispatch, core SFPU, params dispatch)
+
+---
+
+## Operation: hardshrink
+## Date: 2026-04-09
+## Status: SUCCESS
+
+### Summary
+Analyzed the SFPU kernel implementation for the `hardshrink` unary operation. This is a non-standard unary operation that uses a dedicated compute kernel (`hardshrink_kernel.cpp`) instead of the standard `eltwise_sfpu.cpp` + `SFPU_OP_CHAIN_0` dispatch pattern. The kernel implements `hardshrink(x, lambda) = x * 1(x + lambda < 0) + x * 1(x - lambda > 0)` using a hybrid FPU+SFPU approach: SFPU fill_tile loads the lambda constant, SFPU ltz_tile/gtz_tile produce 0/1 indicator masks, and FPU add/sub/mul compose the final result in two passes with an intermediate circular buffer.
+
+### Key Findings
+- **Compute kernel**: `hardshrink_kernel.cpp` (dedicated, NOT `eltwise_sfpu.cpp`)
+- **No single _calculate_ function**: Hardshrink orchestrates multiple primitive SFPU/FPU operations at the compute kernel level
+- **SFPU sub-operations**: `_calculate_fill_` for lambda fill, `_calculate_zero_comp_<SfpuType::less_than_zero>` for ltz, `_calculate_zero_comp_<SfpuType::greater_than_zero>` for gtz
+- **Two-pass algorithm**: Pass 1 -> cb_tmp0, Pass 2 adds Pass 1 result
+- **Approximation mode**: `APPROX = false` (default); neither comparison nor fill SFPU functions branch on APPROXIMATION_MODE
+- **Kernel style**: A_sfpi (SFPI abstractions via v_if/v_else/v_endif for comparisons, dst_reg for fill)
+- **WH/BH identical**: Both architectures use identical ckernel_sfpu_comp.h and ckernel_sfpu_fill.h
+- **ADDR_MOD**: ADDR_MOD_7 (all zero increments) for both WH and BH
+- **Key instructions**: SFPLOAD, SFPSTORE, SFPLOADI, SFPMAD (constant loading), SFPSETCC (comparison), SFPENCC, SFPCOMPC (v_if/v_else/v_endif CC manipulation)
+- **NUKED**: `ltz_tile`, `gtz_tile`, `fill_tile` API headers and LLK dispatch layers removed; core SFPU implementations survive
+
+### Files Produced
+- `.claude-analysis/softcap-1/hardshrink_analysis.md`
+
+### Verification
+- Function `_calculate_zero_comp_` verified in both WH and BH ckernel_sfpu_comp.h
+- Function `_calculate_fill_` verified in both WH and BH ckernel_sfpu_fill.h
+- Function `apply_zero_comp<SfpuType::less_than_zero>` and `apply_zero_comp<SfpuType::greater_than_zero>` verified in ckernel_sfpu_comp.h
+- All 10 cited file paths verified to exist
+- SFPU instructions verified present in source files via grep
