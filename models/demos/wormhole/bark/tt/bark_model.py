@@ -24,10 +24,10 @@ from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, prepro
 # ----- Bark upstream token constants (from HF BarkSemanticGenerationConfig / BarkCoarseGenerationConfig) -----
 SEMANTIC_VOCAB_SIZE = 10_000
 SEMANTIC_PAD_TOKEN = 10_000  # EOS for semantic stage
-TEXT_ENCODING_OFFSET = 10_048
-SEMANTIC_INFER_TOKEN = 129_599
-COARSE_SEMANTIC_PAD_TOKEN = 12_048
-COARSE_INFER_TOKEN = 12_050
+TEXT_ENCODING_OFFSET = 10_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+SEMANTIC_INFER_TOKEN = 129_599  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+COARSE_SEMANTIC_PAD_TOKEN = 12_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
+COARSE_INFER_TOKEN = 12_050  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
 CODEBOOK_SIZE = 1024
 N_COARSE_CODEBOOKS = 2
 
