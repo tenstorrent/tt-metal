@@ -1,6 +1,12 @@
 name: "[Tier 2] Models End-To-End Tests"
 
 on:
+  schedule:
+    # single-card-demo-tests.yaml — Gemma-3-4B e2e (tier 2 only on wh_n150 in models_e2e_tests.yaml)
+    - cron: "0 13,18 * * 0,1,2,3,4,5,6"
+    - cron: "0 5 * * 1,3,6"
+    # t3000-demo-tests.yaml — Loudbox / wh_llmbox_perf tier-2 demos
+    - cron: "0 0 * * 1,3,5"
   workflow_dispatch:
     inputs:
       model:
@@ -64,24 +70,53 @@ permissions:
   packages: write
   contents: write
 
+run-name: >-
+  [Tier 2] Models E2E${{
+    github.event_name == 'schedule'
+    && format(' ({0})', github.event.schedule)
+    || ''
+  }}
+
 jobs:
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
     steps:
-      - name: Resolve SKU selection
+      - name: Resolve SKU and model (scheduled runs mirror legacy pipeline scope)
         id: resolve
         run: |
           ALL_SKUS="wh_llmbox_perf"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
-          if [[ "$SKU_INPUT" == "all" ]]; then
-            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
-          else
-            # Extract SKU name before the parenthetical description
-            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
-            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          SCHEDULE="${{ github.event.schedule }}"
+          case "$SCHEDULE" in
+            "0 13,18 * * 0,1,2,3,4,5,6"|"0 5 * * 1,3,6")
+              # single-card-demo — only Gemma-3-4B has tier-2 e2e on wh_n150
+              echo "enabled-skus=wh_n150" >> $GITHUB_OUTPUT
+              echo "model=gemma-3-4b" >> $GITHUB_OUTPUT
+              ;;
+            "0 0 * * 1,3,5")
+              # t3000-demo — all other tier-2 e2e jobs use wh_llmbox_perf
+              echo "enabled-skus=wh_llmbox_perf" >> $GITHUB_OUTPUT
+              echo "model=all" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::Unhandled schedule '$SCHEDULE'; update resolve-skus in models-t2-e2e-tests.yaml"
+              exit 1
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -101,6 +136,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
-      model: ${{ inputs.model || 'all' }}
+      model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "2"
