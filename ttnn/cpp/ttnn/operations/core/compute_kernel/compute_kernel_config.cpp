@@ -18,7 +18,7 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    tt::ARCH arch,
+    tt::ARCH,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
     const tt::tt_metal::MathFidelity default_fidelity,
     bool default_approx_mode,
@@ -96,7 +96,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 }
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
+    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,
