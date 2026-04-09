@@ -1,9 +1,15 @@
+# This workflow can be run between 3 and 7 AM UTC
 name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    - cron: "0 7 * * 1-5" # Runs weekdays at 8:00 AM GMT+1 (7:00 UTC/9:00 CEST)
+    - cron: "0 3 * * 1-5" # Runs weekdays at 8:00 AM GMT+1 (7:00 UTC/9:00 CEST)
   workflow_dispatch:
+    inputs:
+      note:
+        description: 'This workflow can be run between 3 and 7 AM UTC'
+        required: false
+        default: ''
 
 run-name: Fabric Test on a BH Quad
 jobs:
