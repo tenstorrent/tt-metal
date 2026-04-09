@@ -207,6 +207,7 @@ class Gemma4Model:
                     # Shard the large embedding on dim=-1 across TP devices to halve per-device DRAM
                     tp = mesh_config.tp if mesh_config else 1
                     pli_col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else replicate
+                    pli_tp_suffix = f"_tp{tp}" if tp > 1 else ""
                     # Use bfloat8_b for the large PLI embedding to reduce per-device DRAM
                     self.pli_embed_weight_tt = ttnn.as_tensor(
                         state_dict[pli_embed_key],
@@ -214,7 +215,9 @@ class Gemma4Model:
                         dtype=ttnn.bfloat8_b,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=pli_col_mapper,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_embed_tokens_per_layer_tp{tp}"),
+                        cache_file_name=get_cache_file_name(
+                            tensor_cache_path, f"pli_embed_tokens_per_layer{pli_tp_suffix}"
+                        ),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     self.pli_tp = tp  # Track TP for all-gather after embedding lookup
@@ -226,7 +229,7 @@ class Gemma4Model:
                         dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=pli_col_mapper,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_model_projection_tp{tp}"),
+                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_model_projection{pli_tp_suffix}"),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     # Norm weight is small — replicate
@@ -471,7 +474,9 @@ class Gemma4Model:
         per_layer_inputs = None
         if pli_device_tensors is not None:
             pass  # Pre-computed device tensors provided externally
-        elif is_decode and tokens_tt is not None and self.hidden_size_per_layer_input:
+        elif (
+            is_decode and tokens_tt is not None and self.hidden_size_per_layer_input and getattr(self, "pli_tp", 1) > 1
+        ):
             pli_combined_tt = self._compute_pli_device(tokens_tt, hidden_states)
         else:
             per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
