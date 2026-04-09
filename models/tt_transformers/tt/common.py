@@ -886,7 +886,7 @@ def hf_multimodal_encode(messages, processor):
 
     encoded = processor.apply_chat_template(
         hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-    ).to("cpu", dtype=torch.bfloat16)
+    ).to("cpu")
 
     return SimpleNamespace(
         **encoded,
