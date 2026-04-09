@@ -125,9 +125,10 @@ class AttentionBlock:
             return normalized * gamma
 
         position_id = position_ids[0]
-        # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
+        # RMSNorm (with gamma) for DKV path only; Q path uses raw input
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
-        matmul_result = input_layernorm @ matmul_weights_tensor
+        # Matmul: [1, K] @ [K, N] -> [1, N] — Q projection on raw activations
+        matmul_result = input_tensor @ matmul_weights_tensor
 
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
         matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
@@ -183,8 +184,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (3) + gather (2) + rope (1) + MLA (6) + SDPA (2) + ccl_sync (1) = 15
-        pipeline_num_semaphores = 15
+        # Pipeline semaphores: mcast (3) + mcast_dkv (1) + gather (2) + rope (1) + MLA (6) + SDPA (2) + ccl_sync (1) = 16
+        pipeline_num_semaphores = 16
         allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
         return pipeline_num_semaphores + allreduce_num_semaphores + bcast_num_semaphores
@@ -742,6 +743,11 @@ class AttentionBlock:
         )
         semaphore_index += 1
 
+        mcast_dkv_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
@@ -1049,7 +1055,7 @@ class AttentionBlock:
             ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
-            ("mcast_src_cb", rmsnorm_output_cb),
+            ("mcast_src_cb", input_cb),  # Send raw activations (not normalized)
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_src_num_pages", mcast_src_num_pages),
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
@@ -1060,6 +1066,22 @@ class AttentionBlock:
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
+        ]
+
+        # Mcast_dkv: normalized data from input core -> DKV matmul cores
+        # Reuses same NOC mcast grid + sender semaphore as mcast1 (serialized on input core)
+        # BRISC sender compile-time args (on input core)
+        mcast_dkv_brisc_named_compile_time_args = [
+            ("mcast_dkv_receiver_semaphore_addr", mcast_dkv_receiver_semaphore_addr),
+            ("mcast_dkv_data_size_bytes", mcast_data_size_bytes),
+            ("mcast_dkv_src_num_pages", mcast_src_num_pages),
+            ("mcast_dkv_src_cb", rmsnorm_output_cb),
+        ]
+        # NCRISC receiver compile-time args (on DKV matmul cores)
+        mcast_dkv_ncrisc_named_compile_time_args = [
+            ("mcast_dkv_receiver_semaphore_addr", mcast_dkv_receiver_semaphore_addr),
+            ("mcast_dkv_dst_cb", matmul_input_cb),
+            ("mcast_dkv_dst_num_pages", mcast_dst_num_pages),
         ]
 
         # Calculate matmul1 K-split parameters
@@ -3095,6 +3117,7 @@ class AttentionBlock:
         ncrisc_named_compile_time_args_base = (
             rmsnorm_reader_named_compile_time_args
             + mcast_receiver_named_compile_time_args
+            + mcast_dkv_ncrisc_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_reduce_sender_named_compile_time_args
             + rmsnorm2_ncrisc_named_compile_time_args
@@ -3115,6 +3138,7 @@ class AttentionBlock:
 
         brisc_named_compile_time_args_base = (
             mcast_sender_named_compile_time_args
+            + mcast_dkv_brisc_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_reduce_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
