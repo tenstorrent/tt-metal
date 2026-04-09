@@ -36,7 +36,7 @@ from turbo_quant.ttnn_integration import TTNNTurboQuantCache
 def build_parser():
     p = argparse.ArgumentParser(description="TurboQuant prefill + decode demo")
     p.add_argument("--prompt", default="What is the capital of France?")
-    p.add_argument("--bits", type=int, default=3, choices=[2, 3, 4])
+    p.add_argument("--bits", type=int, default=3, choices=[1, 2, 3, 4])
     p.add_argument("--max-new-tokens", type=int, default=60)
     p.add_argument("--max-seq-len", type=int, default=256)
     p.add_argument("--instruct", action="store_true", default=True)
@@ -108,8 +108,11 @@ def migrate_prefill_kv_to_turbo_quant(
         # Otherwise: store integer indices as BF16.
         max_seq_padded = tq_cache.k_indices_dev[0].shape[2]
         if getattr(tq_cache, "cache_centroids", False):
-            k_idx_bf16 = cpu_quantizer.codebook.centroids[k_idx.long()].to(torch.bfloat16)
-            v_idx_bf16 = cpu_quantizer.codebook.centroids[v_idx.long()].to(torch.bfloat16)
+            # Store pre-rescaled centroid × norm values (matches decode-time cache format).
+            k_centroids = cpu_quantizer.codebook.centroids[k_idx.long()]  # [..., head_dim]
+            v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
+            k_idx_bf16 = (k_centroids * k_norms).to(torch.bfloat16)
+            v_idx_bf16 = (v_centroids * v_norms).to(torch.bfloat16)
         else:
             k_idx_bf16 = k_idx.float().to(torch.bfloat16)
             v_idx_bf16 = v_idx.float().to(torch.bfloat16)

@@ -33,7 +33,7 @@ from turbo_quant.ttnn_integration import TTNNTurboQuantCache
 def build_parser():
     p = argparse.ArgumentParser(description="TurboQuant end-to-end inference")
     p.add_argument("--prompt", default="What is the capital of France?")
-    p.add_argument("--bits", type=int, default=3, choices=[2, 3, 4])
+    p.add_argument("--bits", type=int, default=3, choices=[1, 2, 3, 4])
     p.add_argument("--max-new-tokens", type=int, default=30)
     p.add_argument("--max-seq-len", type=int, default=256)
     p.add_argument("--instruct", action="store_true", default=True, help="Use instruct prompt formatting")
