@@ -113,3 +113,47 @@ Leaky ReLU is a trivially simple operation (conditional multiply) with well-docu
 
 ## Output (leaky_relu)
 - **Analysis file**: `.claude-analysis/rrelu-1/leaky_relu_analysis.md`
+
+---
+
+## Session Info (dropout)
+- **Operation**: dropout
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-09
+- **Status**: SUCCESS
+
+## Summary (dropout)
+Analyzed the SFPU kernel implementation for the `DROPOUT` operation. This is a non-standard operation -- it uses its own experimental program factory (`DropoutProgramFactory`) rather than the standard `UnaryProgramFactory`. The API header and LLK dispatch files have been nuked, but the core SFPU kernel (`ckernel_sfpu_dropout.h`) survives intact in both Wormhole B0 and Blackhole tt_llk directories.
+
+## Key Findings (dropout)
+- **Formula**: For each element: `output = (rand > probability) ? input * scale : 0.0` where scale = `1 / (1 - prob)`
+- **API signature**: `dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor)` + `dropout_kernel_init(uint32_t seed)`
+- **Kernel style**: Raw TTI instructions (Style B-adjacent, but simple enough CC logic for Style A annotation)
+- **Parameters**: Three params -- probability (uint32 = INT_MAX * prob), scale (bitcast float), seed (uint32 runtime arg)
+- **Approximation mode**: `false` (hardcoded in program factory; APPROXIMATION_MODE template param unused in kernel body)
+- **SFPU instructions**: TT_SFPLOADI (x4), TTI_SFPLOAD, TTI_SFPMUL, TTI_SFPMOV (x2, one for PRNG), TTI_SFPSETSGN, TTI_SFPIADD, TTI_SFPENCC, TTI_SFPSTORE
+- **PRNG mechanism**: Special SFPMOV mode (instr_mod1=8, lreg_c=9) generates pseudorandom numbers
+- **Address mode**: ADDR_MOD_7 with dest.incr=0 (same on WH and BH)
+- **WH/BH parity**: Core kernel is byte-for-byte identical on both architectures
+
+## Execution Timeline (dropout)
+1. Read unary_op_utils.cpp -- confirmed DROPOUT enum exists but dispatch cases absent (experimental op)
+2. Found dropout in experimental/ directory with own program factory
+3. Read compute kernel (dropout_kernel.cpp) -- identified dropout_tile() and dropout_kernel_init() calls
+4. Read core SFPU kernel (ckernel_sfpu_dropout.h) for both WH and BH -- confirmed identical
+5. Read LLK dispatch infrastructure (params.h, unary_sfpu.h, addr_mod config)
+6. Read init_prng_seed in ckernel.h (seed write + 600 NOP wait)
+7. Read sfpu-hardware-model.md for SFPIADD CC semantics and instruction timing
+8. Verified all function names, instruction usage, and file paths via grep
+9. Wrote dropout_analysis.md with CC State Machine diagram
+
+## Verification Results (dropout)
+- `_calculate_dropout_`: FOUND in wh+bh ckernel_sfpu_dropout.h
+- `_init_dropout_`: FOUND in wh+bh ckernel_sfpu_dropout.h
+- `init_prng_seed`: FOUND in wh+bh ckernel.h
+- All 8 TTI instructions: verified present in ckernel_sfpu_dropout.h
+- All file paths: verified existing
+
+## Output (dropout)
+- **Analysis file**: `.claude-analysis/rrelu-1/dropout_analysis.md`
+- **Commit**: `7730652612`
