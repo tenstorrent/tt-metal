@@ -11,7 +11,7 @@
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Controls whether the fast approximate exponential clamps very negative inputs.
  *
@@ -116,5 +116,5 @@ ALWI void exp_packthread_tile(
         vector_mode,
         scale));
 }
-
+#endif
 }  // namespace ckernel

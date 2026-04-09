@@ -11,7 +11,7 @@
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
@@ -35,5 +35,7 @@ template <bool FAST_APPROX = false>
 ALWI void sqrt_tile(uint32_t idst) {
     MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST_FN(calculate_sqrt, APPROX, 8, DST_ACCUM_MODE, FAST_APPROX, idst, RC));
 }
+
+#endif
 
 }  // namespace ckernel
