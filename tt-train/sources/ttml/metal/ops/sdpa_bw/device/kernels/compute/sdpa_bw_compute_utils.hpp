@@ -126,32 +126,7 @@ void apply_softmax_statistics_on_dst(
     exp_tile</* approx */ false>(scores_reg);
 }
 
-// Transposes a single tile by swapping width and height dimensions.
-// Uses copy_tile (unpack-to-dest when cb_input has UnpackToDestFp32) + SFPU transpose_wh_dest.
-// Used for cb_attention_weights which has UnpackToDestFp32 enabled.
-inline void transpose_tile(
-    const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh, const uint32_t old_format_cb) {
-    cb_wait_front(cb_input, onetile);
-    copy_tile_to_dst_init_short_with_dt(old_format_cb, cb_input, /*transpose=*/0);
-
-    tile_regs_acquire();
-    copy_tile(cb_input, /* tile idx */ 0, /* register idx */ 0);
-
-    transpose_wh_dest_init_short<true>();
-    transpose_wh_dest<true>(0);
-
-    tile_regs_commit();
-
-    cb_reserve_back(cb_transpose_wh, onetile);
-    pack_reconfig_data_format(cb_transpose_wh);
-    tile_regs_wait();
-    pack_tile(0, cb_transpose_wh);
-    tile_regs_release();
-    cb_push_back(cb_transpose_wh, onetile);
-}
-
-// Transposes a single tile using the FPU transpose_wh path (reads via SrcA, not unpack-to-dest).
-// Use this for CBs with Default UnpackToDestMode (no UnpackToDestFp32).
+// Transposes a single tile using the FPU transpose_wh path (reads via SrcA).
 inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
     cb_wait_front(cb_input, onetile);
 
@@ -367,7 +342,7 @@ void update_grad_value(
     const uint32_t tiles_per_row,
     const uint32_t block_size,
     const bool do_accumulate = false) {
-    transpose_tile(cb_attention_weights, cb_transpose_wh, cb_grad_output);
+    transpose_tile_fpu(cb_attention_weights, cb_transpose_wh);
 
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);

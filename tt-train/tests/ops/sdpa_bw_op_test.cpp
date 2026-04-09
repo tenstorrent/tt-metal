@@ -562,15 +562,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // ========== Composite Implementation (uses ttnn ops) ==========
     auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
     const auto composite_attn_output = /* attn_output */ composite_output[0];
-    auto composite_lse = /* logsumexp */ composite_output[1];
+    [[maybe_unused]] auto composite_lse = /* logsumexp */ composite_output[1];
     const auto dL_dQ = /* dL_dQ */ composite_output[2];
     const auto dL_dK = /* dL_dK */ composite_output[3];
     const auto dL_dV = /* dL_dV */ composite_output[4];
     [[maybe_unused]] const auto attention_weights = /* attention_weights */ composite_output[5];
-
-    // Pad lse from (B, H, S, 1) to (B, H, S, 32) to match kernel intermediate shape
-    const auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
-    const auto composite_intermediates = ttnn::add(padded_interm, composite_lse);
 
     // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
     const auto sdpa_fw_result = ttml::metal::sdpa_fw(
@@ -604,7 +600,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
     const xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
     const xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
-    const xt::xarray<float> composite_intermediates_cpu = core::to_xtensor(composite_intermediates);
 
     const auto& [kernel_dQ, kernel_dK, kernel_dV] = op_result;
     const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(kernel_dQ);  // dL_dQ
@@ -614,42 +609,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const xt::xarray<float> composite_dQ = core::to_xtensor(dL_dQ);
     const xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
     const xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
-
-    // Diagnostic: print value ranges for all kernel outputs
-    auto print_stats = [](const xt::xarray<float>& t, const std::string& name) {
-        size_t nan_count = 0, inf_count = 0;
-        for (size_t i = 0; i < t.size(); ++i) {
-            if (std::isnan(t.flat(i)))
-                nan_count++;
-            if (std::isinf(t.flat(i)))
-                inf_count++;
-        }
-        fmt::print(
-            "[{}] shape={}, min={:.6e}, max={:.6e}, mean={:.6e}, nan={}, inf={}\n",
-            name,
-            t.shape(),
-            xt::amin(t)(),
-            xt::amax(t)(),
-            xt::mean(t)(),
-            nan_count,
-            inf_count);
-        // Print first 8 values
-        fmt::print("  first 8: ");
-        for (size_t i = 0; i < std::min<size_t>(8, t.size()); ++i) {
-            fmt::print("{:.4e} ", t.flat(i));
-        }
-        fmt::print("\n");
-    };
-
-    fmt::print("\n=== Kernel output diagnostics ===\n");
-    print_stats(sdpa_bw_dQ, "kernel_dQ");
-    print_stats(sdpa_bw_dK, "kernel_dK");
-    print_stats(sdpa_bw_dV, "kernel_dV");
-    fmt::print("=== Float reference diagnostics ===\n");
-    print_stats(float_dQ, "float_dQ");
-    print_stats(float_dK, "float_dK");
-    print_stats(float_dV, "float_dV");
-    fmt::print("================================\n\n");
 
     // Verify shapes match
     ASSERT_EQ(sdpa_bw_dQ.shape(), composite_dQ.shape()) << "kernel_dQ shape != composite_dQ shape";

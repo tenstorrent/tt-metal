@@ -494,7 +494,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
         mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;   // kGradValueAccumCbIndex
         mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kGradKeyAccumCbIndex
-        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kAttentionWeightsCbIndex
         return mode;
     };
 
