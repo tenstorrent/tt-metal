@@ -159,7 +159,7 @@ def _warmup_prefill(model, device, token_ids):
     [
         (128, 2048, 50, True, False),
         (128, 2048, 50, False, True),
-        (4096, 8192, 100, False, False),
+        (4096, 8192, 100, True, False),
         (8192, 16384, 50, False, False),
         (65536, 131072, 100, True, False),
         (65536, 131072, 100, False, True),
@@ -273,6 +273,9 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
     Trace captures embedding + full forward + norm + LM head.
     Before each replay, inputs are updated via fast host-to-device DMA.
+    Post-trace cache ops are dispatched immediately after execute_trace (async)
+    so they queue on the device and execute right after the trace finishes,
+    avoiding host dispatch latency gaps.
     """
     T = token_ids.shape[1]
     model.enable_trace(batch_size=1)
@@ -318,14 +321,17 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
         t_step = time.time()
         logits = model.decode_traced(next_input, current_pos=current_pos)
-        ttnn.synchronize_device(device)
 
-        # Staging approach: copy staging K/V to correct position and update mask
+        # Pipeline: dispatch post-trace ops immediately after execute_trace.
+        # They queue on the same command queue and execute right after the trace
+        # finishes on device, avoiding host dispatch latency between sync and ops.
         for layer in model.layers:
             if layer.is_full_attention:
                 layer.attention.update_cache_after_trace(current_pos)
                 layer.attention.update_mask_for_pos(current_pos + 1)
 
+        # Single sync: wait for trace + pipelined post-trace ops to complete
+        ttnn.synchronize_device(device)
         decode_times.append(time.time() - t_step)
 
         logits_torch = ttnn.to_torch(logits).squeeze()
