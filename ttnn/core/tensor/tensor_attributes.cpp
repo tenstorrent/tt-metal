@@ -48,7 +48,9 @@ void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topol
     std::visit(
         ttsl::overloaded{
             [&](HostStorage& host_storage) { host_storage.host_tensor().update_tensor_topology(tensor_topology); },
-            [&](DeviceStorage& device_storage) { device_storage.update_tensor_topology(tensor_topology); },
+            [&](DeviceStorage& device_storage) {
+                device_storage.get_mesh_tensor().update_tensor_topology(tensor_topology);
+            },
         },
         storage_);
 }

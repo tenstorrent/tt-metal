@@ -181,7 +181,7 @@ struct DeviceStorage {
     //
     // This is currently the recommended method to reinterpret an existing Tensor.
     // This is  internal functionality: it is not part of the public API.
-    // TODO: implement a more robust mechanism for Tensor reinterpretation (#38093)
+    // TODO(#38093): implement a more robust mechanism for Tensor reinterpretation
     DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor);
     // End internal functions.
 
@@ -199,10 +199,6 @@ struct DeviceStorage {
         const std::vector<std::reference_wrapper<const DeviceStorage>>& storages, int shard_dim);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Update tensor topology
-    // Throws if the device storage is deallocated.
-    void update_tensor_topology(const TensorTopology& tensor_topology);
-
     // Returns the tensor spec associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
     const TensorSpec& get_tensor_spec() const;
