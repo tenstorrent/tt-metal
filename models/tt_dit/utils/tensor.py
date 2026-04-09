@@ -316,6 +316,15 @@ def fast_device_to_host(
 
     mesh_shape = tuple(mesh_device.shape)
 
+    if len(mesh_shape) != 2:
+        raise ValueError(
+            f"fast_device_to_host only supports 2D meshes, got mesh shape {mesh_shape} (ndim={len(mesh_shape)})"
+        )
+    if len(concat_dims) != 2:
+        raise ValueError(
+            f"concat_dims must have exactly 2 elements for a 2D mesh, got {len(concat_dims)}: {concat_dims}"
+        )
+
     # Get mesh coordinates before issuing DMA — topology is on the original
     # device tensor and maps each shard index to its (row, col) mesh position.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
@@ -333,9 +342,26 @@ def fast_device_to_host(
     logical_shape = list(host_tensors[0].shape)
     shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
 
+    # Validate that topology coordinates and device tensors are consistent.
+    n_coords, n_shards = len(mesh_coords), len(shards)
+    expected = mesh_shape[0] * mesh_shape[1]
+    if n_coords != n_shards:
+        raise ValueError(
+            f"mesh_coords length ({n_coords}) != device shards length ({n_shards}); "
+            "tensor_topology and get_device_tensors are out of sync"
+        )
+    if n_shards != expected:
+        raise ValueError(f"Expected {expected} shards for mesh shape {mesh_shape}, got {n_shards}")
+
     # Build coord→shard mapping using explicit mesh coordinates rather than
     # assuming get_device_tensors() returns shards in row-major order.
     shards_by_coord = {(int(c[0]), int(c[1])): s for c, s in zip(mesh_coords, shards)}
+
+    if len(shards_by_coord) != n_shards:
+        raise ValueError(
+            f"Duplicate mesh coordinates detected: {n_shards} shards but only "
+            f"{len(shards_by_coord)} unique coordinates"
+        )
 
     # Validate: if a mesh axis is not gathered (concat_dims[axis] is None),
     # the tensor must be replicated along that axis (size 1), otherwise we'd
