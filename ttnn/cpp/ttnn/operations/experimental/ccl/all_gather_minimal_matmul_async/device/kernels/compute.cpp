@@ -5,7 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -268,8 +268,7 @@ void add_bias_and_addcmul_block(
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
+    const ckernel::BlockMatmulOp& mm,
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
@@ -289,16 +288,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb,
-                    in1_cb,
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
+                mm.matmul(in0_index, in1_index, dst_index);
                 in0_index++;
                 in1_index += full_N_block_tiles;
             }
@@ -361,7 +351,16 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    ckernel::MatmulOpConfig cfg{};
+    cfg.in0_cb_id = in0_cb;
+    cfg.in1_cb_id = in1_cb;
+    cfg.out_cb_id = intermediate_cb;
+    cfg.ct_dim = subblock_w;
+    cfg.rt_dim = subblock_h;
+    cfg.kt_dim = K_block_tiles;
+    cfg.transpose = false;
+    ckernel::BlockMatmulOp mm(cfg);
+    mm.init();
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -389,13 +388,11 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
-                in0_cb,
-                in1_cb,
-                false /*transpose*/,
-                current_subblock_w /*ct_dim*/,
-                current_subblock_h /*rt_dim*/,
-                K_block_tiles /*kt_dim*/);
+            cfg.ct_dim = current_subblock_w;
+            cfg.rt_dim = current_subblock_h;
+            cfg.kt_dim = K_block_tiles;
+            mm = ckernel::BlockMatmulOp(cfg);
+            mm.init_short();
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
@@ -405,8 +402,7 @@ void kernel_main() {
                 cb_wait_front(in1_cb, in1_block_num_tiles);
 
                 matmul_blocks(
-                    in0_cb,
-                    in1_cb,
+                    mm,
                     intermediate_cb,
                     current_M_block_tiles,
                     current_N_block_tiles,

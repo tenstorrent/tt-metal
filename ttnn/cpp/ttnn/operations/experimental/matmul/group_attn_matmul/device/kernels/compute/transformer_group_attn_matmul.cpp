@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "experimental/circular_buffer.h"
@@ -60,14 +60,13 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
-    // need switching between ColMajor and RowMajor for at least 32 times, inefficient
-    #ifdef ARCH_GRAYSKULL
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
-    #else
-    // TODO: switch back to matmul block after didt solved
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
-    // mm_block_init(cb_in0, cb_in1, cb_intermed0, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
-    #endif
+    ckernel::MatmulOpConfig mm_cfg{};
+    mm_cfg.in0_cb_id = cb_in0;
+    mm_cfg.in1_cb_id = cb_in1;
+    mm_cfg.out_cb_id = cb_intermed0;
+    mm_cfg.transpose = static_cast<bool>(transpose_hw);
+    ckernel::TileMatmulOp mm(mm_cfg);
+    mm.init();
 
     for (uint32_t b = 0; b < batch; b++) {
 
@@ -89,7 +88,6 @@ void kernel_main() {
 
                             tile_regs_acquire();
 
-                            #ifdef ARCH_GRAYSKULL
                             uint32_t dst_index = 0;
                             uint32_t in0_index_h_offset = 0;
                             for (uint32_t h = 0; h < out_subblock_h; h++) {
@@ -98,44 +96,13 @@ void kernel_main() {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
+                                        mm.matmul(in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
                                 }
                                 in0_index_h_offset += in0_block_w;
                             }
-                            #else
-                            // TODO: switch back to matmul block after didt solved
-                            uint32_t dst_index = 0;
-                            uint32_t in0_index_h_offset = 0;
-                            for (uint32_t h = 0; h < out_subblock_h; h++) {
-                                for (uint32_t w = 0; w < out_subblock_w; w++) {
-                                    uint32_t in1_index_inner_dim_offset = 0;
-                                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                        uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                        uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
-                                        in1_index_inner_dim_offset += in1_per_core_w;
-                                    }
-                                    dst_index++;
-                                }
-                                in0_index_h_offset += in0_block_w;
-                            }
-                            // // Compute output sub-block
-                            // uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
-                            // uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
-                            // uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
-                            // // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            // for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                            //     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                            //     // accumulation is done by iterating matmul_block across inner dim
-                            //     // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                            //     matmul_block(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
-                            //     in0_index ++;  // stride right by 1
-                            //     in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
-                            // }
-                            #endif
 
                             tile_regs_commit();
 

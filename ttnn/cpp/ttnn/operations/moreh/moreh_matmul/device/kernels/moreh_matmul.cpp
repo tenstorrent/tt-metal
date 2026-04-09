@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -189,7 +189,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     bool need_other_mask_h,
     bool need_other_mask_w) {
     // TODO: checking required when the input cb format and intermediate cb format are different.
-    mm_init(cb_in0, cb_in1, cb_out0);
+    ckernel::MatmulOpConfig mm_init_cfg{};
+    mm_init_cfg.in0_cb_id = cb_in0;
+    mm_init_cfg.in1_cb_id = cb_in1;
+    mm_init_cfg.out_cb_id = cb_out0;
+    ckernel::TileMatmulOp(mm_init_cfg).init();
     if (transpose_input || transpose_other) {
         transpose_wh_init(cb_in0, cb_out0);
     }
@@ -279,8 +283,13 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            mm_init_short(mm_src0, mm_src1);
-            matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
+            ckernel::MatmulOpConfig mm_cfg{};
+            mm_cfg.in0_cb_id = mm_src0;
+            mm_cfg.in1_cb_id = mm_src1;
+            mm_cfg.out_cb_id = cb_out0;
+            ckernel::TileMatmulOp mm(mm_cfg);
+            mm.init_short();
+            mm.matmul(0, 0, 0);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
@@ -314,13 +323,18 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    mm_init(cb_in0, cb_in1, cb_out0);
+    ckernel::MatmulOpConfig mm_cfg{};
+    mm_cfg.in0_cb_id = cb_in0;
+    mm_cfg.in1_cb_id = cb_in1;
+    mm_cfg.out_cb_id = cb_out0;
+    ckernel::TileMatmulOp mm(mm_cfg);
+    mm.init();
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
             cb_wait_front(cb_in0, onetile);
             cb_wait_front(cb_in1, onetile);
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+            mm.matmul(0, 0, 0);
             cb_pop_front(cb_in0, onetile);
             cb_pop_front(cb_in1, onetile);
         }

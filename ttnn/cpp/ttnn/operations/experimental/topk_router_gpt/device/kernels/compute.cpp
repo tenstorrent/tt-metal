@@ -11,7 +11,7 @@
 //            insertion-sort topk → softmax → pack final output
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose_wh.h"
@@ -79,14 +79,15 @@ void kernel_main() {
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
-    mm_block_init(
-        cb_input,
-        cb_weight,
-        cb_local_out,
-        /*transpose=*/0,
-        /*ct_dim=*/1,
-        /*rt_dim=*/1,
-        /*kt_dim=*/1);
+    ckernel::MatmulOpConfig cfg{};
+    cfg.in0_cb_id = cb_input;
+    cfg.in1_cb_id = cb_weight;
+    cfg.out_cb_id = cb_local_out;
+    cfg.ct_dim = 1;
+    cfg.rt_dim = 1;
+    cfg.kt_dim = 1;
+    ckernel::BlockMatmulOp mm(cfg);
+    mm.init();
     tile_regs_acquire();
 
     uint32_t tiles_done = 0;
@@ -100,16 +101,7 @@ void kernel_main() {
         cb_wait_front(cb_weight, block);
 
         for (uint32_t k = 0; k < block; k++) {
-            matmul_block(
-                cb_input,
-                cb_weight,
-                /*in0_tile_index=*/k,
-                /*in1_tile_index=*/k,
-                /*idst=*/0,
-                /*transpose=*/false,
-                /*ct_dim=*/1,
-                /*rt_dim=*/1,
-                /*kt_dim=*/1);
+            mm.matmul(/*in0_tile_index=*/k, /*in1_tile_index=*/k, /*dst_tile_index=*/0);
         }
 
         cb_pop_front(cb_input, block);

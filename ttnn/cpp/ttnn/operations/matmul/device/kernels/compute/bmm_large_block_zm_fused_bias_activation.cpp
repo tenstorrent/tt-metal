@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
@@ -79,30 +79,6 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         tile_regs_release();
         in0_cb.push_back(last_block_size);
     }
-}
-
-FORCE_INLINE void reload_from_cb_to_dst(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
-    bool in1_transpose_tile,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    mm_partials_cb.wait_front(out_subblock_num_tiles);
-
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
-
-    mm_partials_cb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -214,8 +190,18 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    ckernel::MatmulOpConfig cfg{};
+    cfg.in0_cb_id = in0_cb_id;
+    cfg.in1_cb_id = in1_cb_id;
+    cfg.out_cb_id = mm_partials_cb_id;
+    cfg.ct_dim = out_subblock_w;
+    cfg.rt_dim = out_subblock_h;
+    cfg.kt_dim = in0_block_w;
+    cfg.transpose = in1_transpose_tile;
+    cfg.partials_cb_id = spill ? mm_partials_cb_id : 0u;
+    ckernel::BlockMatmulOp mm(cfg);
+    mm.init();
+
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -262,14 +248,7 @@ void kernel_main() {
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm_block_init_short_with_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_transpose_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        mm.init_short_with_dt(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
@@ -280,46 +259,15 @@ void kernel_main() {
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            tile_regs_acquire();
+                            mm.begin_subblock();
                             if (enable_reload) {
-                                reload_from_cb_to_dst(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    mm_partials_cb_id,
-                                    in1_transpose_tile,
-                                    out_subblock_num_tiles,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
+                                mm.reload_partials(out_subblock_num_tiles);
                             }
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
-                            uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
-
+                            mm.accumulate(
+                                in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, in1_block_w);
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
@@ -512,8 +460,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
-                    mm_block_init_short(
-                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                    mm.init_short();
                 }
             }
         }

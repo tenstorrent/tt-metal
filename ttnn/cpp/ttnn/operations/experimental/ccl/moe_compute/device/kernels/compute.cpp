@@ -5,7 +5,7 @@
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -165,8 +165,15 @@ void kernel_main() {
             PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
             // Initialize matmul for W0
-            mm_block_init(
-                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            ckernel::MatmulOpConfig w0_w1_cfg{};
+            w0_w1_cfg.in0_cb_id = cb_s2c_in;
+            w0_w1_cfg.in1_cb_id = cb_r2c_w0_w1;
+            w0_w1_cfg.out_cb_id = cb_s2c_in2;
+            w0_w1_cfg.ct_dim = 4;
+            w0_w1_cfg.rt_dim = 1;
+            w0_w1_cfg.kt_dim = 1;
+            ckernel::BlockMatmulOp mm(w0_w1_cfg);
+            mm.init();
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
@@ -193,16 +200,7 @@ void kernel_main() {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                        matmul_block(
-                            cb_s2c_in,
-                            cb_r2c_w0_w1,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm.matmul(in0_index++, /*in1_index=*/k, /*dst_index=*/0);
                     }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -242,6 +240,14 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
+            ckernel::MatmulOpConfig w2_cfg{};
+            w2_cfg.in0_cb_id = cb_s2c_in2;
+            w2_cfg.in1_cb_id = cb_r2c_w2;
+            w2_cfg.out_cb_id = cb_c2s_out;
+            w2_cfg.ct_dim = 4;
+            w2_cfg.rt_dim = 1;
+            w2_cfg.kt_dim = 1;
+            ckernel::BlockMatmulOp mm_w2(w2_cfg);
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
@@ -271,16 +277,7 @@ void kernel_main() {
                         }
                         dm1_tiles_remaining--;
 
-                        matmul_block(
-                            cb_s2c_in2,
-                            cb_r2c_w2,
-                            in2_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm_w2.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }

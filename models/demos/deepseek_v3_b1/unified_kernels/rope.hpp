@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -170,10 +170,15 @@ struct Rope {
                 // ============================================================
                 // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
                 // ============================================================
-                mm_init_short(args.in_cb, args.trans_mat_cb);
+                ckernel::MatmulOpConfig rope_cfg{};
+                rope_cfg.in0_cb_id = args.in_cb;
+                rope_cfg.in1_cb_id = args.trans_mat_cb;
+                rope_cfg.out_cb_id = args.rotated_in_interm_cb;
+                ckernel::TileMatmulOp mm_rope(rope_cfg);
+                mm_rope.init_short();
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
+                    mm_rope.matmul(j, 0, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
