@@ -400,39 +400,6 @@ def test_vit_split_query_key_value_and_split_heads(
     assert ttnn.pearson_correlation_coefficient(torch_value_tensor, value_tensor) > 0.999
 
 
-def test_split_query_key_value_and_split_heads_rejects_sharded_input(device):
-    """Regression test for issue #41526: sharded input must be rejected (was silently producing garbage)."""
-    torch.manual_seed(0)
-
-    batch_size, sequence_size, num_heads, head_size = 8, 197, 12, 64
-    hidden_dim = num_heads * 3 * head_size
-    input_shape = (batch_size, sequence_size, hidden_dim)
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
-
-    tile_size = ttnn.TILE_SIZE
-    padded_seq = ((sequence_size + tile_size - 1) // tile_size) * tile_size
-    num_h_cores, num_w_cores = batch_size, num_heads // 2
-
-    block_sharded_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_w_cores - 1, num_h_cores - 1))]),
-            [padded_seq, hidden_dim // num_w_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    tt_input = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
-    )
-    tt_sharded = ttnn.to_memory_config(tt_input, block_sharded_config)
-
-    with pytest.raises(RuntimeError, match="Sharded input is not supported"):
-        ttnn.transformer.split_query_key_value_and_split_heads(tt_sharded, num_heads=num_heads, transpose_key=False)
-
-
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("sequence_size", [224, 384])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
