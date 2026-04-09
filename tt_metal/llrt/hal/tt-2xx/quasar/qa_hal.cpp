@@ -495,7 +495,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->num_tile_counters_ = NOC_NUM_TILE_COUNTERS;
 
     this->neo_tile_counters_base_addr_ = NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_REG_MAP_BASE_ADDR;
-    this->neo_tile_counters_stride_ = 0x10000;
+    this->neo_tile_counters_stride_ = NEO_TILE_COUNTERS_STRIDE;
     this->neo_tile_counters_size_ = NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__REG_FILE_SIZE;
     this->neo_tile_counters_tiles_available_offset_ =
         NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__TILES_AVAILABLE_REG_OFFSET;

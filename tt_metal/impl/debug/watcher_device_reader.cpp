@@ -1162,6 +1162,11 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     }
 }
 
+// Dump tile counter mismatches when remapper is enabled.
+// Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
+//   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
+//   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
+// tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
 void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     const auto& hal = reader_.env.get_hal();
 
@@ -1171,7 +1176,6 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
-    // Helper to read tiles_to_consume from NEO-side tile counter mirror
     auto read_tiles_to_consume = [&](uint8_t client_id, uint8_t tc_id) -> std::pair<uint32_t, uint32_t> {
         uint32_t neo_id = client_id % NEO_0;
         uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
@@ -1182,9 +1186,6 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
         return {tiles_avail_data[0], capacity_data[0]};
     };
 
-    // Remapper supports two modes:
-    // - clientL is producer: 1 producer (clientL) -> 1 to possibly many consumers (clientR)
-    // - clientL is consumer: 1 to possibly many producers (clientR) -> 1 consumer (clientL)
     for (uint32_t pair_idx = 0; pair_idx < hal.get_remapper_num_pairs(); pair_idx++) {
         uint32_t clientL_addr =
             hal.get_remapper_client_l_config_base_addr() + pair_idx * hal.get_remapper_pair_stride();
