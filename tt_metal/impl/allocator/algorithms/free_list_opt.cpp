@@ -413,9 +413,7 @@ Statistics FreeListOpt::get_statistics() const {
             total_allocated_bytes += block_size_[i];
         } else {
             total_free_bytes += block_size_[i];
-            if (block_size_[i] > largest_free_block_bytes) {
-                largest_free_block_bytes = block_size_[i];
-            }
+            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
         }
     }
 
