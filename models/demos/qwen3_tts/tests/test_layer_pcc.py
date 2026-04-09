@@ -11,6 +11,7 @@ each TTNN decoder layer produces matching outputs.
 import argparse
 from pathlib import Path
 
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -38,8 +39,13 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (cov / (std_a * std_b)).item()
 
 
-def test_single_layer(device, layer_idx, hidden_states, model_weights):
-    """Test a single decoder layer."""
+def test_layer_pcc_manual_only():
+    """Placeholder so pytest does not error; real check is ``python .../test_layer_pcc.py``."""
+    pytest.skip("Layer PCC needs /tmp/qwen_tts_tensors + HF weights; run this file as __main__")
+
+
+def run_single_layer(device, layer_idx, hidden_states, model_weights):
+    """Run PCC check for one decoder layer (script helper; not a pytest test)."""
     from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
     from models.demos.qwen3_tts.tt.model_config import Qwen3TTSTalkerConfig
     from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
@@ -92,7 +98,9 @@ def test_single_layer(device, layer_idx, hidden_states, model_weights):
     trans_mat = get_transformation_mat(config.head_dim, device)
 
     # Run TTNN layer
-    output_tt = layer(input_tt, cos, sin, trans_mat, attention_mask=None)
+    # output_tt = layer(input_tt, cos, sin, trans_mat, attention_mask=None)
+    # output_torch = ttnn.to_torch(output_tt).squeeze(1)[:, :seq_len, :]
+    output_tt, _ = layer(input_tt, cos, sin, trans_mat, attention_mask=None)
     output_torch = ttnn.to_torch(output_tt).squeeze(1)[:, :seq_len, :]
 
     # Compare
@@ -157,7 +165,7 @@ def run_tests(device, layers_to_test=None):
             print(f"Skipping layer {layer_idx} (not found in hidden states)")
             continue
 
-        pcc = test_single_layer(device, layer_idx, hidden_states, weights)
+        pcc = run_single_layer(device, layer_idx, hidden_states, weights)
         results[f"layer_{layer_idx}"] = pcc
 
     # Summary
