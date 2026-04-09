@@ -7,9 +7,10 @@ import os
 import torch
 from ultralytics import YOLO
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.yolov11s.reference import yolov11s
 
-YOLOV11S_L1_SMALL_SIZE = 24576
+YOLOV11S_L1_SMALL_SIZE = 16000 if is_wormhole_b0() else 24576
 
 
 def load_torch_model(model_location_generator=None):

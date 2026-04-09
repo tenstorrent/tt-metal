@@ -80,7 +80,7 @@ def run_yolov11s_inference(
         (640, 640),
     ],
 )
-@run_for_wormhole_b0()
+# @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -166,7 +166,7 @@ def test_e2e_performant_trace_matches_torch(
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@run_for_wormhole_b0()
+# @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],

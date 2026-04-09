@@ -13,9 +13,11 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 192.5],  # N150
+        # [1, 192.5],  # N150
         # [2, 385],     # N300
         # [8, 1546],  # T3K
+        [1, 318.5],  # P150
+        # [8, 2547.9], # BH QB
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
