@@ -943,10 +943,16 @@ def import_graph(
                 for buf in active_buffers:
                     buffers_batch.append((operation_id, *buf))
 
+                node_copy = dict(node)
+                node_copy["counter"] = 1
+                node_copy["id"] = 1
+                if "connections" in node_copy:
+                    node_copy["connections"] = [2]
                 capture_start = {
                     "arguments": [],
                     "connections": [1],
                     "counter": 0,
+                    "id": 0,
                     "input_tensors": [],
                     "node_type": "capture_start",
                     "params": {},
@@ -955,16 +961,14 @@ def import_graph(
                 capture_end = {
                     "arguments": [],
                     "connections": [],
-                    "counter": 0,
+                    "counter": 2,
+                    "id": 2,
                     "input_tensors": [],
                     "node_type": "capture_end",
                     "params": {},
                     "stacking_level": 0,
                 }
-                dealloc_subgraph = [capture_start, node, capture_end]
-                for snode in dealloc_subgraph:
-                    if "counter" in snode:
-                        snode["id"] = snode["counter"]
+                dealloc_subgraph = [capture_start, node_copy, capture_end]
                 captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph)))
 
                 operation_counter += 1
