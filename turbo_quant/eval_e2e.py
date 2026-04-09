@@ -100,26 +100,26 @@ def main():
         )
 
     # ------------------------------------------------------------------ #
-    # TT model (non-paged — required for TurboQuant decode path)          #
+    # TT model                                                              #
     # ------------------------------------------------------------------ #
     dtype = ttnn.bfloat8_b
-    # When rotation is absorbed, use a separate weight cache dir so the modified
-    # state_dict is actually used (default cache has un-rotated weights).
-    # When rotation is absorbed, use a sibling cache dir for the modified weights.
-    # The standard cache has un-rotated weights that would shadow our changes.
     wcache = model_args.weight_cache_path(dtype)
     if absorb_rotation:
         from pathlib import Path
 
         wcache = Path(str(wcache) + "_tq_rotated")
-    print(f"Loading TT model{' (no weight cache — rotation absorbed)' if absorb_rotation else ''}...")
+
+    # Non-paged: TQ stores pre-rescaled centroid×norm as BF16 in its own cache.
+    # Paged attention uses BFP8 which destroys the quantized value precision.
+    # TODO: support paged attention with BF16 paged cache or custom scatter.
+    print("Loading TT model...")
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=wcache,
-        paged_attention_config=None,  # non-paged: required for turbo_quant_cache path
+        paged_attention_config=None,
     )
     del state_dict  # free CPU memory
 
