@@ -533,68 +533,62 @@ class Molmo2ProcessorWrapper:
                 if isinstance(video_frames, np.ndarray):
                     # video_frames shape: [raw_frames, H, W, C] — may be many frames
                     logger.info(f"    Video frames shape: {video_frames.shape}, metadata={vllm_metadata is not None}")
-
-                    # --- Adaptive FPS-based sampling matching Molmo2's native behavior ---
-                    # Molmo2 uses: max_fps=2, frame_sample_mode="uniform_last_frame", num_frames=384
-                    video_frames, timestamps = self._adaptive_sample_frames(video_frames, vllm_metadata)
-                    num_frames = video_frames.shape[0]
-                    logger.info(f"    After adaptive sampling: {num_frames} frames, timestamps[0:3]={timestamps[:3]}")
-
-                    # Process frames using demo approach (resize, normalize, stack)
-                    # Using imports from top of file: resize_image, normalize_image,
-                    # arange_for_pooling, IMAGENET_MEAN, IMAGENET_STD
-
-                    base_size = 378
-                    patch_size = 14
-                    pool_h, pool_w = 3, 3  # Video uses 3x3 pooling (k_pool=9), images use 2x2 (k_pool=4)
-                    crop_patches = base_size // patch_size  # 27
-
-                    # Process each frame
-                    all_crops = []
-                    all_pooling_idx = []
-                    patches_per_frame = crop_patches * crop_patches  # 729
-
-                    # Pre-compute pooling indices template
-                    resize_idx_per_frame = np.arange(patches_per_frame).reshape(crop_patches, crop_patches)
-                    resize_idx_per_frame = arange_for_pooling(resize_idx_per_frame, pool_h, pool_w)
-                    pooled_h, pooled_w = resize_idx_per_frame.shape[0], resize_idx_per_frame.shape[1]
-                    resize_idx_flat = resize_idx_per_frame.reshape(-1, pool_h * pool_w)
-
-                    for frame_idx in range(num_frames):
-                        frame = video_frames[frame_idx]
-                        # Resize and normalize
-                        frame_resized = resize_image(frame, [base_size, base_size])
-                        frame_normalized = normalize_image(frame_resized, IMAGENET_MEAN, IMAGENET_STD)
-                        # [H, W, C] -> [C, H, W]
-                        crop = torch.from_numpy(frame_normalized).permute(2, 0, 1).float()
-                        all_crops.append(crop)
-
-                        # Pooling indices with offset for this frame
-                        offset = frame_idx * patches_per_frame
-                        frame_idx_with_offset = np.where(
-                            resize_idx_flat >= 0,
-                            resize_idx_flat + offset,
-                            resize_idx_flat,
+                    if vllm_metadata:
+                        logger.info(
+                            f"    vLLM metadata: fps={vllm_metadata.get('fps')}, total_frames={vllm_metadata.get('total_num_frames')}, decoded_indices={vllm_metadata.get('frames_indices', [])[:10]}..."
                         )
-                        all_pooling_idx.append(frame_idx_with_offset)
 
-                    # Stack into combined tensors (demo format)
-                    pixel_values = torch.stack(all_crops, dim=0)  # [n_frames, 3, H, W]
-                    image_token_pooling = torch.from_numpy(np.stack(all_pooling_idx, axis=0)).long()
+                    # Use _adaptive_sample_frames to match HF's frame sampling exactly
+                    # This maps vLLM's decoded frame indices to HF's expected samples
+                    sampled_frames, timestamps = self._adaptive_sample_frames(video_frames, vllm_metadata)
+                    n_frames = sampled_frames.shape[0]
+                    logger.info(f"    After adaptive sampling: {n_frames} frames, timestamps={timestamps[:5]}...")
+
+                    # Use HF video processor's _preprocess method directly on frames
+                    # This avoids temp video compression and ensures exact parity with demo
+                    from transformers.image_utils import SizeDict
+
+                    vp = self.video_processor
+
+                    # _preprocess expects list of numpy arrays
+                    frames_list = [sampled_frames]  # Wrap as single video (list of frames is [N,H,W,C])
+
+                    # Call _preprocess to get pre-embedded patches
+                    # Must provide size as SizeDict
+                    hf_result = vp._preprocess(
+                        frames_list,
+                        size=SizeDict(height=378, width=378),
+                        return_tensors="pt",
+                    )
+
+                    # Extract results - pixel_values_videos is already [n_frames, 729, 588]
+                    pixel_values = hf_result["pixel_values_videos"]
+                    video_grids = hf_result["video_grids"]  # tensor [[n_frames, pooled_h, pooled_w]]
+                    n_frames = int(video_grids[0, 0].item())
+                    pooled_h_out = int(video_grids[0, 1].item())
+                    pooled_w_out = int(video_grids[0, 2].item())
+                    k_pool = 9  # 3x3 pooling for video
+
+                    # Get pooling indices: [n_tokens, k_pool] where n_tokens = n_frames * pooled_h * pooled_w
+                    pooling_idx = hf_result["video_token_pooling"]  # [n_tokens, k_pool]
+                    n_out = pooled_h_out * pooled_w_out
+                    image_token_pooling = pooling_idx.view(n_frames, n_out, k_pool)
 
                     logger.info(
-                        f"    Processed {num_frames} frames: pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
+                        f"    Direct _preprocess output: pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
                     )
-                    logger.info(f"    pooled_h={pooled_h}, pooled_w={pooled_w}, timestamps={timestamps}")
+                    logger.info(
+                        f"    n_frames={n_frames}, pooled_h={pooled_h_out}, pooled_w={pooled_w_out}, k_pool={k_pool}"
+                    )
 
                     # Store video data for later use
                     self._video_data = {
                         "pixel_values": pixel_values,
                         "image_token_pooling": image_token_pooling,
-                        "n_frames": num_frames,
+                        "n_frames": n_frames,
                         "timestamps": timestamps,
-                        "pooled_h": pooled_h,
-                        "pooled_w": pooled_w,
+                        "pooled_h": pooled_h_out,
+                        "pooled_w": pooled_w_out,
                     }
 
         # Process images using raw pixels (same as video frame processing)
@@ -1042,36 +1036,36 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
                 def generate_video_tokens(n_frames: int, pooled_h: int, pooled_w: int) -> list:
                     """Generate properly structured video tokens with timestamps and frame markers.
 
-                    CRITICAL: Molmo2 uses <frame_start>/<frame_end> for video frames (NOT <im_start>/<im_end>).
-                    This matches demo.py's get_video_tokens() format which works correctly.
+                    CRITICAL: Molmo2 HF processor uses <im_start>/<im_end> for BOTH images AND video.
+                    Format per frame: "{timestamp} <im_start><im_patch>*N<im_end>"
+                    where N = pooled_h * pooled_w (e.g., 81 for 9x9 pooling).
+                    NO <im_col> tokens for video (HF doesn't use them).
                     """
                     # Generate timestamps (evenly spaced, ~0.5 sec apart)
                     timestamps = np.arange(n_frames, dtype=float) * 0.5
 
-                    # Build video string using correct tokens (matching demo.py)
-                    # Token format: "{timestamp} <frame_start><im_patch>*N<im_col><frame_end>"
-                    FRAME_START = "<frame_start>"
-                    FRAME_END = "<frame_end>"
+                    # Build video string matching HF processor format exactly
+                    # Format: "{timestamp} <im_start><im_patch>*N<im_end>" where N = pooled_h * pooled_w
+                    IM_START = "<im_start>"
+                    IM_END = "<im_end>"
                     IM_PATCH = "<im_patch>"
-                    IM_COL = "<im_col>"
 
                     video_string = ""
+                    n_patches = pooled_h * pooled_w  # Total patches per frame (81 for 9x9)
                     for frame_idx, frame_time in enumerate(timestamps):
                         prev_space = " " if frame_idx > 0 else ""
                         frame_prefix = prev_space + f"{frame_time:.1f} "
                         video_string += frame_prefix
 
-                        # Each row: <im_patch>*pooled_w + <im_col>
-                        per_row = IM_PATCH * pooled_w + IM_COL
-                        # Full frame: <frame_start> + (per_row * pooled_h) + <frame_end>
-                        video_string += FRAME_START + (per_row * pooled_h) + FRAME_END
+                        # Full frame: <im_start> + <im_patch>*n_patches + <im_end>
+                        video_string += IM_START + (IM_PATCH * n_patches) + IM_END
 
                     # Tokenize the video string to get proper token IDs
                     token_ids = tokenizer.encode(video_string, add_special_tokens=False)
 
                     logger.info(
                         f"  get_replacement_video[{item_idx}]: Generated {len(token_ids)} tokens "
-                        f"(n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, using <frame_start>/<frame_end>)"
+                        f"(n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, using HF format <im_start>/<im_end>)"
                     )
                     return token_ids
 
@@ -2137,15 +2131,24 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     # Do NOT flatten to [1, n_frames*N_out, K_pool]: that causes batch_size=1
                     # routing to forward_ttnn which processes all pooling positions at once,
                     # requiring huge (447MB+) allocations for long videos.
+                    #
+                    # vLLM multimodal pipeline may flatten 3D to 2D [n_tokens, k_pool].
+                    # If so, reshape back to [n_frames, n_out, k_pool].
+                    if pooling is not None and pooling.dim() == 2:
+                        n_tokens, k_pool = pooling.shape
+                        n_out = n_tokens // n_frames
+                        pooling = pooling.view(n_frames, n_out, k_pool)
+                        logger.info(f"    Reshaped 2D pooling to 3D: {pooling.shape}")
                     logger.info(f"    Pooling shape for prefill: {pooling.shape}")
 
                 if pooling is None:
                     # Generate default pooling for video frames
-                    # Each frame: 14×14 = 196 pooled tokens, pool_size = 2×2 = 4
+                    # Video uses 3×3 pooling: 27/3 = 9 → 9×9 = 81 pooled tokens per frame
                     import numpy as np
 
-                    pooled_h, pooled_w = 14, 14
-                    pool_h, pool_w = 2, 2
+                    pooled_h, pooled_w = 9, 9  # Video: 27/3 = 9
+                    pool_h, pool_w = 3, 3  # Video uses 3×3 pooling
+                    k_pool = pool_h * pool_w  # 9
                     patches_per_frame = 27 * 27  # 729
 
                     all_pooling_idx = []
@@ -2157,8 +2160,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         frame_pooling = np.where(resize_idx_flat >= 0, resize_idx_flat + offset, resize_idx_flat)
                         all_pooling_idx.append(frame_pooling)
 
-                    pooling = torch.from_numpy(np.concatenate(all_pooling_idx, axis=0)).long().unsqueeze(0)
-                    logger.info(f"    Generated default video pooling: {pooling.shape}")
+                    # Stack as [n_frames, n_out, k_pool] for data-parallel processing
+                    n_out = pooled_h * pooled_w  # 81 for video
+                    pooling = torch.from_numpy(np.stack(all_pooling_idx, axis=0)).long()
+                    logger.info(
+                        f"    Generated default video pooling: {pooling.shape} (n_frames={n_frames}, n_out={n_out}, k_pool={k_pool})"
+                    )
 
                 # Run prefill with video data
                 user_tokens = tokens[user_id : user_id + 1]
@@ -2289,23 +2296,30 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     logger.info(f"    pixel_values shape: {pv_tensor.shape}")
 
                     # Get pooling from param (vLLM path) or cache (demo path)
-                    # shape [n_frames, N_out, K_pool]
-                    if param_pooling is not None and param_pooling.dim() == 3:
+                    # Expected shape: [n_frames, N_out, K_pool]
+                    # vLLM may flatten to 2D [n_tokens, k_pool], so reshape if needed
+                    pooling = None
+                    if param_pooling is not None:
                         pooling = param_pooling
                         logger.info(f"    Using param pooling shape: {pooling.shape}")
-                    elif cached_pooling is not None and cached_pooling.dim() == 3:
+                    elif cached_pooling is not None:
                         pooling = cached_pooling
                         logger.info(f"    Using cached pooling shape: {pooling.shape}")
-                    else:
-                        pooling = None
-                        logger.warning(f"    No valid 3D pooling found for video!")
 
-                    # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
-                    # This is what run_prefill expects for video
-                    if pooling is not None and pooling.dim() == 3:
-                        n_frames_p, n_out, k_pool = pooling.shape
-                        pooling = pooling.reshape(n_frames_p * n_out, k_pool).unsqueeze(0)
-                        logger.info(f"    Reshaped pooling for prefill: {pooling.shape}")
+                    # Reshape 2D [n_tokens, k_pool] -> 3D [n_frames, n_out, k_pool]
+                    if pooling is not None and pooling.dim() == 2:
+                        n_tokens, k_pool = pooling.shape
+                        n_out = n_tokens // n_frames
+                        pooling = pooling.view(n_frames, n_out, k_pool)
+                        logger.info(f"    Reshaped 2D pooling to 3D: {pooling.shape}")
+                    elif pooling is None:
+                        logger.warning(f"    No pooling found for video!")
+
+                    # Keep pooling as [n_frames, N_out, K_pool] for data-parallel processing.
+                    # DO NOT flatten to [1, n_frames*N_out, K_pool] - that routes to single-batch path!
+                    # embed_image uses batch_size (dim 0) to decide between DP and single-batch paths.
+                    if pooling is not None:
+                        logger.info(f"    Pooling for prefill: {pooling.shape} (keeping 3D for DP routing)")
                 else:
                     # Single image or old-style format
                     logger.info(f"  prefill_forward: Processing as IMAGE, pixel_values shape={pv_tensor.shape}")
