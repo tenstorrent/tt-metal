@@ -246,9 +246,17 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<scale_cb_index, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f.
+    // compute_uses_reduce_tile=true forces row-0 scaler format, required because the compute
+    // kernel uses reduce_tile directly (not compute_kernel_lib::reduce which auto-switches
+    // SUM+REDUCE_ROW to the matmul path with col-0 format). The same scaler CB serves both
+    // the MAX and SUM reduces, so it must be in row-0 format for reduce_tile compatibility.
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        scale_cb_index,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        true>();
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
