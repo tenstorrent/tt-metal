@@ -102,10 +102,10 @@ def zero_cache_padding_zigzag(
 ):
     """Zero-pad KV cache for migration alignment under zigzag attention layout.
 
-    After prefill writes valid tokens to the cache, this function zeroes the
-    padding region from global_end_token up to the next decode_chunk_align
-    boundary. It handles the zigzag token mapping to dispatch per-device
-    zero_cache_range calls with correct local token ranges.
+    Called before prefill to zero the padding region from global_end_token up
+    to the next decode_chunk_align boundary. Handles the zigzag token mapping
+    to dispatch per-device zero_cache_range calls with correct local token
+    ranges.
 
     Args:
         kvpe_cache: The mesh KV cache tensor (one shard per SP device).

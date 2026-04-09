@@ -46,14 +46,8 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
     const auto num_dram_banks = static_cast<uint32_t>(device->num_dram_channels());
     const auto optimal_cores = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 
-    // Compute pages per shard from the ND shard spec
-    const auto& nd_shard_spec = cache_tensor.memory_config().nd_shard_spec().value();
-    const auto& shard_shape = nd_shard_spec.shard_shape;
-    uint32_t shard_volume = 1;
-    for (uint32_t i = 0; i < shard_shape.rank(); i++) {
-        shard_volume *= shard_shape[i];
-    }
-    const uint32_t pages_per_shard = shard_volume / tt::constants::TILE_HW;
+    // Pages per shard = embedding_dim / tile_width (e.g. 576 / 32 = 18)
+    const uint32_t pages_per_shard = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
     // Determine which shards need zeroing and group by DRAM bank
     const uint32_t first_shard = start_page / pages_per_shard;
@@ -157,13 +151,7 @@ void ZeroCacheRangeProgramFactory::override_runtime_arguments(
     // Recompute page assignments from the new page range
     const auto start_page = operation_attributes.start_page;
     const auto end_page = operation_attributes.end_page;
-    const auto& nd_shard_spec = tensor_args.cache.memory_config().nd_shard_spec().value();
-    const auto& shard_shape = nd_shard_spec.shard_shape;
-    uint32_t shard_volume = 1;
-    for (uint32_t i = 0; i < shard_shape.rank(); i++) {
-        shard_volume *= shard_shape[i];
-    }
-    const uint32_t pages_per_shard = shard_volume / tt::constants::TILE_HW;
+    const uint32_t pages_per_shard = tensor_args.cache.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const auto num_dram_banks = static_cast<uint32_t>(tensor_args.cache.device()->num_dram_channels());
 
     const uint32_t first_shard = start_page / pages_per_shard;

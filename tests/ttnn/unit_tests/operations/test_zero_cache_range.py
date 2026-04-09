@@ -97,40 +97,12 @@ def test_zero_cache_range(device, seq_len, head_dim, start_token, end_token):
         assert torch.all(after != 0), f"Region after tile_end={tile_end} should be non-zero"
 
 
-def test_zigzag_mapping_logic():
-    """Test that global_to_local_token_id correctly maps tokens under zigzag attention."""
-    sp_factor = 4
-    seq_len = 3200
-    num_chunks = 2 * sp_factor  # 8
-    chunk_size = seq_len // num_chunks  # 400
-
-    # Device 0 holds chunks 0 (global 0-399) and 7 (global 2800-3199)
-    dev, local = global_to_local_token_id(0, sp_factor, seq_len)
-    assert dev == 0 and local == 0
-
-    dev, local = global_to_local_token_id(399, sp_factor, seq_len)
-    assert dev == 0 and local == 399
-
-    # Chunk 7 -> device 0, local offset = chunk_size + offset
-    dev, local = global_to_local_token_id(2800, sp_factor, seq_len)
-    assert dev == 0 and local == chunk_size
-
-    dev, local = global_to_local_token_id(3199, sp_factor, seq_len)
-    assert dev == 0 and local == 2 * chunk_size - 1
-
-    # Device 1 holds chunks 1 (global 400-799) and 6 (global 2400-2799)
-    dev, local = global_to_local_token_id(400, sp_factor, seq_len)
-    assert dev == 1 and local == 0
-
-    dev, local = global_to_local_token_id(2400, sp_factor, seq_len)
-    assert dev == 1 and local == chunk_size
-
-
 @pytest.mark.parametrize(
     "global_end_token, decode_chunk_align",
     [
         (50, 128),
         (400, 128),
+        (1580, 128),  # edge case: padding crosses zigzag chunk boundary (chunk_size=1600 for sp=1, seq=3200)
     ],
 )
 def test_zero_cache_padding_zigzag_single_device(device, global_end_token, decode_chunk_align):
@@ -169,3 +141,153 @@ def test_zero_cache_padding_zigzag_single_device(device, global_end_token, decod
     if tile_end < seq_len_local:
         after = result[:, :, tile_end:, :]
         assert torch.all(after != 0), f"Region after tile_end={tile_end} should be non-zero"
+
+
+def test_zigzag_chunk_boundary_crossing():
+    """Test that padding near a zigzag chunk boundary correctly maps to two devices.
+
+    With sp_factor=32, seq_len=102400: chunk_size=1600.
+    global_end_token=1580, padded_end=1664.
+    Padding range [1568, 1664) (tile-aligned) crosses the chunk 0/1 boundary at 1600,
+    so device 0 and device 1 both need zeroing.
+    """
+    import math
+
+    sp_factor = 32
+    seq_len = 102400
+    global_end_token = 1580
+    decode_chunk_align = 128
+    tile_size = 32
+
+    padded_end = math.ceil(global_end_token / decode_chunk_align) * decode_chunk_align
+    global_start = (global_end_token // tile_size) * tile_size
+
+    # Manually compute device_ranges (same logic as zero_cache_padding_zigzag)
+    device_ranges: dict[int, tuple[int, int]] = {}
+    for global_tok in range(global_start, padded_end, tile_size):
+        device_id, local_token_id = global_to_local_token_id(global_tok, sp_factor, seq_len)
+        local_tile_start = (local_token_id // tile_size) * tile_size
+        local_tile_end = local_tile_start + tile_size
+
+        if device_id not in device_ranges:
+            device_ranges[device_id] = (local_tile_start, local_tile_end)
+        else:
+            prev_start, prev_end = device_ranges[device_id]
+            device_ranges[device_id] = (min(prev_start, local_tile_start), max(prev_end, local_tile_end))
+
+    # Should span two devices
+    assert len(device_ranges) == 2, f"Expected 2 devices, got {len(device_ranges)}: {device_ranges}"
+    assert 0 in device_ranges, "Device 0 should be in the range"
+    assert 1 in device_ranges, "Device 1 should be in the range"
+
+    # Device 0: chunk 0 tail (global 1568-1599 -> local 1568-1599)
+    assert device_ranges[0][0] == 1568
+    assert device_ranges[0][1] == 1600
+
+    # Device 1: chunk 1 start (global 1600-1663 -> local 0-63)
+    assert device_ranges[1][0] == 0
+    assert device_ranges[1][1] == 64
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_zero_cache_padding_zigzag_multi_device(mesh_device):
+    """Test zero_cache_padding_zigzag on a multi-device mesh with chunk boundary crossing.
+
+    With sp_factor=32, seq_len=102400: chunk_size=1600.
+    global_end_token=1580, padded_end=1664.
+    Padding crosses the chunk 0/1 boundary at 1600, so device 0 and device 1
+    both get zeroing.
+
+    Device 0 should have local tokens [1568, 1600) zeroed.
+    Device 1 should have local tokens [0, 64) zeroed.
+    All other devices should be entirely untouched.
+    """
+    TILE_HEIGHT = 32
+    sp_axis = 0
+    tp_axis = 1
+    sp_factor = mesh_device.shape[sp_axis]
+    head_dim = 576
+    seq_len = 102400
+    seq_len_local = seq_len // sp_factor
+    global_end_token = 1580
+    decode_chunk_align = 128
+
+    # Create mesh cache filled with ones
+    torch_cache = torch.ones(1, 1, seq_len_local, head_dim, dtype=torch.bfloat16)
+
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    grid = ttnn.CoreRangeSet(core_ranges)
+
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+
+    tt_cache = ttnn.from_torch(
+        torch_cache,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Run zigzag padding
+    zero_cache_padding_zigzag(tt_cache, global_end_token, sp_factor, seq_len, decode_chunk_align)
+
+    # Read back per-device tensors and verify
+    device_tensors = ttnn.get_device_tensors(tt_cache)
+
+    for dev_idx in range(len(device_tensors)):
+        result = ttnn.to_torch(device_tensors[dev_idx]).to(torch.float32)
+
+        if dev_idx == 0:
+            # Device 0: local tokens [1568, 1600) should be zero
+            before = result[:, :, :1568, :]
+            assert torch.all(before != 0), f"Device 0: region before 1568 should be non-zero"
+
+            zeroed = result[:, :, 1568:1600, :]
+            assert torch.all(zeroed == 0), (
+                f"Device 0: region [1568:1600] should be zeros, "
+                f"but has {(zeroed != 0).sum().item()} non-zero elements"
+            )
+
+            after = result[:, :, 1600:, :]
+            assert torch.all(after != 0), f"Device 0: region after 1600 should be non-zero"
+
+        elif dev_idx == 1:
+            # Device 1: local tokens [0, 64) should be zero
+            zeroed = result[:, :, :64, :]
+            assert torch.all(zeroed == 0), (
+                f"Device 1: region [0:64] should be zeros, " f"but has {(zeroed != 0).sum().item()} non-zero elements"
+            )
+
+            after = result[:, :, 64:, :]
+            assert torch.all(after != 0), f"Device 1: region after 64 should be non-zero"
+
+        else:
+            # All other devices should be entirely non-zero (untouched)
+            assert torch.all(result != 0), f"Device {dev_idx}: should be entirely non-zero (untouched)"
