@@ -1,40 +1,36 @@
-# GPT-OSS Prefill MoE Integration Notes
+# GPT-OSS Prefill MoE DeepSeek Integration — FIXED
 
-## Current State (2026-04-07 13:30)
-**Track A COMPLETE**: EP=8 ndg=1 combine hang fixed.
-**Track B COMPLETE (v1)**: DeepSeek prefill path integrated and wired into model.
+## Status: WORKING (2026-04-09)
+36L batch=128 demo PASSED with coherent text for all 128 users.
+TTFT: 73.78ms. No fallback errors.
 
-### Validated:
-- Isolated ops: PCC=0.9996 (random weights, mesh 4x8 and 8x4)
-- Real weights: PCC=0.9954 (GPT-OSS layer 1, mesh 4x8, bfloat4_b quantized)
-- Per-layer latency: 8.3ms (seq=128), 14.5ms (seq=512) on mesh (4,8)
-- Model wiring: create_tt_model → Model → DecoderLayer → MLP → ThroughputExperts
+## Root Causes Fixed
 
-### Remaining:
-- Full demo test with use_deepseek_prefill=True (the model-level prefill input
-  formatting is handled by the generator, not manually)
-- To enable: add use_deepseek_prefill=True to create_tt_model call in text_demo.py
+### 1. Wrong SwiGLU activation function
+TtRoutedExpert used standard SwiGLU: silu(gate)*up
+GPT-OSS requires: (up+1)*gate*sigmoid(gate*1.702) with clamping at [-7,7]
+Fix: Import and use _apply_swiglu from decode.py
 
-## Files Changed
+### 2. Missing expert biases
+TtRoutedExpert had no bias support. GPT-OSS has gate_up_proj_bias and down_proj_bias.
+Fix: Use ThroughputExpertWeights which include biases (w1_bias, w3_bias, w2_bias)
 
-### C++ (Track A — combine hang fix):
-- reader_combine.cpp: num_dispatch_groups CT arg 33, mesh_col % ndg
-- writer_combine.cpp: TensorAccessorArgs shift, array[2]→[4]
-- combine_program_factory.cpp: compute + push num_dispatch_groups
+### 3. Expert-to-device mapping mismatch
+ThroughputExpertWeights use ShardTensorToMesh (LINEAR ordering: device 0=experts 0-3, device 1=experts 4-7...)
+DeepSeek dispatch uses GROUP-BASED ordering (column 0=experts 0-15 across 4 rows)
+Fix: Permute state_dict expert dimension before loading, so ShardTensorToMesh gives GROUP-BASED order
 
-### Python (Track B — integration):
-- NEW: models/demos/gpt_oss/tt/experts_throughput/prefill_deepseek.py
-- models/demos/gpt_oss/tt/experts_throughput/__init__.py
-- models/demos/gpt_oss/tt/mlp.py (creates DeepSeekPrefillConfig)
-- models/demos/gpt_oss/tt/layer.py (threads params)
-- models/demos/gpt_oss/tt/model.py (threads params)
-- models/demos/gpt_oss/tt/common.py (threads params)
+### 4. NaN in dispatch buffer padding
+Unfilled expert buffer slots contain stale DRAM data (NaN/Inf). Fused matmul produces garbage for padding rows.
+Fix: ttnn.where(ttnn.isfinite(buf), buf, 0.0) before expert compute
 
-### Test scripts:
-- test_prefill_4x8.py: Isolated per-op timing + PCC (PASS)
-- test_prefill_integration.py: Real-weight PCC test (PASS, 0.9954)
-- test_prefill_realweights.py: Real-weight pipeline test (PASS)
+## Key Files Modified
+- prefill_deepseek.py: DeepSeek dispatch/combine + GPT-OSS expert compute via ThroughputExpertWeights
+- mlp.py: Permutes state_dict for GROUP-BASED ordering, loads separate permuted weights
+- __init__.py: Passes weights and program_config to forward_prefill_deepseek
+- text_demo.py: enable_prefill_trace temporarily False (restore after trace fix)
 
-## How to enable in demo
-In text_demo.py, add to create_tt_model call:
-  use_deepseek_prefill=True, prefill_seq_len=128
+## Known Issues
+- Double weight loading (standard + permuted) doubles init time (~25min for 36L first run, cached after)
+- Prefill trace disabled (enable_prefill_trace=False) — needs trace-compatible cleanup
+- TTFT 73ms (vs fallback 66ms) — could be improved with trace

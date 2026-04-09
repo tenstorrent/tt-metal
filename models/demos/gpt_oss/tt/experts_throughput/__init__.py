@@ -327,6 +327,8 @@ class ThroughputExperts:
                         mesh_device=self.mesh_device,
                         mesh_config=self.mesh_config,
                         ccl_manager=self.ccl_manager,
+                        weights=self.weights,
+                        program_config=self.program_config,
                     )
                 except Exception as e:
                     import logging
