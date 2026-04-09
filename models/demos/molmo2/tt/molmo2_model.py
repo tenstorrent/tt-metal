@@ -187,17 +187,27 @@ class Molmo2Model(LightweightModule):
         num_devices = self.mesh_device.get_num_devices() if is_mesh_device else 1
 
         # ROUTING LOGIC:
-        # - Single image (batch_size == 1): process directly via forward_ttnn (TP mode)
-        # - Video (batch_size > 1): use _embed_image_chunked (TP mode, correct for mesh)
-        #   _embed_image_data_parallel is INCORRECT: its DP sharding conflicts with the
-        #   ViT's internal all_reduce (designed for TP), causing results from different
-        #   frames to be summed → accuracy degradation vs demo.py.
+        # - Single image (batch_size == 1): No DP overhead, process directly
+        # - Video (batch_size > 1): Always use DP=8, pad to multiple of 8
+        #   This ensures all 8 devices are utilized even for small videos (2-7 frames)
 
-        if batch_size > 1:
+        if batch_size > 1 and is_mesh_device:
+            # VIDEO PATH: Always use DP=8 with padding
+            # Calculate frames_per_device: pad total frames to multiple of num_devices
+            padded_frames = ((batch_size + num_devices - 1) // num_devices) * num_devices
+            effective_frames_per_device = padded_frames // num_devices
+            # Cap at 8 frames/device/pass (ViT memory limit)
+            effective_frames_per_device = min(effective_frames_per_device, 8)
             logger.info(
-                f"embed_image: Video with {batch_size} frames -> chunked TP mode "
-                f"(chunks of {max_frames_per_chunk} for ViT, 1 frame/chunk for pooling)"
+                f"embed_image: Video with {batch_size} frames -> DP=8 "
+                f"(padded to {padded_frames}, {effective_frames_per_device} frames/device)"
             )
+            return self._embed_image_data_parallel(
+                pixel_values, pooled_patches_idx, effective_frames_per_device, num_devices
+            )
+        elif batch_size > max_frames_per_chunk:
+            # Fallback for non-mesh device with many frames
+            logger.info(f"embed_image: Chunked processing {batch_size} frames in chunks of {max_frames_per_chunk}")
             return self._embed_image_chunked(pixel_values, pooled_patches_idx, max_frames_per_chunk)
 
         # Single-batch processing (original path for images and small videos)
@@ -372,39 +382,84 @@ class Molmo2Model(LightweightModule):
         # STAGE 2: Pool + Project on ALL features together
         # This preserves cross-frame attention via GLOBAL indices
         # Use chunked pooling for large videos to avoid OOM
-        # Device-side preprocessing: clip/compare ops run on ttnn
         # ============================================================
-
-        # Always use chunked pooling (1 frame/chunk) to avoid OOM.
-        # The single-pass path keeps image_features alive during all of pooling,
-        # causing OOM for >=12 frames (image_features + to_pool exceed free DRAM).
-        # pool_and_project_chunked_ttnn deallocates image_features early, then
-        # processes to_pool=[1,196,4,2304]→TILE 29MB per chunk (fits in 31MB free block).
-        logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames (1 frame/chunk)")
-
-        # For chunked path, compute valid on CPU (passed to chunked function)
         valid = pooled_patches_idx >= 0
-        valid_token = torch.any(valid, dim=-1)
+        valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
 
-        combined_features_ttnn = ttnn.from_torch(
-            combined_vit_features,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        # Threshold for using chunked pooling (based on memory analysis)
+        # NOTE: chunked pooling has scale bug that affects accuracy - use single-pass when possible
+        max_frames_for_single_pool = 64
 
-        visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
-            image_features=combined_features_ttnn,
-            pooled_patches_idx=pooled_patches_idx,
-            valid_mask=valid,
-            n_out=n_out,
-            k_pool=k_pool,
-            batch_size=batch_size,
-            max_frames_per_pool_chunk=16,
-        )
-        # Note: combined_features_ttnn is deallocated inside pool_and_project_chunked_ttnn
+        if batch_size <= max_frames_for_single_pool:
+            # Small video: use single pooling pass (more accurate)
+            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
+
+            clipped_idx = torch.clip(pooled_patches_idx, min=0)
+            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+            valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            idx_ttnn = ttnn.from_torch(
+                flat_idx,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            valid_mask_ttnn = ttnn.from_torch(
+                valid_mask,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx_ttnn=idx_ttnn,
+                valid_mask_ttnn=valid_mask_ttnn,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+            )
+
+            ttnn.deallocate(combined_features_ttnn)
+            ttnn.deallocate(idx_ttnn)
+            ttnn.deallocate(valid_mask_ttnn)
+        else:
+            # Large video: use chunked pooling to reduce memory
+            logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx=pooled_patches_idx,
+                valid_mask=valid,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+                max_frames_per_pool_chunk=16,
+            )
+            # Note: combined_features_ttnn is deallocated inside pool_and_project_chunked_ttnn
 
         logger.info(f"embed_image_chunked: Complete, output shape: {visual_embeddings.shape}")
 
@@ -572,10 +627,13 @@ class Molmo2Model(LightweightModule):
             embedded = ttnn.add(embedded, vit.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # Add positional embedding (tiled for frames_per_device frames)
+            # positional_embedding shape: [1, 1, num_patches, hidden_dim]
             pos_tiles = [vit.positional_embedding] * frames_per_device
             pos_tiled = ttnn.concat(pos_tiles, dim=2)
             embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(pos_tiled)
+            # NOTE: Do NOT deallocate pos_tiled - ttnn.concat may return a view that
+            # references the input tensors (vit.positional_embedding), and deallocating
+            # it would corrupt the model weights, causing "Buffer is not allocated" errors
 
             # Run ViT forward on each device's data
             vit_output = self.vision_backbone.encode_image(embedded)

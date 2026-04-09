@@ -240,8 +240,8 @@ def preprocess_video(
 
     result = processor(**call_kwargs)
 
-    # Keep pixel_values in HF patch format [n_frames, 729, 588] - skip redundant fold/unfold
-    pixel_values = torch.from_numpy(result["pixel_values_videos"]).float()
+    # Convert pixel_values from HF patch format to image format
+    pixel_values = hf_patches_to_images(result["pixel_values_videos"])
 
     # Extract video grid info
     n_frames, pooled_h, pooled_w = result["video_grids"][0]

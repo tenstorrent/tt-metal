@@ -285,7 +285,8 @@ class VisionTransformer(LightweightModule):
             pos_tiles = [self.positional_embedding] * batch_size
             pos_tiled = ttnn.concat(pos_tiles, dim=2)
             embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(pos_tiled)
+            # NOTE: Do NOT deallocate pos_tiled - ttnn.concat may return a view
+            # that shares buffer with positional_embedding weights
 
         return embedded
 
@@ -341,7 +342,8 @@ class VisionTransformer(LightweightModule):
             pos_tiles = [self.positional_embedding] * num_crops
             pos_tiled = ttnn.concat(pos_tiles, dim=2)
             embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(pos_tiled)
+            # NOTE: Do NOT deallocate pos_tiled - ttnn.concat may return a view
+            # that shares buffer with positional_embedding weights
 
         return embedded
 
