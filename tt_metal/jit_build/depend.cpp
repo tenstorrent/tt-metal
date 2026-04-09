@@ -5,7 +5,6 @@
 #include "depend.hpp"
 #include "common/stable_hash.hpp"
 
-#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -103,21 +102,10 @@ public:
             return {0, false};
         }
 
-        if (entry->ready.load(std::memory_order_acquire) && entry->metadata == metadata) {
+        std::lock_guard<std::mutex> entry_lock(entry->mutex);
+        if (entry->ready && entry->metadata == metadata) {
             return {entry->hash, entry->valid};
         }
-
-        std::lock_guard<std::mutex> entry_lock(entry->compute_mutex);
-        metadata = get_metadata(path);
-        if (!metadata.has_value()) {
-            return {0, false};
-        }
-        if (entry->ready.load(std::memory_order_acquire) && entry->metadata == metadata) {
-            return {entry->hash, entry->valid};
-        }
-
-        // Prevent concurrent readers from seeing partially-written fields.
-        entry->ready.store(false, std::memory_order_release);
 
         std::ifstream dep_file(path, std::ios::binary);
         if (!dep_file.is_open()) {
@@ -131,7 +119,7 @@ public:
         entry->hash = hash;
         entry->valid = true;
         entry->metadata = metadata;
-        entry->ready.store(true, std::memory_order_release);
+        entry->ready = true;
         return {entry->hash, entry->valid};
     }
 
@@ -149,8 +137,8 @@ private:
     };
 
     struct Entry {
-        std::mutex compute_mutex;
-        std::atomic<bool> ready{false};
+        std::mutex mutex;
+        bool ready{false};
         uint64_t hash{0};
         bool valid{false};
         std::optional<Metadata> metadata;

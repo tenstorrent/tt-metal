@@ -154,7 +154,8 @@ TEST_F(JitBuildDependencyTests, ConcurrentUpToDateCheck) {
     create_dependency_files_and_hash(dependencies, obj_file_name);
 
     // All threads should see "up to date" for the same dephash.
-    std::vector<bool> results(kNumThreads, false);
+    // Use int instead of bool to avoid std::vector<bool> bit-packing data race.
+    std::vector<int> results(kNumThreads, 0);
     std::vector<std::thread> threads;
     threads.reserve(kNumThreads);
     for (int t = 0; t < kNumThreads; ++t) {
@@ -191,7 +192,7 @@ TEST_F(JitBuildDependencyTests, ConcurrentInvalidation) {
     std::ofstream{out_dir_ / dep_names[0]} << "Changed content for invalidation test";
 
     // All threads should see "out of date" after the modification.
-    std::vector<bool> results(kNumThreads, true);
+    std::vector<int> results(kNumThreads, 1);
     std::vector<std::thread> threads;
     threads.reserve(kNumThreads);
     for (int t = 0; t < kNumThreads; ++t) {
