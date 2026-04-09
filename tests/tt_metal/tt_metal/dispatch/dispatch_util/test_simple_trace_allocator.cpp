@@ -650,8 +650,7 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, FixedL1AddressBinarySync) {
     populate_kernel_groups(*program0, BinaryPlacement::FixedAddress);
     populate_kernel_groups(*program1, BinaryPlacement::FixedAddress);
     std::vector<TraceNode> trace_nodes = {
-        make_trace_node(specs, SubDeviceId{0}, 3, program0),
-        make_trace_node(specs, SubDeviceId{0}, 4, program1)};
+        make_trace_node(specs, SubDeviceId{0}, 3, program0), make_trace_node(specs, SubDeviceId{0}, 4, program1)};
     auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
 
     auto allocator = make_allocator(64);
@@ -740,14 +739,14 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, LargeTraceSequence) {
     allocator.allocate_trace_programs(hal_, trace_node_ptrs);
 
     uint32_t workers_completed_before = 0;
-    for (size_t index = 0; index < trace_nodes.size(); ++index) {
-        const auto& metadata = trace_nodes[index].dispatch_metadata;
+    for (auto& trace_node : trace_nodes) {
+        const auto& metadata = trace_node.dispatch_metadata;
         ASSERT_EQ(metadata.nonbinary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
         ASSERT_EQ(metadata.binary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
         EXPECT_LT(metadata.nonbinary_kernel_config_addrs[*core_index].addr, 128u);
         EXPECT_LT(metadata.binary_kernel_config_addrs[*core_index].addr, 128u);
         EXPECT_LE(metadata.sync_count, workers_completed_before);
-        workers_completed_before += trace_nodes[index].num_workers;
+        workers_completed_before += trace_node.num_workers;
     }
 }
 
