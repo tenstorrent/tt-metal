@@ -21,46 +21,12 @@ PYTEST_CMD="${PYTEST_CMD:-pytest}"
 
 echo "[CONFIG] PYTEST_CMD=${PYTEST_CMD}"
 
-run_falcon7b_func() {
-
-  $PYTEST_CMD --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
-
-}
-
-run_mistral7b_func() {
-
-  mistral7b=mistralai/Mistral-7B-Instruct-v0.3
-  mistral_cache=$TT_CACHE_HOME/$mistral7b
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
-
-}
-
-
 run_ds_r1_qwen_func() {
   ds_r1_qwen_14b=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
   HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 $PYTEST_CMD --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
 
   ds_r1_qwen_1_5b=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
   HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 $PYTEST_CMD --timeout 1200 models/experimental/tt_transformers_v2/ds_r1_qwen.py
-}
-
-run_gemma3_func() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py -k "ci-token-matching"
-  echo "LOG_METAL: Gemma3 4B accuracy tests completed (text only)"
-}
-
-run_gemma3_perf() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
-  echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
-  echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
-}
-
-run_phi3_func() {
-  phi3=microsoft/Phi-3-mini-128k-instruct
-  phi3_cache=$TT_CACHE_HOME/$phi3
-  HF_MODEL=$phi3 TT_CACHE_PATH=$phi3_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
-  echo "LOG_METAL: Phi-3-Mini-128K-Instruct test completed"
 }
 
 run_phi4_func() {
