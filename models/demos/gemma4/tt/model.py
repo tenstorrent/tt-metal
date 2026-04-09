@@ -206,45 +206,46 @@ class Gemma4Model:
                     # Device-side PLI weights for on-device decode (trace-compatible)
                     # Shard the large embedding on dim=-1 across TP devices to halve per-device DRAM
                     tp = mesh_config.tp if mesh_config else 1
-                    pli_col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else replicate
-                    pli_tp_suffix = f"_tp{tp}" if tp > 1 else ""
-                    # Use bfloat8_b for the large PLI embedding to reduce per-device DRAM
-                    self.pli_embed_weight_tt = ttnn.as_tensor(
-                        state_dict[pli_embed_key],
-                        device=mesh_device,
-                        dtype=ttnn.bfloat8_b,
-                        layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=pli_col_mapper,
-                        cache_file_name=get_cache_file_name(
-                            tensor_cache_path, f"pli_embed_tokens_per_layer{pli_tp_suffix}"
-                        ),
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    self.pli_tp = tp  # Track TP for all-gather after embedding lookup
-                    # Projection weight also sharded on output dim (column-parallel)
-                    pli_proj_w = state_dict[pli_proj_key].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-                    self.pli_proj_weight_tt = ttnn.as_tensor(
-                        pli_proj_w,
-                        device=mesh_device,
-                        dtype=dtype,
-                        layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=pli_col_mapper,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, f"pli_model_projection{pli_tp_suffix}"),
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    # Norm weight is small — replicate
-                    pli_norm_w = state_dict[pli_norm_key].reshape(1, 1, -1, ttnn.TILE_SIZE)
-                    self.pli_norm_weight_tt = ttnn.as_tensor(
-                        pli_norm_w,
-                        device=mesh_device,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=replicate,
-                        cache_file_name=get_cache_file_name(tensor_cache_path, "pli_projection_norm"),
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
+                    self.pli_tp = tp
+                    if tp > 1:
+                        # Load PLI weights to device, column-parallel sharded
+                        pli_col_mapper = mesh_config.column_parallel(mesh_device)
+                        pli_tp_suffix = f"_tp{tp}"
+                        self.pli_embed_weight_tt = ttnn.as_tensor(
+                            state_dict[pli_embed_key],
+                            device=mesh_device,
+                            dtype=ttnn.bfloat8_b,
+                            layout=ttnn.TILE_LAYOUT,
+                            mesh_mapper=pli_col_mapper,
+                            cache_file_name=get_cache_file_name(
+                                tensor_cache_path, f"pli_embed_tokens_per_layer{pli_tp_suffix}"
+                            ),
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        pli_proj_w = state_dict[pli_proj_key].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+                        self.pli_proj_weight_tt = ttnn.as_tensor(
+                            pli_proj_w,
+                            device=mesh_device,
+                            dtype=dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            mesh_mapper=pli_col_mapper,
+                            cache_file_name=get_cache_file_name(
+                                tensor_cache_path, f"pli_model_projection{pli_tp_suffix}"
+                            ),
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        pli_norm_w = state_dict[pli_norm_key].reshape(1, 1, -1, ttnn.TILE_SIZE)
+                        self.pli_norm_weight_tt = ttnn.as_tensor(
+                            pli_norm_w,
+                            device=mesh_device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                            cache_file_name=get_cache_file_name(tensor_cache_path, "pli_projection_norm"),
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
 
-                    logger.info(f"Per-layer input embeddings loaded on device (pli_size={pli_size})")
+                    logger.info(f"Per-layer input embeddings loaded (pli_size={pli_size})")
                     break
 
         # Decoder layers (each creates its own KV cache if requested)
