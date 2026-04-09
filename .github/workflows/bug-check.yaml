@@ -67,26 +67,30 @@ jobs:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ steps.parse.outputs.pr-number }}
           REPO: ${{ github.repository }}
+          HELP_BODY: |
+            ## Bug Checker
+
+            LLM-powered bug pattern detection for tt-metal PRs. Scans your diff against a
+            library of known bug patterns using Claude, then reports findings as inline PR
+            comments and SARIF for Code Scanning.
+
+            ### Commands
+
+            | Command | Description |
+            |---------|-------------|
+            | `/bug-check run` | Scan the PR diff against all matching rules |
+            | `/bug-check list-rules` | Show all available rules with their severity, path globs, and labels |
+            | `/bug-check check-rule <id>` | Run a single named rule against this PR |
+            | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
+
+            Rules are matched by **file path globs** and **PR labels** — only rules relevant
+            to your changes will run. Each rule is an independent LLM analysis; no state is
+            shared between rules.
+
+            Rules are defined in [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules)
+            and registered in [`.github/bug_checker/manifest.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/bug_checker/manifest.yaml).
         run: |
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(cat <<'HELPEOF'
-          ## Bug Checker
-
-          LLM-powered bug pattern detection for tt-metal PRs. Scans your diff against a library of known bug patterns using Claude, then reports findings as inline PR comments and SARIF for Code Scanning.
-
-          ### Commands
-
-          | Command | Description |
-          |---------|-------------|
-          | `/bug-check run` | Scan the PR diff against all matching rules |
-          | `/bug-check list-rules` | Show all available rules with their severity, path globs, and labels |
-          | `/bug-check check-rule <id>` | Run a single named rule against this PR |
-          | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
-
-          Rules are matched by **file path globs** and **PR labels** — only rules relevant to your changes will run. Each rule is an independent LLM analysis; no state is shared between rules.
-
-          **Rules are defined in** [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules) and registered in [`.github/bug_checker/manifest.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/bug_checker/manifest.yaml).
-          HELPEOF
-          | sed 's/^          //')"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$HELP_BODY"
 
   bug-check:
     name: Run Bug Checker
