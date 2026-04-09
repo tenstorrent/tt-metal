@@ -79,7 +79,7 @@ TEST(MeshTensorTest, MovedFromIsNotInitialized) {
     MeshTensor source;
     MeshTensor dest;
     dest = std::move(source);
-    EXPECT_FALSE(source.is_initialized());
+    EXPECT_FALSE(source.is_initialized());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(dest.is_initialized());
 }
 
@@ -181,7 +181,7 @@ TEST_F(MeshTensorDeviceTest, IsNotInitializedAfterMoveFrom) {
 
     MeshTensor moved(std::move(original));
 
-    EXPECT_FALSE(original.is_initialized());
+    EXPECT_FALSE(original.is_initialized());  // NOLINT(bugprone-use-after-move)
     EXPECT_TRUE(moved.is_initialized());
 }
 
