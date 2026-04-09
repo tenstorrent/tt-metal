@@ -779,7 +779,7 @@ def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
 
 profile_a_b_shape_pairs = [
     # [[8192, 8192], [8192, 8192]],
-    [[1, 8192], [8192, 8192]],
+    # [[1, 8192], [8192, 8192]],
     # [[8192, 8192], [1, 8192]],
     # [8192, 1], [8192, 8192]],
     # [[8192, 8192], [8192, 1]],
@@ -787,14 +787,19 @@ profile_a_b_shape_pairs = [
     # [[8192, 1], [1, 8192]],
     # [[1, 1], [8192, 8192]],
     # [[8192, 8192], [1, 1]],
+    # [[2, 2048, 2048], [1, 1]],
+    # [[1, 1], [2, 2048, 2048]],
+    [[1, 2048, 2048], [4, 1, 1]],
+    # [[4, 1, 1], [1, 2048, 2048]],
 ]
 
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
-        (torch.bfloat16, ttnn.bfloat16),
-        # (torch.float32, ttnn.float32)
+        # (torch.bfloat16, ttnn.bfloat16),
+        # (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat8_b),
     ),
 )
 @pytest.mark.parametrize(
@@ -823,12 +828,12 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
     torch_result = torch.add(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+        torch_input_tensor_a, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+        torch_input_tensor_b, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
-    for _ in range(2):
+    for _ in range(1):
         output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=use_legacy)
         output = ttnn.to_torch(output)
 

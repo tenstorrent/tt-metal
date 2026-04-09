@@ -43,11 +43,21 @@ void kernel_main() {
     experimental::CircularBuffer cb_src(cb_id_src);
     experimental::CircularBuffer cb_src_b(cb_id_src_b);
 
-#if !SRC_SHARDED
+#if SRC_SHARDED
+#if !SRC_BCAST
+    cb_reserve_back(cb_id_src, src_num_tiles);
+    cb_push_back(cb_id_src, src_num_tiles);
+#endif
+#else
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
-#if !SRC_SHARDED_B
+#if SRC_SHARDED_B
+#if !SRC_BCAST_B
+    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
+    cb_push_back(cb_id_src_b, src_num_tiles_b);
+#endif
+#else
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
 #endif
@@ -101,7 +111,9 @@ void kernel_main() {
                     noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
+#if !BCAST_LLK
                     FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
+#endif
                     cb_src.push_back(onetile);
 #endif
 #if SRC_BCAST_B
@@ -110,7 +122,9 @@ void kernel_main() {
                     noc.async_read(src_b, cb_src_b, src_tile_bytes_b, {.page_id = tile_offset_b}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
+#if !BCAST_LLK
                     FILL_TILE_WITH_FIRST_ELEMENT_B(cb_id_src_b);
+#endif
                     cb_src_b.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
@@ -125,9 +139,8 @@ void kernel_main() {
 #endif
                             cb_src.push_back(onetile);
 #endif
-#if !SRC_BCAST_B
+#if !SRC_BCAST_B && !SRC_SHARDED_B
                             cb_src_b.reserve_back(onetile);
-#if !SRC_SHARDED_B
                             noc.async_read(
                                 src_b,
                                 cb_src_b,
@@ -135,7 +148,6 @@ void kernel_main() {
                                 {.page_id = tile_offset_b + tw},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
-#endif
                             cb_src_b.push_back(onetile);
 #endif
                         }
