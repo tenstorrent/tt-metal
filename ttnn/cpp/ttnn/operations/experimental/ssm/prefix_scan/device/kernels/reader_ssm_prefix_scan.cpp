@@ -34,7 +34,6 @@ void kernel_main() {
     const uint32_t num_chunks_per_row =
         (total_tiles_per_row + NUM_TILES_IN_TILIZED_CHUNK - 1) / NUM_TILES_IN_TILIZED_CHUNK;
 
-    const uint32_t total_tiles = total_tiles_per_row * total_tiles_per_col;
     const uint32_t chunk_bytes = NUM_TILES_IN_TILIZED_CHUNK * input_tile_size;
 
     // Copy h_prev data from shard to staging CB via NOC read.
@@ -54,15 +53,19 @@ void kernel_main() {
     // Copy tiles from shard to staging CB chunk by chunk via NOC read.
     // A single staging CB is shared between a and bx: the reader pushes a's chunk, compute
     // consumes it (untilize), then the reader pushes bx's chunk and compute consumes that.
-    // Always copy 32 tiles of contiguous shard data to match original shard-backed behavior.
-    // Only the very last chunk that extends past the shard end needs zero-padding.
+    // Each staging chunk always contains 32 tiles. For row tails shorter than 32 tiles,
+    // read only the remaining tiles from the current row and zero-pad the rest so the
+    // consumer never observes data from the next row.
     for (uint32_t row = 0; row < total_tiles_per_col; row++) {
         for (uint32_t chunk = 0; chunk < num_chunks_per_row; chunk++) {
-            const uint32_t tile_offset = row * total_tiles_per_row + chunk * NUM_TILES_IN_TILIZED_CHUNK;
+            const uint32_t tile_offset_in_row = chunk * NUM_TILES_IN_TILIZED_CHUNK;
+            const uint32_t tile_offset = row * total_tiles_per_row + tile_offset_in_row;
             const uint32_t byte_offset = tile_offset * input_tile_size;
-            const uint32_t tiles_available = total_tiles - tile_offset;
-            const uint32_t tiles_to_read =
-                tiles_available >= NUM_TILES_IN_TILIZED_CHUNK ? NUM_TILES_IN_TILIZED_CHUNK : tiles_available;
+            const uint32_t tiles_remaining_in_row =
+                tile_offset_in_row < total_tiles_per_row ? (total_tiles_per_row - tile_offset_in_row) : 0;
+            const uint32_t tiles_to_read = tiles_remaining_in_row >= NUM_TILES_IN_TILIZED_CHUNK
+                                               ? NUM_TILES_IN_TILIZED_CHUNK
+                                               : tiles_remaining_in_row;
             const uint32_t bytes_to_copy = tiles_to_read * input_tile_size;
 
             // Copy a chunk to shared staging CB

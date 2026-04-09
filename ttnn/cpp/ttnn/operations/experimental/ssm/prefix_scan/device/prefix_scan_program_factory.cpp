@@ -185,6 +185,11 @@ void PrefixScanProgramFactory::override_runtime_arguments(
     tt::tt_metal::Buffer* h_buffer = h_prev.buffer();
     tt::tt_metal::Buffer* output_buffer = output.buffer();
 
+    TT_ASSERT(a_buffer != nullptr, "Input a buffer should be allocated on device");
+    TT_ASSERT(bx_buffer != nullptr, "Input bx buffer should be allocated on device");
+    TT_ASSERT(h_buffer != nullptr, "Input h_prev buffer should be allocated on device");
+    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
+
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
