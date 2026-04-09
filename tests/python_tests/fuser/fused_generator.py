@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
 
@@ -12,7 +11,6 @@ from .fuser_config import FuserConfig
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
 
-@dataclass
 class UnpackKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
@@ -51,7 +49,6 @@ class UnpackKernelGenerator:
         return code
 
 
-@dataclass
 class MathKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
@@ -88,7 +85,6 @@ class MathKernelGenerator:
         return code
 
 
-@dataclass
 class PackKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config

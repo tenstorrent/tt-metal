@@ -5,12 +5,12 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .fused_math import ComputeNode
+    from .compute_node import ComputeNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
 
-from .llk_params import PerfRunType
+from helpers.llk_params import PerfRunType
 
 
 class FusedLoop:

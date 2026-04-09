@@ -170,9 +170,13 @@ REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 
 
 class ReduceDimension(Enum):
-    Column = auto()
-    Row = auto()
-    Scalar = auto()
+    Column = "REDUCE_COL"
+    Row = "REDUCE_ROW"
+    Scalar = "REDUCE_SCALAR"
+
+    @property
+    def cpp_enum_value(self):
+        return f"ReduceDim::{self.value}"
 
 
 class ReducePool(Enum):

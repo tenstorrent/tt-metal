@@ -1,81 +1,47 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import re
 from enum import Enum
-from pathlib import Path
 from typing import Annotated, List, Literal, Optional, Type, Union
 
-import yaml
+from fuser.fused_math import ComputeNode, ComputePipeline
+from fuser.fused_operation import FusedOperation
 from helpers.format_config import DataFormat
-from helpers.fused_fpu import (
-    DatacopyFpu,
-    EltwiseFpu,
-    MatmulFpu,
-    ReduceBlockMaxFpu,
-    ReduceFpu,
-)
-from helpers.fused_math import ComputeNode, ComputePipeline
-from helpers.fused_operand import OperandRegistry
-from helpers.fused_operation import FusedOperation
-from helpers.fused_packer import Packer
-from helpers.fused_sfpu import BinarySfpu, UnarySfpu
-from helpers.fused_unpacker import (
-    MatmulUnpacker,
-    ReduceBlockMaxUnpacker,
-    ReduceUnpacker,
-    UnpackerA,
-    UnpackerAB,
-    UnpackerTilizeA,
-)
-from helpers.fuser_config import FuserConfig, GlobalConfig
 from helpers.llk_params import (
     ApproximationMode,
     BroadcastType,
-    DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
+    ReduceDimension,
     ReducePool,
+    Tilize,
     Transpose,
 )
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationError,
     field_validator,
     model_validator,
 )
 
-FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_config"
-)
-
-
-def format_validation_error(error: ValidationError) -> str:
-    messages = []
-    for err in error.errors():
-        loc = ".".join(str(x) for x in err["loc"])
-        msg = err["msg"]
-
-        if "Input should be" in msg:
-            inp = err.get("input")
-            valid_values = re.findall(r"'([^']+)'", msg)
-            expected = ", ".join(valid_values) if valid_values else msg
-            messages.append(f"'{loc}': got '{inp}', expected: {expected}")
-        elif "Extra inputs are not permitted" in msg:
-            messages.append(f"'{loc}': unknown field")
-        elif "Field required" in msg:
-            messages.append(f"'{loc}': required field missing")
-        else:
-            clean_msg = msg.removeprefix("Value error, ")
-            messages.append(f"'{loc}': {clean_msg}")
-
-    return "\n".join(messages)
+from .fpu.datacopy import DatacopyFpu
+from .fpu.eltwise import EltwiseFpu
+from .fpu.matmul import MatmulFpu
+from .fpu.reduce import ReduceFpu
+from .fpu.reduce_block_max import ReduceBlockMaxFpu
+from .packer.packer import Packer
+from .sfpu.binary import BinarySfpu
+from .sfpu.unary import UnarySfpu
+from .unpacker.matmul import MatmulUnpacker
+from .unpacker.reduce import ReduceUnpacker
+from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
+from .unpacker.tilize_a import UnpackerTilizeA
+from .unpacker.unpack_a import UnpackerA
+from .unpacker.unpack_ab import UnpackerAB
 
 
 class UnpackerEnum(Enum):
@@ -103,9 +69,7 @@ class FpuOperationEnum(str, Enum):
     Elwsub = "Elwsub"
     Datacopy = "Datacopy"
     Matmul = "Matmul"
-    ReduceColumn = "ReduceColumn"
-    ReduceRow = "ReduceRow"
-    ReduceScalar = "ReduceScalar"
+    Reduce = "Reduce"
     ReduceBlockMax = "ReduceBlockMax"
 
     def is_eltwise(self) -> bool:
@@ -113,13 +77,6 @@ class FpuOperationEnum(str, Enum):
             FpuOperationEnum.Elwadd,
             FpuOperationEnum.Elwmul,
             FpuOperationEnum.Elwsub,
-        }
-
-    def is_reduce(self) -> bool:
-        return self in {
-            FpuOperationEnum.ReduceColumn,
-            FpuOperationEnum.ReduceRow,
-            FpuOperationEnum.ReduceScalar,
         }
 
     def to_math_operation(self):
@@ -177,11 +134,13 @@ class FpuMathSchema(BaseModel):
     type: Literal["Fpu"]
     operation: FpuOperationEnum
     unpacker: Optional[UnpackerEnum] = None
-    broadcast_type: Optional[BroadcastType] = None
+    broadcast_type: BroadcastType = BroadcastType.None_
     reuse_dest: Optional[EltwiseBinaryReuseDestType] = None
     reduce_pool: Optional[ReducePool] = None
-    unpack_transpose_within_face: Optional[Transpose] = None
-    unpack_transpose_faces: Optional[Transpose] = None
+    reduce_dim: Optional[ReduceDimension] = None
+    unpack_transpose_within_face: Transpose = Transpose.No
+    unpack_transpose_faces: Transpose = Transpose.No
+    math_fidelity: MathFidelity = MathFidelity.LoFi
 
     @field_validator("unpacker", mode="before")
     @classmethod
@@ -192,15 +151,33 @@ class FpuMathSchema(BaseModel):
             return UnpackerEnum[v]
         return v
 
+    @field_validator("math_fidelity", mode="before")
+    @classmethod
+    def parse_math_fidelity(cls, v):
+        if isinstance(v, MathFidelity):
+            return v
+        if isinstance(v, str):
+            try:
+                return MathFidelity[v]
+            except KeyError:
+                pass
+        return v
+
     @model_validator(mode="after")
     def validate_fpu_config(self) -> "FpuMathSchema":
-        if self.operation.is_reduce() and self.reduce_pool is None:
+        if self.operation == FpuOperationEnum.Reduce and self.reduce_pool is None:
             raise ValueError(f"Reduce operations require reduce_pool: {ReducePool}")
 
-        if not self.operation.is_reduce() and self.reduce_pool is not None:
-            raise ValueError(
-                f"reduce_pool: only for Reduce*, not '{self.operation.value}'"
-            )
+        if self.operation == FpuOperationEnum.Reduce and self.reduce_dim is None:
+            raise ValueError(f"Reduce operations require reduce_dim: {ReduceDimension}")
+
+        if self.operation == FpuOperationEnum.ReduceBlockMax:
+            if self.reduce_dim is None:
+                self.reduce_dim = ReduceDimension.Row
+            elif self.reduce_dim != ReduceDimension.Row:
+                raise ValueError(
+                    f'Reduce operations require reduce_dim: "{ReduceDimension.Row.value}"'
+                )
 
         if self.unpacker is not None:
             if self.operation == FpuOperationEnum.Datacopy:
@@ -216,7 +193,7 @@ class FpuMathSchema(BaseModel):
                     raise ValueError(
                         f"Matmul: unpacker must be MatmulUnpacker, got '{self.unpacker.value}'"
                     )
-            elif self.operation.is_reduce():
+            elif self.operation == FpuOperationEnum.Reduce:
                 if self.unpacker != UnpackerEnum.ReduceUnpacker:
                     raise ValueError(
                         f"Reduce: unpacker must be ReduceUnpacker, got '{self.unpacker.value}'"
@@ -240,22 +217,68 @@ class FpuMathSchema(BaseModel):
                         f"ReduceBlockMax: unpacker must be ReduceBlockMaxUnpacker, got '{self.unpacker.value}'"
                     )
 
+        if self.unpacker == UnpackerEnum.UnpackerTilizeA:
+            if self.broadcast_type != BroadcastType.None_:
+                raise ValueError("UnpackerTilizeA does not support broadcast")
+
+            if (
+                self.unpack_transpose_faces.value
+                or self.unpack_transpose_within_face.value
+            ):
+                raise ValueError("UnpackerTilizeA does not support transpose")
+
+        if self.unpacker == UnpackerEnum.MatmulUnpacker:
+            if self.unpack_transpose_within_face != self.unpack_transpose_faces:
+                raise ValueError(
+                    "MatmulUnpacker does not support different values for transpose_faces and transpose_within_face"
+                )
+
+        if self.unpacker == UnpackerEnum.UnpackerAB:
+            if (
+                self.broadcast_type == BroadcastType.Scalar
+                and self.unpack_transpose_faces.value
+            ):
+                raise ValueError(
+                    "SrcA transpose is not supported with scalar broadcast"
+                )
+
+            if self.unpack_transpose_within_face != self.unpack_transpose_faces:
+                raise ValueError(
+                    "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
+                )
+
+        # LLK contract: eltwise add/sub only support LoFi fidelity.
+        if (
+            self.operation in [FpuOperationEnum.Elwadd, FpuOperationEnum.Elwsub]
+            and self.math_fidelity != MathFidelity.LoFi
+        ):
+            raise ValueError(f"{self.operation} does not support {self.math_fidelity}")
+
         if (
             self.reuse_dest is not None
             and self.reuse_dest != EltwiseBinaryReuseDestType.NONE
+            and not self.operation.is_eltwise()
         ):
-            if not self.operation.is_eltwise():
-                raise ValueError(
-                    f"reuse_dest: only for Eltwise operations, not '{self.operation.value}'"
-                )
+            raise ValueError(
+                f"reuse_dest: only for Eltwise operations, not '{self.operation.value}'"
+            )
+
+        if (
+            self.reuse_dest is not None
+            and self.reuse_dest != EltwiseBinaryReuseDestType.NONE
+            and not self.operation.is_eltwise()
+        ):
+            raise ValueError(
+                f"reuse_dest: only for Eltwise operations, not '{self.operation.value}'"
+            )
 
         return self
 
     def to_compute_node(self):
         if self.operation.is_eltwise():
             fpu = EltwiseFpu(self.operation.to_math_operation())
-        elif self.operation.is_reduce():
-            fpu = ReduceFpu(self.operation.to_math_operation(), pool=self.reduce_pool)
+        elif self.operation == FpuOperationEnum.Reduce:
+            fpu = ReduceFpu()
         elif self.operation == FpuOperationEnum.Datacopy:
             fpu = DatacopyFpu()
         elif self.operation == FpuOperationEnum.Matmul:
@@ -276,6 +299,12 @@ class FpuMathSchema(BaseModel):
             kwargs["broadcast_type"] = self.broadcast_type
         if self.reuse_dest:
             kwargs["reuse_dest"] = self.reuse_dest
+        if self.reduce_dim:
+            kwargs["reduce_dim"] = self.reduce_dim
+        if self.reduce_pool:
+            kwargs["reduce_pool"] = self.reduce_pool
+        if self.math_fidelity:
+            kwargs["math_fidelity"] = self.math_fidelity
 
         return ComputeNode(fpu=fpu, sfpu=None, **kwargs)
 
@@ -352,9 +381,9 @@ class OperationSchema(BaseModel):
     math: List[MathSchema] = Field(..., min_length=1)
 
     packer: PackerEnum = PackerEnum.Packer
-    math_fidelity: MathFidelity = MathFidelity.LoFi
     dest_sync: Optional[DestSync] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
+    bh_tilize: Optional[Tilize] = None
 
     @field_validator("src_a_dims", "src_b_dims", "output_dims", "block_size")
     @classmethod
@@ -374,18 +403,6 @@ class OperationSchema(BaseModel):
         if isinstance(v, str):
             try:
                 return DataFormat[v]
-            except KeyError:
-                pass
-        return v
-
-    @field_validator("math_fidelity", mode="before")
-    @classmethod
-    def parse_math_fidelity(cls, v):
-        if isinstance(v, MathFidelity):
-            return v
-        if isinstance(v, str):
-            try:
-                return MathFidelity[v]
             except KeyError:
                 pass
         return v
@@ -412,6 +429,35 @@ class OperationSchema(BaseModel):
                     f"Matmul: src_a[1]={self.src_a_dims[1]} != src_b[0]={self.src_b_dims[0]}"
                 )
 
+        if (
+            self.block_size[0] > self.output_dims[0]
+            or self.block_size[1] > self.output_dims[1]
+        ):
+            raise ValueError(
+                f"Block size {self.block_size} exceeds output dimensions {self.output_dims}"
+            )
+
+        unpackers = [
+            m.unpacker
+            for m in self.math
+            if isinstance(m, FpuMathSchema) and m.unpacker is not None
+        ]
+
+        unique_unpackers = set(unpackers)
+
+        if UnpackerEnum.UnpackerTilizeA in unique_unpackers:
+            self.bh_tilize = Tilize.Yes
+        else:
+            self.bh_tilize = Tilize.No
+
+        if (
+            len(unique_unpackers) > 1
+            and UnpackerEnum.UnpackerTilizeA in unique_unpackers
+        ):
+            raise ValueError(
+                "UnpackerTilizeA cannot be combined with other unpackers on BH"
+            )
+
         return self
 
     def to_fused_operation(self, operands):
@@ -431,7 +477,7 @@ class OperationSchema(BaseModel):
         math_ops = [m.to_compute_node() for m in self.math]
 
         kwargs = {
-            "math_fidelity": self.math_fidelity,
+            "bh_tilize": self.bh_tilize,
         }
         if self.dest_sync:
             kwargs["dest_sync"] = self.dest_sync
@@ -443,65 +489,3 @@ class OperationSchema(BaseModel):
             math=ComputePipeline(math_ops, self.packer.to_runtime()),
             **kwargs,
         )
-
-
-class FuserConfigSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    dest_acc: DestAccumulation = DestAccumulation.No
-    loop_factor: Annotated[int, Field(ge=1)] = 16
-    operations: List[OperationSchema] = Field(..., min_length=1)
-
-    @model_validator(mode="after")
-    def validate_config(self) -> "FuserConfigSchema":
-        outputs = set()
-        for i, op in enumerate(self.operations):
-            if op.output in outputs:
-                raise ValueError(f"op[{i}].output='{op.output}' already defined")
-            outputs.add(op.output)
-        return self
-
-    def to_fuser_config(self, test_name: str):
-        operands = OperandRegistry()
-        pipeline = [op.to_fused_operation(operands) for op in self.operations]
-
-        return FuserConfig(
-            pipeline=pipeline,
-            global_config=GlobalConfig(
-                dest_acc=self.dest_acc,
-                test_name=test_name,
-                loop_factor=self.loop_factor,
-            ),
-        )
-
-    @classmethod
-    def validate_file(cls, yaml_path: Union[str, Path]) -> "FuserConfigSchema":
-        yaml_path = Path(yaml_path)
-        if not yaml_path.exists():
-            raise FileNotFoundError(f"File not found: {yaml_path}")
-
-        with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
-
-        try:
-            return cls.model_validate(config_dict)
-        except ValidationError as e:
-            raise ValueError(
-                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
-            ) from None
-
-    @classmethod
-    def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
-        config_dict = yaml.safe_load(yaml_content)
-        try:
-            return cls.model_validate(config_dict)
-        except ValidationError as e:
-            raise ValueError(
-                f"Validation failed:\n{format_validation_error(e)}"
-            ) from None
-
-    @classmethod
-    def load(cls, test_name: str):
-        yaml_path = FUSER_CONFIG_DIR / f"{test_name}.yaml"
-        schema = cls.validate_file(yaml_path)
-        return schema.to_fuser_config(test_name)

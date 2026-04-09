@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -207,7 +207,7 @@ class OperandRegistry:
     def add_input(
         self,
         name: str,
-        dimensions: Tuple[int, int, int, int],
+        dimensions: Tuple[int, int],
         data_format: DataFormat,
         address: int = None,
         sfpu: bool = True,
@@ -267,9 +267,9 @@ class OperandRegistry:
         src_a: str,
         src_b: str,
         output: str,
-        src_a_dims: Tuple[int, int] = [32, 32],
-        src_b_dims: Tuple[int, int] = [32, 32],
-        output_dims: Tuple[int, int] = [64, 64],
+        src_a_dims: Tuple[int, int] = (32, 32),
+        src_b_dims: Tuple[int, int] = (32, 32),
+        output_dims: Tuple[int, int] = (64, 64),
         input_format: DataFormat = DataFormat.Float16_b,
         output_format: DataFormat = DataFormat.Float16_b,
         src_a_tensor: torch.Tensor = None,
