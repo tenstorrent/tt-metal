@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t index = 0;

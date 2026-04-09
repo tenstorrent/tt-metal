@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 namespace {
