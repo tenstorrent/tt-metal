@@ -134,6 +134,7 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """Apply tensor-parallel allreduce if TP > 1."""
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
+    breakpoint()
 
     global _allreduce_count
     _allreduce_count += 1
@@ -143,12 +144,14 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         f"layout={tensor.layout}, memory={tensor.memory_config()}, "
         f"num_links=1, topology=Linear, cluster_axis={mesh_config.tp_axis}"
     )
+    subdevice_id = getattr(ccl_manager, "ccl_sub_device_id", None)
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=mesh_config.tp_axis,
         num_links=1,
         topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        subdevice_id=subdevice_id,
     )
     logger.info(f"all_reduce #{call_id} done: shape={result.shape}")
     tensor.deallocate(True)
