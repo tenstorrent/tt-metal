@@ -12,11 +12,13 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.utils import zero_cache_padding_zigzag
 
 
 BH_NUM_DRAM_BANKS = 8
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
+pytestmark = [run_for_blackhole()]
 
 
 def create_nd_sharded_cache(device, seq_len, head_dim):

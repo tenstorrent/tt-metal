@@ -15,6 +15,32 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+// Compute per-bank page ranges for a given [start_page, end_page) range.
+// Returns a vector indexed by bank_id, where each entry is (page_start, page_end).
+// Banks with no work have page_start == page_end == 0.
+static std::vector<std::pair<uint32_t, uint32_t>> compute_bank_page_ranges(
+    uint32_t start_page, uint32_t end_page, uint32_t pages_per_shard, uint32_t num_dram_banks) {
+    std::vector<std::pair<uint32_t, uint32_t>> bank_ranges(num_dram_banks, {0, 0});
+
+    const uint32_t first_shard = start_page / pages_per_shard;
+    const uint32_t last_shard = (end_page + pages_per_shard - 1) / pages_per_shard;
+
+    for (uint32_t shard = first_shard; shard < last_shard; shard++) {
+        uint32_t bank_id = shard % num_dram_banks;
+        uint32_t shard_page_start = std::max(shard * pages_per_shard, start_page);
+        uint32_t shard_page_end = std::min(shard * pages_per_shard + pages_per_shard, end_page);
+
+        if (bank_ranges[bank_id].first == 0 && bank_ranges[bank_id].second == 0) {
+            bank_ranges[bank_id] = {shard_page_start, shard_page_end};
+        } else {
+            bank_ranges[bank_id].first = std::min(bank_ranges[bank_id].first, shard_page_start);
+            bank_ranges[bank_id].second = std::max(bank_ranges[bank_id].second, shard_page_end);
+        }
+    }
+
+    return bank_ranges;
+}
+
 ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::create(
     const ZeroCacheRangeParams& operation_attributes,
     const ZeroCacheRangeInputs& tensor_args,
@@ -42,49 +68,28 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
 
     const auto noc = tt::tt_metal::detail::preferred_noc_for_dram_write(arch);
 
-    // Get optimal core-to-DRAM-bank mapping
+    // Get optimal core-to-DRAM-bank mapping — one core per bank for all banks
     const auto num_dram_banks = static_cast<uint32_t>(device->num_dram_channels());
     const auto optimal_cores = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 
     // Pages per shard = embedding_dim / tile_width (e.g. 576 / 32 = 18)
     const uint32_t pages_per_shard = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
-    // Determine which shards need zeroing and group by DRAM bank
-    const uint32_t first_shard = start_page / pages_per_shard;
-    const uint32_t last_shard = (end_page + pages_per_shard - 1) / pages_per_shard;
+    // Compute per-bank page ranges
+    auto bank_ranges = compute_bank_page_ranges(start_page, end_page, pages_per_shard, num_dram_banks);
 
-    // Map: bank_id -> list of (page_start, page_end) for contiguous shard ranges on that bank
-    std::map<uint32_t, std::pair<uint32_t, uint32_t>> bank_page_ranges;
-    for (uint32_t shard = first_shard; shard < last_shard; shard++) {
-        uint32_t bank_id = shard % num_dram_banks;
-        uint32_t shard_page_start = shard * pages_per_shard;
-        uint32_t shard_page_end = shard_page_start + pages_per_shard;
-
-        // Clamp to the requested range
-        shard_page_start = std::max(shard_page_start, start_page);
-        shard_page_end = std::min(shard_page_end, end_page);
-
-        if (bank_page_ranges.find(bank_id) == bank_page_ranges.end()) {
-            bank_page_ranges[bank_id] = {shard_page_start, shard_page_end};
-        } else {
-            // Extend range (pages for same bank may not be contiguous in global page space,
-            // but the kernel iterates page-by-page so it handles gaps via TensorAccessor)
-            bank_page_ranges[bank_id].first = std::min(bank_page_ranges[bank_id].first, shard_page_start);
-            bank_page_ranges[bank_id].second = std::max(bank_page_ranges[bank_id].second, shard_page_end);
-        }
-    }
-
-    // Build core list and page assignments - one optimal core per active bank
+    // Always allocate all bank cores so the program structure is stable for caching.
+    // Cores with no work get page_start == page_end and the kernel loop does nothing.
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> page_starts;
     std::vector<uint32_t> page_ends;
     std::set<CoreRange> core_ranges;
 
-    for (const auto& [bank_id, range] : bank_page_ranges) {
+    for (uint32_t bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         const auto& core = optimal_cores[bank_id];
         cores.push_back(core);
-        page_starts.push_back(range.first);
-        page_ends.push_back(range.second);
+        page_starts.push_back(bank_ranges[bank_id].first);
+        page_ends.push_back(bank_ranges[bank_id].second);
         core_ranges.insert(CoreRange(core));
     }
 
@@ -104,7 +109,7 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
-    // Create kernel on optimal cores only
+    // Create kernel on all bank cores
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/zero_cache_writer.cpp",
@@ -147,52 +152,20 @@ void ZeroCacheRangeProgramFactory::override_runtime_arguments(
     auto& page_ends = cached_program.shared_variables.page_ends;
 
     auto* dst_buffer = tensor_args.cache.buffer();
-
-    // Recompute page assignments from the new page range
-    const auto start_page = operation_attributes.start_page;
-    const auto end_page = operation_attributes.end_page;
     const uint32_t pages_per_shard = tensor_args.cache.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    const auto num_dram_banks = static_cast<uint32_t>(tensor_args.cache.device()->num_dram_channels());
+    const auto num_dram_banks = static_cast<uint32_t>(cores.size());
 
-    const uint32_t first_shard = start_page / pages_per_shard;
-    const uint32_t last_shard = (end_page + pages_per_shard - 1) / pages_per_shard;
+    auto bank_ranges = compute_bank_page_ranges(
+        operation_attributes.start_page, operation_attributes.end_page, pages_per_shard, num_dram_banks);
 
-    std::map<uint32_t, std::pair<uint32_t, uint32_t>> bank_page_ranges;
-    for (uint32_t shard = first_shard; shard < last_shard; shard++) {
-        uint32_t bank_id = shard % num_dram_banks;
-        uint32_t shard_page_start = std::max(shard * pages_per_shard, start_page);
-        uint32_t shard_page_end = std::min(shard * pages_per_shard + pages_per_shard, end_page);
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        page_starts[i] = bank_ranges[i].first;
+        page_ends[i] = bank_ranges[i].second;
 
-        if (bank_page_ranges.find(bank_id) == bank_page_ranges.end()) {
-            bank_page_ranges[bank_id] = {shard_page_start, shard_page_end};
-        } else {
-            bank_page_ranges[bank_id].first = std::min(bank_page_ranges[bank_id].first, shard_page_start);
-            bank_page_ranges[bank_id].second = std::max(bank_page_ranges[bank_id].second, shard_page_end);
-        }
-    }
-
-    uint32_t i = 0;
-    for (const auto& [bank_id, range] : bank_page_ranges) {
-        if (i < cores.size()) {
-            page_starts[i] = range.first;
-            page_ends[i] = range.second;
-
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-            runtime_args[0] = dst_buffer->address();
-            runtime_args[1] = page_starts[i];
-            runtime_args[2] = page_ends[i];
-        }
-        i++;
-    }
-
-    // Zero out remaining cores if fewer banks needed this time
-    for (; i < cores.size(); i++) {
-        page_starts[i] = 0;
-        page_ends[i] = 0;
         auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
         runtime_args[0] = dst_buffer->address();
-        runtime_args[1] = 0;
-        runtime_args[2] = 0;
+        runtime_args[1] = page_starts[i];
+        runtime_args[2] = page_ends[i];
     }
 }
 
