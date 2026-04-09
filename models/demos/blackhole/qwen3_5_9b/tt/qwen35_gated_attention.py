@@ -156,6 +156,31 @@ class Qwen35GatedAttention:
             device=self.device,
             memory_config=_dram,
         )
+        # Pre-allocate HEIGHT_SHARDED K/V buffers for sdpa_decode path in trace.
+        # paged_update_cache requires sharded inputs; pre-allocating avoids
+        # allocation during trace capture (which is not allowed).
+        # Logical shape is [1, N, 1, head_dim] — TILE_LAYOUT pads dim[-2] to 32 internally.
+        N = batch_size * self.num_kv_heads
+        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))})
+        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
+        k_buf = ttnn.from_torch(
+            torch.zeros(1, N, 1, self.head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        self.sdpa_k_shard = ttnn.interleaved_to_sharded(k_buf, _sharded_mc)
+        ttnn.deallocate(k_buf)
+        v_buf = ttnn.from_torch(
+            torch.zeros(1, N, 1, self.head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        self.sdpa_v_shard = ttnn.interleaved_to_sharded(v_buf, _sharded_mc)
+        ttnn.deallocate(v_buf)
+
         self.use_preallocated_cache = True
         self.use_trace_mode = False
         self.cache_pos = 0
