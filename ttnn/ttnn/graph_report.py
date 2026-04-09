@@ -31,8 +31,6 @@ from loguru import logger
 SUPPORTED_REPORT_VERSION = 1
 DATABASE_SCHEMA_VERSION = 2
 
-_BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
-
 
 def _int_param(params, key):
     """Return an int from params[key], or None if missing."""
@@ -40,14 +38,6 @@ def _int_param(params, key):
     if v is None:
         return None
     return v if isinstance(v, int) else int(v)
-
-
-def _strip_enum_prefix(value):
-    """Strip namespace prefix from enum string: 'BufferType::L1' -> 'L1'."""
-    if value is None:
-        return None
-    s = str(value)
-    return s.split("::")[-1] if "::" in s else s
 
 
 def _tid_int(tid):
@@ -852,10 +842,7 @@ def import_graph(
                     layout = layout.replace("::", ".")
                 device_id = _int_param(params, "device_id")
                 address = _int_param(params, "address")
-                buffer_type = _int_param(params, "buffer_type_value")
-                if buffer_type is None:
-                    bt_name = _strip_enum_prefix(params.get("buffer_type"))
-                    buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
+                buffer_type = _int_param(params, "buffer_type") or 0
                 tensors_batch.append(
                     (
                         tensor_id,
@@ -883,10 +870,7 @@ def import_graph(
             size = _int_param(params, "size") or 0
             page_size = _int_param(params, "page_size") or 0
             num_cores = _int_param(params, "num_cores") or 0
-            buffer_type = _int_param(params, "buffer_type_value")
-            if buffer_type is None:
-                bt_name = _strip_enum_prefix(params.get("exact_buffer_type") or params.get("type", "DRAM"))
-                buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0)
+            buffer_type = _int_param(params, "buffer_type") or 0
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
@@ -1034,10 +1018,7 @@ def import_graph(
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
-                btv = _int_param(p, "buffer_type_value")
-                if btv is None:
-                    bt_name = _strip_enum_prefix(p.get("buffer_type"))
-                    btv = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
+                btv = _int_param(p, "buffer_type") or 0
                 tensors_batch.append(
                     (
                         mtid,
