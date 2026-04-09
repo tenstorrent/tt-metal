@@ -28,6 +28,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     dtype=ttnn.bfloat16,
     gate_dtype=None,
     use_bias=False,
+    broadcast_gate=True,
     M_block_size=8,
     K_block_size=8,
     N_block_size=8,
@@ -42,6 +43,8 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     Args:
         gate_dtype: Optional ttnn dtype for the gate (addcmul_b) tensor.
                     Defaults to None, which uses the same dtype as the matmul inputs.
+        broadcast_gate: If True, gate is (1, N) broadcast across M rows.
+                       If False, gate is (M, N) full-size (no broadcast).
     """
     # Resolve gate dtype: default to the main dtype
     tt_gate_dtype = gate_dtype if gate_dtype is not None else dtype
@@ -52,7 +55,10 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     torch_matmul_input = torch.randn(M, K, dtype=torch.float32)
     torch_matmul_weight = torch.randn(K, N, dtype=torch.float32)
     torch_addcmul_a = torch.randn(M, N, dtype=torch.float32)  # base value (full shape)
-    torch_addcmul_b = torch.randn(1, N, dtype=torch.float32)  # gate (broadcast like bias)
+    if broadcast_gate:
+        torch_addcmul_b = torch.randn(1, N, dtype=torch.float32)  # gate (broadcast like bias)
+    else:
+        torch_addcmul_b = torch.randn(M, N, dtype=torch.float32)  # gate (full size, no broadcast)
     torch_bias = torch.randn(1, N, dtype=torch.float32) if use_bias else None
 
     # Compute expected torch output (full fused operation) in float32 for accuracy
@@ -191,6 +197,64 @@ def test_dit_minimal_matmul_addcmul_fused_fp32_gate(device, use_bias):
         dtype=ttnn.bfloat16,
         gate_dtype=ttnn.float32,
         use_bias=use_bias,
+    )
+    assert check_result["pcc"] > 0.9995
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "no_bias"])
+def test_dit_minimal_matmul_addcmul_fused_full_gate(device, use_bias):
+    """Test with non-broadcast (full M×N) gate tensor."""
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
+        device=device,
+        M=256,
+        K=512,
+        N=1024,
+        scalar=1.0,
+        dtype=ttnn.bfloat16,
+        use_bias=use_bias,
+        broadcast_gate=False,
+    )
+    assert check_result["pcc"] > 0.9995
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "no_bias"])
+def test_dit_minimal_matmul_addcmul_fused_full_gate_fp32(device, use_bias):
+    """Test non-broadcast gate with fp32 dtype."""
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
+        device=device,
+        M=256,
+        K=512,
+        N=1024,
+        scalar=1.0,
+        dtype=ttnn.bfloat16,
+        gate_dtype=ttnn.float32,
+        use_bias=use_bias,
+        broadcast_gate=False,
+    )
+    assert check_result["pcc"] > 0.9995
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (9472, 5120, 1280),  # wan2.2_14b-720p-glx
+        (2368, 5120, 1280),  # wan2.2_14b-720p-single
+    ],
+)
+def test_dit_minimal_matmul_addcmul_fused_full_gate_wan2_shapes(device, M, K, N):
+    """Test non-broadcast gate with Wan2.2 shapes."""
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
+        device=device,
+        M=M,
+        K=K,
+        N=N,
+        scalar=1.0,
+        dtype=ttnn.bfloat16,
+        use_bias=True,
+        broadcast_gate=False,
     )
     assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02

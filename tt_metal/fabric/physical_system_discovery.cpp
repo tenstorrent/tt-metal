@@ -7,6 +7,8 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <unistd.h>
 #include <climits>
 #include <fstream>
@@ -43,9 +45,21 @@ TrayID get_tray_id_for_chip(
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
     };
 
-    if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
+    if (using_mock_cluster_desc) {
+        return TrayID{0};
+    }
+    if (!mobo_to_bus_ids.contains(mobo_name)) {
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        log_warning(
+            tt::LogAlways,
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+            mobo_name,
+            chip_id,
+            bus_id);
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);

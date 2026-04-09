@@ -825,8 +825,9 @@ jobs:
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
+          mkdir -p model_tracer/traced_operations
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/sweep_manifest.yaml \
+            model_tracer/trace_selection_registry.yaml \
             model_tracer/traced_operations/ttnn_operations_master.json \
             lead_models
       - name: Generate JSON for model_traced run
@@ -834,8 +835,9 @@ jobs:
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
+          mkdir -p model_tracer/traced_operations
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/sweep_manifest.yaml \
+            model_tracer/trace_selection_registry.yaml \
             model_tracer/traced_operations/ttnn_operations_master.json \
             model_traced
       - name: Upload master JSON artifact
@@ -959,8 +961,20 @@ jobs:
           MEASURE_DEVICE_PERF: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
-          # Compute combined + per-hardware matrices (all output lines go to GITHUB_OUTPUT)
-          python3 tests/sweep_framework/framework/compute_sweep_matrix.py >> "$GITHUB_OUTPUT"
+          # Compute combined + per-hardware matrices once.
+          python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
+            --write-to-file /tmp/sweep_matrix.pretty.json \
+            > /tmp/sweep_matrix.outputs.txt
+
+          # Export compact key=value outputs for downstream jobs.
+          cat /tmp/sweep_matrix.outputs.txt >> "$GITHUB_OUTPUT"
+
+      - name: Show module matrix
+        shell: bash
+        run: |
+          echo "::group::Sweep module matrix"
+          jq . /tmp/sweep_matrix.pretty.json
+          echo "::endgroup::"
 
   ttnn-run-single-sweep:
     name: Run single sweep

@@ -1666,6 +1666,14 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
 
 void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
+    detail::bind_binary_operation<"remainder">(
+        mod,
+        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i)doc",
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_operation<"add">(
         mod,
@@ -1950,12 +1958,11 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite<"atan2">(
         mod,
-        R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
-        )doc",
+        R"doc(Element-wise arctangent of :attr:`input_tensor_a_i` / :attr:`input_tensor_b_i` with consideration of the quadrant. Returns signed angles in radians between the vector (:attr:`input_tensor_b_i`, :attr:`input_tensor_a_i`) and the vector (1, 0).)doc",
+        R"doc(\mathrm{output\_tensor}_i = \operatorname{atan2}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i))doc",
         &ttnn::atan2,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
-        R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
+        R"doc(The second parameter, :attr:`input_tensor_b`, is the x-coordinate, while the first parameter, :attr:`input_tensor_a`, is the y-coordinate.)doc");
 
     detail::bind_binary_operation<"logical_xor">(
         mod,
@@ -2116,14 +2123,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
         static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
-        R"doc(BFLOAT16, FLOAT32, INT32)doc");
-
-    detail::bind_binary_overload_operation<"remainder">(
-        mod,
-        R"doc(Performs an eltwise-modulus operation.)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOverloadScalarFn>(&ttnn::remainder),
-        static_cast<detail::BinaryOverloadTensorFn>(&ttnn::remainder),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation<"gt_">(
