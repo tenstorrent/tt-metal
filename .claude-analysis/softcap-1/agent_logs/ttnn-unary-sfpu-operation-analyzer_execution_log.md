@@ -23,3 +23,33 @@ Analyzed the SFPU kernel implementation for the `atanh` unary operation. The ker
 - Verified `atanh_init` function exists in both WH and BH ckernel directories
 - Verified all file paths in abstraction layers table exist
 - Verified SFPI intrinsic-to-instruction mappings via sfpi_lib.h
+
+---
+
+## Operation: sinh
+## Date: 2026-04-09
+
+### Summary
+Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel implements `sinh(x) = (exp(x) - exp(-x)) / 2` using:
+1. A `exp_21f` helper (Moroz et al. 2022 algorithm for fast 2^z)
+2. Taylor series fallback `sinh(x) ~ x + x^3/6` for `|x| < 0.5` to avoid catastrophic cancellation
+3. Final BF16 rounding via `float_to_fp16b` for deterministic output
+
+### Key Findings
+1. **Compute kernel**: `eltwise_sfpu.cpp` (standard unary dispatch)
+2. **SFPU_OP_CHAIN_0**: `sinh_tile(0)` with `SFPU_OP_SINH_INCLUDE` split-include mechanism
+3. **Approximation mode**: `false` (default), kernel has no branching on APPROXIMATION_MODE
+4. **Undefined symbol**: `_float_to_int32_positive_` is called twice in `exp_21f` but has no definition -- compilation blocker
+5. **SFPU instructions per iteration**: Heavy SFPMAD (all float arithmetic), SFPDIVP2/SFPEXEXP/SFPEXMAN/SFPSETEXP (IEEE 754 manipulation), SFPCAST, SFPSTOCHRND, and CC instructions
+6. **WH/BH identical**: Both hardware targets use the same ckernel_sfpu_sinh.h
+7. **Address mode**: ADDR_MOD_7 (all increments = 0), standard DEST progression
+
+### Files Created
+- `.claude-analysis/softcap-1/sinh_analysis.md`
+
+### Verification Steps
+- Verified `calculate_sinh` function exists in both WH and BH ckernel directories
+- Verified `sinh_init` function exists in both WH and BH ckernel directories
+- Verified all file paths in abstraction layers table exist
+- Verified SFPI intrinsic-to-instruction mappings via sfpi_lib.h
+- Confirmed `_float_to_int32_positive_` is undefined across entire codebase (0 definitions found)
