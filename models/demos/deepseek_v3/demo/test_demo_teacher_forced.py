@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, Q_CHUNK_SIZE, USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -68,8 +68,9 @@ def _assert_no_garbage_tokens(
 
 
 def _tile_align(length: int) -> int:
-    tile_size = int(ttnn.TILE_SIZE)
-    return ((int(length) + tile_size - 1) // tile_size) * tile_size
+    q_chunk_size = Q_CHUNK_SIZE
+    aligned_size = max(int(ttnn.TILE_SIZE), q_chunk_size)
+    return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
 
 
 @pytest.mark.timeout(3600)
