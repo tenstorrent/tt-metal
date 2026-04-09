@@ -20,13 +20,8 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& a = tensor_args.a;
-    const auto& bx = tensor_args.bx;
-    const auto& h_prev = tensor_args.h_prev;
     auto& output = tensor_return_value;
 
-    auto* a_buffer = a.buffer();
-    auto* bx_buffer = bx.buffer();
-    auto* h_buffer = h_prev.buffer();
     auto* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
@@ -62,19 +57,20 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
     constexpr uint32_t num_tiles_in_chunk = 32;
     const uint32_t num_chunks_per_row = tt::div_up(total_tiles_per_row, num_tiles_in_chunk);
 
+    // Create all non-shard-backed CBs BEFORE shard-backed CBs to keep them at low L1 addresses.
+    // The CB allocator tracks the sequential allocation pointer; shard-backed CBs at high buffer
+    // addresses would push the pointer up, placing subsequent non-shard-backed CBs near the L1 limit.
+
+    // Non-shard-backed staging CB shared between a and bx inputs.
+    // The untilize operation always reads 32 tiles. When total_tiles_per_row is not a multiple of 32,
+    // the last chunk has fewer tiles in the shard, causing OOB reads on a shard-backed CB.
+    // Using a staging CB with exactly 32 tiles ensures the untilize reads stay within allocated memory.
+    // The reader kernel copies data from the shard to this staging CB chunk by chunk via NOC read,
+    // alternating between a and bx data. The compute kernel consumes each in sequence.
     const uint32_t cb_a_in_id = tt::CBIndex::c_0;
-    const auto cb_a_in = create_circular_buffer(cb_a_in_id, total_tiles, input_tile_size, input_format, a_buffer);
+    create_circular_buffer(cb_a_in_id, num_tiles_in_chunk, input_tile_size, input_format);
 
-    const uint32_t cb_bx_in_id = tt::CBIndex::c_1;
-    const auto cb_bx_in = create_circular_buffer(cb_bx_in_id, total_tiles, input_tile_size, input_format, bx_buffer);
-
-    // Hidden state is in row-major so must be bfloat16
-    const uint32_t cb_h_in_id = tt::CBIndex::c_2;
-    const auto cb_h_in =
-        create_circular_buffer(cb_h_in_id, total_tiles_per_row, intermediary_row_size, intermediary_format, h_buffer);
-
-    const uint32_t cb_out_id = tt::CBIndex::c_16;
-    const auto cb_out = create_circular_buffer(cb_out_id, total_tiles, input_tile_size, input_format, output_buffer);
+    const uint32_t cb_bx_in_id = cb_a_in_id;  // shared staging CB
 
     const uint32_t num_tiles_in_row_to_tile_cb = 32;  // Tilizing 32 tiles will pack tensor rows into separate tiles
     const uint32_t cb_a_tilize_in_id = tt::CBIndex::c_24;
@@ -99,11 +95,20 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
     const uint32_t cb_h_acc_id = tt::CBIndex::c_31;
     create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
-    std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
-    tt::tt_metal::TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bx_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(h_buffer).append_to(reader_compile_time_args);
+    // Non-shard-backed staging CB for h_in. The h_prev shard uses intermediary_row_size pages
+    // (64 bytes) but Float16_b format. The unpacker reads full-format tiles (~2KB) which overshoot
+    // the 64-byte page boundary. If the shard is near the L1 limit this causes OOB.
+    // Using a non-shard-backed CB at a low L1 address avoids this.
+    const uint32_t cb_h_in_id = tt::CBIndex::c_2;
+    create_circular_buffer(cb_h_in_id, total_tiles_per_row, intermediary_row_size, intermediary_format);
+
+    // Shard-backed output CB last - buffer address may be high in L1
+    const uint32_t cb_out_id = tt::CBIndex::c_16;
+    const auto cb_out = create_circular_buffer(cb_out_id, total_tiles, input_tile_size, input_format, output_buffer);
+
+    std::vector<uint32_t> reader_compile_time_args = {
+        cb_a_in_id, cb_bx_in_id, cb_h_in_id, input_tile_size, intermediary_row_size};
+    std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
@@ -150,9 +155,6 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
     shared_variables.writer_kernel_id = writer_kernel_id;
     shared_variables.compute_kernel_id = compute_kernel_id;
     shared_variables.cores = cores;
-    shared_variables.cb_a_in = cb_a_in;
-    shared_variables.cb_bx_in = cb_bx_in;
-    shared_variables.cb_h_in = cb_h_in;
     shared_variables.cb_out = cb_out;
     shared_variables.total_tiles = total_tiles;
     shared_variables.total_tiles_per_row = total_tiles_per_row;
@@ -186,25 +188,28 @@ void PrefixScanProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
-    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_a_in, *a_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_bx_in, *bx_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_h_in, *h_buffer);
+    // Only update shard-backed output CB; a_in/bx_in and h_in are non-shard-backed staging CBs
     UpdateDynamicCircularBufferAddress(program, shared_vars.cb_out, *output_buffer);
 
     std::vector<std::vector<uint32_t>> reader_runtime_args = {
-        shared_vars.cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+        shared_vars.cores.size(),
+        {0, 0, 0, 0, 0}};  // (total_tiles_per_row, total_tiles_per_col, a_shard_addr, bx_shard_addr, h_shard_addr)
     std::vector<std::vector<uint32_t>> writer_runtime_args = {
-        shared_vars.cores.size(), {0, 0}};  // (num_tiles_per_core, hidden_state_len)
+        shared_vars.cores.size(), {0, 0, 0}};  // (num_tiles_per_core, hidden_state_len, h_shard_addr)
     std::vector<std::vector<uint32_t>> compute_runtime_args = {
         shared_vars.cores.size(),
         {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
 
     for (uint32_t i = 0; i < shared_vars.cores.size(); i++) {
-        reader_runtime_args[i][0] = shared_vars.total_tiles;
-        reader_runtime_args[i][1] = shared_vars.total_tiles_per_row;
+        reader_runtime_args[i][0] = shared_vars.total_tiles_per_row;
+        reader_runtime_args[i][1] = shared_vars.total_tiles_per_col;
+        reader_runtime_args[i][2] = static_cast<uint32_t>(a_buffer->address());
+        reader_runtime_args[i][3] = static_cast<uint32_t>(bx_buffer->address());
+        reader_runtime_args[i][4] = static_cast<uint32_t>(h_buffer->address());
 
         writer_runtime_args[i][0] = shared_vars.total_tiles;
         writer_runtime_args[i][1] = shared_vars.sharded_hidden_state_length;
+        writer_runtime_args[i][2] = static_cast<uint32_t>(h_buffer->address());
 
         compute_runtime_args[i][0] = shared_vars.total_tiles;
         compute_runtime_args[i][1] = shared_vars.total_tiles_per_row;

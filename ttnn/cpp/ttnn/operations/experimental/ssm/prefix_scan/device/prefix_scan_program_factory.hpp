@@ -14,9 +14,6 @@ struct PrefixScanSharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    tt::tt_metal::CBHandle cb_a_in{};
-    tt::tt_metal::CBHandle cb_bx_in{};
-    tt::tt_metal::CBHandle cb_h_in{};
     tt::tt_metal::CBHandle cb_out{};
     uint32_t total_tiles = 0;
     uint32_t total_tiles_per_row = 0;
