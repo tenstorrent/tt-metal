@@ -1,0 +1,2 @@
+{"event":"start","agent":"ttnn-unary-sfpu-operation-self-reflection","operation":"rrelu","ts":"2026-04-09T11:45:13+00:00"}
+{"event":"complete","agent":"ttnn-unary-sfpu-operation-self-reflection","operation":"rrelu","report_file":".claude-analysis/rrelu-1/sfpu_reflection.md","findings":{"implementation_coverage":"FULL","logging_compliance":"PARTIAL","sfpi_enforcement":"COMPLIANT","issues_found":6,"recommendations":5},"ts":"2026-04-09T11:49:14+00:00"}
