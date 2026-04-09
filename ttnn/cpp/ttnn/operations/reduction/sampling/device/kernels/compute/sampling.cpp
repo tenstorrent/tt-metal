@@ -4,8 +4,6 @@
 
 #include <cstdint>
 #include <cstring>
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -20,7 +18,6 @@
 #include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
 #include "api/compute/tilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #define DEBUG_PRINT 0

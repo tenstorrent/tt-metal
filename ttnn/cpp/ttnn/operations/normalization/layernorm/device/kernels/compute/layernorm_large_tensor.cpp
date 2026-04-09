@@ -19,12 +19,12 @@
 #include "experimental/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
