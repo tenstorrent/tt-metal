@@ -49,6 +49,13 @@ void kernel_main() {
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
 
+#ifdef USE_SOFTCAP
+    constexpr bool use_softcap = true;
+    constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_10;
+#else
+    constexpr bool use_softcap = false;
+#endif
+
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
@@ -179,7 +186,8 @@ void kernel_main() {
                         use_padded_mask,
                         is_chunked,
                         scale_fp32,
-                        sliding_window_size>(
+                        sliding_window_size,
+                        use_softcap>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,

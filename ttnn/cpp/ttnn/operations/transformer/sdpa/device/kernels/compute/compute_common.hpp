@@ -1592,7 +1592,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool use_softcap = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1809,6 +1810,43 @@ void sdpa_inner_loop(
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                 }
+            }
+
+            /**
+             * Logits softcap: QK = tanh(QK * scale / cap) * cap
+             *
+             * Program factory sets:
+             *   scale_fp32 = cap (fused into sub_exp_block)
+             *   cb_inv_softcap_scalar (c_10) = packed bfloat16(scale / cap)
+             *
+             * Step 1: QK *= scale/cap  (via scalar CB multiply)
+             * Step 2: QK = tanh(QK)    (in-place)
+             * Then sub_exp with scale=cap: exp((tanh(QK*s/c) - max) * cap)
+             * = softmax(cap * tanh(QK * scale / cap))  ✓
+             */
+            if constexpr (use_softcap) {
+                constexpr uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
+                constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_10;
+
+                // QK *= scale / cap
+                mul_block_bcast_scalar_inplace<cb_inv_softcap_scalar, qk_tiles>(cb_qk_im);
+
+                // QK = tanh(QK), following the same in-place pattern as mul_block_bcast_scalar_inplace
+                cb_wait_front(cb_qk_im, qk_tiles);
+                copy_tile_to_dst_init_short(cb_qk_im);
+                tanh_tile_init();
+
+                for (uint32_t t = 0; t < qk_tiles; ++t) {
+                    acquire_dst();
+                    copy_tile(cb_qk_im, t, 0);
+                    tanh_tile(0);
+                    pack_tile(0, cb_qk_im);
+                    release_dst();
+                }
+
+                cb_pop_front(cb_qk_im, qk_tiles);
+                cb_reserve_back(cb_qk_im, qk_tiles);
+                cb_push_back(cb_qk_im, qk_tiles);
             }
 
             /**
@@ -2061,7 +2099,8 @@ template <
     bool use_padded_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool use_softcap = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2117,7 +2156,8 @@ void sdpa_standard(
         false,  // use_joint_mask (not used)
         is_chunked,
         scale_fp32,
-        sliding_window_size>(
+        sliding_window_size,
+        use_softcap>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,

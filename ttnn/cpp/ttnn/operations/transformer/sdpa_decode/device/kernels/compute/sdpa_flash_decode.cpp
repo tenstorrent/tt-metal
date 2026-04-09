@@ -399,6 +399,47 @@ void kernel_main() {
                  * This gives us scaling for free on the performance-critical exp(x - max) computation.
                  */
 
+#ifdef USE_SOFTCAP
+                {
+                    // Logits softcap: QK = tanh(QK * scale/cap) * cap
+                    constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_15;
+
+                    // Step 1: QK *= scale/cap (via scalar CB)
+                    // Use runtime-aware multiply since chunk size may be dynamic
+                    reconfig_data_format(cb_qk_im, cb_inv_softcap_scalar);
+                    mul_tiles_bcast_scalar_init_short(cb_qk_im, cb_inv_softcap_scalar);
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                    cb_wait_front(cb_inv_softcap_scalar, 1);
+                    for (uint32_t t = 0; t < qk_chunk_tiles_dynamic; ++t) {
+                        tile_regs_acquire();
+                        mul_tiles_bcast_scalar(cb_qk_im, cb_inv_softcap_scalar, t, 0, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_qk_im, t);
+                        tile_regs_release();
+                    }
+                    cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                    cb_reserve_back(cb_qk_im, qk_chunk_tiles_dynamic);
+                    cb_push_back(cb_qk_im, qk_chunk_tiles_dynamic);
+
+                    // Step 2: QK = tanh(QK)
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                    copy_tile_to_dst_init_short(cb_qk_im);
+                    tanh_tile_init();
+                    for (uint32_t t = 0; t < qk_chunk_tiles_dynamic; ++t) {
+                        acquire_dst();
+                        copy_tile(cb_qk_im, t, 0);
+                        tanh_tile(0);
+                        pack_tile(0, cb_qk_im);
+                        release_dst();
+                    }
+                    cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                    cb_reserve_back(cb_qk_im, qk_chunk_tiles_dynamic);
+                    cb_push_back(cb_qk_im, qk_chunk_tiles_dynamic);
+                    // sub_exp_block will apply scale=cap: exp((tanh(QK*s/c) - max) * cap)
+                }
+#endif
+
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
 

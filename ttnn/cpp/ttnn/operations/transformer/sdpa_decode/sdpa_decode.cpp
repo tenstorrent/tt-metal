@@ -45,7 +45,8 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<float> logits_softcap) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -88,7 +89,8 @@ ttnn::Tensor scaled_dot_product_attention_decode(
         k_chunk_size,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        logits_softcap);
 }
 
 ttnn::Tensor paged_scaled_dot_product_attention_decode(
@@ -104,7 +106,8 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<float> logits_softcap) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -145,7 +148,8 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
         k_chunk_size,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        logits_softcap);
 }
 
 ttnn::Tensor flash_multi_latent_attention_decode(

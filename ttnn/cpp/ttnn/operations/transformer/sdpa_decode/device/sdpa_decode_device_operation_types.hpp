@@ -28,6 +28,7 @@ struct SdpaDecodeParams {
     // When true, enables multi-latent attention (MLA) path where V is derived from K.
     std::optional<bool> use_mla = std::nullopt;
     std::optional<uint32_t> head_dim_v = std::nullopt;
+    std::optional<float> logits_softcap = std::nullopt;
 };
 
 struct SdpaDecodeInputs {

@@ -498,7 +498,8 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<float> logits_softcap) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -512,6 +513,7 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
+            .logits_softcap = logits_softcap,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

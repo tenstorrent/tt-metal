@@ -446,7 +446,8 @@ Tensor sdpa_decode(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
-    std::optional<uint32_t> head_dim_v) {
+    std::optional<uint32_t> head_dim_v,
+    std::optional<float> logits_softcap) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -461,6 +462,7 @@ Tensor sdpa_decode(
         .share_cache = share_cache,
         .use_mla = use_mla,
         .head_dim_v = head_dim_v,
+        .logits_softcap = logits_softcap,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

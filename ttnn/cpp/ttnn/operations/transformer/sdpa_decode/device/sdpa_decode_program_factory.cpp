@@ -44,6 +44,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
     bool share_cache = operation_attributes.share_cache.value_or(false);
+    const bool use_softcap =
+        operation_attributes.logits_softcap.has_value() && operation_attributes.logits_softcap.value() != 0.0f;
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
@@ -496,6 +498,10 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         create_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     }
     create_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
+    if (use_softcap) {
+        create_cb(
+            CBIndex::c_15, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);  // inv_softcap
+    }
     create_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
     create_cb(CBIndex::c_7, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // l_in
 
@@ -570,11 +576,18 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
     const uint32_t packed_zero_scalar = pack_two_bfloat16_into_uint32({bfloat_zero_scalar, bfloat_zero_scalar});
 
+    const float softcap_val = operation_attributes.logits_softcap.value_or(0.0f);
+
     union {
         float f;
         uint32_t u;
     } scale_union{};
-    scale_union.f = scale;
+    // When softcap is active, sub_exp uses cap as scale
+    scale_union.f = use_softcap ? softcap_val : scale;
+
+    const bfloat16 bfloat_inv_softcap_scalar(use_softcap ? (scale / softcap_val) : 0.0f);
+    const uint32_t packed_inv_softcap_scalar =
+        pack_two_bfloat16_into_uint32({bfloat_inv_softcap_scalar, bfloat_inv_softcap_scalar});
 
     // ========== Semaphores ==========
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
@@ -726,6 +739,11 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    if (use_softcap) {
+        compute_defines["USE_SOFTCAP"] = "1";
+        compute_defines["PACKED_INV_SOFTCAP_SCALAR"] = std::to_string(packed_inv_softcap_scalar);
+    }
+
     // ========== Kernel Creation ==========
     const std::string kernel_path = "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/";
 
@@ -746,11 +764,16 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         core_grid,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
 
+    std::map<std::string, std::string> writer_defines;
+    if (use_softcap) {
+        writer_defines["USE_SOFTCAP"] = "1";
+        writer_defines["PACKED_INV_SOFTCAP_SCALAR"] = std::to_string(packed_inv_softcap_scalar);
+    }
     auto writer_kernels_id = CreateKernel(
         program,
         kernel_path + "dataflow/writer_decode_all.cpp",
         core_grid,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, writer_defines));
 
     // ========== Buffer Addresses for Runtime Args ==========
     const uint32_t q_addr = q_buffer->address();

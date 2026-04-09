@@ -74,6 +74,11 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
+#ifdef USE_SOFTCAP
+    constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_10;
+    generate_reduce_scaler(cb_inv_softcap_scalar, PACKED_INV_SOFTCAP_SCALAR);
+#endif
+
     // Lightweight mask: generate a single -inf tile once, leave permanently fronted.
     if constexpr (use_lightweight_mask) {
         const uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);

@@ -204,6 +204,11 @@ void kernel_main() {
     generate_reduce_scaler<is_half_tile>(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
+#ifdef USE_SOFTCAP
+    constexpr uint32_t cb_inv_softcap_scalar = tt::CBIndex::c_15;
+    generate_reduce_scaler<is_half_tile>(cb_inv_softcap_scalar, PACKED_INV_SOFTCAP_SCALAR);
+#endif
+
     // Generate sliding window mask only if we have local data and need it
     if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here

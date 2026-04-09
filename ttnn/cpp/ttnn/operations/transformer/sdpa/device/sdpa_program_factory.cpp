@@ -476,11 +476,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
+    const bool use_softcap =
+        operation_attributes.logits_softcap.has_value() && operation_attributes.logits_softcap.value() != 0.0f;
+    const float scale_val = scale.value_or(1.0f);
+    const float softcap_val = operation_attributes.logits_softcap.value_or(0.0f);
+
     union {
         float f;
         uint32_t u;
     } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    // When softcap is active, sub_exp_block uses cap as its scale:
+    //   exp((tanh(QK * scale/cap) - max) * cap) = softmax(cap * tanh(QK * scale/cap))
+    // The scale/cap multiply is applied separately via scalar CB before tanh.
+    scale_union.f = use_softcap ? softcap_val : scale_val;
+
+    // inv_softcap = scale / cap, packed as bfloat16 for scalar CB multiply before tanh
+    class bfloat16 bfloat_inv_softcap_scalar(use_softcap ? (scale_val / softcap_val) : 0.0f);
+    uint32_t packed_inv_softcap_scalar =
+        pack_two_bfloat16_into_uint32({bfloat_inv_softcap_scalar, bfloat_inv_softcap_scalar});
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
@@ -637,6 +650,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
+    if (use_softcap) {
+        defines["USE_SOFTCAP"] = "1";
+        defines["PACKED_INV_SOFTCAP_SCALAR"] = std::to_string(packed_inv_softcap_scalar);
+    }
+
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
 
@@ -724,6 +742,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             CircularBufferConfig(chunk_start_idx_page_size, {{tt::CBIndex::c_9, tt::DataFormat::Int32}})
                 .set_page_size(tt::CBIndex::c_9, chunk_start_idx_page_size);
         CreateCircularBuffer(program, core_grid, c_chunk_start_writer_config);
+    }
+
+    // Create softcap inverse scalar buffer (c_10) for scale/cap multiply before tanh
+    if (use_softcap) {
+        auto c_in10_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_10, scalar_df}})
+                                 .set_page_size(tt::CBIndex::c_10, scalar_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in10_config);
     }
 
     // Create attention sink buffer if provided

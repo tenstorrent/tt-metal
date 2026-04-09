@@ -22,6 +22,7 @@ struct SDPAParams {
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
+    std::optional<float> logits_softcap;
 };
 
 struct SDPAInputs {

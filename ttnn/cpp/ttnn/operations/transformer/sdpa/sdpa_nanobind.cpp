@@ -215,7 +215,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("logits_softcap") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
