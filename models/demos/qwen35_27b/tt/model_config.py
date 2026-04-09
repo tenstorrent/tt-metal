@@ -342,6 +342,9 @@ class Qwen35ModelArgs(ModelArgs):
             "topology": self.ccl_topology() or ttnn.Topology.Linear,
         }
 
+        # TopK core grid: use 30 cores (3x10) instead of single-core default
+        self.sub_core_grid_topk = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9))])
+
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         """Map framework module names to Qwen3.5 state dict key prefixes."""
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
