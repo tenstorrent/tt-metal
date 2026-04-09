@@ -63,7 +63,15 @@ namespace {
 
 uint64_t hash_file_content(std::istream& file) {
     tt::FNV1a hasher;
-    hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    char buf[65536];
+    for (;;) {
+        file.read(buf, sizeof(buf));
+        std::streamsize bytes_read = file.gcount();
+        if (bytes_read <= 0) {
+            break;
+        }
+        hasher.update(buf, buf + bytes_read);
+    }
     return hasher.digest();
 }
 
