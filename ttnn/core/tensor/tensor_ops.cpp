@@ -351,7 +351,7 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
     const auto& old_layout = old_spec.tensor_layout();
 
     TensorLayout new_tensor_layout(
-        old_layout.get_data_type(), PageConfig(target_layout), old_layout.get_memory_config());
+        old_layout.get_data_type(), PageConfig(target_layout, old_layout.get_tile()), old_layout.get_memory_config());
     TensorSpec new_spec(old_spec.logical_shape(), new_tensor_layout);
     const auto& topology = input_tensor.tensor_topology();
 
