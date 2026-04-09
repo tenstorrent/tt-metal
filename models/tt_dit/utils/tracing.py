@@ -100,7 +100,7 @@ class Tracer:
         """
         if self._trace_id is None:
             if self._function is None:
-                msg = "tracer can not be reused after the trace was released"
+                msg = "tracer cannot be reused after release_trace() has been called"
                 raise RuntimeError(msg)
 
             args = _tree_map(_verify_value, args, path_label="args")
