@@ -130,11 +130,21 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
-    result = ttnn.all_reduce(
+    reduced = ttnn.reduce_scatter(
         tensor,
+        dim=3,
         num_links=1,
         topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tensor.deallocate(True)
-    return result
+
+    gathered = ttnn.all_gather(
+        reduced,
+        dim=3,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    reduced.deallocate(True)
+    return gathered
