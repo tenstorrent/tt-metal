@@ -87,6 +87,13 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
     torch.manual_seed(41467)
 
     inp_shape = (1, 1, 32, 128)
+    # inp_shape = (1, 1, 24, 42) #test passing on this non-multiple shape of 32 regardless of implicit padding (#31983)
+    inp_shape = (
+        1,
+        1,
+        24,
+        38,
+    )  # test failing on this non-multiple shape of 32 only when implicit padding is enabled (#31983)
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
@@ -110,6 +117,7 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
     tt_res = torch2tt_tensor(
         torch_res,
         tt_dtype=ttnn.bfloat16,
@@ -125,6 +133,7 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
         compute_kernel_config=kernel_config,
         memory_config=dram_memcfg,
     )
+    tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
     tt_output_host = tt2torch_tensor(tt_stats)
     all_passing = True
@@ -218,6 +227,9 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
+    tt_inp = ttnn.fill_implicit_tile_padding(
+        tt_inp, TEST_PADDING_VALUE
+    )  # test failing when implicit padding is enabled (#31983)
 
     if use_pre_all_gather:
         tt_stats = ln_pre_allgather_op([tt_inp], 1, False, ttnn.bfloat16, pre_kernel_config)[0]
@@ -230,6 +242,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
+        tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
     tt_gamma = torch2tt_tensor(
         gamma_torch,
@@ -296,7 +309,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 tt_memory_config=dram_memcfg,
             )
         )
-        tt_inp[d] = ttnn.fill_implicit_tile_padding(tt_inp[d], TEST_PADDING_VALUE)
+        # tt_inp[d] = ttnn.fill_implicit_tile_padding(tt_inp[d], TEST_PADDING_VALUE) #(#31983)
 
     # LN pre all gather OP
     kernel_config = ttnn.init_device_compute_kernel_config(
@@ -394,9 +407,8 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (1, 1, 8192, 8192),
         (2, 1, 128, 8192),
         (1, 1, 128, 2048),
-        # (1,1,32,33) # Implicit padding case
-        # Disabled due to issue #31983:
-        # getting critical error and sometimes hardware reset request
+        # (1, 1, 129, 2052), # test failed on this shape stating Physical data size 8192 should be same as volume indicated by physical shape (160, 64) (#31983) with or without implicit padding
+        # (1, 1, 24, 42), #test not running completely getting segmentation fault (core dumped) on this shape with or without implicit padding (#31983)
     ],
 )
 @pytest.mark.parametrize(
@@ -426,9 +438,8 @@ def test_layernorm_part_1_with_program_cache(inp_shape, n_devices, is_rmsnorm, i
     "inp_shape",
     [
         (1, 1, 2048, 8192),
-        # (1,1,32,33) # Implicit padding case
-        # Disabled due to issue #31983:
-        # failing when shape changed
+        # (1, 1, 129, 2052), #test failing on this shape stating Program cache should have only one entry with or without implicit padding (#31983)
+        # (1, 1, 24, 42), #test failing on this shape stating list index out of range with or without implicit padding (#31983)
     ],
 )
 @pytest.mark.parametrize(

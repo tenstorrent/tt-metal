@@ -13,7 +13,7 @@ TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize("shape", [[2, 10, 512, 8192]])
-# [2, 10, 512, 8193]  test is stuck when shape is changed
+# [2, 10, 512, 342]  test is failing regardless of implicit padding
 def test_ttnn_softmax_sdxl_attention(device, shape):
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)

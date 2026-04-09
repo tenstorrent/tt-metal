@@ -48,8 +48,6 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import run_distributed_norm_test
 
-TEST_PADDING_VALUE = -42
-
 
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("seq_len", [512, 1024, 2048])

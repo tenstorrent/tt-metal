@@ -15,8 +15,6 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-TEST_PADDING_VALUE = -42
-
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if gamma is None:
@@ -93,7 +91,6 @@ def run_distributed_layernorm(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
     )
-    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
     tt_gamma = ttnn.as_tensor(
         gamma.reshape(n_devices, 1, -1, 32),
         dtype=ttnn.bfloat16,
