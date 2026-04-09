@@ -64,7 +64,7 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
 
     // Valid rows in the last H tile (for padding exclusion).
-    constexpr uint32_t last_tile_rows = (H % tile_height) == 0 ? tile_height : H % tile_height;
+    constexpr uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
 
     // Population variance: scale_idx = H-1 gives reciprocal 1/H.
     // Bessel's correction is applied later by the writer kernel.
@@ -89,18 +89,32 @@ void kernel_main() {
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // H-reduce one column of Ht tiles.
+
+                // start_N is the cumulative row count across tiles processed so far;
+                // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
+                // for each row's running-mean update.
                 uint32_t start_N = 0;
                 welford_init();
 
-                for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    if constexpr (do_scale) {
-                        // Scale step in its own DST cycle (same pattern as welford_reduce_h.cpp).
+                if constexpr (do_scale) {
+                    // The do_scale path needs per-tile DST windows because the
+                    // FPU multiply is incompatible with SFPU Welford within
+                    // the same DST window.  The Welford SFPU state (LREG4/5)
+                    // persists across tile_regs_release/acquire cycles.
+                    for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        // Scale step in its own DST cycle.
                         cb_in_obj.wait_front(onetile);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                         tile_regs_commit();
                         cb_in_obj.pop_front(1);
+
+                        // mul_tiles_bcast_scalar_init_short reconfigured the FPU math
+                        // pipeline in a way that's incompatible with the subsequent
+                        // SFPU Welford operation. While confusingly unusual, packing
+                        // the result to an intermediate CB and reading it back before the
+                        // SFPU Welford operation fixes the configuration.
                         cb_scaled_obj.reserve_back(onetile);
                         tile_regs_wait();
                         pack_reconfig_data_format(cb_scaled);
@@ -114,34 +128,57 @@ void kernel_main() {
                         copy_tile_to_dst_init_short(cb_scaled);
                         copy_tile(cb_scaled, 0, input_dst);
                         cb_scaled_obj.pop_front(onetile);
-                    } else {
-                        cb_in_obj.wait_front(onetile);
-                        tile_regs_acquire();
-                        copy_tile_to_dst_init_short(cb_in);
-                        copy_tile(cb_in, 0, input_dst);
-                        cb_in_obj.pop_front(1);
-                    }
 
-                    if (ht < (Ht - 1)) {
-                        welford_update<0>(input_dst, start_N, {});
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        tile_regs_release();
-                    } else {
-                        // Last tile: process only valid rows, then finalize.
-                        welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                        // Finalize to row format: 32 per-column (mean, var) values
-                        // stored in tile row 0 (across Face 0 and Face 1).
-                        // welford_finalize_to_row applies SFPTRANSP to convert from
-                        // SFPU lane order to tile column order; the "raw face" variant
-                        // (welford_finalize_to_face) skips this and stores in lane
-                        // order, which is NOT the same as tile column order.
-                        // Population variance (scale_idx = H-1); Bessel's correction
-                        // is applied by the writer kernel after W-combine.
-                        welford_finalize_to_row<0>(mean_dst, scale_idx, {});
-                        tile_regs_commit();
+                        if (ht < (Ht - 1)) {
+                            welford_update<0>(input_dst, start_N, {});
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+                        } else {
+                            // Last tile: process only valid rows, then finalize.
+                            welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                            // Finalize to row format: 32 per-column (mean, var) values
+                            // stored in tile row 0 (across Face 0 and Face 1).
+                            // welford_finalize_to_row applies SFPTRANSP to convert from
+                            // SFPU lane order to tile column order; the "raw face" variant
+                            // (welford_finalize_to_face) skips this and stores in lane
+                            // order, which is NOT the same as tile column order.
+                            // Population variance (scale_idx = H-1); Bessel's correction
+                            // is applied by the writer kernel after W-combine.
+                            welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                            tile_regs_commit();
+                        }
+                        start_N += tile_height;
                     }
-                    start_N += tile_height;
+                } else {
+                    // No scaling: copy_tile (unpack) and welford_update (SFPU) are
+                    // compatible operations, so the entire Ht loop runs in a single
+                    // DST window — no per-tile acquire/release overhead.
+                    copy_tile_to_dst_init_short(cb_in);
+                    tile_regs_acquire();
+                    for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        cb_in_obj.wait_front(onetile);
+                        copy_tile(cb_in, 0, input_dst);
+                        cb_in_obj.pop_front(onetile);
+
+                        if (ht < (Ht - 1)) {
+                            welford_update<0>(input_dst, start_N, {});
+                        } else {
+                            // Last tile: process only valid rows, then finalize.
+                            welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                            // Finalize to row format: 32 per-column (mean, var) values
+                            // stored in tile row 0 (across Face 0 and Face 1).
+                            // welford_finalize_to_row applies SFPTRANSP to convert from
+                            // SFPU lane order to tile column order; the "raw face" variant
+                            // (welford_finalize_to_face) skips this and stores in lane
+                            // order, which is NOT the same as tile column order.
+                            // Population variance (scale_idx = H-1); Bessel's correction
+                            // is applied by the writer kernel after W-combine.
+                            welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                        }
+                        start_N += tile_height;
+                    }
+                    tile_regs_commit();
                 }
 
                 // Pack mean (DST[1]) and var (DST[2]) tiles to cb_partial.

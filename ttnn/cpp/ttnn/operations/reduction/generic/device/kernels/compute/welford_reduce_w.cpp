@@ -56,16 +56,11 @@ void kernel_main() {
     // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
     constexpr auto cb_scaled = tt::CBIndex::c_20;
 
-    // The CB that the transpose step reads from: cb_scaled when scaling,
-    // cb_in directly when not.
-    constexpr auto cb_transpose_src = do_scale ? cb_scaled : cb_in;
-
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_scalar_obj(cb_scalar);
     experimental::CircularBuffer cb_out_obj(cb_out);
     experimental::CircularBuffer cb_var_obj(cb_var);
     experimental::CircularBuffer cb_scaled_obj(cb_scaled);
-    experimental::CircularBuffer cb_transpose_src_obj(cb_transpose_src);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -79,7 +74,7 @@ void kernel_main() {
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed.
-    constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
+    constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
     compute_kernel_hw_startup(cb_in, cb_out);
     pack_reconfig_data_format(cb_out);
@@ -97,13 +92,23 @@ void kernel_main() {
         // The Welford SFPU state (running mean in LREG4, M2 in LREG5) persists
         // across tile_regs_release/acquire cycles because LREGs are SFPU registers,
         // separate from the DST register file controlled by the semaphore.
+
+        // start_N is the cumulative sample count across tiles processed so far;
+        // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
+        // for each sample's running-mean update.
         uint32_t start_N = 0;
 
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            if constexpr (do_scale) {
+        if constexpr (do_scale) {
+            // The do_scale path needs per-tile DST windows because the FPU
+            // multiply is incompatible with SFPU Welford within the same DST
+            // window.  The scaled result is packed to cb_scaled so that
+            // transpose_wh_tile (an unpack operation) can read it back.
+            // The Welford SFPU state (LREG4/5) persists across
+            // tile_regs_release/acquire cycles.
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // --- Scale step: multiply input tile by scalar ---
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
@@ -126,33 +131,61 @@ void kernel_main() {
                 pack_tile(input_dst, cb_scaled);
                 tile_regs_release();
                 cb_scaled_obj.push_back(onetile);
-            }
 
-            // --- Transpose + Welford step ---
-            cb_transpose_src_obj.wait_front(onetile);
+                // --- Transpose + Welford step ---
+                cb_scaled_obj.wait_front(onetile);
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_scaled);
+                transpose_wh_init_short(cb_scaled);
+                transpose_wh_tile(cb_scaled, 0, input_dst);
+
+                if (wt < (Wt - 1)) {
+                    welford_update<0>(input_dst, start_N, {});
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    tile_regs_release();
+                } else {
+                    // Last tile: finalize and keep DST acquired for variance packing
+                    welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                    // scale_idx controls the divisor for M2 -> variance conversion:
+                    //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
+                    //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
+                    constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
+                    welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                    tile_regs_commit();
+                }
+                cb_scaled_obj.pop_front(onetile);
+                start_N += tile_width;
+            }
+        } else {
+            // No scaling: transpose_wh_tile (unpack) and welford_update (SFPU)
+            // are compatible operations, so the entire Wt loop runs in a single
+            // DST window — no per-tile acquire/release overhead.
+            // Explicit srca reconfig is required because the output packing
+            // phase (below) calls reconfig_data_format_srca(cb_var) which
+            // changes the format on the 2nd+ NCHt iterations.
+            reconfig_data_format_srca(cb_in);
+            transpose_wh_init_short(cb_in);
             tile_regs_acquire();
-            reconfig_data_format_srca(cb_transpose_src);
-            transpose_wh_init_short(cb_transpose_src);
-            transpose_wh_tile(cb_transpose_src, 0, input_dst);
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                cb_in_obj.wait_front(onetile);
+                transpose_wh_tile(cb_in, 0, input_dst);
+                cb_in_obj.pop_front(onetile);
 
-            if (wt < (Wt - 1)) {
-                welford_update<0>(input_dst, start_N, {});
-                tile_regs_commit();
-                tile_regs_wait();
-                tile_regs_release();
-            } else {
-                // Last tile: finalize and keep DST acquired for variance packing
-                welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                // Store the mean and variance to the destination registers.
-                // scale_idx controls the divisor for M2 -> variance conversion:
-                //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
-                //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
-                constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
-                welford_finalize_to_row<0>(mean_dst, scale_idx, {});
-                tile_regs_commit();
+                if (wt < (Wt - 1)) {
+                    welford_update<0>(input_dst, start_N, {});
+                } else {
+                    // Last tile: finalize and keep DST acquired for variance packing
+                    welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                    // scale_idx controls the divisor for M2 -> variance conversion:
+                    //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
+                    //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
+                    constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
+                    welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                }
+                start_N += tile_width;
             }
-            cb_transpose_src_obj.pop_front(onetile);
-            start_N += tile_width;
+            tile_regs_commit();
         }
 
         // Pack variance and transpose back to column format
