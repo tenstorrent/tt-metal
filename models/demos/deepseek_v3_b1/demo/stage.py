@@ -1129,6 +1129,9 @@ class _CombinedPipelineBlock:
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 
+        self.h2d_socket.export_descriptor(f"deepseek_h2d")
+        self.d2h_socket.export_descriptor(f"deepseek_d2h")
+
         print(
             f"[COMBINED P{my_mesh_id}] _CombinedPipelineBlock created: "
             f"h2d_dev={h2d_device_coord} exit_dev={exit_node_coord} "
