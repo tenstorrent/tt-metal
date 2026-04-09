@@ -46,13 +46,18 @@ def mesh_device_fixture():
     """
     Override default device fixture.
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    Conv2d requires l1_small_size to avoid circular buffer clashes with L1 buffers.
     """
     mesh_shape = get_mesh_shape()
 
     if mesh_shape:
         # Create mesh device based on env var
         try:
-            device = create_mesh_device(mesh_shape)
+            device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                dispatch_core_config=ttnn.DispatchCoreConfig(),
+                l1_small_size=79104,
+            )
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
