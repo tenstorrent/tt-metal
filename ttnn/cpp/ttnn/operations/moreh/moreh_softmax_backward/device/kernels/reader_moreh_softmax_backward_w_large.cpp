@@ -33,7 +33,7 @@ void kernel_main() {
     const auto dy_in = TensorAccessor(dy_args, dy_addr, dy_tile_bytes);
 
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(mask_w);
+        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     generate_mask_w(cb_mask, mask_w);
 
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
