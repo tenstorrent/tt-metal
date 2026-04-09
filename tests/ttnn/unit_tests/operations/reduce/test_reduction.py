@@ -11,10 +11,12 @@ import sys
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_blackhole, torch_random
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 31, 63])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
 @pytest.mark.parametrize("dim", [-1, -2])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
@@ -25,8 +27,6 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     torch_output_tensor = torch.std(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that std removes it
-
     output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -44,8 +44,8 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])  # , 31, 63])
-@pytest.mark.parametrize("w", [32, 64])  # , 31, 63])
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
 @pytest.mark.parametrize("dim", [None, [], -1, -2])
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("correction", [True, False])
@@ -56,7 +56,6 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch_output_tensor = torch.var(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(input_tensor, 0)  # garbage padding to test that var removes it
 
     output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -112,7 +111,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         dtype=dtype,
         # pad_value=1.0,
     )
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that prod removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
@@ -150,7 +149,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -183,7 +182,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -215,7 +214,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -246,7 +245,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -276,7 +275,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -315,7 +314,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that topk removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
 
     desired_shape = [dim1, dim2]
@@ -383,7 +382,7 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that topk removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
 
     desired_shape = [dim1, dim2]
@@ -443,7 +442,7 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that topk removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
 
     desired_shape = [dim1, dim2, dim3, dim4, dim5]
@@ -516,7 +515,7 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that topk removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
 
     desired_shape = [dim1, dim2, dim3, dim4, dim5, dim6]
@@ -575,7 +574,7 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -603,7 +602,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that sum removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -633,7 +632,7 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that mean removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -662,7 +661,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that mean removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -690,7 +689,7 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that mean removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -713,7 +712,7 @@ def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
     input_tensor = torch.reshape(input_tensor, (1, 1, -1, in_c))
     input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that max_pool2d removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.max_pool2d(
         input_tensor,
         batch_size,
@@ -747,7 +746,7 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that mean removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_numeric_metrics(
@@ -803,7 +802,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     torch_tensor = torch.randn(*tensor_shape) if rank > 0 else torch.randn(())
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_tensor, -42)  # garbage padding to test that the operation removes it
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
 

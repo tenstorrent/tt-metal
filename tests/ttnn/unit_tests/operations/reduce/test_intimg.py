@@ -7,6 +7,8 @@ import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
+
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
     assert len(features_nhwc.shape) == 4, "Input tensor must be 4D"
@@ -30,7 +32,7 @@ def ttnn_integral_image_channel_last(features_nhwc):
         ([1, 12, 40, 256]),
         ([1, 24, 80, 256]),
         ([1, 48, 160, 256]),
-        ([1, 96, 160, 256])
+        ([1, 96, 160, 256]),
     ],
     ids=["OFT32", "OFT16", "OFT8", "big_one"],
 )
@@ -50,7 +52,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     if dtype == ttnn.bfloat16:
@@ -77,7 +79,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
     if dtype == ttnn.bfloat16:

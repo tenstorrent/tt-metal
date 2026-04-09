@@ -11,6 +11,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+TEST_PADDING_VALUE = -42
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
@@ -26,7 +27,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that the operation removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
@@ -37,7 +38,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor = ttnn.from_torch(
             indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
         )
-        ttnn.fill_implicit_tile_padding(indices_tensor, -42)
+        indices_tensor = ttnn.fill_implicit_tile_padding(indices_tensor, TEST_PADDING_VALUE)
     else:
         indices_tensor = None
 
@@ -122,7 +123,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (5, 9, 96, 1024, 2, 32),
         (5, 9, 1024, 96, 3, 32),
         (3, 2, 160, 960, 2, 32),
-        (8, 16, 31, 63, 3, 32),  # implicit padding issue.
+        (8, 16, 18, 20, 3, 18),
     ),
 )
 @pytest.mark.parametrize(
@@ -158,7 +159,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 )
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
-    ((1, 1, 32, 16 * 1024, 3, 32), (8, 16, 31, 63, 3, 32)),  # implicit padding issue.
+    ((1, 1, 32, 16 * 1024, 3, 32), (8, 16, 18, 22, 3, 22)),
 )
 @pytest.mark.parametrize(
     "sorted",
@@ -212,7 +213,7 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     (
         (1, 1, 32, 151936, 3, 50),
         (1, 1, 32, 128256, 3, 50),
-        (1, 1, 32, 255999, 3, 50),  # implicit padding issue.
+        (1, 1, 16, 20, 3, 16),
     ),
 )
 @pytest.mark.parametrize(
@@ -262,7 +263,7 @@ def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
     pyt_values, _ = torch.topk(input_torch, k, dim=dim, largest=True, sorted=True)
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat8_b, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that the operation removes it
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_values, ttnn_indices = ttnn.topk(
         ttnn_input, k, dim=dim, largest=True, sorted=True, sub_core_grids=sub_core_grids
     )
@@ -349,7 +350,6 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         input_torch = torch.randint(0, 100, shape, dtype=torch_input_tensor_dtype)
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that the operation removes it
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
@@ -372,7 +372,6 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    ttnn.fill_implicit_tile_padding(ttnn_input, -42)  # garbage padding to test that the operation removes it
     value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
     index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
 
