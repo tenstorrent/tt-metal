@@ -1,6 +1,13 @@
 name: "[Tier 1] Models Unit Tests"
 
 on:
+  schedule:
+    # fast-dispatch-full-regressions-and-models.yaml
+    - cron: "0 5,14,23 * * *"
+    # t3000-unit-tests.yaml
+    - cron: "0 */2 * * *"
+    # galaxy-unit-tests.yaml
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -59,24 +66,53 @@ permissions:
   packages: write
   contents: write
 
+run-name: >-
+  [Tier 1] Models Unit${{
+    github.event_name == 'schedule'
+    && format(' ({0})', github.event.schedule)
+    || ''
+  }}
+
 jobs:
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
     steps:
-      - name: Resolve SKU selection
+      - name: Resolve SKU and model (scheduled runs mirror legacy pipeline scope)
         id: resolve
         run: |
           ALL_SKUS="wh_n150,wh_n300,wh_galaxy"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
-          if [[ "$SKU_INPUT" == "all" ]]; then
-            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
-          else
-            # Extract SKU name before the parenthetical description
-            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
-            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          SCHEDULE="${{ github.event.schedule }}"
+          case "$SCHEDULE" in
+            "0 5,14,23 * * *")
+              # fast-dispatch-full-regressions-and-models.yaml — Llama 3.1-8B + Whisper unit on N150/N300
+              echo "enabled-skus=wh_n150,wh_n300" >> $GITHUB_OUTPUT
+              echo "model=all" >> $GITHUB_OUTPUT
+              ;;
+            "0 */2 * * *"|"0 8 * * *")
+              # t3000-unit-tests.yaml + galaxy-unit-tests.yaml — Galaxy tier-1 unit jobs
+              echo "enabled-skus=wh_galaxy" >> $GITHUB_OUTPUT
+              echo "model=all" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::Unhandled schedule '$SCHEDULE'; update resolve-skus in models-t1-unit-tests.yaml"
+              exit 1
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -96,6 +132,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
-      model: ${{ inputs.model || 'all' }}
+      model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "1"
