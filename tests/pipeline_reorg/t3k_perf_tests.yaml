@@ -11,6 +11,25 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: t3k_LLM_falcon7b_model_perf_tests
+  cmd: run_t3000_falcon7b_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 75
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: falcon7b
+  model-type: LLM
+
+- name: t3k_LLM_falcon40b_model_perf_tests
+  cmd: run_t3000_falcon40b_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 75
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  model-name: falcon40b
+  model-type: LLM
 
 - name: t3k_CNN_resnet50_model_perf_tests
   cmd: run_t3000_resnet50_tests
@@ -97,3 +116,23 @@
   model-name: qwenimage
   model-type: DiT
   save-perf-data: true
+
+- name: t3k_ViT_Gemma3_perf_tests
+  cmd: run_t3000_gemma3_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 75
+  owner_id: U093901FR8U # Milos Stojko
+  team: models
+  model-name: gemma-3-27b-it
+  model-type: ViT
+
+- name: t3k_ViT_Gemma3_perf_tests_op_to_op
+  cmd: run_t3000_gemma3_tests_op_to_op
+  skus:
+    wh_llmbox_perf:
+      timeout: 25
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+  model-name: gemma-3-27b-it
+  model-type: ViT

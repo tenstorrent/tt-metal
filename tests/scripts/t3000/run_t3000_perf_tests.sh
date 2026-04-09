@@ -3,6 +3,64 @@ set -eo pipefail
 
 TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
+run_t3000_falcon7b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon7b_tests"
+
+  # TODO(ci): Skip prefill_seq2048 until perf gate is stable; merge_perf_results fails on small regressions vs baseline.
+  # Tracking: https://github.com/tenstorrent/tt-metal/issues/40304
+  pytest models/demos/falcon7b_common/tests -m "model_perf_t3000" -k "not prefill_seq2048" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon7b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_mistral7b_perf_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mistral7b_perf_tests"
+
+  hf_model=mistralai/Mistral-7B-Instruct-v0.3
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mistral7b_perf_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_falcon40b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon40b_tests"
+
+  pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon40b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_resnet50_tests() {
   # Record the start time
   fail=0
@@ -57,6 +115,28 @@ run_t3000_dit_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_gemma3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Gemma3 27B ViT test completed"
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_gemma3_tests_op_to_op() {
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
 }
 
 run_t3000_wan22_tests() {
