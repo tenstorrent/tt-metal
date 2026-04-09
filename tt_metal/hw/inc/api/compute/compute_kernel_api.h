@@ -663,8 +663,10 @@ ALWI void max_reduce_with_indices_init() {
 template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim=ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL || (reduce_dim == ReduceDim::REDUCE_ROW && pool_type == PoolType::SUM),
-        "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only supported for SUM");
+        reduce_dim == ReduceDim::REDUCE_COL ||
+            (reduce_dim == ReduceDim::REDUCE_ROW && (pool_type == PoolType::SUM || pool_type == PoolType::MAX)),
+        "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only "
+        "supported for SUM and MAX");
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
