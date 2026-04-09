@@ -462,13 +462,8 @@ class ttMLA:
         # Update KV cache with compressed latent representation
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, 0)
 
-        # expand v with wkv_b2
-        # TODO: workaround for #37416, remove when resolved
-        tt_v_latent_post_repeat = ttnn.repeat(tt_kv_nope, [1, num_heads_local, 1, 1])
-        ttnn.deallocate(tt_kv_nope)
-
         tt_v_embedding = ttnn.linear(
-            tt_v_latent_post_repeat,
+            tt_kv_nope,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
