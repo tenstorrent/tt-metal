@@ -87,6 +87,47 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
+      - name: Configure ctcache
+        # Same fork gate as ccache: forks have no secrets so skip silently.
+        # Unlike ccache, ctcache is writable from ALL non-fork refs (including PR branches)
+        # so repeated commits to a branch benefit from cached clang-tidy results.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          python3 -m pip install --quiet clang-tidy-cache redis
+
+          # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
+          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          {
+            echo "CTCACHE_REDIS_HOST=${{ vars.REDIS_HOST }}"
+            echo "CTCACHE_REDIS_PORT=${{ vars.REDIS_PORT }}"
+            echo "CTCACHE_REDIS_USERNAME=${{ vars.REDIS_USER }}"
+            echo "CTCACHE_REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
+            echo "CTCACHE_REDIS_NAMESPACE=/ctcache/ct${CT_VERSION}"
+            echo "CTCACHE_REDIS_READ_ONLY=false"
+            echo "CTCACHE_REDIS_CONNECT_TIMEOUT=2.0"
+            echo "CTCACHE_KEEP_COMMENTS=1"
+            echo "CTCACHE_SAVE_OUTPUT=1"
+          } >> "$GITHUB_ENV"
+          echo "ctcache namespace: /ctcache/ct${CT_VERSION}"
+
+          # Verify connectivity — warn but don't fail if Redis is down
+          python3 - << 'PYEOF'
+          import redis, os, sys
+          try:
+              r = redis.Redis(
+                  host=os.environ["CTCACHE_REDIS_HOST"],
+                  port=int(os.environ["CTCACHE_REDIS_PORT"]),
+                  username=os.environ["CTCACHE_REDIS_USERNAME"],
+                  password=os.environ["CTCACHE_REDIS_PASSWORD"],
+                  socket_connect_timeout=2,
+              )
+              r.ping()
+              print("ctcache Redis connection OK")
+          except Exception as e:
+              print(f"::warning::ctcache Redis unreachable ({e}) — analysis will run without caching")
+              sys.exit(0)
+          PYEOF
+
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
@@ -114,8 +155,13 @@ jobs:
 
       - name: Create shim
         run: |
-          # Suppress clang-tidy to first get an up-to-date build tree
-          ln -sf /usr/bin/true ./clang-tidy-shim
+          # Use a script rather than a symlink so we can overwrite it later (with the ctcache
+          # wrapper) without changing the command text that Ninja tracks for incremental builds.
+          cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec /usr/bin/true "$@"
+          SHIMEOF
+          chmod +x ./clang-tidy-shim
 
       - name: 🔧 CMake configure
         run: |
@@ -171,9 +217,23 @@ jobs:
 
       - name: Restore shim
         run: |
-          # Restore shim to legit clang-tidy
-          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
+          # Overwrite the no-op shim with the real analysis wrapper.
+          # We keep the filename ./clang-tidy-shim unchanged so Ninja doesn't force-rebuild every TU.
+          if command -v clang-tidy-cache &>/dev/null; then
+            cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec clang-tidy-cache --directories_with_clang_tidy=/work clang-tidy-20 "$@"
+          SHIMEOF
+            chmod +x ./clang-tidy-shim
+            echo "ctcache shim active (results cached in Redis namespace ${CTCACHE_REDIS_NAMESPACE:-/ctcache})"
+          else
+            cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec clang-tidy-20 "$@"
+          SHIMEOF
+            chmod +x ./clang-tidy-shim
+            echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
+          fi
 
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
@@ -195,3 +255,29 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Publish ctcache summary
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          python3 - << 'PYEOF'
+          import os, redis, sys
+          try:
+              r = redis.Redis(
+                  host=os.environ["CTCACHE_REDIS_HOST"],
+                  port=int(os.environ["CTCACHE_REDIS_PORT"]),
+                  username=os.environ["CTCACHE_REDIS_USERNAME"],
+                  password=os.environ["CTCACHE_REDIS_PASSWORD"],
+                  socket_connect_timeout=2,
+              )
+              ns = os.environ.get("CTCACHE_REDIS_NAMESPACE", "/ctcache")
+              count = r.dbsize()
+              print(f"## ctcache Summary")
+              print(f"Namespace: `{ns}`")
+              print(f"Total keys in Redis DB: {count}")
+          except Exception as e:
+              print(f"ctcache stats unavailable: {e}")
+          PYEOF
+          # Also print clang-tidy-cache stats if available
+          if command -v clang-tidy-cache &>/dev/null; then
+            clang-tidy-cache --show-stats 2>/dev/null || true
+          fi
