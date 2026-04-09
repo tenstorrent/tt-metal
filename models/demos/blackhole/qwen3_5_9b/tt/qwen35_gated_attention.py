@@ -251,6 +251,8 @@ class Qwen35GatedAttention:
                 page_table=page_table,
                 paged_kv_cache_key=self.paged_kv_cache_key,
                 paged_kv_cache_value=self.paged_kv_cache_value,
+                paged_k_buf=getattr(self, "paged_k_buf", None),
+                paged_v_buf=getattr(self, "paged_v_buf", None),
             )
             return output
         elif self.use_preallocated_cache and self.use_trace_mode:
@@ -352,3 +354,32 @@ class Qwen35GatedAttention:
         self.paged_kv_cache_key = k_cache
         self.paged_kv_cache_value = v_cache
         self.use_paged_attention = True
+
+    def enable_trace_buffers(self, batch_size=1):
+        """Allocate pre-sharded K/V buffers for paged attention inside trace.
+        Uses [B]-core shard grid matching paged path's [1, B, H_kv, D] input shape.
+        """
+        B = batch_size
+        head_dim = self.head_dim
+        num_kv_heads = self.num_kv_heads
+        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(B - 1, 0))})
+        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
+
+        k_interleaved = ttnn.from_torch(
+            torch.zeros(1, B, num_kv_heads, head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        self.paged_k_buf = ttnn.interleaved_to_sharded(k_interleaved, _sharded_mc)
+        ttnn.deallocate(k_interleaved)
+
+        v_interleaved = ttnn.from_torch(
+            torch.zeros(1, B, num_kv_heads, head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        self.paged_v_buf = ttnn.interleaved_to_sharded(v_interleaved, _sharded_mc)
+        ttnn.deallocate(v_interleaved)

@@ -77,6 +77,9 @@ class Qwen35Model:
         self.vocab_size = args.vocab_size
         self._paged_kv_caches = None
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
+        self._trace_id = None
+        self._prev_page_table = None
+        self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
 
     @classmethod
     def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048, n_layers=None):
@@ -267,6 +270,21 @@ class Qwen35Model:
         ttnn.deallocate(x)
         return logits
 
+    def _forward_decode(self, token_ids_buf, cos, sin, cur_pos_tensor, page_table):
+        """Device-facing paged decode forward. ALL inputs are device tensors.
+        Trace-safe: no host-device transfers inside this function.
+        """
+        x = ttnn.embedding(token_ids_buf, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        for layer in self.layers:
+            if layer.is_full_attention:
+                x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
+            else:
+                x = layer.forward(x, mode="decode")
+        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        logits = ttnn.linear(x, self.lm_head_weight)
+        ttnn.deallocate(x)
+        return logits
+
     def enable_trace(self, batch_size=1):
         """Prepare all layers for trace-compatible decode."""
         logger.info("Enabling trace mode...")
@@ -276,6 +294,16 @@ class Qwen35Model:
                 layer.attention.enable_trace_mode()
             else:
                 layer.attention.enable_inplace_state()
+
+    def enable_trace_paged(self, batch_size=1):
+        """Prepare for paged+traced decode.
+        Note: We do NOT pre-allocate sharded K/V buffers in L1 here because they
+        clash with other ops' circular buffers during trace. Instead, the paged branch
+        in gated_attention_forward_ttnn allocates sharded buffers inline via to_memory_config.
+        Traces handle this correctly — the allocation happens during capture and the same
+        address is reused on replay.
+        """
+        pass  # No-op: paged_k_buf/paged_v_buf not needed, trace handles inline allocation
 
     def _prefill_for_trace(self, token_ids):
         """Prefill that populates pre-allocated KV caches and DeltaNet states."""
@@ -449,6 +477,88 @@ class Qwen35Model:
 
         logger.info("Trace captured successfully (embedding inside trace)!")
 
+    def capture_decode_trace_paged(self, device, page_table):
+        """Capture a trace for paged decode. page_table is a host torch.Tensor."""
+        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+
+        if self._trace_id is not None:
+            ttnn.release_trace(device, self._trace_id)
+            self._trace_id = None
+            for buf_name in ["_trace_token_ids", "_trace_cos", "_trace_sin", "_trace_cur_pos", "_trace_page_table"]:
+                buf = getattr(self, buf_name, None)
+                if buf is not None:
+                    ttnn.deallocate(buf)
+
+        self._trace_token_ids = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        cos_host, sin_host = self.rope.get_cos_sin_host(0)
+        self._trace_cos = ttnn.to_device(cos_host, device)
+        self._trace_sin = ttnn.to_device(sin_host, device)
+        self._trace_cur_pos = ttnn.from_torch(
+            torch.zeros(1, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        self._trace_page_table = ttnn.from_torch(
+            page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+        saved = self._save_deltanet_states()
+        dummy_tokens = torch.zeros(1, 1, dtype=torch.long)
+        self.decode_paged(dummy_tokens, 0, page_table)
+        ttnn.synchronize_device(device)
+
+        self._restore_deltanet_states(saved, device)
+        saved = self._save_deltanet_states()
+
+        self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._trace_output = self._forward_decode(
+            self._trace_token_ids,
+            self._trace_cos,
+            self._trace_sin,
+            self._trace_cur_pos,
+            self._trace_page_table,
+        )
+        ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
+
+        self._restore_deltanet_states(saved, device)
+        logger.info("Paged trace captured successfully!")
+
+    def decode_traced_paged(self, token_ids, current_pos, page_table):
+        """Replay captured paged trace with updated inputs. All params are host types."""
+        assert self._trace_id is not None, "Call capture_decode_trace_paged first"
+        assert current_pos < self.args.max_seq_len, f"Position {current_pos} >= max_seq_len {self.args.max_seq_len}"
+
+        token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(token_host, self._trace_token_ids)
+
+        cos_host, sin_host = self.rope.get_cos_sin_host(current_pos)
+        ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
+        ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
+
+        cur_pos_host = ttnn.from_torch(
+            torch.tensor([current_pos], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        ttnn.copy_host_to_device_tensor(cur_pos_host, self._trace_cur_pos)
+
+        if self._prev_page_table is None or not torch.equal(self._prev_page_table, page_table):
+            page_table_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy_host_to_device_tensor(page_table_host, self._trace_page_table)
+            self._prev_page_table = page_table.clone()
+
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
+
+        return self._trace_output
+
     def decode_traced(self, token_ids, current_pos):
         """Execute traced decode: write inputs via host DMA, replay trace.
 
@@ -489,6 +599,43 @@ class Qwen35Model:
             k_cache, v_cache = kv_caches[cache_idx]
             self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache)
 
+    def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
+        """Allocate caches for all 32 layers. Returns only 8 attention KV caches (for vLLM)."""
+        assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
+
+        kv_caches = []
+        for idx in self._attention_layer_indices:
+            k_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            v_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            kv_caches.append([k_cache, v_cache])
+        self.set_paged_kv_caches(kv_caches)
+
+        self._deltanet_external_states = []
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                dn = layer.attention
+                rec = ttnn.from_torch(
+                    torch.zeros(batch_size, dn.num_v_heads, dn.head_k_dim, dn.head_v_dim, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                conv = ttnn.from_torch(
+                    torch.zeros(
+                        batch_size,
+                        dn.conv_kernel_size - 1,
+                        dn.args.linear_q_dim + dn.args.linear_k_dim + dn.args.linear_v_dim,
+                        dtype=torch.bfloat16,
+                    ),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                dn.set_external_state(rec, conv)
+                self._deltanet_external_states.append((rec, conv))
+
+        return kv_caches
+
     def _fill_paged_cache_from_prefill(self, page_table):
         """Transfer concat-based K/V into paged cache after prefill.
 
@@ -516,6 +663,9 @@ class Qwen35Model:
             logits: ttnn.Tensor [B, 1, vocab_size]
         """
         B, T = token_ids.shape
+        # Accept host torch.Tensor or device ttnn.Tensor for page_table
+        if isinstance(page_table, torch.Tensor):
+            page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         self.reset_state(batch_size=B)
 
         # Use existing prefill (concat-based K/V for SDPA)
@@ -548,6 +698,18 @@ class Qwen35Model:
                     dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
                     dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
 
+        # Copy DeltaNet states back into external (pre-allocated) buffers so trace can see them
+        if self._deltanet_external_states is not None:
+            dn_idx = 0
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    dn = layer.attention
+                    ext_rec, ext_conv = self._deltanet_external_states[dn_idx]
+                    ttnn.copy(dn.recurrent_state, ext_rec)
+                    if dn.fused_conv_state is not None:
+                        ttnn.copy(dn.fused_conv_state, ext_conv)
+                    dn_idx += 1
+
         return logits
 
     def decode_paged(self, token_ids, current_pos, page_table):
@@ -556,11 +718,14 @@ class Qwen35Model:
         Args:
             token_ids: torch.Tensor [B, 1] token IDs
             current_pos: int -- current position in the sequence
-            page_table: ttnn.Tensor [B, max_blocks_per_seq] int32 on device
+            page_table: torch.Tensor or ttnn.Tensor [B, max_blocks_per_seq] int32
         Returns:
             logits: ttnn.Tensor [B, 1, vocab_size]
         """
         B = token_ids.shape[0]
+        # Accept host torch.Tensor or device ttnn.Tensor for page_table
+        if isinstance(page_table, torch.Tensor):
+            page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -628,4 +793,5 @@ class Qwen35Model:
                     )
                     ttnn.copy(restored_conv, dn.fused_conv_state)
                     ttnn.deallocate(restored_conv)
+                    dn._restore_split_conv_from_fused()
                 idx += 1
