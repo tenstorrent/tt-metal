@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - n300 mesh llama3.2-11b-vision
           - grok
           - dits
           - deepseek

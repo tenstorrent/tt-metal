@@ -52,7 +52,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, falcon7b, falcon40b, llama3, etc.)"
+        description: "Select model to test (all, resnet50, sentence_bert, sd35_large, flux1-dev, motif, qwenimage, wan22, mochi)"
         required: false
         type: string
         default: "all"
