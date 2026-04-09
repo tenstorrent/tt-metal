@@ -40,3 +40,4 @@
 {"event":"analysis_written","operation":"tanhshrink","output_file":".claude-analysis/softcap-1/tanhshrink_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","addr_mode","local_knowledge_sources"],"ts":"2026-04-09T19:16:11+00:00"}
 {"event":"analysis_file_written","details":"sinh_analysis.md written to .claude-analysis/softcap-1/","ts":"2026-04-09T19:17:15+00:00"}
 {"event":"complete","operation":"tanhshrink","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/tanhshrink_analysis.md","commit":"2ac09c13c5","ts":"2026-04-09T19:17:15+00:00"}
+{"event":"analysis_written","operation":"hardshrink","output_file":".claude-analysis/softcap-1/hardshrink_analysis.md","sections":["dispatch_summary","approximation_mode","abstraction_layers","call_chain","params_dispatch","annotated_source","instruction_table","register_usage","address_mode","local_knowledge_sources"],"ts":"2026-04-09T19:18:27+00:00"}
