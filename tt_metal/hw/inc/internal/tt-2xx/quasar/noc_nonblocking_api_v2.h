@@ -1302,7 +1302,7 @@ inline __attribute__((always_inline)) void noc_read_with_state(
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, (uint32_t)src_addr);
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1313,6 +1313,40 @@ inline __attribute__((always_inline)) void noc_read_with_state(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8,
             (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+    }
+
+    noc_reads_num_issued[noc] += 1;
+}
+
+// Same as above, but with src_noc_addr giving the source NOC address separately.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, src_noc_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1404,13 +1438,56 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dst_addr);
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
             (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+    }
+
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += ndests;
+        }
+    }
+}
+
+// Similar to above except takes additional argument, dst_noc_addr, to free up dst_addr to be 64 bits.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_wwrite_with_state(
+    uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, dst_noc_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
