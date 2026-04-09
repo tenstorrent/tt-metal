@@ -56,11 +56,12 @@ void kernel_main() {
         tile_regs_wait();
 
         // out_of_order_output to keep packing to cb_acc at the same location
+        cb_acc_obj.reserve_back(ONE_TILE);
+
         pack_reconfig_data_format(CB_ACC);
         pack_tile(DST_ACC, CB_ACC);
         tile_regs_release();
 
-        cb_acc_obj.reserve_back(ONE_TILE);
         cb_acc_obj.push_back(ONE_TILE);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
@@ -92,12 +93,13 @@ void kernel_main() {
             pack_tile(DST_ACC, CB_OUT);
             cb_out_obj.push_back(ONE_TILE);
 
+            cb_acc_obj.reserve_back(ONE_TILE);
+
             pack_reconfig_data_format(CB_OUT, CB_ACC);  // Needed for fp32_acc_to_dest=True
             pack_tile(DST_ACC, CB_ACC);
 
             tile_regs_release();
 
-            cb_acc_obj.reserve_back(ONE_TILE);
             cb_acc_obj.push_back(ONE_TILE);
         }
     }

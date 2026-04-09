@@ -177,7 +177,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
     )
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-    assert_cumsum_quality(tt_input_grad_cpu, torch_input_tensor.grad)
+    assert_cumsum_quality(torch_input_tensor.grad, tt_input_grad_cpu)
 
 
 @pytest.mark.parametrize(
