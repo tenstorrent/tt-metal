@@ -576,43 +576,35 @@ Remaining overhead (~6.5ms constant, independent of seq_len):
 - **Quantize** (norm + bucketize + gather on 1 token): ~1.5ms
 - **Scatter** (2× paged_update_cache for K/V): ~1ms
 
-**Two modes** (`memory_efficient` flag in TTNNTurboQuantCache):
+**Three cache modes:**
 
-| Mode | KV memory (seq=4096) | vs BFP8 | Latency scaling |
-|------|---------------------|---------|-----------------|
-| `memory_efficient=True` (default) | **105 MB** | **2.8× smaller** | O(max_seq) dequantize |
-| `memory_efficient=False` | 537 MB | 1.83× larger | O(1) flat latency |
-| BFP8 baseline | 293 MB | 1.0× | O(1) flat (paged SDPA) |
+| Mode | Latency | Max context (N150) | KV memory/elem | How |
+|------|---------|-------------------|----------------|-----|
+| **Paged BF16** (new) | **37.2 ms** (= baseline) | 16K | 2 bytes | Paged SDPA on BF16 pre-rescaled |
+| Contiguous BFP8 indices | 46–321 ms (O(seq)) | 16K | ~0.4 bytes | Contiguous + full-cache dequantize |
+| Contiguous BF16 pre-rescaled | 43.5 ms (flat) | 8K | 2 bytes | Contiguous + O(1) dequantize |
+| BFP8 baseline | **37.0 ms** | 32K | 1 byte | Paged BFP8 + paged SDPA |
 
-**Full benchmark (Wormhole N150, Llama-3.1-8B, 3-bit, powers of 2 up to 128K):**
+**Paged BF16 benchmark (Wormhole N150, Llama-3.1-8B, 3-bit):**
 
-| seq_len | Baseline BFP8 | TQ efficient | TQ pre-rescaled | KV mem (BFP8/TQ_eff/TQ_bf16) |
-|---------|--------------|-------------|-----------------|------------------------------|
-| 128 | **37.0 ms** | 46.1 ms (1.25×) | 43.5 ms (1.18×) | 9 / 3 / 17 MB |
-| 256 | **37.0 ms** | 48.6 ms (1.31×) | 44.0 ms (1.19×) | 18 / 7 / 34 MB |
-| 512 | **37.0 ms** | 53.8 ms (1.45×) | 44.8 ms (1.21×) | 37 / 13 / 67 MB |
-| 1024 | **37.0 ms** | 62.6 ms (1.69×) | 44.8 ms (1.21×) | 73 / 26 / 134 MB |
-| 2048 | **37.0 ms** | 80.0 ms (2.16×) | 44.8 ms (1.21×) | 146 / 52 / 268 MB |
-| 4096 | **36.9 ms** | 114.5 ms (3.10×) | 44.8 ms (1.21×) | 293 / 105 / 537 MB |
-| 8192 | **36.9 ms** | 183.5 ms (4.97×) | OOM | 585 / 210 / 1074 MB |
-| 16384 | **37.0 ms** | OOM | OOM | 1170 / 419 / 2147 MB |
-| 32768 | **37.0 ms** | OOM | OOM | — |
-| 65536 | **36.9 ms** | OOM | OOM | — |
-| 131072 | **37.0 ms** | OOM | OOM | — |
+| seq_len | Baseline BFP8 | TQ paged BF16 |
+|---------|--------------|---------------|
+| 128 | 37.0 ms | **37.2 ms** |
+| 512 | 37.0 ms | **37.2 ms** |
+| 2048 | 37.0 ms | **37.2 ms** |
+| 8192 | 36.9 ms | **37.2 ms** |
+| 16384 | 37.0 ms | **37.2 ms** |
+| 32768 | 37.0 ms | OOM |
+| 131072 | 37.0 ms | OOM |
 
-**Key observations:**
-- Baseline is flat (37ms) up to 131K — paged SDPA only reads filled positions
-- TQ efficient: 2.8× less memory but O(max_seq) latency. OOMs at 16K
-- TQ pre-rescaled: flat latency but OOMs at 8K (BF16 = 2× per element)
-- TQ uses **contiguous** cache allocation — OOMs before paged baseline despite
-  smaller per-element size. Paged allocation is needed for long contexts.
+TQ with paged BF16 **matches baseline latency exactly** (37ms flat) but
+supports half the max context (16K vs 32K) because BF16 = 2× per element.
 
-**Remaining work — paged TQ cache:**
-To match the baseline's 131K reach, TQ needs paged cache allocation (not contiguous).
-The blocker: BFP8 paged cache destroys pre-rescaled centroid×norm values.
-Solution: store BFP8 indices in paged cache (exact for 0-7), dequantize after read.
-This requires intercepting between paged cache read and SDPA, or using non-paged
-SDPA with a paged-to-contiguous gather.
+**Next: BFP8 paged indices with post-read dequantize.**
+Store BFP8 indices (exact for 0-7) + BF16 norms in paged caches. After paged
+cache read, dequantize (gather centroids + mul norms) before passing to SDPA.
+This gives BFP8-level memory (same as baseline = 32K+) with a small dequantize
+overhead proportional to filled positions (not max_seq).
 
 ---
 
