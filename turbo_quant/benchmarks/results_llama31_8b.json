@@ -1,0 +1,33 @@
+{
+  "baseline_perplexity": 12.224400685317105,
+  "total_tokens": 10193,
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "num_layers": 32,
+  "head_dim": 128,
+  "kv_distortion": {
+    "mse_2bit": {
+      "key_mse": 0.47251893673092127,
+      "value_mse": 0.012312116285283992,
+      "key_cosine_sim": 0.9399854391813278,
+      "value_cosine_sim": 0.9400712125003338
+    },
+    "mse_3bit": {
+      "key_mse": 0.1384209781419486,
+      "value_mse": 0.003606243433023337,
+      "key_cosine_sim": 0.9827929839491845,
+      "value_cosine_sim": 0.9828143361955881
+    },
+    "mse_4bit": {
+      "key_mse": 0.0379547500051558,
+      "value_mse": 0.000991113957275047,
+      "key_cosine_sim": 0.9953054010868072,
+      "value_cosine_sim": 0.995300917699933
+    },
+    "outlier_2.25bit": {
+      "key_mse": 0.38932419661432505,
+      "value_mse": 0.010098746663470593,
+      "key_cosine_sim": 0.9508374102413655,
+      "value_cosine_sim": 0.9509994398802519
+    }
+  }
+}
