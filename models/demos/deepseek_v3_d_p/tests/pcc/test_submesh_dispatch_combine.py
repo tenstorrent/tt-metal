@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for parallel dispatch+combine on independent submeshes.
+Test for parallel dispatch+combine on independent submeshes with dynamic lifecycle.
 
 Splits an 8-device mesh into two 4x1 submeshes and runs the full
-dispatch→combine round-trip on each with different inputs, validating:
+dispatch→combine round-trip on each with different inputs, then tears down
+the submeshes and runs again on the full 8x1 mesh, validating:
   1. Fabric isolation — each submesh's CCL stays within its 4 devices
   2. Correctness — both submeshes produce correct output vs torch reference
   3. Parallel execution — ops dispatched to both submeshes execute concurrently on HW
   4. Cross-contamination — different seeds per submesh detect data leaks
+  5. Dynamic lifecycle — submeshes can be created, destroyed, and the parent mesh reused
 """
 
 from dataclasses import dataclass
@@ -381,7 +383,7 @@ def test_submesh_parallel_dispatch_combine(
     num_links,
     topology,
 ):
-    """Test dispatch+combine on two independent 4x1 submeshes of an 8x1 mesh, running in parallel."""
+    """Test dispatch+combine on two independent 4x1 submeshes, then tear them down and run on full 8x1 mesh."""
 
     assert mesh_device.get_num_devices() == 8, f"Expected 8 devices, got {mesh_device.get_num_devices()}"
     logger.info(f"Parent mesh shape: {mesh_device.shape}")
@@ -430,3 +432,36 @@ def test_submesh_parallel_dispatch_combine(
     result_b.assert_passed("Submesh B round-trip mismatch")
 
     logger.info("Both submeshes passed dispatch+combine round-trip independently!")
+
+    # Phase 3: Tear down 4x1 submeshes and run on full 8x1 parent mesh
+    logger.info("Phase 3: Synchronizing and releasing 4x1 submeshes...")
+    ttnn.synchronize_device(submesh_a)
+    ttnn.synchronize_device(submesh_b)
+
+    # Close submeshes explicitly via the same API the fixture teardown uses.
+    # This ensures CQ state is properly torn down before reusing the parent mesh.
+    ttnn.close_mesh_device(submesh_a)
+    ttnn.close_mesh_device(submesh_b)
+    # del ctx_a, ctx_b
+    # del submesh_a, submesh_b, submeshes
+
+    logger.info("Submeshes closed. Running dispatch+combine on full 8x1 parent mesh...")
+    ttnn.visualize_mesh_device(mesh_device)
+
+    ctx_full = setup_and_dispatch_roundtrip(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        capacity_factor,
+        num_links,
+        topology,
+        seed=777,
+        label="full_8x1",
+    )
+
+    result_full = validate_roundtrip(ctx_full)
+    result_full.assert_passed("Full 8x1 mesh round-trip mismatch after submesh teardown")
+
+    logger.info("Full 8x1 parent mesh passed dispatch+combine after submesh teardown!")
