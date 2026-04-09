@@ -1897,6 +1897,53 @@ void py_module(nb::module_& mod) {
     {
         auto doc = fmt::format(
             R"doc(
+            Applies the RReLU (Randomized Leaky ReLU) function element-wise.
+
+            In evaluation mode (default): output = x if x >= 0, else slope * x
+            where slope = (lower + upper) / 2.
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \begin{{cases}} x & \text{{if }} x \geq 0 \\ \frac{{\mathrm{{lower}} + \mathrm{{upper}}}}{{2}} \cdot x & \text{{if }} x < 0 \end{{cases}}
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of the uniform distribution. Defaults to `0.125`.
+                upper (float, optional): upper bound of the uniform distribution. Defaults to `0.3333333432674408`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            &unary_two_float_5param_to_6param_wrapper<&ttnn::rrelu>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 0.3333333432674408f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
             Performs element-wise reverse power: computes base^x for each element x.
 
             .. math::

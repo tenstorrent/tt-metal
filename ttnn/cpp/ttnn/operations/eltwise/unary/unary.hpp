@@ -294,6 +294,27 @@ inline Tensor hardtanh(
         sub_core_grids);
 }
 
+// rrelu: three float parameters (lower, upper, training)
+// In eval mode (training=false, default): slope = (lower + upper) / 2
+// In training mode: slope is sampled per-element from Uniform(lower, upper) (not yet supported on device)
+// For now, we pre-compute the slope on host and pass it as a single parameter.
+inline Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower = 0.125f,
+    float upper = 0.3333333432674408f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    // Pre-compute slope = (lower + upper) / 2 for evaluation mode
+    float slope = (lower + upper) / 2.0f;
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::RRELU, slope}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
 // -----------------------------------------------------------------------------
 // Functions defined without macros (non-SFPU operations kept)
 // -----------------------------------------------------------------------------
