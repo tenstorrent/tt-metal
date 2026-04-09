@@ -138,7 +138,7 @@ jobs:
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ steps.set_artifact_name.outputs.artifact_name }}

@@ -58,7 +58,7 @@ jobs:
                 --junitxml=pytest-duration-wormhole-all.xml .
 
       - name: Upload duration data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: test-durations-wormhole
@@ -104,7 +104,7 @@ jobs:
                 --junitxml=pytest-duration-blackhole-all.xml .
 
       - name: Upload duration data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: test-durations-blackhole
