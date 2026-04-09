@@ -56,11 +56,11 @@ public:
 };
 
 #define DRAM_SKIP_GUARDS()                                                                                  \
-    if (!this->IsSlowDispatch()) {                                                                          \
-        log_info(tt::LogTest, "DRAM cores only support Slow Dispatch (Fast Dispatch not yet supported).");  \
-        GTEST_SKIP();                                                                                       \
-    }                                                                                                       \
     do {                                                                                                    \
+        if (!this->IsSlowDispatch()) {                                                                      \
+            log_info(tt::LogTest, "DRAM cores only support Slow Dispatch (Fast Dispatch not yet supported).");  \
+            GTEST_SKIP();                                                                                   \
+        }                                                                                                   \
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();                                     \
         if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {                               \
             log_info(tt::LogTest, "Skipping: DRAM programmable cores not available on this architecture."); \

@@ -195,7 +195,10 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
         }
     }
     if (set.empty()) {
-        TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*,DR.", spec);
+        TT_THROW(
+            "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*{}.",
+            spec,
+            has_programmable_core_type(HalProgrammableCoreType::DRAM) ? ",DR" : "");
     }
     return set;
 }

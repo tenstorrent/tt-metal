@@ -50,7 +50,6 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -806,7 +805,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = env_.get_hal();
     std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         core_types_to_check.push_back(CoreType::DRAM);
