@@ -1043,6 +1043,7 @@ class _CombinedPipelineBlock:
         embedding_tensor,
         lmhead_input_core: ttnn.CoreCoord,
         argmax_final_core: ttnn.CoreCoord,
+        io_socket_descriptor_prefix: str | None = None,
     ) -> None:
         my_mesh_id = mesh_device.get_system_mesh_id()
         num_procs = int(ttnn.distributed_context_get_size())
@@ -1129,8 +1130,9 @@ class _CombinedPipelineBlock:
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 
-        self.h2d_socket.export_descriptor(f"deepseek_h2d")
-        self.d2h_socket.export_descriptor(f"deepseek_d2h")
+        prefix = io_socket_descriptor_prefix if io_socket_descriptor_prefix is not None else "deepseek"
+        self.h2d_socket.export_descriptor(f"{prefix}_h2d")
+        self.d2h_socket.export_descriptor(f"{prefix}_d2h")
 
         print(
             f"[COMBINED P{my_mesh_id}] _CombinedPipelineBlock created: "
@@ -1190,6 +1192,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         shared_head_norm: ttnn.Tensor | None = None,
+        io_socket_descriptor_prefix: str | None = None,
     ) -> None:
         super().__init__(
             weights,
@@ -1198,6 +1201,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             shared_head_norm=shared_head_norm,
         )
         self._embedding_weights = embedding_weights
+        self._io_socket_descriptor_prefix = io_socket_descriptor_prefix
         print(
             f"[STAGE] SpecLMHeadWithEmbeddingStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} shared_head_norm={shared_head_norm is not None}",
             flush=True,
@@ -1216,4 +1220,5 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             self._embedding_weights.embedding,
             SpecLMHeadStage.LMHEAD_INPUT_CORE,
             SpecLMHeadStage.ARGMAX_FINAL_CORE,
+            io_socket_descriptor_prefix=self._io_socket_descriptor_prefix,
         )
