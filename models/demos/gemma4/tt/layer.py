@@ -129,6 +129,7 @@ class Gemma4DecoderLayer:
             hf_config=hf_config,
             state_dict=substate(layer_state, "mlp") if layer_state else {},
             mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
             dtype=dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
         )
