@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.24...4.2)
+# BrAIn test comment: added by the AI SW assistant for PR testing purposes
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
