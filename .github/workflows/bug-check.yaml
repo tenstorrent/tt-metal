@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Acknowledge command
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           COMMENT_ID: ${{ github.event.comment.id }}
           REPO: ${{ github.repository }}
         run: |
@@ -74,7 +74,7 @@ jobs:
     steps:
       - name: Post running notice
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
           REPO: ${{ github.repository }}
           SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
