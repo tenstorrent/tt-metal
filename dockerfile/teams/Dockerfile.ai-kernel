@@ -1,0 +1,37 @@
+# Team AI-kernel image on top of tt-metal dev
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="AI kernel team image layered on tt-metal dev"
+
+############################################
+# Install ONLY missing OS tools
+# tmux: multiplexer for IRD/remote dev; htop: process viewer; ca-certificates: HTTPS;
+# gnupg: GPG keys for external apt repos (e.g. GitHub CLI).
+############################################
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    tmux \
+    htop \
+    ca-certificates \
+    gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
+############################################
+# Install GitHub CLI (gh): PRs, repos, workflows from terminal/CI
+# Keyring dearmor, add repo, install gh.
+############################################
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y gh \
+ && rm -rf /var/lib/apt/lists/*
+
+############################################
+# Install Claude Code (native installer); symlink into PATH
+############################################
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+ && ln -s /root/.local/bin/claude /usr/local/bin/claude || true
