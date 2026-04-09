@@ -42,6 +42,7 @@ on:
           - deepseek_prefill
           - deepseek_decode
           - wan22
+          - sp1_deepseek
 
   schedule:
     # Run daily at 4 AM UTC
@@ -109,3 +110,15 @@ jobs:
       model: wan22
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
+
+  deepseek-sp1-tests:
+    name: "SP1 DeepSeek Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sp1
