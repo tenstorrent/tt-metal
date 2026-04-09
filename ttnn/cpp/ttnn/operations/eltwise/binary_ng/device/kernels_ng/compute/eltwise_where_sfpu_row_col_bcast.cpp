@@ -41,14 +41,18 @@ ALWI void process_tile(
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
+    experimental::CircularBuffer exp_cb_bcast(CB_BCAST);
+    experimental::CircularBuffer exp_cb_other(CB_OTHER);
+    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
+
     unary_op_init_common(cb_left, cb_out);
     BINARY_SFPU_INIT
 
-    cb_wait_front(CB_BCAST, num_tiles_per_cycle);
+    exp_cb_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        cb_wait_front(CB_OTHER, num_tiles_per_cycle);
-        cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_other.wait_front(num_tiles_per_cycle);
+        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
 
         tile_regs_acquire();
@@ -57,10 +61,10 @@ ALWI void process_tile(
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        cb_push_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
 
-        cb_pop_front(CB_OTHER, num_tiles_per_cycle);
+        exp_cb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
@@ -68,7 +72,7 @@ ALWI void process_tile(
 #endif
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
-        cb_wait_front(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
@@ -116,9 +120,9 @@ ALWI void process_tile(
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
-        cb_pop_front(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.pop_front(num_tiles_per_cycle);
     }
-    cb_pop_front(CB_BCAST, num_tiles_per_cycle);
+    exp_cb_bcast.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {

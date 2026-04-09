@@ -37,14 +37,21 @@ void kernel_main() {
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
+    experimental::CircularBuffer exp_cb_in0(cb_in0);
+    experimental::CircularBuffer exp_cb_in1(cb_in1);
+    experimental::CircularBuffer exp_cb_bcast(cb_bcast);
+    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
+    experimental::CircularBuffer exp_cb_left(cb_left);
+    experimental::CircularBuffer exp_cb_right(cb_right);
+
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        exp_cb_in0.wait_front(num_tiles_per_cycle);
+        exp_cb_in1.wait_front(num_tiles_per_cycle);
 
-        cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -53,10 +60,10 @@ void kernel_main() {
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        cb_push_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
 
-        cb_pop_front(cb_bcast, num_tiles_per_cycle);
+        exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
@@ -64,7 +71,7 @@ void kernel_main() {
 #endif
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
-        cb_wait_front(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
@@ -112,7 +119,7 @@ void kernel_main() {
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
-        cb_pop_front(cb_left, num_tiles_per_cycle);
-        cb_pop_front(cb_right, num_tiles_per_cycle);
+        exp_cb_left.pop_front(num_tiles_per_cycle);
+        exp_cb_right.pop_front(num_tiles_per_cycle);
     }
 }

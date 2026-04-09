@@ -54,6 +54,11 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
+    experimental::CircularBuffer exp_cb_bcast(cb_bcast);
+    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
+    experimental::CircularBuffer exp_cb_post_lhs(cb_post_lhs);
+    experimental::CircularBuffer exp_cb_post_rhs(cb_post_rhs);
+
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
@@ -64,8 +69,8 @@ void kernel_main() {
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_bcast, num_tiles_per_cycle);
-        cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_bcast.wait_front(num_tiles_per_cycle);
+        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -74,9 +79,9 @@ void kernel_main() {
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        cb_push_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
-        cb_pop_front(cb_bcast, num_tiles_per_cycle);
+        exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
@@ -84,10 +89,10 @@ void kernel_main() {
 #endif
 
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+        exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+        exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -118,7 +123,7 @@ void kernel_main() {
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
-        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
-        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
+        exp_cb_post_lhs.pop_front(num_tiles_per_cycle);
+        exp_cb_post_rhs.pop_front(num_tiles_per_cycle);
     }
 }
