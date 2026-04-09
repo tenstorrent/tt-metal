@@ -12,7 +12,9 @@ namespace ttml::metal::ops::frobenius_normalize::device {
 struct FrobeniusNormalizeProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle reader_origin_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
+        tt::tt_metal::KernelHandle compute_origin_id{};
         tt::tt_metal::KernelHandle compute_group_1_id{};
         tt::tt_metal::KernelHandle compute_group_2_id{};
         tt::tt_metal::CoreRangeSet core_group_1;
