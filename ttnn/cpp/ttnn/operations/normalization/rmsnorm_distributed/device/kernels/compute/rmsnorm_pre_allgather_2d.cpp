@@ -9,9 +9,6 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"

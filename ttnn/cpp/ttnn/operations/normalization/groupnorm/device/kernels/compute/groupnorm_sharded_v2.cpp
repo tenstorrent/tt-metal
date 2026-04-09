@@ -237,7 +237,6 @@ void kernel_main() {
             reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
 
             // Partial-E[x]
-            // LOCAL reduction: Use mul_tiles for high precision (don't use reduce helper here!)
             index_h_offset = 0;
             mul_tiles_init(cb_x_id, cb_ones_id);
             cb_ex2pe.reserve_back(1);
@@ -265,7 +264,6 @@ void kernel_main() {
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
-            // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
