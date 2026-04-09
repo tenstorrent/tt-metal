@@ -278,7 +278,7 @@ Tensor scatter(
     const std::optional<std::string>& opt_reduction_string,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
-    const auto input_tensor_rank = input_tensor.padded_shape().rank();
+    const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
     using namespace operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
 
