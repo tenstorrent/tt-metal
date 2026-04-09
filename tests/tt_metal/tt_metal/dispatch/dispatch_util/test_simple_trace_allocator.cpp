@@ -135,6 +135,17 @@ protected:
         return ptrs;
     }
 
+    void populate_kernel_groups(detail::ProgramImpl& program, BinaryPlacement placement) const {
+        for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
+            bool binary_in_config =
+                hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            if ((placement == BinaryPlacement::FixedAddress && !binary_in_config) ||
+                (placement == BinaryPlacement::InConfig && binary_in_config)) {
+                program.get_kernel_groups(index).push_back(nullptr);
+            }
+        }
+    }
+
     void allocate_on_subdevice(
         SimpleTraceAllocator& allocator, std::vector<TraceNode>& trace_nodes, SubDeviceId sub_device_id) const {
         auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
@@ -633,9 +644,14 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, FixedL1AddressBinarySync) {
         GTEST_SKIP() << "All programmable core types store kernels in the config buffer on this architecture.";
     }
 
-    auto specs = make_program_specs(0, 32, BinaryPlacement::FixedAddress);
+    auto specs = make_program_specs(0, 0, BinaryPlacement::FixedAddress);
+    auto program0 = make_program(specs);
+    auto program1 = make_program(specs);
+    populate_kernel_groups(*program0, BinaryPlacement::FixedAddress);
+    populate_kernel_groups(*program1, BinaryPlacement::FixedAddress);
     std::vector<TraceNode> trace_nodes = {
-        make_trace_node(specs, SubDeviceId{0}, 3), make_trace_node(specs, SubDeviceId{0}, 4)};
+        make_trace_node(specs, SubDeviceId{0}, 3, program0),
+        make_trace_node(specs, SubDeviceId{0}, 4, program1)};
     auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
 
     auto allocator = make_allocator(64);
