@@ -117,14 +117,6 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Check available nodes before allocation
-        run: |
-          echo "=== Checking nodes with ci-metal label ==="
-          kubectl get nodes -n ttop-ci -l exabox.tenstorrent.com/purpose=ci-metal -o wide || echo "No nodes with ci-metal label found"
-          echo ""
-          echo "=== Current allocations in ttop-ci namespace ==="
-          kubectl get allocations -n ttop-ci -o wide || echo "No allocations found"
-
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
@@ -140,18 +132,6 @@ jobs:
               - exabox.tenstorrent.com/quad
             mgd: |
             ${{ needs.load-test-matrix.outputs.mgd }}
-
-      - name: Debug allocation if it failed
-        if: failure() && steps.allocation.conclusion == 'failure'
-        run: |
-          echo "=== Allocation Status ==="
-          kubectl describe allocation ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }} -n ttop-ci || echo "Allocation not found"
-          echo ""
-          echo "=== Available ci-metal nodes ==="
-          kubectl get nodes -l exabox.tenstorrent.com/purpose=ci-metal -o wide
-          echo ""
-          echo "=== All allocations ==="
-          kubectl get allocations -n ttop-ci -o wide
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
