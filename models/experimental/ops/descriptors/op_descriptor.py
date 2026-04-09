@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
+import inspect
 from typing import Callable, Optional
 
 import ttnn
@@ -147,10 +149,14 @@ class OpDescriptor:
             self._factory_fn = factory_fn
             self._descriptor = descriptor
 
-        self.input_tensors = input_tensors if input_tensors is not None else []
+        if isinstance(input_tensors, dict):
+            self._input_names = tuple((k, i) for i, k in enumerate(input_tensors))
+            self.input_tensors = list(input_tensors.values())
+        else:
+            self.input_tensors = input_tensors if input_tensors is not None else []
+            self._input_names = input_names
         self.output_tensors = output_tensors if output_tensors is not None else []
         self.name = name
-        self._input_names = input_names
         self._complete_fn = complete_fn
 
         if program_cache_key is not None:
@@ -221,6 +227,112 @@ class OpDescriptor:
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
         ttnn.generic_op(io_tensors, self.descriptor)
         return self.output_tensors
+
+    @staticmethod
+    def create(name=""):
+        """Decorator for descriptor factory functions.
+
+        Wraps a factory so that it supports both **inline** and **persistent**
+        modes automatically.  The factory body always receives real tensors —
+        the decorator intercepts calls where a required parameter (no default
+        in the signature) is ``None`` and returns a deferred descriptor that
+        materializes on first :meth:`update`.
+
+        Tensor inputs for :meth:`update` naming are inferred automatically:
+        required parameters (no default) are always included; optional
+        parameters are included when they receive a ``Tensor`` value.
+        No explicit tensor list needed.
+
+        Usage::
+
+            @OpDescriptor.create(name="rms_norm")
+            def rms_norm(input_tensor, weight=None, bias=None, epsilon=1e-12, ...):
+                inputs = {"input_tensor": input_tensor}
+                if weight is not None: inputs["weight"] = weight
+                ...
+                return OpDescriptor(factory_fn=..., input_tensors=inputs, ...)
+
+            # Inline — body runs immediately:
+            desc = rms_norm(tt_q, weight=qw, ...)
+
+            # Persistent — body deferred until update():
+            desc = rms_norm(weight=qw, ...)
+            desc.update(tt_q)
+        """
+
+        def decorator(fn):
+            sig = inspect.signature(fn)
+            params = sig.parameters
+            # Required params: no default → None means "deferred"
+            required = frozenset(
+                pname
+                for pname, p in params.items()
+                if p.default is inspect.Parameter.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+            )
+            # Pre-compute positional index of each required param
+            # for fast None-check without sig.bind() on the hot path.
+            param_names = list(params.keys())
+            required_positions = {t: param_names.index(t) for t in required}
+
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                # Fast check: are all required params present and non-None?
+                deferred = False
+                for tname, pos in required_positions.items():
+                    if pos < len(args):
+                        if args[pos] is None:
+                            deferred = True
+                            break
+                    elif kwargs.get(tname) is None:
+                        deferred = True
+                        break
+
+                if not deferred:
+                    # Inline hot path: call the factory body directly.
+                    return fn(*args, **kwargs)
+
+                # Deferred path: use sig.bind() to resolve all arg values by name.
+                # Fill in None for missing required params so bind() doesn't raise.
+                kw = dict(kwargs)
+                for tname in required:
+                    if tname not in kw and required_positions[tname] >= len(args):
+                        kw[tname] = None
+                bound = sig.bind(*args, **kw)
+                bound.apply_defaults()
+                all_args = bound.arguments
+
+                # Build input list: required params (may be None/deferred) +
+                # optional params that received a Tensor value.
+                input_names = []
+                inputs = []
+                idx = 0
+                for pname, val in all_args.items():
+                    if pname in required:
+                        input_names.append((pname, idx))
+                        inputs.append(val)
+                        idx += 1
+                    elif isinstance(val, ttnn.Tensor):
+                        input_names.append((pname, idx))
+                        inputs.append(val)
+                        idx += 1
+
+                def _complete(final_inputs):
+                    kw = dict(all_args)
+                    for (pname, _), tensor in zip(input_names, final_inputs):
+                        kw[pname] = tensor
+                    return wrapper(**kw)
+
+                return OpDescriptor(
+                    input_tensors=inputs,
+                    output_tensors=[None],
+                    name=name,
+                    complete_fn=_complete,
+                    input_names=tuple(input_names),
+                )
+
+            return wrapper
+
+        return decorator
 
 
 # Backward compatibility alias — will be removed once all references are cleaned up.
