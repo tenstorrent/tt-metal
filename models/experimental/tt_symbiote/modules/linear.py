@@ -326,6 +326,7 @@ class PytorchLinearActivation(nn.Module):
         return hidden_states
 
 
+@trace_enabled
 class TTNNLinearActivation(TTNNModule):
     """Linear layer with activation using TTNN."""
 

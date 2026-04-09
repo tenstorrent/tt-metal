@@ -820,6 +820,7 @@ def _unwrap_ttnn(x):
     return x
 
 
+@trace_enabled
 class TTNNSAMMLPBlock(TTNNModule):
     """TTNN version of SAM MLPBlock (lin1 -> act -> lin2). Input/output shape (B, H, W, C)."""
 
