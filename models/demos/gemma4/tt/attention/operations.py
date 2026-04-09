@@ -135,6 +135,7 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
 
     num_links = ccl_manager.num_links if ccl_manager else 1
     # reduce_scatter + all_gather = all_reduce for N300 (1-D mesh)
+    # Parameters match tt_transformers/tt/ccl.py pattern
     reduced = ttnn.experimental.reduce_scatter_minimal_async(
         tensor,
         persistent_output_buffers=None,
@@ -145,6 +146,9 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=ttnn.Topology.Linear,
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
     )
     tensor.deallocate(True)
 
