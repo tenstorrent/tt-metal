@@ -462,5 +462,4 @@ class TTNNNoTPFeedForward(TTNNModule):
         output = ttnn.linear(
             output, self.fc2_weight, bias=self.fc2_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        output = ttnn.to_torch(output)
         return output

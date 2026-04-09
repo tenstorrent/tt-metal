@@ -907,6 +907,7 @@ class TTNNImageEncoderViT(TTNNModule):
         super().__init__()
         self.depth = depth
         self.window_size = window_size
+        self._pos_cache = {}
 
     def initialize_submodules(self):
         assert (
@@ -967,18 +968,20 @@ class TTNNImageEncoderViT(TTNNModule):
 
         if self.torch_layer.pos_embed is not None:
             B, H, W, C = x.shape
-            pos = self.torch_layer.pos_embed
-            src_size = pos.shape[1]
-            if src_size != H:
-                pos_nchw = pos.permute(0, 3, 1, 2).float()
-                pos_resized = F.interpolate(
-                    pos_nchw, size=(H, W), mode="bicubic", antialias=True, align_corners=False
-                ).to(pos.dtype)
-                pos = pos_resized.permute(0, 2, 3, 1)
-            pos_tt = ttnn.from_torch(
-                pos.expand(B, -1, -1, -1), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            x = ttnn.add(x, pos_tt)
+            cache_key = (B, H, W)
+            if cache_key not in self._pos_cache:
+                pos = self.torch_layer.pos_embed
+                src_size = pos.shape[1]
+                if src_size != H:
+                    pos_nchw = pos.permute(0, 3, 1, 2).float()
+                    pos_resized = F.interpolate(
+                        pos_nchw, size=(H, W), mode="bicubic", antialias=True, align_corners=False
+                    ).to(pos.dtype)
+                    pos = pos_resized.permute(0, 2, 3, 1)
+                self._pos_cache[cache_key] = ttnn.from_torch(
+                    pos.expand(B, -1, -1, -1), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                )
+            x = ttnn.add(x, self._pos_cache[cache_key])
 
         for blk in self.blocks:
             x = _unwrap_ttnn(blk(x))
@@ -1006,6 +1009,7 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches + 1
         self.torch_layer_cp = None
+        self._abs_pos_cache = {}
 
     @classmethod
     def from_torch(cls, visionEmbedding):
@@ -1083,6 +1087,8 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         return pixel_values
 
     def get_abs_pos_ttnn(self, abs_pos: ttnn.Tensor, tgt_size: int, device: ttnn.Device) -> ttnn.Tensor:
+        if tgt_size in self._abs_pos_cache:
+            return self._abs_pos_cache[tgt_size]
         abs_pos_torch = ttnn.to_torch(abs_pos)
         cls_token = abs_pos_torch[:, :1, :]
         old_pos_embed = abs_pos_torch[:, 1:, :]
@@ -1101,13 +1107,15 @@ class TTNNClipVisionEmbeddings(TTNNModule):
             vision_pos_embed = torch.cat([cls_token, new_pos_embed], dim=1)
         else:
             vision_pos_embed = abs_pos_torch
-        return ttnn.from_torch(
+        result = ttnn.from_torch(
             vision_pos_embed,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._abs_pos_cache[tgt_size] = result
+        return result
 
     def forward(self, pixel_values: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         pixel_values = _unwrap_ttnn(pixel_values)
@@ -1147,7 +1155,6 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         num_patches_actual = actual_seq_len - 1
         pos_embeds = self.get_abs_pos_ttnn(self.position_embedding, num_patches_actual, self.device)
         embeddings = ttnn.add(embeddings, pos_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(pos_embeds)
         return embeddings
 
 

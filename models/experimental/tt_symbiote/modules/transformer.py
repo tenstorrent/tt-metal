@@ -94,7 +94,6 @@ class TTNNNoTPTransformerBlock(TTNNModule):
 
         out = ttnn.add(h, out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(h)
-        out = ttnn.to_torch(out)
         return out
 
 

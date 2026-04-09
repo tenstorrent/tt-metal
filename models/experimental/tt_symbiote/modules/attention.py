@@ -3081,19 +3081,11 @@ def _window_partition_unpartition_sam(
     Hp, Wp = H + pad_h, W + pad_w
 
     if pad_h > 0 or pad_w > 0:
-        x_t = ttnn.to_torch(x_bhwc)
-        if x_t.device.type != "cpu":
-            x_t = x_t.cpu()
-        x_t = x_t.reshape(B, H, W, C)
-        x_t = F.pad(x_t, (0, 0, 0, pad_w, 0, pad_h))
-        x_bhwc = ttnn.from_torch(
-            x_t.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=memory_config,
+        if x_bhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x_bhwc = ttnn.to_layout(x_bhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+        x_bhwc = ttnn.pad(
+            x_bhwc, padding=[(0, 0), (0, pad_h), (0, pad_w), (0, 0)], value=0, memory_config=memory_config
         )
-        x_t = None
 
     if pad_h > 0 or pad_w > 0:
         x_rm = x_bhwc
@@ -3155,6 +3147,7 @@ class TTNNSAMAttention(TTNNModule):
         self._use_rel_pos = False
         self._rel_pos_h = None
         self._rel_pos_w = None
+        self._rel_pos_tt_cache = {}
         self.sdpa = TTNNSDPAAttention()
         self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -3181,6 +3174,68 @@ class TTNNSAMAttention(TTNNModule):
             new_attn._rel_pos_w = sam_attn.rel_pos_w.detach()
         return new_attn
 
+    def _ensure_rel_pos_cache(self, H: int, W: int) -> None:
+        if (H, W) in self._rel_pos_tt_cache:
+            return
+        Rh = _get_rel_pos_sam(H, H, self._rel_pos_h).to(torch.bfloat16)
+        Rw = _get_rel_pos_sam(W, W, self._rel_pos_w).to(torch.bfloat16)
+        rh_slices = [
+            ttnn.from_torch(
+                Rh[h].T.unsqueeze(0).unsqueeze(0).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for h in range(H)
+        ]
+        rw_slices = [
+            ttnn.from_torch(
+                Rw[w].T.unsqueeze(0).unsqueeze(0).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for w in range(W)
+        ]
+        self._rel_pos_tt_cache[(H, W)] = {"rh": rh_slices, "rw": rw_slices}
+
+    def _compute_rel_pos_bias_ttnn(self, q: ttnn.Tensor, H: int, W: int) -> ttnn.Tensor:
+        self._ensure_rel_pos_cache(H, W)
+        cache = self._rel_pos_tt_cache[(H, W)]
+        rh_slices, rw_slices = cache["rh"], cache["rw"]
+        B, n_heads, S, head_dim = q.shape
+
+        rel_h_parts = []
+        for h_idx in range(H):
+            q_h = ttnn.slice(q, (0, 0, h_idx * W, 0), (B, n_heads, (h_idx + 1) * W, head_dim))
+            rel_h_parts.append(
+                ttnn.matmul(q_h, rh_slices[h_idx], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            )
+        rel_h = ttnn.concat(rel_h_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        q_wh_flat = ttnn.reshape(
+            ttnn.permute(ttnn.reshape(q, (B * n_heads, H, W, head_dim)), (0, 2, 1, 3)),
+            (B, n_heads, S, head_dim),
+        )
+        rel_w_parts = []
+        for w_idx in range(W):
+            q_w = ttnn.slice(q_wh_flat, (0, 0, w_idx * H, 0), (B, n_heads, (w_idx + 1) * H, head_dim))
+            rel_w_parts.append(
+                ttnn.matmul(q_w, rw_slices[w_idx], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            )
+        rel_w_wm = ttnn.concat(rel_w_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        rel_w = ttnn.reshape(
+            ttnn.permute(ttnn.reshape(rel_w_wm, (B * n_heads, W, H, W)), (0, 2, 1, 3)),
+            (B, n_heads, S, W),
+        )
+        rel_h_exp = ttnn.repeat(ttnn.reshape(rel_h, (B * n_heads, S, H, 1)), ttnn.Shape([1, 1, 1, W]))
+        rel_w_exp = ttnn.repeat(ttnn.reshape(rel_w, (B * n_heads, S, 1, W)), ttnn.Shape([1, 1, H, 1]))
+        bias = ttnn.add(rel_h_exp, rel_w_exp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(bias, (B, n_heads, S, S))
+
     def _forward_core(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Core attention on (B, H, W, C)."""
         B, H, W, C = x.shape
@@ -3201,17 +3256,7 @@ class TTNNSAMAttention(TTNNModule):
         ttnn.deallocate(qkv_out)
         attn_bias_tt = None
         if self._use_rel_pos and self._rel_pos_h is not None and self._rel_pos_w is not None:
-            q_t = ttnn.to_torch(q)
-            if q_t.device.type != "cpu":
-                q_t = q_t.cpu()
-            attn_bias = compute_sam_attn_bias(q_t, self._rel_pos_h, self._rel_pos_w, (H, W))
-            attn_bias_tt = ttnn.from_torch(
-                attn_bias.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            attn_bias_tt = self._compute_rel_pos_bias_ttnn(q, H, W)
         cfg = self._attn_compute_config
         qk = ttnn.matmul(
             q,
@@ -3443,5 +3488,4 @@ class TTNNNoTPAttention(TTNNModule):
         ttnn.deallocate(value)
         ttnn.deallocate(attention_output)
 
-        output = ttnn.to_torch(output)
         return output
