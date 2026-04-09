@@ -86,6 +86,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     if (!is_integer_format(acc_dataformat)) {
         acc_dataformat = DataFormat::Float32;
     }
+    auto acc_dataformat_name = fmt::format("DataFormat::{}", acc_dataformat);
 
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
@@ -106,10 +107,10 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     if (is_integer_format(dst_cb_data_format)) {
         defines_kernel_args["BINARY_OP_INIT"] = operation_attributes.op == AccumulationOp::CUMSUM
                                                     ? "add_int_tile_init"
-                                                    : "mul_int_tile_init<DataFormat::Int32>";
+                                                    : fmt::format("mul_int_tile_init<{}>", acc_dataformat_name);
         defines_kernel_args["BINARY_OP"] = operation_attributes.op == AccumulationOp::CUMSUM
-                                               ? "add_int_tile<DataFormat::Int32>"
-                                               : "mul_int_tile<DataFormat::Int32>";
+                                               ? fmt::format("add_int_tile<{}>", acc_dataformat_name)
+                                               : fmt::format("mul_int_tile<{}>", acc_dataformat_name);
     } else {
         defines_kernel_args["BINARY_OP_INIT"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile_init" : "mul_binary_tile_init";
