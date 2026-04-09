@@ -19,6 +19,7 @@ from queue import Empty
 # third party
 import enlighten
 import framework.tt_smi_util as tt_smi_util
+
 try:
     from faster_fifo import Queue  # faster IPC; not available on aarch64 Linux
 except ImportError:
