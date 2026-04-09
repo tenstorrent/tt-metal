@@ -150,7 +150,7 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
 
         if is_clang_tidy_failure:
             return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
-        
+
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
 
