@@ -14,9 +14,10 @@
 namespace tt {
 
 /**
- * @brief Tensix data format enum, used across the entire SW+HW stack.
- * This enum is also replicated in tensix_types.h (LLK), but we don't want to include it here since the other data types
- * are not relevant.
+ * @brief Tensix data format enum.
+ * @details This enum contains the union of all data formats supported by Tensix hardware of all generations.
+ * Not all data formats are supported by all hardware generations; compatibility is legality checked at runtime.
+ * Architecture-specific data format enums are replicated in tensix_types.h (LLK).
  */
 enum class DataFormat : uint8_t {
     Float32 = 0,
@@ -47,6 +48,19 @@ enum class DataFormat : uint8_t {
  * @brief Evaluates to true if the data format is an integer type.
  */
 bool is_integer_format(DataFormat format);
+
+/**
+ * @brief True if the format is supported by Gen1 Tensix hardware (Wormhole and Blackhole).
+ * @details Source of truth: `tt_metal/hw/inc/internal/tt-1xx/wormhole/.../tensix_types.h` and
+ *          `tt_metal/hw/inc/internal/tt-1xx/blackhole/tensix_types.h`.
+ */
+bool is_supported_for_gen1(DataFormat format);
+
+/**
+ * @brief True if the format is supported by Gen2 Tensix hardware (Quasar and derivatives).
+ * @details Source of truth: `tt_metal/hw/inc/internal/tt-2xx/quasar/tensix_types.h`.
+ */
+bool is_supported_for_gen2(DataFormat format);
 
 std::ostream& operator<<(std::ostream& os, const DataFormat& format);
 
