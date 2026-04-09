@@ -7,9 +7,12 @@
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::tt_metal;
 
@@ -403,8 +406,30 @@ Tensor SdpaDecodeDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
-    bool has_attn_mask = tensor_args.attn_mask.has_value();
+    // TensorSpec hashing uses logical_shape + tensor_layout only, not cached_padded_shape_
+    const ttsl::hash::hash_t qkv_logical_padded_shape_key = [&] {
+        ttsl::hash::hash_t h = ttsl::hash::hash_objects_with_default_seed(
+            tensor_args.q.logical_shape(),
+            tensor_args.q.padded_shape(),
+            tensor_args.k.logical_shape(),
+            tensor_args.k.padded_shape());
+        if (tensor_args.v.has_value()) {
+            h = ttsl::hash::hash_objects(h, tensor_args.v->logical_shape(), tensor_args.v->padded_shape());
+        }
+        return h;
+    }();
+
+    // Hash the full optional Tensor for layout/memory/placement; hash logical_shape separately
+    // so rank and extents always contribute to the program-cache key
+    const ttsl::hash::hash_t cur_pos_tensor_logical_shape_key =
+        tensor_args.cur_pos_tensor.has_value()
+            ? ttsl::hash::hash_objects_with_default_seed(true, tensor_args.cur_pos_tensor->logical_shape())
+            : ttsl::hash::hash_objects_with_default_seed(false);
+
+    // Encode optional share_cache as 0 = unset, 1 = false, 2 = true so all three differ in the program hash.
+    const uint8_t share_cache_hash_tag = operation_attributes.share_cache.has_value()
+                                             ? (operation_attributes.share_cache.value() ? uint8_t{2} : uint8_t{1})
+                                             : uint8_t{0};
 
     return operation::hash_operation<SdpaDecodeDeviceOperation>(
         operation_attributes.scale,
@@ -414,17 +439,20 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.k_chunk_size,
         operation_attributes.paged_attention,
         operation_attributes.is_causal,
+        share_cache_hash_tag,
+        operation_attributes.cur_pos,
         operation_attributes.use_mla,
         operation_attributes.head_dim_v,
         operation_attributes.sliding_window_size,
-        has_attn_mask,
-        has_cur_pos,
         tensor_args.q,
         tensor_args.k,
         tensor_args.v,
-        // Hash on page_table_tensor to properly size page table CB
+        qkv_logical_padded_shape_key,
         tensor_args.page_table_tensor,
-        tensor_args.attention_sink);
+        tensor_args.attention_sink,
+        tensor_args.attn_mask,
+        tensor_args.cur_pos_tensor,
+        cur_pos_tensor_logical_shape_key);
 }
 
 Tensor sdpa_decode(

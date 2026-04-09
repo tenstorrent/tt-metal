@@ -222,13 +222,13 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     "b, nh, nkv, s, d",
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
-def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
+def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, reset_seeds):
     dummy_tensors = []
+    # One cur_pos vector for both outer passes: compute_program_hash includes cur_pos, so resampling
+    # per iteration would compile extra programs for cur_pos_tensor=False paths (expected cache size 4).
+    start_indices = np.random.randint(0, s - 1, b).tolist()
+    start_indices[0] = s - 1
     for i in range(2):
-        # generate random start indices from 0 to s-1
-        start_indices = np.random.randint(0, s - 1, b).tolist()
-        start_indices[0] = s - 1
-
         dummy_tensors.append(
             ttnn.as_tensor(
                 torch.zeros(32, 32),
