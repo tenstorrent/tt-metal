@@ -72,21 +72,28 @@ inline uint32_t fused_hidden_dim(uint32_t num_q_heads, uint32_t num_kv_heads, ui
     return (num_q_heads + 2 * num_kv_heads) * head_dim;
 }
 
-// Generate a deterministic float input tensor with mean=0, stddev=1 per the framework
-// convention in tech_reports/Handling_Special_Value/special_values.md. NaN/Inf are not
-// produced — those are not framework-supported as inputs.
-std::vector<float> make_random_qkv_input(
-    uint32_t seed, uint32_t batch, uint32_t seq, uint32_t num_q_heads, uint32_t num_kv_heads, uint32_t head_dim) {
-    const uint32_t hidden = fused_hidden_dim(num_q_heads, num_kv_heads, head_dim);
-    const uint32_t total = batch * seq * hidden;
+// Generate `count` deterministic floats with mean=0, stddev=1 per the framework
+// convention in tech_reports/Handling_Special_Value/special_values.md. NaN/Inf are
+// not produced — those are not framework-supported as inputs. The seed is the only
+// source of variation; (seed, count) → identical output across runs and machines.
+std::vector<float> make_random_normal_floats(uint32_t seed, size_t count) {
     std::vector<float> data;
-    data.reserve(total);
+    data.reserve(count);
     std::mt19937 rng(seed);
     std::normal_distribution<float> dist(0.0f, 1.0f);
-    for (uint32_t i = 0; i < total; ++i) {
+    for (size_t i = 0; i < count; ++i) {
         data.push_back(dist(rng));
     }
     return data;
+}
+
+// Convenience wrapper for the fused [Q|K|V] case (`(num_q + 2*num_kv) * head_dim`
+// hidden width). For the separate Q + KV case, call `make_random_normal_floats`
+// directly with the explicit element count.
+std::vector<float> make_random_qkv_input(
+    uint32_t seed, uint32_t batch, uint32_t seq, uint32_t num_q_heads, uint32_t num_kv_heads, uint32_t head_dim) {
+    return make_random_normal_floats(
+        seed, static_cast<size_t>(batch) * seq * fused_hidden_dim(num_q_heads, num_kv_heads, head_dim));
 }
 
 // Use the QkvLayout enum exposed by the op (added by the same change set as this
@@ -288,6 +295,19 @@ tt::tt_metal::Tensor make_interleaved_tensor(
     return tt::tt_metal::Tensor::from_vector(data, spec).to_device(device);
 }
 
+// Build a sharded MemoryConfig for a (grid_w × grid_h) core grid anchored at (0, 0)
+// with the given per-core shard_shape. Buffer type is always L1 (sharded tensors don't
+// live in DRAM in tt-metal). Used by `make_block_sharded_tensor` and the REJECTED
+// test cells that need to construct WIDTH_SHARDED / HEIGHT_SHARDED / BLOCK_SHARDED
+// configs inline.
+tt::tt_metal::MemoryConfig make_sharded_mem_config(
+    tt::tt_metal::TensorMemoryLayout layout, uint32_t grid_w, uint32_t grid_h, std::array<uint32_t, 2> shard_shape) {
+    tt::tt_metal::CoreRange grid_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid_w - 1, grid_h - 1));
+    tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
+    tt::tt_metal::ShardSpec shard_spec(grid_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    return tt::tt_metal::MemoryConfig(layout, tt::tt_metal::BufferType::L1, shard_spec);
+}
+
 // Build a BLOCK_SHARDED tensor on device. Uploads via DRAM interleaved first, then
 // reshards to the requested grid (caller picks num_w_cores and num_h_cores so the
 // shard math works out for the head config; see comments on the test cells below).
@@ -311,13 +331,8 @@ tt::tt_metal::Tensor make_block_sharded_tensor(
     TT_FATAL(shard_h % tt::constants::TILE_HEIGHT == 0, "shard_h {} not tile-aligned", shard_h);
     TT_FATAL(shard_w % tt::constants::TILE_WIDTH == 0, "shard_w {} not tile-aligned", shard_w);
 
-    tt::tt_metal::CoreRange grid_range(
-        tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(num_w_cores - 1, num_h_cores - 1));
-    tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
-    tt::tt_metal::ShardSpec shard_spec(grid_set, {shard_h, shard_w}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-    tt::tt_metal::MemoryConfig sharded_config(
-        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
-
+    auto sharded_config = make_sharded_mem_config(
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, num_w_cores, num_h_cores, {shard_h, shard_w});
     return ttnn::to_memory_config(staging, sharded_config);
 }
 
@@ -445,31 +460,10 @@ PccTriple run_separate_kv_interleaved_cell(
     const uint32_t q_hidden = num_q_heads * head_dim;
     const uint32_t kv_hidden = 2 * num_kv_heads * head_dim;
 
-    // Two distinct seeds so Q and KV don't have correlated values (any cross-tensor
-    // mixup would still show up as a PCC drop on either Q or K/V).
-    auto q_data = make_random_qkv_input(kFixedSeed, batch, seq, num_q_heads, /*num_kv_heads=*/0, head_dim);
-    // make_random_qkv_input bakes the (Q+KV) hidden into its computation; for this
-    // separate-KV case we want a Q-only tensor with the right size, so call it again
-    // with num_q=num_q, num_kv=0. That gives us batch*seq*num_q*head_dim floats.
-    // Re-derive q_data via direct generation to avoid the helper's assumptions.
-    q_data.clear();
-    q_data.reserve(static_cast<size_t>(batch) * seq * q_hidden);
-    {
-        std::mt19937 rng(kFixedSeed);
-        std::normal_distribution<float> dist(0.0f, 1.0f);
-        for (uint32_t i = 0; i < batch * seq * q_hidden; ++i) {
-            q_data.push_back(dist(rng));
-        }
-    }
-    std::vector<float> kv_data;
-    kv_data.reserve(static_cast<size_t>(batch) * seq * kv_hidden);
-    {
-        std::mt19937 rng(kFixedSeed ^ 0xDEADBEEFu);  // distinct seed for KV
-        std::normal_distribution<float> dist(0.0f, 1.0f);
-        for (uint32_t i = 0; i < batch * seq * kv_hidden; ++i) {
-            kv_data.push_back(dist(rng));
-        }
-    }
+    // Two distinct seeds so Q and KV don't have correlated values — any cross-tensor
+    // mixup would still show up as a PCC drop on either Q or K/V.
+    auto q_data = make_random_normal_floats(kFixedSeed, static_cast<size_t>(batch) * seq * q_hidden);
+    auto kv_data = make_random_normal_floats(kFixedSeed ^ 0xDEADBEEFu, static_cast<size_t>(batch) * seq * kv_hidden);
 
     auto cpu_ref =
         cpu_split_qkv_separate_reference(q_data, kv_data, batch, seq, num_q_heads, num_kv_heads, head_dim, transpose_k);
@@ -1097,13 +1091,11 @@ TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InWidthSharded__bf16__REJECTED) {
             std::vector<float> data(static_cast<size_t>(batch) * seq * hidden, 0.0f);
             auto staging = make_interleaved_tensor(
                 device_, data, {batch, seq, hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
-            // Width-sharded mem config across 8 cores along width
-            tt::tt_metal::CoreRange grid_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 0));
-            tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
-            tt::tt_metal::ShardSpec shard_spec(
-                grid_set, {batch * seq, hidden / 8}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-            tt::tt_metal::MemoryConfig width_sharded(
-                tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+            // Width-sharded across 8 cores along width — `to_memory_config` may fail
+            // here, or the op call below will fail at the create_qkv_heads validator.
+            // Either is an acceptable REJECTED outcome.
+            auto width_sharded = make_sharded_mem_config(
+                tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, /*grid_w=*/8, /*grid_h=*/1, {batch * seq, hidden / 8});
             auto width_sharded_tensor = ttnn::to_memory_config(staging, width_sharded);
             (void)ttnn::transformer::split_query_key_value_and_split_heads(
                 width_sharded_tensor,
@@ -1131,13 +1123,14 @@ TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InHeightSharded__bf16__REJECTED) {
             std::vector<float> data(static_cast<size_t>(batch) * seq * hidden, 0.0f);
             auto staging = make_interleaved_tensor(
                 device_, data, {batch, seq, hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
-            // Height-sharded mem config across 4 cores along height
-            tt::tt_metal::CoreRange grid_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 3));
-            tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
-            tt::tt_metal::ShardSpec shard_spec(
-                grid_set, {(batch * seq) / 4, hidden}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-            tt::tt_metal::MemoryConfig height_sharded(
-                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+            // Height-sharded across 4 cores along height — `to_memory_config` may
+            // fail here, or the op call below will fail at the create_qkv_heads
+            // validator. Either is an acceptable REJECTED outcome.
+            auto height_sharded = make_sharded_mem_config(
+                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                /*grid_w=*/1,
+                /*grid_h=*/4,
+                {(batch * seq) / 4, hidden});
             auto height_sharded_tensor = ttnn::to_memory_config(staging, height_sharded);
             (void)ttnn::transformer::split_query_key_value_and_split_heads(
                 height_sharded_tensor,
@@ -1187,10 +1180,20 @@ TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutBlockSharded__b
 // Cell 26: Falcon7B backend with the exact shape its validator hard-codes.
 // `nlp_create_qkv_heads_falcon7b_device_operation.cpp:33` requires
 //   `input_shape == [batch, 1, seq, 4672]` where 4672 = (71 + 2*1) * 64.
-// We exercise the path with `use_falcon7b_backend=true` and the canonical
-// num_q=71, num_kv=1, head_dim=64 config. The CPU reference uses CONCATENATED
-// layout — if the Falcon7B backend kernel expects a different layout the test
-// will surface it as PCC < threshold; if the layout matches it will PASS.
+//
+// CPU reference uses CONCATENATED layout — empirically (PCC ~ 1.0 below) the
+// Falcon7B-specific reader accepts the standard `nn.Linear(d, 3d)` output without
+// any grouped-repacking step. This is different from `experimental::create_qkv_heads`
+// (the generic sharded reader, which requires GROUPED layout — see Cell 13's
+// REJECTED case). Worth noting because both ops have similar names and the layout
+// expectation is non-obvious.
+//
+// `seq=32` (one tile) is chosen to keep the runtime small — the 4672-wide hidden
+// dimension makes even one-tile inputs allocate ~280 KB per tensor and the kernel
+// launch dominates. The existing Python `test_falcon_split_query_key_value_and_
+// split_heads` uses `seq=384` for fuller coverage but goes through the generic
+// GQA path (no `use_falcon7b_backend=True`), so it doesn't actually exercise the
+// Falcon7B-specific kernel that this cell targets.
 TEST_F(SplitQkvMatrixTest, Falcon7B__InDramInterleaved__OutDramInterleaved__seq32__bf16) {
     constexpr uint32_t batch = 1;
     constexpr uint32_t seq = 32;
