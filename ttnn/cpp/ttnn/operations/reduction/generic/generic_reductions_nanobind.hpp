@@ -34,6 +34,7 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
+            correction (bool, optional): **Deprecated.** This parameter is deprecated and will be removed in a future release. It has no impact on the result.
             sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.
 
         Returns:
@@ -65,12 +66,43 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
         qualified_name);
 }
 
+// Wrapper that detects explicit use of the deprecated 'correction' parameter and
+// emits a Python DeprecationWarning before forwarding to the real implementation.
+// The binding-layer type is std::optional<bool> (default nb::none()) so we can
+// distinguish "user passed correction=True" from "used the default".
+template <auto Func>
+Tensor generic_reduction_with_deprecated_correction(
+    const Tensor& input_tensor,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    std::optional<bool> correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (correction.has_value()) {
+        PyErr_WarnEx(
+            PyExc_DeprecationWarning,
+            "The 'correction' parameter is deprecated and will be removed in a future release.",
+            1);
+    }
+    return Func(
+        input_tensor,
+        dim,
+        keepdim,
+        memory_config,
+        compute_kernel_config,
+        scalar,
+        correction.value_or(true),
+        sub_core_grids);
+}
+
 inline void bind_generic_reductions(nb::module_& mod) {
     const auto sum_doc = get_generic_reduction_doc("sum", "ttnn.sum");
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
-        &ttnn::sum,
+        &generic_reduction_with_deprecated_correction<&ttnn::sum>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -78,14 +110,14 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
+        nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
     const auto mean_doc = get_generic_reduction_doc("mean", "ttnn.mean");
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        &ttnn::mean,
+        &generic_reduction_with_deprecated_correction<&ttnn::mean>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -93,14 +125,14 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
+        nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc("max", "ttnn.max");
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &ttnn::max,
+        &generic_reduction_with_deprecated_correction<&ttnn::max>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -108,14 +140,14 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
+        nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
     const auto min_doc = get_generic_reduction_doc("min", "ttnn.min");
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &ttnn::min,
+        &generic_reduction_with_deprecated_correction<&ttnn::min>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -123,7 +155,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
+        nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 }
 
