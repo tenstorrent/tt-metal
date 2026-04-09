@@ -30,6 +30,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_rsub_int.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp
+    test_split_qkv_heads_matrix.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
 )
