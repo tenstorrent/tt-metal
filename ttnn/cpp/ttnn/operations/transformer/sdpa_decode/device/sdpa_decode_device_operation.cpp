@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -425,6 +426,11 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
             ? ttsl::hash::hash_objects_with_default_seed(true, tensor_args.cur_pos_tensor->logical_shape())
             : ttsl::hash::hash_objects_with_default_seed(false);
 
+    // Encode optional share_cache as 0 = unset, 1 = false, 2 = true so all three differ in the program hash.
+    const uint8_t share_cache_hash_tag = operation_attributes.share_cache.has_value()
+                                             ? (operation_attributes.share_cache.value() ? uint8_t{2} : uint8_t{1})
+                                             : uint8_t{0};
+
     return operation::hash_operation<SdpaDecodeDeviceOperation>(
         operation_attributes.scale,
         operation_attributes.output_mem_config,
@@ -433,7 +439,7 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.k_chunk_size,
         operation_attributes.paged_attention,
         operation_attributes.is_causal,
-        operation_attributes.share_cache,
+        share_cache_hash_tag,
         operation_attributes.cur_pos,
         operation_attributes.use_mla,
         operation_attributes.head_dim_v,
