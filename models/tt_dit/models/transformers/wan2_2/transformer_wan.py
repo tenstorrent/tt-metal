@@ -4,11 +4,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
+
+if not os.environ.get("TT_DIT_DEBUG"):
+    logger.disable(__name__)
+
 
 import ttnn
 
