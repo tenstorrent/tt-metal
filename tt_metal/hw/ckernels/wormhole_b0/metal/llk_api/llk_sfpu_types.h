@@ -11,4 +11,24 @@ enum class SfpuType {
     atanh,
     sinh,
     rrelu,
+    // Comparison types used by third-party LLK
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_equal_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    // Unary comparison types
+    unary_ne,
+    unary_eq,
+    unary_gt,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    // Inf/NaN types
+    isinf,
+    isposinf,
+    isneginf,
+    isnan,
+    isfinite,
 };
