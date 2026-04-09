@@ -163,7 +163,6 @@ void compute_u_scalar_row(
     cb_push_back(cb_u_scalar_row, onetile);
 
     cb_wait_front(cb_u_scalar_row, onetile);
-    tile_regs_acquire();
     reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
 
     ckernel::MatmulOpConfig u_reduce_cfg{};
@@ -171,6 +170,7 @@ void compute_u_scalar_row(
     u_reduce_cfg.in1_cb_id = cb_mat_mul_reduction;
     u_reduce_cfg.out_cb_id = 0;
     ckernel::TileMatmulOp mm_u_reduce(u_reduce_cfg);
+    mm_u_reduce.begin_subblock();
     mm_u_reduce.init_short();
     mm_u_reduce.matmul(0, 0, accum_register);
     tile_regs_commit();
@@ -201,7 +201,7 @@ void compute_grad_attn_weights(
     grad_attn_cfg.transpose = true;
     ckernel::TileMatmulOp mm_grad_attn(grad_attn_cfg);
     mm_grad_attn.init_short();
-    tile_regs_acquire();
+    mm_grad_attn.begin_subblock();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         mm_grad_attn.matmul(tile_idx, tile_idx, 0);
     }
@@ -298,7 +298,7 @@ void update_grad_query(
     ckernel::TileMatmulOp mm_grad_q(grad_q_cfg);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        tile_regs_acquire();
+        mm_grad_q.begin_subblock();
         mm_grad_q.init_short_with_dt(cb_grad_query_accum);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mm_grad_q.matmul(0, tile_idx + block_idx, block_idx);
@@ -353,7 +353,7 @@ void update_grad_value(
     ckernel::TileMatmulOp mm_grad_v(grad_v_cfg);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        tile_regs_acquire();
+        mm_grad_v.begin_subblock();
         mm_grad_v.init_short_with_dt(cb_grad_value_accum);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mm_grad_v.matmul(0, tile_idx + block_idx, block_idx);
@@ -406,7 +406,7 @@ void update_grad_key(
     ckernel::TileMatmulOp mm_grad_k(grad_k_cfg);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        tile_regs_acquire();
+        mm_grad_k.begin_subblock();
         mm_grad_k.init_short_with_dt(cb_grad_key_accum);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mm_grad_k.matmul(0, tile_idx + block_idx, block_idx);
