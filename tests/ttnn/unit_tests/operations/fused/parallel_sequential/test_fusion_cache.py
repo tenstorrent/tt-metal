@@ -498,3 +498,208 @@ class TestLaunchInPlaceBranchIo:
         unique = set(fused_ids)
         assert len(unique) <= 2, f"run() should converge to one FusedOp, got {len(unique)} distinct ids"
         assert fused_ids[-1] == fused_ids[-2], "last two calls should share the same FusedOp"
+
+
+# ===========================================================================
+# Infra tests for update(), @OpDescriptor.create, and named kwargs
+# ===========================================================================
+
+
+class TestUpdateAPI:
+    """Test OpDescriptor.update() — positional and keyword forms."""
+
+    def test_update_positional(self, device):
+        """update(tensor) replaces input_tensors[0]."""
+        q, _, _ = _make_branches(device)
+        original = q.input_tensors[0]
+        new_tensor = ttnn.from_torch(
+            torch.rand_like(ttnn.to_torch(original)),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=original.memory_config(),
+        )
+        q.update(new_tensor)
+        assert q.input_tensors[0] is new_tensor
+
+    def test_update_keyword(self, device):
+        """update(input_tensor=tensor) replaces by name."""
+        q, _, _ = _make_branches(device)
+        original = q.input_tensors[0]
+        new_tensor = ttnn.from_torch(
+            torch.rand_like(ttnn.to_torch(original)),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=original.memory_config(),
+        )
+        q.update(input_tensor=new_tensor)
+        assert q.input_tensors[0] is new_tensor
+
+    def test_update_error_unknown_name(self, device):
+        """update(bad_name=t) raises ValueError with valid names listed."""
+        q, _, _ = _make_branches(device)
+        with pytest.raises(ValueError, match="Unknown input name"):
+            q.update(nonexistent=q.input_tensors[0])
+
+    def test_update_multiple_positional(self, device):
+        """update(t1, t2) replaces input_tensors[0] and [1]."""
+        q, _, _ = _make_branches(device)
+        old_0, old_1 = q.input_tensors[0], q.input_tensors[1]
+        new_0 = ttnn.from_torch(
+            torch.rand_like(ttnn.to_torch(old_0)),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=old_0.memory_config(),
+        )
+        new_1 = ttnn.from_torch(
+            torch.rand_like(ttnn.to_torch(old_1)),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        q.update(new_0, new_1)
+        assert q.input_tensors[0] is new_0
+        assert q.input_tensors[1] is new_1
+
+    def test_update_error_mixed_args(self, device):
+        """update(t, input_tensor=t) raises ValueError."""
+        q, _, _ = _make_branches(device)
+        t = q.input_tensors[0]
+        with pytest.raises(ValueError, match="positional OR keyword"):
+            q.update(t, input_tensor=t)
+
+
+class TestDeferredDescriptor:
+    """Test @OpDescriptor.create decorator — deferred (persistent) descriptors."""
+
+    def test_partial_has_no_hash(self, device):
+        """rms_norm(weight=w) without input_tensor has program_cache_key=None."""
+        q, _, _ = _make_branches(device)
+        w = q.input_tensors[1]
+        mem = q.input_tensors[0].memory_config()
+        desc = rms_norm(weight=w, epsilon=1e-5, memory_config=mem, core_range_set=mem.shard_spec.grid)
+        assert desc.program_cache_key is None
+        assert desc.input_tensors[0] is None  # pending slot
+
+    def test_partial_materializes_on_update(self, device):
+        """After update(tensor), program_cache_key is set and factory is ready."""
+        q, _, _ = _make_branches(device)
+        # Extract config from the eager descriptor to build a matching partial one
+        w = q.input_tensors[1]  # weight
+        x = q.input_tensors[0]  # activation
+        mem = x.memory_config()
+        desc = rms_norm(weight=w, epsilon=1e-5, memory_config=mem, core_range_set=mem.shard_spec.grid)
+        assert desc.program_cache_key is None
+        desc.update(x)
+        assert desc.program_cache_key is not None
+        assert desc.input_tensors[0] is x
+
+    def test_partial_matches_full(self, device):
+        """Deferred descriptor after update() has same hash as eager descriptor."""
+        q, _, _ = _make_branches(device)
+        w = q.input_tensors[1]
+        x = q.input_tensors[0]
+        mem = x.memory_config()
+        cr = mem.shard_spec.grid
+        # Eager (inline)
+        eager = rms_norm(x, weight=w, epsilon=1e-5, memory_config=mem, core_range_set=cr)
+        # Deferred (persistent)
+        deferred = rms_norm(weight=w, epsilon=1e-5, memory_config=mem, core_range_set=cr)
+        deferred.update(x)
+        assert eager.program_cache_key == deferred.program_cache_key
+
+
+class TestNamedKwargs:
+    """Test named kwargs on Parallel/Sequential — attribute access + collision detection."""
+
+    def test_parallel_named_access(self, device):
+        """Parallel(q=desc, kv=desc) sets named attributes."""
+        q, kv, _ = _make_branches(device)
+        p = Parallel(q=q, kv=kv)
+        assert p.q is q
+        assert p.kv is kv
+
+    def test_sequential_named_access(self, device):
+        """Sequential(a=desc) sets named attribute."""
+        q, _, _ = _make_branches(device)
+        s = Sequential(a=q)
+        assert s.a is q
+
+    def test_nested_hoisting(self, device):
+        """Names from nested containers are hoisted to the top level."""
+        q, kv, _ = _make_branches(device)
+        # Need a third descriptor for Sequential (needs ≥1 item)
+        q2, _, _ = _make_branches(device, seed=99)
+        inner = Parallel(q=q, kv=kv)
+        outer = Sequential(stem=q2, branches=inner)
+        # Hoisted: outer.q, outer.kv should work
+        assert outer.q is q
+        assert outer.kv is kv
+        assert outer.stem is q2
+
+    def test_duplicate_name_raises(self, device):
+        """Duplicate names across nesting levels raise ValueError."""
+        q, kv, _ = _make_branches(device)
+        q2, _, _ = _make_branches(device, seed=99)
+        inner = Parallel(q=q, kv=kv)
+        with pytest.raises(ValueError, match="Duplicate descriptor name"):
+            Sequential(q=q2, branches=inner)  # "q" collides
+
+
+class TestPersistentInvalidation:
+    """Test _run_fused invalidation after add() or invalidate_run()."""
+
+    def test_invalidate_run_resets_persistent(self, device):
+        """invalidate_run() clears _run_fused so next run() does a fresh build."""
+        q, kv, torches = _make_branches(device, seed=42)
+        p = Parallel(q=q, kv=kv)
+
+        # Run twice to enter persistent mode
+        p.run()
+        p.run()
+        assert p._run_fused is not None, "Should have cached FusedOp after 2nd run"
+
+        # Invalidate
+        p.invalidate_run()
+        assert p._run_fused is None, "invalidate_run should clear _run_fused"
+        assert p._run_called is False, "invalidate_run should reset _run_called"
+
+        # Next run should work (fresh cold build)
+        [out_q, out_kv] = p.run()
+        torch_q_in, torch_q_w, torch_kv_in, torch_kv_w = torches
+        ok_q, _ = comp_pcc(torch_rms_norm(torch_q_in.float(), torch_q_w.float()), ttnn.to_torch(out_q), pcc=0.98)
+        ok_kv, _ = comp_pcc(torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()), ttnn.to_torch(out_kv), pcc=0.98)
+        assert ok_q and ok_kv, "PCC should pass after invalidate + fresh run"
+
+    def test_add_invalidates_persistent(self, device):
+        """add() clears _run_fused so the topology change is picked up."""
+        q, kv, _ = _make_branches(device, seed=42)
+        q2, _, _ = _make_branches(device, seed=99)
+
+        # Start with just q, kv
+        s = Sequential(q)
+        s.run()
+        s.run()
+        assert s._run_fused is not None
+
+        # add() should invalidate
+        s.add(kv)
+        assert s._run_fused is None
+
+
+class TestPersistentWithResults:
+    """Test persistent mode with explicit results kwarg."""
+
+    def test_persistent_parallel_explicit_results(self, device):
+        """run(results=[specific_desc]) works in persistent mode."""
+        q, kv, torches = _make_branches(device, seed=42)
+        p = Parallel(q=q, kv=kv)
+
+        # Run enough times to enter persistent mode
+        p.run()
+        p.run()
+        p.run()
+
+        # Now use explicit results — request only Q output
+        [out_q] = p.run(results=[q])
+        torch_q_in, torch_q_w, _, _ = torches
+        ok, _ = comp_pcc(torch_rms_norm(torch_q_in.float(), torch_q_w.float()), ttnn.to_torch(out_q), pcc=0.98)
+        assert ok, "Explicit results=[q] should return correct Q output"

@@ -207,6 +207,7 @@ class OpDescriptor:
                 full = self._complete_fn(self.input_tensors)
                 self.program_cache_key = full.program_cache_key
                 self._factory_fn = full._factory_fn
+                self._descriptor = full._descriptor
                 self.output_tensors = full.output_tensors
                 self._complete_fn = None
 
@@ -301,13 +302,14 @@ class OpDescriptor:
                 bound.apply_defaults()
                 all_args = bound.arguments
 
-                # Build input list: required params (may be None/deferred) +
-                # optional params that received a Tensor value.
+                # Build input list: required params that are pending (None) or
+                # are Tensors, plus optional params that received a Tensor value.
+                # Non-tensor required params (e.g., begins: List[int]) are excluded.
                 input_names = []
                 inputs = []
                 idx = 0
                 for pname, val in all_args.items():
-                    if pname in required:
+                    if val is None and pname in required:
                         input_names.append((pname, idx))
                         inputs.append(val)
                         idx += 1
