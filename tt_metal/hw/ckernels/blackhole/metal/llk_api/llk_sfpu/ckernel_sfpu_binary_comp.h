@@ -224,4 +224,31 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt, "Supported operation types: lt, gt");
+    constexpr uint dst_tile_size = 64;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        if constexpr (RELATIONAL_OP == SfpuType::lt) {
+            // Load operand A as uint16 for lt operation (zero-extended to 32 bits)
+            TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+            // Load operand B as uint16 for lt operation (zero-extended to 32 bits)
+            TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
+            // Load operand A as uint16 for gt operation (zero-extended to 32 bits)
+            TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+            // Load operand B as uint16 for gt operation (zero-extended to 32 bits)
+            TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        }
+        // LREG1 = LREG0 - LREG1 = A - B (imod=6 does dst = src - dst)
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+        // Extract sign bit: logical right shift by 31 -> 1 if negative (A < B), 0 otherwise
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+        // Store the result in the destination register
+        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        // Increment the destination register
+        dst_reg++;
+    }
+}
 }  //  namespace ckernel::sfpu

@@ -764,3 +764,61 @@ def test_binary_bitwise_right_shift(device):
     z_tt_out = ttnn.typecast(z_tt_out, dtype=ttnn.uint32)
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
     assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (torch.Size([1, 1, 64, 128])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (1000, 10000, 500, 1000),
+        (30000, 40000, 10000, 15000),
+        (50000, 55000, 1000, 2000),
+        (1000, 2000, 50000, 55000),
+        (8000, 12000, 8000, 12000),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [ttnn.lt, ttnn.gt],
+)
+def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, device):
+    num_elements = max(int(torch.prod(torch.tensor(shape)).item()), 1)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    corner_cases = torch.tensor([0, 1, 65535], dtype=torch.int32)
+    torch_input_tensor_a = torch.cat([torch_input_tensor_a, corner_cases])
+    torch_input_tensor_a = torch_input_tensor_a[-num_elements:].reshape(shape)
+
+    num_elements = max(int(torch.prod(torch.tensor(shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+    corner_cases = torch.tensor([0, 1, 65535], dtype=torch.int32)
+    torch_input_tensor_b = torch.cat([torch_input_tensor_b, corner_cases])
+    torch_input_tensor_b = torch_input_tensor_b[-num_elements:].reshape(shape)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
