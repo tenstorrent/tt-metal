@@ -122,6 +122,28 @@ def run(
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a
 
+    # Tile layout pads last two dims to multiples of 32.  When A uses TILE and B
+    # uses ROW_MAJOR (or vice-versa), the inner matmul dimension will mismatch
+    # because one side is padded and the other is not.  Align the torch shapes so
+    # that the inner dimension (A.width / B.height) is the same after tile padding.
+    def _tile_align(dim):
+        return ((dim + 31) // 32) * 32
+
+    a_is_tile = input_a_layout == ttnn.TILE_LAYOUT
+    b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
+
+    if a_is_tile != b_is_tile and len(shape_a) >= 2 and len(shape_b) >= 2:
+        inner_a = shape_a[-1]  # A's width
+        inner_b = shape_b[-2]  # B's height
+        if inner_a == inner_b:
+            aligned = _tile_align(inner_a)
+            if a_is_tile and not b_is_tile:
+                # A will be tile-padded → pad B's height to match
+                shape_b = tuple(list(shape_b[:-2]) + [aligned, shape_b[-1]])
+            elif b_is_tile and not a_is_tile:
+                # B will be tile-padded → pad A's width to match
+                shape_a = tuple(list(shape_a[:-2]) + [shape_a[-2], aligned])
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
