@@ -329,18 +329,35 @@ void TestContext::compile_programs() {
     }
 
     if (show_workers_) {
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         for (const auto& [coord, test_device] : test_devices_) {
             const auto& node_id = test_device.get_node_id();
             const auto& senders = test_device.get_senders();
             const auto& receivers = test_device.get_receivers();
-            if (!senders.empty() || !receivers.empty()) {
-                log_info(
-                    tt::LogTest,
-                    "Device {}: {} sender(s), {} receiver(s)",
-                    tt::tt_fabric::fabric_tests::format_device_label(node_id),
-                    senders.size(),
-                    receivers.size());
+            if (senders.empty() && receivers.empty()) {
+                continue;
             }
+
+            std::string eth_info;
+            for (const auto& [core, sender] : senders) {
+                for (const auto& [cfg, key] : sender.get_configs()) {
+                    auto eth_chans =
+                        control_plane.get_active_fabric_eth_channels_in_direction(node_id, key.direction);
+                    auto ch = key.link_idx < eth_chans.size() ? std::to_string(eth_chans.at(key.link_idx)) : "?";
+                    if (!eth_info.empty()) {
+                        eth_info += ", ";
+                    }
+                    eth_info += std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) + "]=ch" + ch;
+                }
+            }
+
+            log_info(
+                tt::LogTest,
+                "Device {}: {} sender(s), {} receiver(s){}",
+                tt::tt_fabric::fabric_tests::format_device_label(node_id),
+                senders.size(),
+                receivers.size(),
+                eth_info.empty() ? "" : "; sender eth channels: " + eth_info);
         }
     }
 
