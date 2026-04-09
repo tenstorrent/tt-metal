@@ -12,6 +12,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
+TEST_PADDING_VALUE = 42
+
 
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
@@ -26,7 +28,7 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     torch_output_tensor, _ = torch.min(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    ttnn.fill_implicit_tile_padding(input_tensor, 42)  # garbage padding to test that min removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -55,7 +57,7 @@ def test_min_global(device, batch_size, h, w):
     torch_output_tensor = torch.min(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.fill_implicit_tile_padding(input_tensor, 42)  # garbage padding to test that min removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.min(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)

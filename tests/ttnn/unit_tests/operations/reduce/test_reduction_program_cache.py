@@ -46,7 +46,6 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
     torch_result = ttnn_ops[op](torch_a, dim=dim, keepdim=True)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    # ttnn.fill_implicit_tile_padding(tt_a, -42)  # garbage padding to test that reduce removes it
     with device.cache_entries_counter.measure():
         tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -62,7 +61,6 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
 def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -100,7 +98,6 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     """Different reduce math ops (sum vs max) -> different cache entries."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
     # test for equivalance
@@ -130,7 +127,6 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
 def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     """Different reduce dims (W vs H) -> different program factories -> different cache entries."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
 
     # dim=-1 (W): ReduceMultiCoreWProgramFactory
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -162,7 +158,6 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
 
@@ -192,7 +187,6 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
 def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
 
     torch_ref1, tt_out1 = run_reduce_op(
         device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -258,14 +252,12 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in compute_program_hash() and affects work distribution (compile-time)."""
     shape = [1, 1, 64, 64]
-    # shape = [1, 1, 31, 63]  # implicit tile padding test
     torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
 
     grid_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(tt_a, -42)  # garbage padding to test that reduce removes it
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_a)
         tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
