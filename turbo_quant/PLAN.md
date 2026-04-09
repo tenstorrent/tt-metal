@@ -529,23 +529,20 @@ Two sub-steps:
 
 ---
 
-## Where We Are (2026-04-08)
+## Where We Are (2026-04-09)
 
 **TurboQuant vs Baseline BFP8 (Wormhole N150, Llama-3.1-8B-Instruct):**
 
 | max_seq | Baseline BFP8 | TurboQuant 3-bit | Overhead |
 |---------|--------------|-----------------|----------|
-| 128 | 37.0 ms | **45.6 ms** | **1.23×** |
-| 512 | 37.7 ms | 48.0 ms | 1.27× |
-| 1024 | 37.7 ms | 50.1 ms | 1.33× |
-| 2048 | 37.8 ms | 53.6 ms | 1.42× |
-| 4096 | 37.7 ms | 60.7 ms | 1.61× |
-| 8192 | 37.7 ms | 74.8 ms | 1.98× |
+| 128 | 37.0 ms | **44.1 ms** | **1.19×** |
+| 512 | 37.7 ms | 45.3 ms | 1.20× |
+| 2048 | 37.8 ms | 45.3 ms | 1.20× |
+| 4096 | 37.7 ms | 45.3 ms | 1.20× |
+| 8192 | 37.7 ms | 45.3 ms | 1.20× |
 
-Baseline is flat (~37.7ms) because SDPA decode only reads filled positions.
-TurboQuant overhead grows linearly: the `mul(cached_centroids, norms)` dequantize
-processes the **entire** pre-allocated `[1, H, max_seq_padded, D]` cache every step,
-including unfilled positions. Fixing this scaling issue is the next optimization target.
+Overhead is **flat at 1.20×** across all sequence lengths (was 1.98× at seq=8192
+before the pre-rescale fix).
 
 **Optimisation history:**
 
@@ -557,14 +554,14 @@ A2t    71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)
 B1+2   47ms     fused bucketize + gather kernels
 centr  46ms     cache centroid values (gather at quantize time)
 absrb  45.6ms   absorb Π into W_v/W_o weights
+rescl  44.1ms   pre-rescale centroids×norms at scatter (O(1) dequant)
 base   37.0ms   baseline BFP8 (no TurboQuant)
 ```
 
-Remaining overhead at seq=128 (~8.6ms) breakdown:
-- **K rotation + Q pre-rotation**: ~3ms (RoPE forces these to remain)
+Remaining overhead (~7.5ms constant, independent of seq_len):
+- **K rotation + Q pre-rotation**: ~4ms (RoPE forces these to remain)
 - **Quantize** (norm + bucketize + gather on 1 token): ~2ms
-- **Scatter** (4× paged_update_cache): ~2ms
-- **Dequantize** mul (full cache × norms): ~1.5ms
+- **Scatter** (2× paged_update_cache for K/V): ~1.5ms
 
 ---
 
