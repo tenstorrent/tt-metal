@@ -112,7 +112,16 @@ class OpDescriptor:
     descriptor at construction; for deferred ops it is passed in.
     """
 
-    __slots__ = ("_factory_fn", "_descriptor", "input_tensors", "output_tensors", "name", "program_cache_key")
+    __slots__ = (
+        "_factory_fn",
+        "_descriptor",
+        "input_tensors",
+        "output_tensors",
+        "name",
+        "program_cache_key",
+        "_input_names",
+        "_complete_fn",
+    )
 
     def __init__(
         self,
@@ -123,24 +132,77 @@ class OpDescriptor:
         *,
         factory_fn: Optional[Callable] = None,
         program_cache_key: Optional[int] = None,
+        input_names: Optional[tuple] = None,
+        complete_fn: Optional[Callable] = None,
     ):
-        if descriptor is not None and factory_fn is not None:
+        if complete_fn is not None:
+            # Partial descriptor: hash computed lazily on first update().
+            self._factory_fn = None
+            self._descriptor = None
+        elif descriptor is not None and factory_fn is not None:
             raise ValueError("Pass descriptor or factory_fn, not both")
-        if descriptor is None and factory_fn is None:
+        elif descriptor is None and factory_fn is None:
             raise ValueError("Pass descriptor or factory_fn")
+        else:
+            self._factory_fn = factory_fn
+            self._descriptor = descriptor
 
-        self._factory_fn = factory_fn
-        self._descriptor = descriptor
         self.input_tensors = input_tensors if input_tensors is not None else []
         self.output_tensors = output_tensors if output_tensors is not None else []
         self.name = name
+        self._input_names = input_names
+        self._complete_fn = complete_fn
 
         if program_cache_key is not None:
             self.program_cache_key = program_cache_key
         elif descriptor is not None:
             self.program_cache_key = ttnn.compute_program_descriptor_hash(descriptor)
+        elif complete_fn is not None:
+            self.program_cache_key = None  # computed on first update()
         else:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
+
+    def update(self, *args, **kwargs):
+        """Replace input tensors by name or position.
+
+        **Positional** (common single-activation case)::
+
+            desc.update(new_q)
+
+        **Keyword** (multi-input or self-documenting)::
+
+            desc.update(input_tensor=new_q)
+            desc.update(input_a=new_a, input_b=new_b)
+        """
+        if args and kwargs:
+            raise ValueError("update(): positional OR keyword arguments, not both")
+        if args:
+            for i, t in enumerate(args):
+                self.input_tensors[i] = t
+        elif kwargs:
+            if self._input_names is None:
+                raise ValueError(
+                    "Keyword update requires named inputs. " "This OpDescriptor was created without input_names."
+                )
+            name_to_idx = dict(self._input_names)
+            for name, t in kwargs.items():
+                idx = name_to_idx.get(name)
+                if idx is None:
+                    raise ValueError(
+                        f"Unknown input name {name!r} for {self.name!r} op. "
+                        f"Valid names: {sorted(name_to_idx.keys())}"
+                    )
+                self.input_tensors[idx] = t
+
+        # Lazy materialization: first update() that fills all None slots
+        # on a partial descriptor triggers hash computation + factory setup.
+        if self.program_cache_key is None and self._complete_fn is not None:
+            if all(t is not None for t in self.input_tensors):
+                full = self._complete_fn(self.input_tensors)
+                self.program_cache_key = full.program_cache_key
+                self._factory_fn = full._factory_fn
+                self.output_tensors = full.output_tensors
+                self._complete_fn = None
 
     @property
     def descriptor(self):
@@ -170,6 +232,37 @@ def is_op_descriptor(item) -> bool:
     return isinstance(item, OpDescriptor)
 
 
+def make_partial_descriptor(factory_fn, factory_kwargs, input_tensors, input_names, name=""):
+    """Create a partial ``OpDescriptor`` that materializes on first :meth:`~OpDescriptor.update`.
+
+    Used when some tensor arguments are not yet available (e.g., activations
+    at module ``__init__`` time).  When :meth:`~OpDescriptor.update` fills all
+    ``None`` slots, ``factory_fn(**factory_kwargs)`` is called with the real
+    tensors to produce the full descriptor (hash, factory closure, output alloc).
+
+    Args:
+        factory_fn: The full descriptor factory (e.g., ``_create_layernorm_op_descriptor``).
+        factory_kwargs: All arguments to *factory_fn* (tensor args may be ``None``).
+        input_tensors: List of tensors in input order (``None`` for pending slots).
+        input_names: Tuple of ``(name, index)`` pairs for :meth:`~OpDescriptor.update`.
+        name: Op name for error messages.
+    """
+
+    def _complete(final_inputs):
+        kw = dict(factory_kwargs)
+        for (param_name, _), tensor in zip(input_names, final_inputs):
+            kw[param_name] = tensor
+        return factory_fn(**kw)
+
+    return OpDescriptor(
+        input_tensors=list(input_tensors),
+        output_tensors=[None],
+        name=name,
+        complete_fn=_complete,
+        input_names=tuple(input_names),
+    )
+
+
 __all__ = [
     "OpDescriptor",
     "DeferredOpDescriptor",
@@ -177,4 +270,5 @@ __all__ = [
     "core_range_set_fusion_key",
     "extend_branch_program_cache_key",
     "is_op_descriptor",
+    "make_partial_descriptor",
 ]
