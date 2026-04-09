@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,11 @@ namespace ttnn::operations::reduction::detail {
 static std::string get_welford_reduction_doc(const char* op_name, const char* qualified_name) {
     return fmt::format(
         R"doc(
-        Computes the {0} of the input tensor :attr:`input_a` along the specified dimension(s) :attr:`dim`.
+        Computes the {0} of the input tensor :attr:`input_tensor` along the specified dimension(s) :attr:`dim`.
         If no dimension is provided, {0} is computed over all dimensions yielding a single value.
 
         Args:
-            input_a (ttnn.Tensor): the input tensor. Must be on the device.
+            input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
             dim (number or tuple): dimension value(s) to reduce over.
             keepdim (bool, optional): keep the original dimension size(s). Defaults to `False`.
 
@@ -54,7 +54,7 @@ static std::string get_welford_reduction_doc(const char* op_name, const char* qu
                 * - BFLOAT8_B
                   - TILE
 
-            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -70,35 +70,33 @@ void bind_welford_reductions(nb::module_& mod) {
     ttnn::bind_function<"std">(
         mod,
         std_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::std,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("use_legacy") = false));
+        &ttnn::std,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("use_legacy") = false);
 
     const auto var_doc = get_welford_reduction_doc("var", "ttnn.var");
     ttnn::bind_function<"var">(
         mod,
         var_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::var,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("use_legacy") = false));
+        &ttnn::var,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("use_legacy") = false);
 }
 
 }  // namespace ttnn::operations::reduction::detail

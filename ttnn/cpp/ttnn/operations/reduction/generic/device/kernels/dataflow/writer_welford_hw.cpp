@@ -16,7 +16,6 @@
 // NOC-writes it to DRAM.
 
 #include <cstdint>
-#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"

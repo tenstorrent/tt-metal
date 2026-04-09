@@ -175,7 +175,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
     return out_tensor
 
 
-# Test a 0D, 1D, 5D, and a 0-volume tensor
+# Test a 0D, 1D, 1-element, 1 column, 0-volume, and a 5D tensor
 @pytest.mark.parametrize(
     "tensor_shape",
     [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
@@ -285,7 +285,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         atol = 0.1
 
     if op == "var":
-        # For var/std there are cases where all values are close to 1, and we're using bfloat16,
+        # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
         # so even a rounding error of 0.5 ULP has a significant impact on PCC.
         pcc = 0.99
     elif op == "std":
@@ -547,7 +547,7 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
         atol = 0.1
 
     if op == "var" and shape == (3, 4, 8, 56, 33):
-        # For var/std there are cases where all values are close to 1, and we're using bfloat16,
+        # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
         # so even a rounding error of 0.5 ULP has a significant impact on PCC with large tensors.
         pcc = 0.98
     elif op == "std" and shape == (3, 4, 8, 56, 33):

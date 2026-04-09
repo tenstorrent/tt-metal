@@ -207,7 +207,7 @@ static Tensor reduce_impl(
             TT_THROW("Unsupported dim");
         }
 
-        int reduced_volume = 1;
+        uint64_t reduced_volume = 1;
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
         }
@@ -279,7 +279,7 @@ static Tensor std_var_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    int reduced_volume = 1;
+    uint64_t reduced_volume = 1;
     if (rank != 0) {
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];

@@ -114,7 +114,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
 
     const uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_work_units = reduce_w ? NC * Ht : (reduce_hw ? NC / reduce_batch_size : NC * Wt);
+    auto num_work_units = reduce_w ? (NC * Ht) : (reduce_hw ? (NC / reduce_batch_size) : (NC * Wt));
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
@@ -175,10 +175,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_config);
     }
 
-    // cb_scaled (c_20): both W-reduce and H-reduce need this when do_scale is
-    // true.  mul_tiles_bcast_scalar_init_short reconfigures the FPU math
-    // pipeline, so the scaled result must be packed to this intermediate CB
-    // and read back before the SFPU Welford operation.
+    // cb_scaled (c_20): all three reduce modes (W, H, HW) need this when
+    // do_scale is true.  mul_tiles_bcast_scalar_init_short reconfigures the
+    // FPU math pipeline, so the scaled result must be packed to this
+    // intermediate CB and read back before the SFPU Welford operation.
     bool do_scale = (operation_attributes.scalar != 1.0f);
     if (do_scale) {
         CBIndex scaled_cb_index = CBIndex::c_20;
@@ -255,6 +255,13 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
 
     tt_metal::KernelHandle writer_kernel_id;
     if (reduce_hw) {
+        if (operation_attributes.correction) {
+            TT_FATAL(
+                H * W * reduce_batch_size >= 2,
+                "Bessel's correction requires at least 2 elements across all reduction dimensions, got {}",
+                H * W * reduce_batch_size);
+        }
+
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
             Wt, W, tile_width, H, static_cast<uint32_t>(operation_attributes.correction), reduce_batch_size};
@@ -292,6 +299,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         };
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
     } else {
+        if (operation_attributes.correction) {
+            uint32_t reduce_size = reduce_w ? W : H;
+            TT_FATAL(
+                reduce_size >= 2,
+                "Bessel's correction requires at least 2 elements along the reduction dimension, got {}",
+                reduce_size);
+        }
+
         // W-reduce compile args: {Wt, W, tile_width, do_scale, correction, is_std}
         // H-reduce compile args: {Ht, H, tile_height, do_scale, correction, is_std}
         compute_compile_args = {

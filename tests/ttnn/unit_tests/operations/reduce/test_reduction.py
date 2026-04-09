@@ -30,19 +30,20 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
 
     rtol = 0.01
     atol = 0.01
     frobenius = 0.005
-    # All values are close to 1, and we're using bfloat16, so even a rounding error
-    # of 1 ULP impacts PCC.
-    # Therefore PCC threshold has to be lower than for other tests.
-    # ATOL/RTOL/Frobenius should catch any significant errors.
-    pcc = 0.98
+    pcc = 0.9999
     if use_legacy:
         # Legacy implementation is even less accurate.
         pcc = 0.975
+    elif dim == (-2, -1):
+        # For 2D reduction, all output values are close to 1, and we're using bfloat16,
+        # so a rounding error of even 1 ULP impacts PCC.
+        # ATOL/RTOL/Frobenius should catch any significant errors.
+        pcc = 0.98
 
     outputs_all_finite = torch.isfinite(torch_output_tensor).all() and torch.isfinite(output_tensor).all()
     if outputs_all_finite and torch_output_tensor.numel() > 0:
@@ -82,7 +83,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
 
-    # test for equivalance
+    # test for equivalence
     rtol = 0.01
     atol = 0.01
     pcc = 0.99999
@@ -146,7 +147,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -179,7 +180,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -212,7 +213,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -244,7 +245,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -275,7 +276,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -305,7 +306,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -378,7 +379,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         rtol = 0.044
         atol = 0.016
         frobenius_threshold = 0.007
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
@@ -435,7 +436,7 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
@@ -504,7 +505,7 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
         rtol = 2.933
         atol = 0.026
         frobenius_threshold = 0.010
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
@@ -571,7 +572,7 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
         rtol = 2.997
         atol = 0.026
         frobenius_threshold = 0.011
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
@@ -600,7 +601,7 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -628,7 +629,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -658,7 +659,7 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -687,7 +688,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -715,7 +716,7 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -861,7 +862,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
 
     outputs_all_finite = torch.isfinite(torch_result).all() and torch.isfinite(ttnn_result).all()
     if outputs_all_finite and torch_result.numel() > 0:
-        # test for equivalance
+        # test for equivalence
         assert_numeric_metrics(
             torch_result,
             ttnn_result,
@@ -870,8 +871,8 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
             atol=0.01,
             frobenius_threshold=0.004,
         )
-
-    atol = rtol = 0.1
-    assert torch.allclose(
-        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
-    ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+    else:
+        atol = rtol = 0.1
+        assert torch.allclose(
+            torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
+        ), f"torch: {torch_result}, ttnn: {ttnn_result}"
