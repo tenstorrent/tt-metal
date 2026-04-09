@@ -732,8 +732,9 @@ def test_group_attn_matmul_with_program_cache_exhaustive(
     input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
     golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-    allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-    assert allclose, f"FAILED: {output}"
+    assert_numeric_metrics(
+        tt_output_tensor, golden_output_tensor, check_allclose=False, check_frobenius=False, check_ulp=False
+    )
 
 
 def _attn_round_up_tokens(n: int) -> int:
@@ -961,4 +962,6 @@ def test_attn_matmul_with_program_cache_exhaustive(
         b_eff = input_tensor_b_f[:, :, :n_round, :]
         golden_output_tensor = (input_tensor_a_f.transpose(0, 2) @ b_eff).transpose(0, 2)
 
-    assert_numeric_metrics(tt_output_tensor, golden_output_tensor, check_allclose=False, check_frobenius=False, check_ulp=False)
+    assert_numeric_metrics(
+        tt_output_tensor, golden_output_tensor, check_allclose=False, check_frobenius=False, check_ulp=False
+    )

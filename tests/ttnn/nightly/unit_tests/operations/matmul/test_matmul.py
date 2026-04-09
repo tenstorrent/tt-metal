@@ -347,7 +347,9 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
 
     assert out_ref.shape == out_candidate.shape
     pcc = 0.97 if rhs_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) else 0.999
-    assert_with_pcc(out_ref, out_candidate, pcc=pcc)
+    assert_numeric_metrics(
+        out_ref, out_candidate, pcc_threshold=pcc, check_ulp=False, check_allclose=False, check_frobenius=False
+    )
 
 
 @pytest.mark.parametrize(
