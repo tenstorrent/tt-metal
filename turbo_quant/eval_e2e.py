@@ -152,6 +152,13 @@ def main():
                 tq.rotation_absorbed = True
             layer.attention.tq_cache = tq
 
+            # Free the model's paged layer_past — TQ uses its own cache.
+            # This reclaims ~1GB+ at long seqlens.
+            if hasattr(layer.attention, "layer_past"):
+                for t in layer.attention.layer_past:
+                    ttnn.deallocate(t)
+                layer.attention.layer_past = None
+
     # ------------------------------------------------------------------ #
     # Prepare initial inputs                                               #
     # ------------------------------------------------------------------ #
