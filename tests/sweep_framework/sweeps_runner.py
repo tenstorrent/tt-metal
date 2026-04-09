@@ -19,7 +19,10 @@ from queue import Empty
 # third party
 import enlighten
 import framework.tt_smi_util as tt_smi_util
-from faster_fifo import Queue
+try:
+    from faster_fifo import Queue  # faster IPC; not available on aarch64 Linux
+except ImportError:
+    from multiprocessing import Queue
 
 # tt
 from framework.device_fixtures import default_device
