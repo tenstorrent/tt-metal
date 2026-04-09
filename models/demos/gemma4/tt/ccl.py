@@ -1,72 +1,68 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+CCL manager for Gemma4 tensor parallelism.
+
+Follows the TT_CCL pattern from tt_transformers/tt/ccl.py exactly:
+- Per-axis semaphore sets (axis 0, axis 1, no-axis)
+- Double-buffered (ping-pong) semaphores for each op type
+- reduce_scatter: 3 semaphores per ping-pong set
+- all_gather: 2 semaphores per ping-pong set
+- barrier: 1 semaphore per ping-pong set
+"""
+
 import ttnn
+from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):
+    def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Linear):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
 
-        self._ping_pong_buffer_cache = {}
-        self._ping_pong_buffer_indices = {}
-
-        self._init_subdevice()
-        self._init_semaphores()
-        self.rs_ping_pong_idx = 0
-        self.ag_ping_pong_idx = 0
-        self.barrier_idx = 0
-
-    def _init_subdevice(self):
-        compute_grid_size = ttnn.CoreCoord(8, 8)
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-
-        _worker_sub_device = ttnn.SubDevice(
-            [
-                self.ccl_cores,
-            ]
-        )
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
-    def _init_semaphores(self):
-        rs_n_sems = 3 * 2
-        self.rs_ping_pong_semaphores = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)
-        ]
+        # Per-axis semaphore arrays: index 0=axis-0, 1=axis-1, 2=no-axis
+        self.barrier_semaphore_idx = [0, 0, 0]
+        self.barrier_semaphore_handles = [[], [], []]
+        self.ag_semaphores_idx = [0, 0, 0]
+        self.ag_semaphore_handles = [[], [], []]
+        self.rs_semaphores_idx = [0, 0, 0]
+        self.rs_semaphore_handles = [[], [], []]
 
-        ag_n_sems = 2 * 2
-        self.ag_ping_pong_semaphores = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)
-        ]
+        for i in range(3):
+            for _ in range(2):  # double-buffered
+                self.barrier_semaphore_handles[i].append(ttnn.create_global_semaphore(mesh_device, self.ccl_cores, 0))
+                self.ag_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(mesh_device, self.ccl_cores, 0) for _ in range(2)]
+                )
+                self.rs_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(mesh_device, self.ccl_cores, 0) for _ in range(3)]
+                )
 
-        barrier_ns_sems = 2 * 1
-        self.barrier_semaphore = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_ns_sems)
-        ]
+    def get_num_links(self, cluster_axis=None):
+        return get_common_num_links(self.mesh_device, cluster_axis)
 
-    def get_rs_ping_pong_semaphore(self):
-        cur_idx = self.rs_ping_pong_idx
-        n_sems = 3
-        self.rs_ping_pong_idx = (cur_idx + 1) % 2
-        return self.rs_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
+    def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
+        idx = 2 if not cluster_axis else cluster_axis
+        cur = self.barrier_semaphore_idx[idx]
+        self.barrier_semaphore_idx[idx] = (cur + 1) % 2
+        return self.barrier_semaphore_handles[idx][cur]
 
-    def get_ag_ping_pong_semaphore(self):
-        cur_idx = self.ag_ping_pong_idx
-        n_sems = 2
-        self.ag_ping_pong_idx = (cur_idx + 1) % 2
-        return self.ag_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
+        idx = 2 if not cluster_axis else cluster_axis
+        cur = self.ag_semaphores_idx[idx]
+        self.ag_semaphores_idx[idx] = (cur + 1) % 2
+        return self.ag_semaphore_handles[idx][cur]
 
-    def get_barrier_semaphore(self):
-        cur_idx = self.barrier_idx
-        self.barrier_idx = (cur_idx + 1) % 2
-        return self.barrier_semaphore[cur_idx]
-
-    def reset_global_semaphores(self):
-        for sem in self.rs_ping_pong_semaphores:
-            ttnn.reset_global_semaphore_value(sem, 0)
-        for sem in self.ag_ping_pong_semaphores:
-            ttnn.reset_global_semaphore_value(sem, 0)
+    def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
+        idx = 2 if not cluster_axis else cluster_axis
+        cur = self.rs_semaphores_idx[idx]
+        self.rs_semaphores_idx[idx] = (cur + 1) % 2
+        return self.rs_semaphore_handles[idx][cur]
