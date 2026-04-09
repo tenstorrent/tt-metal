@@ -27,7 +27,7 @@ namespace ttnn::prim {
 namespace {
 
 // Appends 5 compile-time args needed for a fabric MUX client worker kernel.
-static void fabric_mux_connection_ct_args(
+void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_link,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args) {
@@ -41,7 +41,7 @@ static void fabric_mux_connection_ct_args(
 
 // Appends 17 runtime args for a fabric MUX client worker.
 // Creates 5 semaphores on worker_logical_core for the connection state.
-static void fabric_mux_connection_rt_args(
+void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
     const CoreCoord& mux_logical_core,
@@ -90,7 +90,7 @@ ExpRingJointSDPAProgramFactory::cached_mesh_workload_t ExpRingJointSDPAProgramFa
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(args, coord, tensor_args, output_tensors);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
 
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};

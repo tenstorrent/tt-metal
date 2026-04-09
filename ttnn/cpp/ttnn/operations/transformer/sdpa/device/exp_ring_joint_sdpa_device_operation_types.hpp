@@ -69,7 +69,7 @@ struct ExpRingJointSDPAParams {
         num_buffers_per_channel(num_buffers_per_channel) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("joint_strategy", joint_strategy);
         attrs.emplace_back("logical_n", logical_n);
