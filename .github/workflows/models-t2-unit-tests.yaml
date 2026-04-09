@@ -18,6 +18,7 @@ on:
           - qwen2.5-coder-32b
           - qwen2.5-72b-vl
           - mistral-7b
+          - gemma-3-4b
           - gemma-3-27b
           - mixtral-8x7b
           - shallow-unet

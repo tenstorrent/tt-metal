@@ -185,6 +185,17 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Gemma-3-4B unit tests
+  cmd: |
+    pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
+      timeout: 22
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Gemma-3-27B unit tests
   cmd: |
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"

@@ -148,6 +148,19 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Gemma-3-4B e2e tests
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it
+    pytest --timeout 1000 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
+    pytest --timeout 1000 models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
+      timeout: 25
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Gemma-3-27B e2e tests
   cmd: |
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it
