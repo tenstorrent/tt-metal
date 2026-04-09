@@ -10,6 +10,29 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.matmul.test_matmul_deepseek import _run_matmul_2d_interleaved_in0_sharded_in1
 
 
+def _skip_matmul_2d_interleaved_sharded_dtype_bias_sweep_known_failures(
+    has_bias: bool,
+    in0_dtype,
+    in1_dtype,
+    out_dtype,
+    bias_dtype,
+) -> bool:
+    """
+    Combinations that fail assert_numeric_metrics: reference is BF16-only while device uses mixed dtypes
+    on ttnn.linear (see _run_matmul_2d_interleaved_in0_sharded_in1).
+    """
+    if not has_bias:
+        return False
+    if out_dtype == ttnn.bfloat8_b:
+        return True
+    if bias_dtype == ttnn.bfloat8_b:
+        return not (
+            (in1_dtype == ttnn.bfloat16 and in0_dtype == ttnn.bfloat8_b)
+            or (in1_dtype == ttnn.bfloat8_b and in0_dtype == ttnn.bfloat8_b)
+        )
+    return not (in1_dtype == ttnn.bfloat16 or (in1_dtype == ttnn.float32 and in0_dtype == ttnn.float32))
+
+
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
@@ -244,6 +267,11 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
     across various data type combinations for inputs, outputs, and bias,
     restricted to batch == 1 so that ttnn.Linear() can be used with bias.
     """
+    if _skip_matmul_2d_interleaved_sharded_dtype_bias_sweep_known_failures(
+        has_bias, in0_dtype, in1_dtype, out_dtype, bias_dtype
+    ):
+        pytest.skip("Known PCC failure: BF16-only PyTorch golden vs mixed-dtype linear. Issue #41801")
+
     expected_pcc = 0.99
 
     _run_matmul_2d_interleaved_in0_sharded_in1(
