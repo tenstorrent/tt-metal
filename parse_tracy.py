@@ -321,6 +321,41 @@ def calculate_device_stats(spans: List[TraceSpan], chip_freq_mhz: int, ops_perf:
 # ── Report generation ────────────────────────────────────────────────────────
 
 
+def format_core_grid(
+    grid: Dict[Tuple[int, int], float],
+    x_coords: List[int],
+    y_coords: List[int],
+    title: str,
+    cell_fmt: str = "{:>6.2f}",
+    cell_width: int = 6,
+) -> List[str]:
+    """Render a Y\\X markdown table from a (core_x, core_y) -> value dict."""
+    lines: List[str] = []
+    lines.append(f"{title}\n\n")
+
+    header = "| Y\\X |"
+    for x in x_coords:
+        header += f" {x:>{cell_width}} |"
+    lines.append(header + "\n")
+
+    sep = "|-----|"
+    for _ in x_coords:
+        sep += "-" * (cell_width + 2) + "|"
+    lines.append(sep + "\n")
+
+    for y in y_coords:
+        row = f"| {y:>3} |"
+        for x in x_coords:
+            if (x, y) in grid:
+                row += f" {cell_fmt.format(grid[(x, y)])} |"
+            else:
+                row += f" {'-':>{cell_width}} |"
+        lines.append(row + "\n")
+
+    lines.append("\n")
+    return lines
+
+
 def generate_device_report(
     device: int, spans: List[TraceSpan], chip_freq_mhz: int, stats: Optional[DeviceStats]
 ) -> List[str]:
@@ -339,30 +374,9 @@ def generate_device_report(
     for s in spans:
         grid[(s.core_x, s.core_y)] = s.duration_ms(chip_freq_mhz)
 
-    # Generate table
-    device_report.append("### Kernel Duration Per Core (milliseconds)\n\n")
+    device_report.extend(format_core_grid(grid, x_coords, y_coords, "### Kernel Duration Per Core (milliseconds)"))
 
-    header = "| Y\\X |"
-    for x in x_coords:
-        header += f" {x:2d} |"
-    device_report.append(header + "\n")
-
-    separator = "|-----|"
-    for _ in x_coords:
-        separator += "--------|"
-    device_report.append(separator + "\n")
-
-    for y in y_coords:
-        row = f"| {y:2d}  |"
-        for x in x_coords:
-            if (x, y) in grid:
-                row += f" {grid[(x, y)]:6.2f} |"
-            else:
-                row += "      - |"
-        device_report.append(row + "\n")
-
-    # Append statistics from shared metrics configuration
-    device_report.append(f"\n**Statistics:**\n")
+    device_report.append("**Statistics:**\n")
     for metric in DEVICE_STATS:
         formatted_value = metric.format_value(stats)
         unit_str = f" {metric.units}" if metric.units else ""
@@ -450,36 +464,29 @@ def generate_zone_percentile_report(zone_name: str, spans: List[TraceSpan], chip
         x_coords = sorted(set(k[0] for k in core_data.keys()))
         y_coords = sorted(set(k[1] for k in core_data.keys()))
 
-        grid_max: Dict[Tuple[int, int], float] = {}
-        grid_min: Dict[Tuple[int, int], float] = {}
-        for (cx, cy), durations in core_data.items():
-            grid_max[(cx, cy)] = max(durations)
-            grid_min[(cx, cy)] = min(durations)
+        grid_min = {k: min(v) for k, v in core_data.items()}
+        grid_max = {k: max(v) for k, v in core_data.items()}
 
-        def generate_core_table(grid: Dict[Tuple[int, int], float], title: str) -> None:
-            report.append(f"### Device {device} - {title} (us)\n\n")
-            header = "| Y\\X |"
-            for x in x_coords:
-                header += f" {x:>5} |"
-            report.append(header + "\n")
-
-            separator = "|-----|"
-            for _ in x_coords:
-                separator += "-------|"
-            report.append(separator + "\n")
-
-            for y in y_coords:
-                row = f"| {y:>3} |"
-                for x in x_coords:
-                    if (x, y) in grid:
-                        row += f" {grid[(x, y)]:>5.1f} |"
-                    else:
-                        row += "     - |"
-                report.append(row + "\n")
-            report.append("\n")
-
-        generate_core_table(grid_min, "Min Duration Per Core")
-        generate_core_table(grid_max, "Max Duration Per Core")
+        report.extend(
+            format_core_grid(
+                grid_min,
+                x_coords,
+                y_coords,
+                f"### Device {device} - Min Duration Per Core (us)",
+                cell_fmt="{:>5.1f}",
+                cell_width=5,
+            )
+        )
+        report.extend(
+            format_core_grid(
+                grid_max,
+                x_coords,
+                y_coords,
+                f"### Device {device} - Max Duration Per Core (us)",
+                cell_fmt="{:>5.1f}",
+                cell_width=5,
+            )
+        )
 
     # Per-iteration analysis across all devices
     max_iters = 0
@@ -515,33 +522,22 @@ def generate_zone_percentile_report(zone_name: str, spans: List[TraceSpan], chip
         core_data = by_device_core[0]
         x_coords = sorted(set(k[0] for k in core_data.keys()))
         y_coords = sorted(set(k[1] for k in core_data.keys()))
-
         dev0_max_iters = max(len(durations) for durations in core_data.values())
 
         report.append("### Device 0 - Duration Per Core By Iteration (us)\n\n")
 
         for iter_idx in range(min(dev0_max_iters, 20)):
-            report.append(f"**Iteration {iter_idx}**\n\n")
-
-            header = "| Y\\X |"
-            for x in x_coords:
-                header += f" {x:>5} |"
-            report.append(header + "\n")
-
-            separator = "|-----|"
-            for _ in x_coords:
-                separator += "-------|"
-            report.append(separator + "\n")
-
-            for y in y_coords:
-                row = f"| {y:>3} |"
-                for x in x_coords:
-                    if (x, y) in core_data and iter_idx < len(core_data[(x, y)]):
-                        row += f" {core_data[(x, y)][iter_idx]:>5.1f} |"
-                    else:
-                        row += "     - |"
-                report.append(row + "\n")
-            report.append("\n")
+            grid = {k: v[iter_idx] for k, v in core_data.items() if iter_idx < len(v)}
+            report.extend(
+                format_core_grid(
+                    grid,
+                    x_coords,
+                    y_coords,
+                    f"**Iteration {iter_idx}**",
+                    cell_fmt="{:>5.1f}",
+                    cell_width=5,
+                )
+            )
 
         if dev0_max_iters > 20:
             report.append(f"*Showing first 20 of {dev0_max_iters} iterations*\n\n")
@@ -556,6 +552,7 @@ def write_report(
     device_stats: Dict[int, DeviceStats],
     device_reports: List[List[str]],
     zone_reports: Optional[List[List[str]]] = None,
+    operation_name: str = "RingJointSDPADeviceOperation",
 ) -> None:
     """Write the complete analysis report to file."""
     report: List[str] = []
@@ -563,7 +560,7 @@ def write_report(
     report.append(f"**Report Date:** {report_date}\n")
     report.append(f"**Architecture:** {metadata.arch.title()}\n")
     report.append(f"**Chip Frequency:** {metadata.chip_freq_mhz} MHz\n")
-    report.append(f"**Operation:** RingJointSDPADeviceOperation\n\n")
+    report.append(f"**Operation:** {operation_name}\n\n")
 
     # Add summary table
     report.extend(generate_summary_table(device_stats))
@@ -588,11 +585,17 @@ def write_report(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse Tracy profiling logs and generate analysis report")
     parser.add_argument(
-        "tracy_dir", help="Directory containing Tracy profiling logs (profile_log_device.csv, ops_perf_results_*.csv)"
+        "tracy_dir",
+        help="Directory containing Tracy profiling logs (profile_log_device.csv, ops_perf_results_*.csv)",
     )
     parser.add_argument("-o", "--output", help="Output path for analysis report (default: <tracy_dir>/analysis.md)")
     parser.add_argument(
         "--zones", nargs="+", default=[], help="Zone names for percentile analysis (e.g., 'K fwd' 'K receive')"
+    )
+    parser.add_argument(
+        "--operation",
+        default="RingJointSDPADeviceOperation",
+        help="Operation name for report header (default: RingJointSDPADeviceOperation)",
     )
     args = parser.parse_args()
 
@@ -642,4 +645,4 @@ if __name__ == "__main__":
             generate_zone_percentile_report(name, zone_spans[name], metadata.chip_freq_mhz) for name in args.zones
         ]
 
-    write_report(output_path, report_date, metadata, device_stats, device_reports, zone_reports)
+    write_report(output_path, report_date, metadata, device_stats, device_reports, zone_reports, args.operation)
