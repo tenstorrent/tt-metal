@@ -16,7 +16,6 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .experts_throughput.prefill_deepseek import _prepare_expert_weights_for_deepseek
 from .topk import TopKRouter
 
 
@@ -73,22 +72,42 @@ class MLP:
 
             # Create DeepSeek prefill config if requested
             prefill_deepseek_config = None
+            deepseek_permuted_weights = None
             if use_deepseek_prefill:
-                expert_weights_for_prefill = _prepare_expert_weights_for_deepseek(
-                    experts_state_dict, throughput_expert_config
-                )
+                import torch as _torch
+
+                from .experts_throughput.prefill_deepseek import _compute_weight_permutation
+
                 prefill_deepseek_config = DeepSeekPrefillConfig(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
-                    routed_expert_weights=expert_weights_for_prefill,
                     dispatch_group_size=mesh_device.shape[0],
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
                     seq_len_per_chip=prefill_seq_len,
                     num_links=1,
-                    activations_dtype=ttnn.bfloat8_b,
-                    weights_dtype=ttnn.bfloat4_b,
                 )
+                # Permute expert state_dict to GROUP-BASED ordering before loading
+                perm = _compute_weight_permutation(
+                    mesh_device.shape[0],
+                    mesh_device.shape[1],
+                    throughput_expert_config.num_experts // (mesh_device.shape[0] * mesh_device.shape[1]),
+                )
+                perm_t = _torch.tensor(perm, dtype=_torch.long)
+                permuted_sd = {
+                    k: v.index_select(0, perm_t) if v.shape[0] == throughput_expert_config.num_experts else v
+                    for k, v in experts_state_dict.items()
+                }
+                from .experts_throughput.weights import load_throughput_expert_weights
+
+                deepseek_permuted_weights = load_throughput_expert_weights(
+                    mesh_device=mesh_device,
+                    config=throughput_expert_config,
+                    state_dict=permuted_sd,
+                    weight_dtype=ttnn.bfloat4_b,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_ds_perm"),
+                )
+                prefill_deepseek_config.permuted_weights = deepseek_permuted_weights
 
             # Create TT experts module
             self.experts = ThroughputExperts(

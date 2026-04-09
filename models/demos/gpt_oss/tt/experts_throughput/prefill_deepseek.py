@@ -3,8 +3,8 @@
 
 """Prefill forward pass using DeepSeek prefill dispatch/combine ops.
 
-Replaces the chunked-decode prefill path with native prefill CCL ops for
-better performance on long sequences. Device-side routing setup (no host round-trip).
+Uses GROUP-BASED dispatch table (standard ExpertMapping) with permuted
+ThroughputExpertWeights to match the dispatch's expert-to-device mapping.
 """
 
 from loguru import logger
@@ -14,39 +14,53 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, comp
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
-from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 
 from .config import ThroughputExpertConfig
+from .decode import _apply_swiglu
+
+
+def _compute_weight_permutation(mesh_rows, mesh_cols, experts_per_chip):
+    """Compute permutation to reorder experts from LINEAR to GROUP-BASED ordering.
+
+    ShardTensorToMesh distributes experts in linear device order (device 0, 1, 2, ...).
+    The DeepSeek dispatch table uses group-based ordering (column-major: group=col, chip=row).
+    This permutation, applied to the expert dim of the state_dict before loading,
+    ensures each device gets the experts that the dispatch table routes to it.
+
+    Returns a list of global expert indices in the order ShardTensorToMesh will distribute them.
+    """
+    perm = []
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            for i in range(experts_per_chip):
+                group_expert = ExpertMapping.get_global_expert_idx(
+                    group=col,
+                    chip=row,
+                    local_expert=i,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=mesh_rows,
+                    num_dispatch_groups=mesh_cols,
+                )
+                perm.append(group_expert)
+    return perm
 
 
 class DeepSeekPrefillConfig:
-    """Pre-initialized modules for DeepSeek prefill MoE path.
-
-    Created once at model init, stores dispatch/combine/expert modules and
-    static tensors (dispatch table). Reused across layers and calls.
-    """
+    """Pre-initialized modules for DeepSeek prefill MoE path."""
 
     def __init__(
         self,
         mesh_device,
         config: ThroughputExpertConfig,
-        routed_expert_weights: list,
         dispatch_group_size: int = 4,
         num_dispatch_groups: int = 8,
         capacity_factor: float = 2.0,
         seq_len_per_chip: int = 128,
         num_links: int = 1,
         topology=None,
-        activations_dtype=None,
-        weights_dtype=None,
     ):
         if topology is None:
             topology = ttnn.Topology.Linear
-        if activations_dtype is None:
-            activations_dtype = ttnn.bfloat8_b
-        if weights_dtype is None:
-            weights_dtype = ttnn.bfloat4_b
 
         self.mesh_device = mesh_device
         self.config = config
@@ -69,7 +83,7 @@ class DeepSeekPrefillConfig:
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched
 
-        # Static dispatch table
+        # Standard GROUP-BASED dispatch table
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             config.num_experts, dispatch_group_size, num_dispatch_groups
         )
@@ -78,7 +92,6 @@ class DeepSeekPrefillConfig:
             mesh_device, expert_dispatch_table, dispatch_axis=0
         )
 
-        # Dispatch module
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -94,7 +107,6 @@ class DeepSeekPrefillConfig:
             topology=topology,
         )
 
-        # Combine module
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -108,29 +120,9 @@ class DeepSeekPrefillConfig:
             init_zeros=True,
         )
 
-        # Routed expert (sequential per-expert FFN)
-        self.routed_expert = TtRoutedExpert(
-            mesh_device=mesh_device,
-            experts_per_chip=experts_per_chip,
-            emb_dim=config.hidden_size,
-            hidden_dim=config.intermediate_size,
-            max_tokens=max_dispatched,
-            torch_weights=routed_expert_weights,
-            activations_dtype=activations_dtype,
-            weights_dtype=weights_dtype,
-        )
-
-        # Reduce module (weighted sum + reduce-scatter across TP axis)
-        self.reduce_module = TtReduceModule(
-            mesh_device=mesh_device,
-            topk_dim=3,
-            cluster_axis=1,
-            num_links=num_links,
-            topology=topology,
-        )
-
-        # Device-side routing setup (no host round-trip for offsets/counts)
         self.routing_setup = TtMoERoutingSetup(mesh_device, expert_dispatch_table, num_links=num_links)
+
+        self.permuted_weights = None  # Set by mlp.py after host-side permutation
 
         logger.info(
             f"DeepSeekPrefillConfig: experts_per_chip={experts_per_chip}, "
@@ -138,91 +130,57 @@ class DeepSeekPrefillConfig:
         )
 
 
-def _prepare_expert_weights_for_deepseek(
-    state_dict: dict,
-    config: ThroughputExpertConfig,
-) -> list:
-    """Convert GPT-OSS expert weights to per-expert dicts for TtRoutedExpert.
-
-    GPT-OSS stores: gate_up_proj [E, H, 2*I] (interleaved), down_proj [E, I, H]
-    TtRoutedExpert expects HF format per-expert:
-        gate_proj: [I, H]  (out_features, in_features)
-        up_proj:   [I, H]
-        down_proj: [H, I]
-
-    Returns:
-        List of dicts, one per expert, with gate_proj, up_proj, down_proj tensors.
-    """
+# Keep for backward compatibility
+def _prepare_expert_weights_for_deepseek(state_dict, config):
     E = config.num_experts
-    I = config.intermediate_size
-    H = config.hidden_size
-
     if "gate_up_proj" in state_dict:
-        gate_up = state_dict["gate_up_proj"]  # [E, H, 2*I] interleaved
-        down = state_dict["down_proj"]  # [E, I, H]
-        # Unfuse interleaved: even columns = gate, odd = up
-        gate_all = gate_up[..., ::2]  # [E, H, I]
-        up_all = gate_up[..., 1::2]  # [E, H, I]
+        gate_up = state_dict["gate_up_proj"]
+        down = state_dict["down_proj"]
+        gate_all = gate_up[..., ::2]
+        up_all = gate_up[..., 1::2]
     elif "gate_proj" in state_dict:
-        gate_all = state_dict["gate_proj"]  # [E, H, I] or [E, I, H]
+        gate_all = state_dict["gate_proj"]
         up_all = state_dict["up_proj"]
         down = state_dict["down_proj"]
     else:
-        raise ValueError("Expected gate_up_proj or gate_proj in state_dict, got: %s" % list(state_dict.keys()))
-
-    weights_list = []
-    for e in range(E):
-        # Transpose to HF format (out_features, in_features) for TtRoutedExpert
-        weights_list.append(
-            {
-                "gate_proj": gate_all[e].T.contiguous(),  # [H, I] -> [I, H]
-                "up_proj": up_all[e].T.contiguous(),  # [H, I] -> [I, H]
-                "down_proj": down[e].T.contiguous(),  # [I, H] -> [H, I]
-            }
-        )
-    return weights_list
+        raise ValueError("Expected gate_up_proj or gate_proj, got: %s" % list(state_dict.keys()))
+    return [
+        {
+            "gate_proj": gate_all[e].T.contiguous(),
+            "up_proj": up_all[e].T.contiguous(),
+            "down_proj": down[e].T.contiguous(),
+        }
+        for e in range(E)
+    ]
 
 
 def forward_prefill_deepseek(
-    hidden_states: ttnn.Tensor,
-    topk_expert_indices: ttnn.Tensor,
-    topk_expert_weights: ttnn.Tensor,
-    config: ThroughputExpertConfig,
-    prefill_config: DeepSeekPrefillConfig,
+    hidden_states,
+    topk_expert_indices,
+    topk_expert_weights,
+    config,
+    prefill_config,
     mesh_device,
     mesh_config=None,
     ccl_manager=None,
-) -> ttnn.Tensor:
-    """Prefill forward using DeepSeek dispatch/combine.
-
-    Args:
-        hidden_states: [seq_per_device, 1, 1, hidden_size] (TP-sharded on last dim)
-        topk_expert_indices: [seq_per_device, 1, 1, K] (uint16 from TopKRouter)
-        topk_expert_weights: [seq_per_device, 1, 1, K] (bfloat16)
-        config: ThroughputExpertConfig
-        prefill_config: DeepSeekPrefillConfig with pre-initialized modules
-        mesh_device: TTNN mesh device
-
-    Returns:
-        [seq_per_device, 1, 1, hidden_size] (TP-sharded)
-    """
+    weights=None,
+    program_config=None,
+):
+    """Prefill forward using DeepSeek dispatch/combine with GPT-OSS expert compute."""
     pc = prefill_config
+    # Use pre-permuted weights (GROUP-BASED ordering matching dispatch table)
+    pw = getattr(pc, "permuted_weights", None) or weights
 
-    # Step 1: All-gather x across TP axis to get full hidden_dim (skip if already full)
+    # Step 1: All-gather x across TP axis
     if mesh_device.shape[1] > 1 and hidden_states.shape[-1] < config.hidden_size:
         x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
     else:
         x_full = hidden_states
 
-    # Ensure ROW_MAJOR for dispatch
     if x_full.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_full = ttnn.to_layout(x_full, ttnn.ROW_MAJOR_LAYOUT)
 
-    logger.warning(
-        f"[DS_PREFILL] input shapes: hidden={hidden_states.shape} indices={topk_expert_indices.shape} weights={topk_expert_weights.shape}"
-    )
-
-    # Step 2: Device-side routing setup (offsets + counts on device, no host round-trip)
+    # Step 2: Routing setup
     if topk_expert_indices.dtype == ttnn.uint16:
         idx_for_routing = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     else:
@@ -237,7 +195,7 @@ def forward_prefill_deepseek(
         num_experts_per_tok=config.num_experts_per_tok,
     )
 
-    # Step 3: Format indices/scores for dispatch (int32, ROW_MAJOR)
+    # Step 3: Format indices/scores for dispatch
     if topk_expert_indices.dtype != ttnn.int32:
         indices_tile = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
         indices_i32 = ttnn.typecast(indices_tile, ttnn.int32)
@@ -245,11 +203,9 @@ def forward_prefill_deepseek(
     else:
         indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     scores_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-
-    # Save scores for weighted sum (dispatch may consume the input tensors)
     scores_for_reduce = ttnn.clone(scores_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    # Step 4: Reshape to 3D for dispatch [dispatch_group_size_per_device, seq, dim]
+    # Step 4: Reshape to 3D for dispatch
     x_3d = ttnn.reshape(x_full, (1, pc.seq_len_per_chip, config.hidden_size))
     w_3d = ttnn.reshape(scores_rm, (1, pc.seq_len_per_chip, config.num_experts_per_tok))
     i_3d = ttnn.reshape(indices_rm, (1, pc.seq_len_per_chip, config.num_experts_per_tok))
@@ -257,35 +213,66 @@ def forward_prefill_deepseek(
     # Step 5: Dispatch
     dispatched, metadata = pc.dispatch_module(x_3d, w_3d, i_3d, tt_offsets, pc.tt_dispatch_table)
 
-    # Step 6: Expert compute
-    buf = ttnn.squeeze(ttnn.squeeze(dispatched, dim=0), dim=0)
+    # Step 6: Expert compute using GROUP-permuted ThroughputExpertWeights
+    buf = ttnn.squeeze(dispatched, dim=0)
+    if len(buf.shape) == 3:
+        buf = ttnn.unsqueeze(buf, dim=0)
+    # Zero NaN/Inf padding before expert compute
+    if buf.layout == ttnn.ROW_MAJOR_LAYOUT:
+        buf = ttnn.where(ttnn.isfinite(buf), buf, 0.0)
     buf_tiled = ttnn.to_layout(buf, ttnn.TILE_LAYOUT)
-    expert_out = pc.routed_expert(buf_tiled, tt_counts)
-    expert_out = ttnn.unsqueeze(ttnn.unsqueeze(expert_out, dim=0), dim=0)
-    expert_out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT)
+
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if pw.w1_w3_fused is not None:
+        w1_w3_out = ttnn.matmul(buf_tiled, pw.w1_w3_fused, memory_config=memory_config)
+        ttnn.deallocate(buf_tiled)
+        ttnn.add(w1_w3_out, pw.w1_w3_bias_fused, output_tensor=w1_w3_out)
+        shape = w1_w3_out.shape
+        w1_out = ttnn.slice(
+            w1_w3_out, [0, 0, 0, 0], [shape[0], shape[1], shape[2], config.intermediate_size], [1, 1, 1, 1]
+        )
+        w3_out = ttnn.slice(
+            w1_w3_out,
+            [0, 0, 0, config.intermediate_size],
+            [shape[0], shape[1], shape[2], 2 * config.intermediate_size],
+            [1, 1, 1, 1],
+        )
+        ttnn.deallocate(w1_w3_out)
+    else:
+        w1_out = ttnn.matmul(buf_tiled, pw.w1, memory_config=memory_config)
+        ttnn.add(w1_out, pw.w1_bias, output_tensor=w1_out)
+        w3_out = ttnn.matmul(buf_tiled, pw.w3, memory_config=memory_config)
+        ttnn.deallocate(buf_tiled)
+        ttnn.add(w3_out, pw.w3_bias, output_tensor=w3_out)
+
+    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+
+    expert_output = ttnn.matmul(activated, pw.w2, memory_config=memory_config)
+    ttnn.deallocate(activated)
+    ttnn.add(expert_output, pw.w2_bias, output_tensor=expert_output)
+
+    expert_out_rm = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(expert_output)
+    expert_out_rm = ttnn.unsqueeze(expert_out_rm, dim=0)
 
     # Step 7: Combine
     combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
 
     # Step 8: Weighted sum + all_reduce
-    # GPT-OSS MLP returns full hidden_size (all_reduce, not reduce_scatter).
     combined_tiled = ttnn.to_layout(combined, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
-
-    # Local weighted sum over topk dim
     w_exp = ttnn.unsqueeze(w_reduce, dim=-1)
     if w_exp.layout != ttnn.TILE_LAYOUT:
         w_exp = ttnn.to_layout(w_exp, ttnn.TILE_LAYOUT)
     weighted = ttnn.mul(combined_tiled, w_exp)
     summed = ttnn.sum(weighted, dim=3)
 
-    # All-reduce across TP axis (full hidden_size on every device)
     if mesh_device.shape[1] > 1:
         output = ttnn.all_reduce(summed, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
     else:
         output = summed
 
-    # Match output rank to 4D
     while len(output.shape) > 4:
         output = ttnn.squeeze(output, dim=0)
     while len(output.shape) < 4:

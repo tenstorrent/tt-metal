@@ -308,10 +308,14 @@ class ThroughputExperts:
         if self.prefill_deepseek_config is not None:
             pc = self.prefill_deepseek_config
             seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) > 3 else hidden_states.shape[0]
-            per_device_rows = hidden_states.shape[0] if len(hidden_states.shape) > 3 else 1
-            # Skip DeepSeek if: single-user prefill (replicated rows), or seq_len mismatch
-            if per_device_rows < pc.dispatch_group_size or seq_per_device != pc.seq_len_per_chip:
-                pass  # fall through to chunked-decode
+            if seq_per_device != pc.seq_len_per_chip:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "DeepSeek prefill seq_len mismatch: got %d, configured %d. Falling back.",
+                    seq_per_device,
+                    pc.seq_len_per_chip,
+                )
             else:
                 try:
                     return forward_prefill_deepseek(
@@ -323,6 +327,8 @@ class ThroughputExperts:
                         mesh_device=self.mesh_device,
                         mesh_config=self.mesh_config,
                         ccl_manager=self.ccl_manager,
+                        weights=self.weights,
+                        program_config=self.program_config,
                     )
                 except Exception as e:
                     import logging
