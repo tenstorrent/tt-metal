@@ -1,0 +1,7 @@
+{"ts":"2026-04-09T10:18:23+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-generator","operation":"rrelu","input_files":[]}
+{"event":"pipeline_start","op_name":"rrelu","math_definition":"x if x>=0, a*x if x<0 where a~Uniform(lower,upper) in training, a=(lower+upper)/2 in eval","output_folder":".claude-analysis/rrelu-1","ts":"2026-04-09T10:18:26+00:00"}
+{"event":"phase_start","phase":1,"phase_name":"Reference Discovery","ts":"2026-04-09T10:18:42+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-reference-discoverer","phase":1,"ts":"2026-04-09T10:18:46+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-reference-discoverer","status":"ok","ts":"2026-04-09T10:20:46+00:00"}
+{"event":"phase_complete","phase":1,"phase_name":"Reference Discovery","status":"ok","references":["threshold","dropout","hardtanh","clamp","fill"],"ts":"2026-04-09T10:20:46+00:00"}
+{"event":"phase_start","phase":2,"phase_name":"Reference Analysis","analyzer_count":5,"ts":"2026-04-09T10:20:56+00:00"}
