@@ -15,16 +15,16 @@ Architecture:
 
 Usage:
     # Orchestrator: sweep one shape on BH 4x8
-    pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep \\
-        -k "6144_5120_3456_11x10_mm-bh_4x8" -x -s
+    pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \\
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
 
     # Worker: run directly (useful for debugging, no profiling)
-    pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
-        -k "m4-6144_5120_3456_11x10_mm-bh_4x8" -x -s
+    pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
+        -k "m4-9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
 
     # Standalone script
-    python models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py \\
-        --device-config bh_4x8 --shape 6144,5120,3456
+    python models/tt_dit/utils/sweep_mm_block_sizes.py \\
+        --device-config bh_4x8 --shape 9472,3456,5120
 """
 
 import argparse
@@ -94,45 +94,21 @@ def resolve_config(name):
 #   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True)
 #   "ff1_gelu"  - FFN first linear (fused GELU activation)
 #   "cross_attn_kv" - cross-attention to_kv (minimal_matmul_split, chunks=2, math_approx_mode=True)
+# Example shapes from Wan2.2 configs in matmul.py — one per use case.
+# Add model-specific shapes via register_matmul_configs() and extend this list as needed.
 SHAPES = [
-    (96, 96, 192, 11, 10, False, "plain"),
-    (64, 192, 384, 11, 10, False, "plain"),
-    (64, 96, 192, 11, 10, False, "plain"),
-    (32, 96, 192, 11, 10, False, "plain"),
-    (32, 192, 384, 11, 10, False, "plain"),
-    (32, 256, 5120, 11, 10, False, "plain"),
-    (32, 32, 32, 11, 10, False, "plain"),
-    (32, 1280, 30720, 11, 10, False, "plain"),
-    (32, 3072, 10240, 11, 10, False, "plain"),
-    (32, 5120, 1280, 11, 10, False, "plain"),
-    (32, 10240, 10240, 11, 10, False, "plain"),
+    # plain: basic matmul, no fused activation or addcmul (Wan2.2 720p DiT, 11x10 grid)
+    (9472, 3456, 5120, 11, 10, False, "plain"),
+    # ff2: RowParallelLinear — same kernel path as plain (Wan2.2 480p DiT, 11x10 grid)
+    (2368, 3456, 5120, 11, 10, False, "ff2"),
+    # qkv: attention QKV projection, chunks=3, approx math (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 3840, 12, 9, True, "qkv"),
+    # to_out: attention output with fused addcmul, approx math (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 1280, 12, 9, True, "to_out"),
+    # ff1_gelu: FFN first linear with fused GELU activation (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
-    (512, 4096, 5120, 11, 10, False, "plain"),
-    (512, 5120, 5120, 11, 10, False, "plain"),
-    (6144, 384, 384, 11, 10, False, "plain"),
-    (6144, 384, 1152, 11, 10, False, "plain"),
-    (6144, 3456, 5120, 11, 10, False, "ff2"),
-    (6144, 5120, 64, 11, 10, False, "plain"),
-    (6144, 5120, 1280, 12, 9, True, "to_out"),
-    (6144, 5120, 3456, 11, 10, False, "plain"),
-    (6144, 5120, 3456, 12, 9, True, "ff1_gelu"),
-    (6144, 5120, 3840, 12, 9, True, "qkv"),
-    (6240, 384, 384, 11, 10, False, "plain"),
-    (6240, 384, 1152, 11, 10, False, "plain"),
-    (6240, 3456, 5120, 11, 10, False, "ff2"),
-    (6240, 5120, 64, 11, 10, False, "plain"),
-    (6240, 5120, 1280, 12, 9, True, "to_out"),
-    (6240, 5120, 3456, 11, 10, False, "plain"),
-    (6240, 5120, 3456, 12, 9, True, "ff1_gelu"),
-    (6240, 5120, 3840, 12, 9, True, "qkv"),
-    (14400, 384, 384, 11, 10, False, "plain"),
-    (14400, 384, 1152, 11, 10, False, "plain"),
-    (14400, 3456, 5120, 11, 10, False, "ff2"),
-    (14400, 5120, 64, 11, 10, False, "plain"),
-    (14400, 5120, 1280, 12, 9, True, "to_out"),
-    (14400, 5120, 3456, 11, 10, False, "plain"),
-    (14400, 5120, 3456, 12, 9, True, "ff1_gelu"),
-    (14400, 5120, 3840, 12, 9, True, "qkv"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -543,7 +519,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
 
             # 4D buffer without mesh_mapper (matching model's CCLManager)
             persistent_output_buffer = ttnn.from_torch(
-                torch.empty((1, 1, M, K), dtype=torch.float32),
+                torch.empty((M, K), dtype=torch.float32),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -837,7 +813,7 @@ def test_mm_subblock_sweep_worker(device_config, shape):
 
             # 4D buffer without mesh_mapper (matching model's CCLManager)
             persistent_output_buffer = ttnn.from_torch(
-                torch.empty((1, 1, M, K), dtype=torch.float32),
+                torch.empty((M, K), dtype=torch.float32),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1102,7 +1078,7 @@ def test_mm_sweep(device_config, shape):
                 os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
                 os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
             command = (
-                f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
                 f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
             )
 
@@ -1256,7 +1232,7 @@ def test_mm_sweep(device_config, shape):
         combos_file = f"valid_combos_{device_config}_{shape_id}_subblock.json"
         os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
         command = (
-            f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+            f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
             f"::test_mm_subblock_sweep_worker[{shape_id}-{device_config}] -x"
         )
 
@@ -1426,7 +1402,7 @@ def main():
                 os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
                 os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
                 command = (
-                    f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                    f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
                     f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
                 )
 
@@ -1559,7 +1535,7 @@ def main():
                 combos_file = f"valid_combos_{device_config}_{shape_id}_subblock.json"
                 os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
                 command = (
-                    f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                    f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
                     f"::test_mm_subblock_sweep_worker[{shape_id}-{device_config}] -x"
                 )
 

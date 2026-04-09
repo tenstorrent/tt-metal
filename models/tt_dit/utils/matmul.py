@@ -153,31 +153,24 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         core_grid = ttnn.CoreCoord(8, 8)
 
     config_tuple = None
-    # Only use lookup for 8x8 grid; otherwise default
-    if getattr(core_grid, "x", None) == 8 and getattr(core_grid, "y", None) == 8:
-        config_tuple = grid_88_configs.get((M, K, N))
-    elif getattr(core_grid, "x", None) == 8 and getattr(core_grid, "y", None) == 9:
-        config_tuple = grid_89_configs.get((M, K, N))
-    elif getattr(core_grid, "x", None) == 13 and getattr(core_grid, "y", None) == 9:
-        config_tuple = grid_13_9_configs.get((M, K, N))
-        if config_tuple is not None:
-            subblock_h, subblock_w = config_tuple[3]
-            config_tuple = config_tuple[:3]
-    elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 10:
-        config_tuple = grid_12_10_configs.get((M, K, N))
-        if config_tuple is not None:
-            subblock_h, subblock_w = config_tuple[3]
-            config_tuple = config_tuple[:3]
-    elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
-        config_tuple = grid_11_10_configs.get((M, K, N))
-        if config_tuple is not None:
-            subblock_h, subblock_w = config_tuple[3]
-            config_tuple = config_tuple[:3]
-    elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 9:
-        config_tuple = grid_12_9_configs.get((M, K, N))
-        if config_tuple is not None:
-            subblock_h, subblock_w = config_tuple[3]
-            config_tuple = config_tuple[:3]
+    grid_x = getattr(core_grid, "x", None)
+    grid_y = getattr(core_grid, "y", None)
+    grid_lookup = {
+        (8, 8): grid_88_configs,
+        (8, 9): grid_89_configs,
+        (13, 9): grid_13_9_configs,
+        (12, 10): grid_12_10_configs,
+        (11, 10): grid_11_10_configs,
+        (12, 9): grid_12_9_configs,
+    }
+    grid_dict = grid_lookup.get((grid_x, grid_y))
+    if grid_dict is not None:
+        config_tuple = grid_dict.get((M, K, N))
+
+    # Unpack: 3-tuple (M, K, N) or 4-tuple (M, K, N, (sub_h, sub_w))
+    if config_tuple is not None and len(config_tuple) == 4:
+        subblock_h, subblock_w = config_tuple[3]
+        config_tuple = config_tuple[:3]
 
     if config_tuple is None:
         M_block_size, K_block_size, N_block_size = default_block_size if default_block_size is not None else (8, 8, 8)
@@ -190,8 +183,6 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         if N_tiles < N_block_size:
             N_block_size = subblock_w
 
-        grid_x = getattr(core_grid, "x", None)
-        grid_y = getattr(core_grid, "y", None)
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:
             logger.warning(
@@ -268,7 +259,9 @@ def register_matmul_configs(configs: dict) -> None:
     Args:
         configs: Mapping from grid key string to dict of (M,K,N) -> config tuples.
             Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
-            Config tuple format: ``(M_block, K_block, N_block, (sub_h, sub_w))``.
+            Config tuple format: ``(M_block, K_block, N_block)`` or
+            ``(M_block, K_block, N_block, (sub_h, sub_w))``.
+            When subblock is omitted, the default ``(2, 2)`` is used.
 
     Example::
 
