@@ -22,6 +22,7 @@ on:
           - gemma-3-27b
           - mixtral-8x7b
           - shallow-unet
+          - gpt-oss-20b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
