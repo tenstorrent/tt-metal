@@ -90,6 +90,26 @@ class LazyOutputList:
         return f"LazyOutputList({self._slots!r})"
 
 
+class _DeferredOutput:
+    """Sentinel for a deferred output tensor slot.
+
+    Each instance is unique so that Python identity matching (``is``) can
+    detect internal edges in Sequential chains::
+
+        norm = rms_norm(weight=w, ...)          # output_tensors = [_DeferredOutput()]
+        mm = matmul(input_a=norm.output_tensors[0], input_b=W)
+        # mm.input_tensors[0] is norm.output_tensors[0]  → True (same _DeferredOutput)
+
+    ``Sequential.run()`` uses this identity to connect predecessor outputs
+    to successor inputs after materialization.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return f"_DeferredOutput(id={id(self):#x})"
+
+
 class OpDescriptor:
     """Operation descriptor with optional deferred ``ProgramDescriptor`` materialization.
 
@@ -200,10 +220,11 @@ class OpDescriptor:
                     )
                 self.input_tensors[idx] = t
 
-        # Lazy materialization: first update() that fills all None slots
-        # on a partial descriptor triggers hash computation + factory setup.
+        # Lazy materialization: first update() that fills all real tensor slots.
+        # _DeferredOutput entries are internal edges (resolved by Sequential);
+        # don't trigger materialization until they're replaced with real tensors.
         if self.program_cache_key is None and self._complete_fn is not None:
-            if all(t is not None for t in self.input_tensors):
+            if all(t is not None and not isinstance(t, _DeferredOutput) for t in self.input_tensors):
                 full = self._complete_fn(self.input_tensors)
                 self.program_cache_key = full.program_cache_key
                 self._factory_fn = full._factory_fn
@@ -275,16 +296,20 @@ class OpDescriptor:
             param_names = list(params.keys())
             required_positions = {t: param_names.index(t) for t in required}
 
+            def _is_pending(val):
+                return val is None or isinstance(val, _DeferredOutput)
+
             @functools.wraps(fn)
             def wrapper(*args, **kwargs):
-                # Fast check: are all required params present and non-None?
+                # Fast check: are all required params present and non-pending?
+                # _DeferredOutput counts as pending (internal edge, not a real tensor).
                 deferred = False
                 for tname, pos in required_positions.items():
                     if pos < len(args):
-                        if args[pos] is None:
+                        if _is_pending(args[pos]):
                             deferred = True
                             break
-                    elif kwargs.get(tname) is None:
+                    elif _is_pending(kwargs.get(tname)):
                         deferred = True
                         break
 
@@ -302,14 +327,15 @@ class OpDescriptor:
                 bound.apply_defaults()
                 all_args = bound.arguments
 
-                # Build input list: required params that are pending (None) or
-                # are Tensors, plus optional params that received a Tensor value.
+                # Build input list: pending required params (None or _DeferredOutput),
+                # plus optional params that received a Tensor value.
                 # Non-tensor required params (e.g., begins: List[int]) are excluded.
+                # _DeferredOutput inputs preserve identity for Sequential edge detection.
                 input_names = []
                 inputs = []
                 idx = 0
                 for pname, val in all_args.items():
-                    if val is None and pname in required:
+                    if _is_pending(val) and pname in required:
                         input_names.append((pname, idx))
                         inputs.append(val)
                         idx += 1
@@ -326,7 +352,7 @@ class OpDescriptor:
 
                 return OpDescriptor(
                     input_tensors=inputs,
-                    output_tensors=[None],
+                    output_tensors=[_DeferredOutput()],
                     name=name,
                     complete_fn=_complete,
                     input_names=tuple(input_names),
@@ -345,6 +371,7 @@ def is_op_descriptor(item) -> bool:
 __all__ = [
     "OpDescriptor",
     "LazyOutputList",
+    "_DeferredOutput",
     "core_range_set_fusion_key",
     "extend_branch_program_cache_key",
     "is_op_descriptor",
