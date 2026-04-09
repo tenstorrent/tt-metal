@@ -358,6 +358,16 @@ void kernel_main() {
     constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t matmul_bounding_box_num_cores = get_named_compile_time_arg_val("matmul_bounding_box_num_cores");
 
+    // All worker cores multicast coordinates
+    constexpr uint32_t all_worker_cores_mcast_start_x =
+        get_named_compile_time_arg_val("all_worker_cores_mcast_start_x");
+    constexpr uint32_t all_worker_cores_mcast_start_y =
+        get_named_compile_time_arg_val("all_worker_cores_mcast_start_y");
+    constexpr uint32_t all_worker_cores_mcast_end_x = get_named_compile_time_arg_val("all_worker_cores_mcast_end_x");
+    constexpr uint32_t all_worker_cores_mcast_end_y = get_named_compile_time_arg_val("all_worker_cores_mcast_end_y");
+    constexpr uint32_t all_worker_cores_bounding_box_num_cores =
+        get_named_compile_time_arg_val("all_worker_cores_bounding_box_num_cores");
+
     // Coordinates for combine signalling seminc
     constexpr uint32_t combine_sync_noc_x = get_named_compile_time_arg_val("combine_sync_noc_x");
     constexpr uint32_t combine_sync_noc_y = get_named_compile_time_arg_val("combine_sync_noc_y");
@@ -851,29 +861,38 @@ void kernel_main() {
 
         // == 1 ==
 
-        // Determine encoded value
-        // NOTE: can handle up to 3 experts:
-        // - 1 valid bit
-        // - 10 bits per expert, valid num_tokens is [0, 512]
-        // - 32 bits available in semaphore (4 Bytes), 0 value reserved as init value
+        // Get pointer to token counts
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-        constexpr uint32_t bits_per_expert = 10;
-        constexpr uint32_t expert_mask = 0x3FFu;
-        uint32_t encoded_value = 1u;  // flag bit
-        for (uint32_t e = 0; e < experts_per_device; ++e) {
-            encoded_value |= (num_tokens_per_expert[e] & expert_mask) << (1 + bits_per_expert * e);
-        }
-
-        // set local semaphore value
-        volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-        *metadata_ready_semaphore_ptr = encoded_value;
+        // Write raw token counts to the CB (already in the correct location)
+        // The counts are already written during the metadata aggregation phase above
 
         // == 2 ==
 
-        // get mcast address
+        // Multicast the per-expert token counts to ALL worker cores (tilize + matmul + combine)
+        uint64_t all_worker_cores_expert_counts_mcast_addr = get_safe_multicast_noc_addr(
+            all_worker_cores_mcast_start_x,
+            all_worker_cores_mcast_start_y,
+            all_worker_cores_mcast_end_x,
+            all_worker_cores_mcast_end_y,
+            get_read_ptr(per_expert_total_tokens_cb_id));
+
+        noc_async_write_multicast(
+            get_read_ptr(per_expert_total_tokens_cb_id),
+            all_worker_cores_expert_counts_mcast_addr,
+            experts_per_device * sizeof(uint32_t),
+            all_worker_cores_bounding_box_num_cores - 1);  // Exclude self
+
+        // Ensure multicast completes before signaling semaphore
+        noc_async_writes_flushed();
+
+        // == 3 ==
+
+        // Signal readiness via semaphore (no encoded data, just a ready flag)
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
+        // get mcast address for semaphore
         uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,

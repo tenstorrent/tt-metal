@@ -154,17 +154,15 @@ void kernel_main() {
     cb_reserve_back(cb_w2c_md, 2);
     cb_push_back(cb_w2c_md, 2);
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    // Read per-expert token counts from CB
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
     }
