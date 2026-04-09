@@ -69,6 +69,8 @@ def test_mla_disaggregation(
     logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights)")
     logger.info("=" * 80)
 
+    torch.manual_seed(0)
+
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
         config, weights = request.getfixturevalue("pretrained_weights")
