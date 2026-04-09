@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
+        case UnaryOpType::SOFTCAP: return "SFPU_OP_SOFTCAP_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -39,6 +40,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] const T param0_raw = params[0];
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
+        case UnaryOpType::SOFTCAP: {
+            float cap = param0;
+            float inv_cap = 1.0f / cap;
+            uint32_t p0 = std::bit_cast<uint32_t>(cap);
+            uint32_t p1 = std::bit_cast<uint32_t>(inv_cap);
+            return {
+                fmt::format("softcap_tile_init(0x{:x}u, 0x{:x}u);", p0, p1), fmt::format("softcap_tile({});", idst)};
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }
