@@ -300,6 +300,14 @@ class WanCausalConv3d(Module):
             H=H,
             W=W,
         )
+        # Enable halo buffer path when T_out_block > 1 AND halo exchange is needed.
+        # T_out_block > 1 means the blocking table selected a multi-T-batch plan, which requires
+        # NP to signal conv3d readers per T-batch via the progress semaphore.
+        # use_h_halo_buffer is a compile-time flag (part of program hash); set it once here.
+        h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        if self.conv_config.T_out_block > 1 and (h_pad_enabled or w_pad_enabled):
+            self.conv_config.use_h_halo_buffer = True
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -421,6 +429,28 @@ class WanCausalConv3d(Module):
                     self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            if self.conv_config.use_h_halo_buffer:
+                return self.ccl_manager.neighbor_pad_conv3d_fused(
+                    x_BTHWC,
+                    self.weight.data,
+                    self.bias.data,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    conv_config=self.conv_config,
+                    output_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.internal_padding,
+                    dilation=(1, 1, 1),
+                    padding_mode="zeros",
+                    dtype=self.dtype,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
 
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
@@ -762,6 +792,10 @@ class WanConv2d(Module):
             H=H,
             W=W,
         )
+        h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        if self.conv_config.T_out_block > 1 and (h_pad_enabled or w_pad_enabled):
+            self.conv_config.use_h_halo_buffer = True
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -865,6 +899,28 @@ class WanConv2d(Module):
                     self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            if self.conv_config.use_h_halo_buffer:
+                return self.ccl_manager.neighbor_pad_conv3d_fused(
+                    x_BTHWC,
+                    self.weight.data,
+                    self.bias.data,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    conv_config=self.conv_config,
+                    output_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.internal_padding,
+                    dilation=(1, 1, 1),
+                    padding_mode="zeros",
+                    dtype=self.dtype,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
 
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
