@@ -266,7 +266,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val)
     v_endif;
 
     // Run series in Horner form
-    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::s2vFloat16b(0.863281);
+    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::sFloat16b(0.863281f);
     val              = val * tmp + sfpi::vConst1;
 
     v_if (exp >= 0)
@@ -347,7 +347,7 @@ inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const std
     sfpi::vFloat result = 0.0f;
     if constexpr (SCALE_EN)
     {
-        in = in * sfpi::s2vFloat16b(exp_base_scale_factor);
+        in = in * sfpi::sFloat16b(exp_base_scale_factor);
     }
     if constexpr (APPROXIMATION_MODE)
     {
@@ -917,8 +917,8 @@ inline void _init_exponential_()
     else if constexpr (APPROXIMATION_MODE)
     {
         sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-        sfpi::vConstFloatPrgm1 = sfpi::s2vFloat16b(p_exp::C23_73);
-        sfpi::vConstFloatPrgm2 = sfpi::s2vFloat16b(p_exp::ADJ_EXP);
+        sfpi::vConstFloatPrgm1 = sfpi::sFloat16b(p_exp::C23_73);
+        sfpi::vConstFloatPrgm2 = sfpi::sFloat16b(p_exp::ADJ_EXP);
     }
     else
     {
