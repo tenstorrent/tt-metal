@@ -63,9 +63,12 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<scale_cb_index, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        scale_cb_index,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
