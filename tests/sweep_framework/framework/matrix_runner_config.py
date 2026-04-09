@@ -95,8 +95,8 @@ RUNNER_PROFILES = {
     },
     "t3k": {
         "arch": "wormhole_b0",
-        "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
-        "runner_label": "config-t3000",
+        "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+        "runner_label": "n300-llmbox",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "t3k",
     },
@@ -201,6 +201,7 @@ TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
         {"device_series": "p150b", "card_count": 1},
     ),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
+    "n300-llmbox-ccl": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
     "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
     "lead-models-galaxy": (
