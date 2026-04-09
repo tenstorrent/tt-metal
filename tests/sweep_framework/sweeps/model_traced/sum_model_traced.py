@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -80,8 +80,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
+    pos_args = extract_positional_args(kwargs)
     if dim is None:
-        dim = kwargs.get("arg1", None)
+        dim = pos_args.get(1, None)
     # Read keepdim from op_kwargs (from traced config), defaulting to False (TTNN default)
     keepdim = op_kwargs.get("keepdim", False)
     if keepdim is None:

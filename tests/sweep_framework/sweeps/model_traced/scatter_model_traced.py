@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -103,7 +103,8 @@ def run(
         output_memory_config=output_memory_config,
     )
 
-    dim = dim or kwargs.get("arg1", 0)
+    pos_args = extract_positional_args(kwargs)
+    dim = dim or pos_args.get(1, 0)
     if isinstance(dim, float):
         dim = int(dim)
 

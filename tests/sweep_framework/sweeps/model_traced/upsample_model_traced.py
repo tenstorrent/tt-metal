@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -93,7 +93,8 @@ def run(
         scale_factor = kwargs.get("scale_factor")
     if scale_factor is None:
         # V2 loader may store scale_factor as arg1 (positional arg)
-        scale_factor = kwargs.get("arg1")
+        pos_args = extract_positional_args(kwargs)
+        scale_factor = pos_args.get(1)
     if scale_factor is None:
         return [(False, "Missing scale_factor from JSON"), 0.0]
 

@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -104,7 +104,8 @@ def run(
 
     # Check if arg1 is a scalar (traced configs often have remainder(tensor, scalar))
     # The V2 loader stores non-tensor positional args as "arg1" in kwargs.
-    arg1_scalar = kwargs.get("arg1", None)
+    pos_args = extract_positional_args(kwargs)
+    arg1_scalar = pos_args.get(1, None)
     if arg1_scalar is not None and arg1_scalar != "__ABSENT__":
         # arg1 might be a scalar value or a dict with {"value": ...}
         if isinstance(arg1_scalar, dict) and "value" in arg1_scalar:

@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -81,8 +81,9 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
     # v2 tracer puts dims in arg1, also may have named 'dims'
+    pos_args = extract_positional_args(kwargs)
     if dims is None:
-        dims = kwargs.get("arg1", None)
+        dims = pos_args.get(1, None)
     if dims is None:
         dims = (0, 2, 3, 1)  # fallback for sample
 

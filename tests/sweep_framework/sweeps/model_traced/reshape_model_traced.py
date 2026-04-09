@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -87,7 +87,8 @@ def run(
         """Return None if val is the __ABSENT__ sentinel."""
         return None if val == "__ABSENT__" else val
 
-    tgt_shape = _clean_absent(target_shape) or _clean_absent(shape) or _clean_absent(kwargs.get("arg1", None))
+    pos_args = extract_positional_args(kwargs)
+    tgt_shape = _clean_absent(target_shape) or _clean_absent(shape) or _clean_absent(pos_args.get(1, None))
     if tgt_shape is None:
         tgt_shape = (1, 32, 1, 32)  # fallback for sample
 
@@ -108,7 +109,7 @@ def run(
             tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
     # arg2 may be a padded output shape; extract if present
-    arg2 = _clean_absent(kwargs.get("arg2", None))
+    arg2 = _clean_absent(pos_args.get(2, None))
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
 

@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
 
 TIMEOUT = 300
 
@@ -82,8 +82,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
-    dim0 = dim0 or kwargs.get("arg1", 0)
-    dim1 = dim1 or kwargs.get("arg2", 1)
+    pos_args = extract_positional_args(kwargs)
+    dim0 = dim0 or pos_args.get(1, 0)
+    dim1 = dim1 or pos_args.get(2, 1)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
