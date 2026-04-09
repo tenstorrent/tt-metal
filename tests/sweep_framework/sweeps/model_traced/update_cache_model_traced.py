@@ -137,13 +137,17 @@ def run(
             return [1.0, 0.0]
 
     # Parse scalars - cache_idx and batch_offset
+    # The V2 loader stores positional args as arg0, arg1, arg2, arg3, …
+    # update_cache(cache_tensor, input_tensor, update_index, batch_offset)
+    # → arg0=cache (tensor), arg1=input (tensor), arg2=update_index, arg3=batch_offset
     if scalar and isinstance(scalar, dict):
         cache_idx = int(scalar.get("update_index", shape_a[2] // 2))
         batch_offset = int(scalar.get("batch_offset", 0))
     else:
-        # Default to middle of cache sequence length
-        cache_idx = shape_a[2] // 2 if len(shape_a) > 2 else 0
-        batch_offset = 0
+        raw_idx = kwargs.get("arg2", None)
+        raw_batch = kwargs.get("arg3", None)
+        cache_idx = int(raw_idx) if raw_idx is not None else (shape_a[2] // 2 if len(shape_a) > 2 else 0)
+        batch_offset = int(raw_batch) if raw_batch is not None else 0
 
     # Generate cache tensor
     torch_cache = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
