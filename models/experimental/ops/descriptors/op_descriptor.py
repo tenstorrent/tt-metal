@@ -335,52 +335,15 @@ class OpDescriptor:
         return decorator
 
 
-# Backward compatibility alias — will be removed once all references are cleaned up.
-DeferredOpDescriptor = OpDescriptor
-
-
 def is_op_descriptor(item) -> bool:
     """True if ``item`` is an :class:`OpDescriptor`."""
     return isinstance(item, OpDescriptor)
 
 
-def make_partial_descriptor(factory_fn, factory_kwargs, input_tensors, input_names, name=""):
-    """Create a partial ``OpDescriptor`` that materializes on first :meth:`~OpDescriptor.update`.
-
-    Used when some tensor arguments are not yet available (e.g., activations
-    at module ``__init__`` time).  When :meth:`~OpDescriptor.update` fills all
-    ``None`` slots, ``factory_fn(**factory_kwargs)`` is called with the real
-    tensors to produce the full descriptor (hash, factory closure, output alloc).
-
-    Args:
-        factory_fn: The full descriptor factory (e.g., ``_create_layernorm_op_descriptor``).
-        factory_kwargs: All arguments to *factory_fn* (tensor args may be ``None``).
-        input_tensors: List of tensors in input order (``None`` for pending slots).
-        input_names: Tuple of ``(name, index)`` pairs for :meth:`~OpDescriptor.update`.
-        name: Op name for error messages.
-    """
-
-    def _complete(final_inputs):
-        kw = dict(factory_kwargs)
-        for (param_name, _), tensor in zip(input_names, final_inputs):
-            kw[param_name] = tensor
-        return factory_fn(**kw)
-
-    return OpDescriptor(
-        input_tensors=list(input_tensors),
-        output_tensors=[None],
-        name=name,
-        complete_fn=_complete,
-        input_names=tuple(input_names),
-    )
-
-
 __all__ = [
     "OpDescriptor",
-    "DeferredOpDescriptor",
     "LazyOutputList",
     "core_range_set_fusion_key",
     "extend_branch_program_cache_key",
     "is_op_descriptor",
-    "make_partial_descriptor",
 ]
