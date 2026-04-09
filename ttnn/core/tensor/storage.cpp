@@ -273,6 +273,14 @@ DeviceStorage DeviceStorage::combine_device_storages(
         joint_coords.insert(other_coords.begin(), other_coords.end());
     }
 
+    const int tensor_rank = static_cast<int>(model_storage.get_tensor_spec().logical_shape().rank());
+    TT_FATAL(
+        shard_dim >= 0 && shard_dim < tensor_rank,
+        "shard_dim ({}) is out of range for tensor logical rank {} (expected range [0, {}))",
+        shard_dim,
+        tensor_rank,
+        tensor_rank);
+
     TensorTopology topology =
         TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(joint_coords.size()), shard_dim);
 
