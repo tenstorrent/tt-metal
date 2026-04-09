@@ -545,8 +545,9 @@ class Attention(LightweightModule):
             sin_b = sin[:, :, b : b + 1, :]
             q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
             k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
-            q_il_parts.append(ttnn.sharded_to_interleaved(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
-            k_il_parts.append(ttnn.sharded_to_interleaved(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+
             ttnn.deallocate(q_rot)
             ttnn.deallocate(k_rot)
 
