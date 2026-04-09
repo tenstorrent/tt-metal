@@ -350,6 +350,8 @@ class Mailboxes(Enum):
     BriscCommand0 = Unpacker + 12
     BriscCommand1 = Unpacker + 16
     BriscCounter = Unpacker + 20
+    BriscBread0 = Unpacker + 24
+    BriscBread1 = Unpacker + 28
 
 
 class MailboxesCoverage(Enum):
@@ -359,6 +361,8 @@ class MailboxesCoverage(Enum):
     BriscCommand0 = Unpacker + 12
     BriscCommand1 = Unpacker + 16
     BriscCounter = Unpacker + 20
+    BriscBread0 = Unpacker + 24
+    BriscBread1 = Unpacker + 28
 
 
 class MailboxesQuasar(Enum):

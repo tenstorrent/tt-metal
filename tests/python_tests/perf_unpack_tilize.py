@@ -28,13 +28,19 @@ from helpers.test_variant_parameters import (
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_unpack_tilize_float(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
+    perf_report,
+    formats,
+    rt_dim,
+    ct_dim,
 ):
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 
     _perf_unpack_tilize(
-        perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
+        perf_report,
+        formats,
+        rt_dim,
+        ct_dim,
     )
 
 
@@ -45,15 +51,24 @@ def test_perf_unpack_tilize_float(
     ct_dim=[1, 2],
 )
 def test_perf_unpack_tilize_int(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
+    perf_report,
+    formats,
+    rt_dim,
+    ct_dim,
 ):
     _perf_unpack_tilize(
-        perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
+        perf_report,
+        formats,
+        rt_dim,
+        ct_dim,
     )
 
 
 def _perf_unpack_tilize(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
+    perf_report,
+    formats,
+    rt_dim,
+    ct_dim,
 ):
     tile_count = rt_dim * ct_dim
     dimensions = [rt_dim * 32, ct_dim * 32]
@@ -86,4 +101,4 @@ def _perf_unpack_tilize(
         unpack_to_dest=formats.input_format == DataFormat.Int32,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)
