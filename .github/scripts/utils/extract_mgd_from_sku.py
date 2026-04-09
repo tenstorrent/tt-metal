@@ -31,8 +31,6 @@ def main():
         sys.exit(1)
 
     # Print MGD content with 2-space indentation for each line (required for YAML block scalars)
-    # Start with a blank line (required for mgd: |- interpolation)
-    print()
     mgd_content = skus[sku_name]["mgd"]
     for line in mgd_content.splitlines():
         print(f"  {line}")
