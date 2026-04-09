@@ -250,6 +250,11 @@ class Qwen35ModelArgs(ModelArgs):
         rows, cols = self.find_grid(k_tiles)
         self.mlp_core_grid = ttnn.CoreGrid(x=cols, y=rows)
 
+        # ── Fused W1+W3 MLP ────────────────────────────────────────────
+        from models.demos.qwen35_27b.tt.fused_mlp import Qwen35FusedMLP
+
+        self.mlp_cls = Qwen35FusedMLP
+
         # ── Qwen3.5-specific overrides ──────────────────────────────────
         self.rms_norm_add_unit_offset = True
         self.rope_dim = ROPE_DIM
@@ -342,6 +347,7 @@ class Qwen35ModelArgs(ModelArgs):
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
+            "Qwen35FusedMLP": "feed_forward",
             "Attention": "attention",
             "TtGatedDeltaNet": "attention",
             "Qwen35Attention": "attention",

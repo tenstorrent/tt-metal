@@ -86,7 +86,8 @@ class TransformerBlock(LightweightModule):
                 tt_ccl=self.tt_ccl,
             )
         else:
-            self.feed_forward = MLP(
+            mlp_cls = getattr(args, "mlp_cls", MLP)
+            self.feed_forward = mlp_cls(
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 args=args,
