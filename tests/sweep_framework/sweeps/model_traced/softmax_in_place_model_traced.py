@@ -137,6 +137,10 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output_tensor.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
+
     # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
