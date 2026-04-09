@@ -116,6 +116,9 @@ public:
             return {entry->hash, entry->valid};
         }
 
+        // Prevent concurrent readers from seeing partially-written fields.
+        entry->ready.store(false, std::memory_order_release);
+
         std::ifstream dep_file(path, std::ios::binary);
         if (!dep_file.is_open()) {
             return {0, false};

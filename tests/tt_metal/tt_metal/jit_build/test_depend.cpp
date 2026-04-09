@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
+#include <vector>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -134,4 +136,72 @@ TEST(JitBuildTests, EmptyHashFile) {
 
     // Verify that dependencies are not up to date when no dependencies are found
     EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(empty_hash_file));
+}
+
+TEST_F(JitBuildDependencyTests, ConcurrentUpToDateCheck) {
+    constexpr auto obj_file_name = "test.o";
+    constexpr int kNumFiles = 20;
+    constexpr int kNumThreads = 16;
+
+    std::vector<std::string> dep_names;
+    dep_names.reserve(kNumFiles);
+    for (int i = 0; i < kNumFiles; ++i) {
+        dep_names.push_back("dep_" + std::to_string(i) + ".txt");
+    }
+    const tt::jit_build::ParsedDependencies dependencies{
+        {obj_file_name, dep_names},
+    };
+    create_dependency_files_and_hash(dependencies, obj_file_name);
+
+    // All threads should see "up to date" for the same dephash.
+    std::vector<bool> results(kNumThreads, false);
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int t = 0; t < kNumThreads; ++t) {
+        threads.emplace_back(
+            [&, t] { results[t] = tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name); });
+    }
+    for (auto& th : threads) {
+        th.join();
+    }
+    for (int t = 0; t < kNumThreads; ++t) {
+        EXPECT_TRUE(results[t]) << "Thread " << t << " did not see up-to-date";
+    }
+}
+
+TEST_F(JitBuildDependencyTests, ConcurrentInvalidation) {
+    constexpr auto obj_file_name = "test.o";
+    constexpr int kNumFiles = 20;
+    constexpr int kNumThreads = 16;
+
+    std::vector<std::string> dep_names;
+    dep_names.reserve(kNumFiles);
+    for (int i = 0; i < kNumFiles; ++i) {
+        dep_names.push_back("dep_" + std::to_string(i) + ".txt");
+    }
+    const tt::jit_build::ParsedDependencies dependencies{
+        {obj_file_name, dep_names},
+    };
+    create_dependency_files_and_hash(dependencies, obj_file_name);
+
+    // Warm the cache so entries are in ready state.
+    ASSERT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
+
+    // Modify a dependency to trigger metadata-based rehash.
+    std::ofstream{out_dir_ / dep_names[0]} << "Changed content for invalidation test";
+
+    // All threads should see "out of date" after the modification.
+    std::vector<bool> results(kNumThreads, true);
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int t = 0; t < kNumThreads; ++t) {
+        threads.emplace_back(
+            [&, t] { results[t] = tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name); });
+    }
+    for (auto& th : threads) {
+        th.join();
+    }
+    for (int t = 0; t < kNumThreads; ++t) {
+        EXPECT_FALSE(results[t]) << "Thread " << t << " did not detect invalidation";
+    }
 }
