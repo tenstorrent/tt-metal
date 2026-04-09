@@ -798,6 +798,9 @@ def import_graph(
                     if "input_tensors" in nd_copy:
                         nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
                     subgraph.append(nd_copy)
+            for snode in subgraph:
+                if "counter" in snode:
+                    snode["id"] = snode["counter"]
             captured_graph_batch.append((operation_id, json.dumps(subgraph)))
             current_op_nodes = []
 
@@ -924,10 +927,16 @@ def import_graph(
                 for buf in active_buffers:
                     buffers_batch.append((operation_id, *buf))
 
+                node_copy = dict(node)
+                node_copy["counter"] = 1
+                node_copy["id"] = 1
+                if "connections" in node_copy:
+                    node_copy["connections"] = [2]
                 capture_start = {
                     "arguments": [],
                     "connections": [1],
                     "counter": 0,
+                    "id": 0,
                     "input_tensors": [],
                     "node_type": "capture_start",
                     "params": {},
@@ -936,13 +945,15 @@ def import_graph(
                 capture_end = {
                     "arguments": [],
                     "connections": [],
-                    "counter": 0,
+                    "counter": 2,
+                    "id": 2,
                     "input_tensors": [],
                     "node_type": "capture_end",
                     "params": {},
                     "stacking_level": 0,
                 }
-                captured_graph_batch.append((operation_id, json.dumps([capture_start, node, capture_end])))
+                dealloc_subgraph = [capture_start, node_copy, capture_end]
+                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph)))
 
                 operation_counter += 1
             else:
@@ -1282,6 +1293,10 @@ def import_report(
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
+                for node in report["graph"]:
+                    if "counter" in node:
+                        node["id"] = node["counter"]
+
                 python_io = report.get("python_io")
                 if python_io is None:
                     sidecar_path = rpath.with_suffix(".python_io.json")

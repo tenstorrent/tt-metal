@@ -2713,7 +2713,7 @@ class TestPerOpCapturedGraphImport:
     """Tests that per-op captured_graph from python_io is used directly."""
 
     def test_per_op_captured_graph_used_when_available(self, tmp_path):
-        """captured_graph from python_io should be stored as-is."""
+        """captured_graph from python_io should be stored with id fields injected."""
         per_op_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
             {
@@ -2729,6 +2729,24 @@ class TestPerOpCapturedGraphImport:
                 "connections": [3],
             },
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        expected_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1], "id": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "InnerOp"},
+                "connections": [2],
+                "id": 1,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "InnerOp"},
+                "connections": [3],
+                "id": 2,
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": [], "id": 3},
         ]
         mock_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
@@ -2764,7 +2782,7 @@ class TestPerOpCapturedGraphImport:
         rows = cursor.fetchall()
         assert len(rows) == 1
         stored = json.loads(rows[0][0])
-        assert stored == per_op_graph, "Per-op graph should be stored exactly as provided"
+        assert stored == expected_graph, "Per-op graph should have id fields injected from counter"
         conn.close()
 
     def test_fallback_extraction_when_no_per_op_graph(self, tmp_path):
