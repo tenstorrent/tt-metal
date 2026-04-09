@@ -99,20 +99,22 @@ def zero_cache_padding_zigzag(
     sp_factor: int,
     seq_len: int,
     decode_chunk_align: int = 128,
+    tp_factor: int = 1,
 ):
     """Zero-pad KV cache for migration alignment under zigzag attention layout.
 
     Called before prefill to zero the padding region from global_end_token up
     to the next decode_chunk_align boundary. Handles the zigzag token mapping
     to dispatch per-device zero_cache_range calls with correct local token
-    ranges.
+    ranges. For 2D meshes (SP x TP), zeroes all TP replicas for each SP device.
 
     Args:
-        kvpe_cache: The mesh KV cache tensor (one shard per SP device).
+        kvpe_cache: The mesh KV cache tensor (one shard per SP device, replicated over TP).
         global_end_token: First invalid global token position (effective seq_len).
         sp_factor: Number of devices in the sequence parallel group.
         seq_len: Total sequence length across all devices.
         decode_chunk_align: Decode chunk alignment in tokens (default 128).
+        tp_factor: Number of TP replicas per SP device (default 1).
     """
     padded_end = math.ceil(global_end_token / decode_chunk_align) * decode_chunk_align
     padded_end = min(padded_end, seq_len)
@@ -120,11 +122,9 @@ def zero_cache_padding_zigzag(
     if global_end_token >= padded_end:
         return
 
-    chunk_size = seq_len // (2 * sp_factor)
     tile_size = 32  # KV cache tile height
 
-    # Accumulate local token ranges per device
-    # Each entry: [local_start, local_end) — we track min start and max end per device
+    # Accumulate local token ranges per SP device
     device_ranges: dict[int, tuple[int, int]] = {}
 
     # Walk the global padding region in tile-sized steps (32 tokens)
@@ -142,6 +142,9 @@ def zero_cache_padding_zigzag(
             device_ranges[device_id] = (min(prev_start, local_tile_start), max(prev_end, local_tile_end))
 
     # Dispatch per-device zero_cache_range
+    # In a 2D mesh (SP x TP), flat device index = sp_device * tp_factor + tp_device
     device_tensors = ttnn.get_device_tensors(kvpe_cache)
-    for device_id, (local_start, local_end) in device_ranges.items():
-        ttnn.kv_cache.zero_cache_range(device_tensors[device_id], local_start, local_end)
+    for sp_device_id, (local_start, local_end) in device_ranges.items():
+        for tp_device_id in range(tp_factor):
+            flat_idx = sp_device_id * tp_factor + tp_device_id
+            ttnn.kv_cache.zero_cache_range(device_tensors[flat_idx], local_start, local_end)
