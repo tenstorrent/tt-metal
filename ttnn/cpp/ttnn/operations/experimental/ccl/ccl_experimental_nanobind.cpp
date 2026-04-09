@@ -20,7 +20,6 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.hpp"
@@ -51,7 +50,6 @@ void py_module(nb::module_& mod) {
     ccl::bind_all_reduce_async(mod);
     ccl::bind_llama_reduce_scatter(mod);
     ccl::bind_llama_rs_create_heads(mod);
-    ccl::bind_ring_attention_all_gather_async(mod);
     ccl::bind_send_async(mod);
     ccl::bind_recv_async(mod);
     ccl::bind_neighbor_pad_async(mod);
