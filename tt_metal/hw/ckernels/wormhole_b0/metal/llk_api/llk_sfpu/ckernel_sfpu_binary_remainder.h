@@ -160,6 +160,63 @@ sfpi_inline void calculate_remainder_int32_body(
         r.get(), sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
+    // remainder(a, b) = a - floor(a/b) * b
+
+    sfpi::vFloat a = in0;
+    sfpi::vFloat b = in1;
+
+    // Compute a/b = a * (1/b)
+    sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
+
+    // Compute floor(a/b)
+    // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _floor_body_(),
+    // so we must read them to inform the SFPI register allocator they are not immediately available.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
+    _floor_body_();
+    sfpi::vFloat floor_div = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat _lreg2_clobbered_ = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vFloat _lreg3_clobbered_ = sfpi::l_reg[sfpi::LRegs::LReg3];
+
+    // Compute remainder = a - floor(a/b) * b
+    sfpi::vFloat result = a - floor_div * b;
+
+    // Sign correction: remainder must match the sign of b (or be zero).
+    // XOR of the float bit-patterns detects sign mismatch via the MSB,
+    // avoiding a compound conditional with four comparisons and an OR.
+    v_if(result != sfpi::vFloat(0.0f)) {
+        sfpi::vInt signs = sfpi::reinterpret<sfpi::vUInt>(result) ^ sfpi::reinterpret<sfpi::vUInt>(b);
+        v_and(signs < 0);
+        result += b;
+    }
+    v_endif;
+
+    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
+    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
+        sfpi::vFloat diff = result - b;
+        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
+        v_endif;
+    }
+    v_endif;
+    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
+        sfpi::vFloat diff = result - b;
+        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
+        v_endif;
+    }
+    v_endif;
+
+    // Handle division by zero - return NaN
+    v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
+    v_endif;
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+    }
+
+    return result;
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
@@ -169,9 +226,30 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_binary_remainder(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+        sfpi::vFloat result = _sfpu_binary_remainder_<is_fp32_dest_acc_en>(in0, in1);
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 inline void remainder_int32_init() {
     div_floor_init<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void remainder_binary_init() {
+    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 }  // namespace ckernel::sfpu
