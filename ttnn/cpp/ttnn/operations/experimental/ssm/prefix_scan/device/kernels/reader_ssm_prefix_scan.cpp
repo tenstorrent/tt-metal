@@ -12,7 +12,8 @@ constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
 void kernel_main() {
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_bx_in_id = get_compile_time_arg_val(1);  // same as cb_in_id (shared staging CB)
+    constexpr uint32_t cb_bx_in_id = get_compile_time_arg_val(1);
+    static_assert(cb_bx_in_id == cb_in_id, "cb_bx_in_id must match cb_in_id because bx reuses the shared staging CB");
     constexpr uint32_t cb_h_in_id = get_compile_time_arg_val(2);
     constexpr uint32_t input_tile_size = get_compile_time_arg_val(3);
     constexpr uint32_t h_page_size = get_compile_time_arg_val(4);
