@@ -397,8 +397,7 @@ class TTNNTurboQuantCache:
         bits: int = 3,
         seed: int = 42,
         max_batch_size: int = 1,
-        use_bfp8_indices: bool = False,
-        cache_centroids: bool = True,
+        memory_efficient: bool = True,
     ):
         _require_ttnn()
 
@@ -409,8 +408,11 @@ class TTNNTurboQuantCache:
         self.max_seq_len = max_seq_len
         self.bits = bits
         self.max_batch_size = max_batch_size
-        self.use_bfp8_indices = use_bfp8_indices and not cache_centroids
-        self.cache_centroids = cache_centroids
+        self.memory_efficient = memory_efficient
+
+        # Legacy flags — derived from memory_efficient for backward compat.
+        self.cache_centroids = not memory_efficient
+        self.use_bfp8_indices = memory_efficient
 
         # Shared quantizer setup (rotation + codebook on device)
         self.setup = TTNNTurboQuantSetup(device, head_dim=head_dim, bits=bits, seed=seed)
@@ -418,27 +420,18 @@ class TTNNTurboQuantCache:
         # ------------------------------------------------------------------ #
         # On-device cache                                                     #
         #                                                                     #
-        # cache_centroids=True (default): stores pre-gathered centroid values  #
-        # in BF16.  The gather runs at quantize time (1 token = tiny) rather   #
-        # than at dequantize time (full cache = expensive).  Dequantize        #
-        # reduces to a single mul(cached_centroids, norms).  This eliminates   #
-        # the typecast + gather pass that reads/writes the entire cache.       #
+        # memory_efficient=True (default): BFP8 indices + BF16 norms.         #
+        # At 3-bit: 105 MB at seq=4096 vs 293 MB BFP8 baseline (2.8× smaller)#
+        # Dequantize: typecast + gather + mul per step (O(max_seq)).          #
         #                                                                     #
-        # cache_centroids=False: stores integer indices.  BFP8 when            #
-        # use_bfp8_indices=True (~1.88× memory savings).  Dequantize requires  #
-        # typecast + gather + mul (3 passes over full cache).                  #
-        #                                                                     #
-        # Norms remain BF16 [batch, kv_heads, max_seq_padded, 1].            #
+        # memory_efficient=False: BF16 pre-rescaled centroid×norm values.     #
+        # Same memory as FP16 (537 MB at seq=4096).                           #
+        # Dequantize: pass cache directly to SDPA (O(1), flat latency).       #
         # ------------------------------------------------------------------ #
         max_seq_padded = ((max_seq_len + 31) // 32) * 32
         self.max_seq_padded = max_seq_padded
 
-        if cache_centroids:
-            idx_dtype = ttnn.bfloat16  # centroid values are continuous floats
-        elif use_bfp8_indices:
-            idx_dtype = ttnn.bfloat8_b
-        else:
-            idx_dtype = ttnn.bfloat16
+        idx_dtype = ttnn.bfloat8_b if memory_efficient else ttnn.bfloat16
         zero_idx = torch.zeros(max_batch_size, num_kv_heads, max_seq_padded, head_dim, dtype=torch.bfloat16)
         self.k_indices_dev = [
             ttnn.from_torch(
