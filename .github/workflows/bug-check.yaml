@@ -42,7 +42,10 @@ jobs:
 
           CMD_LINE=$(printf '%s\n' "$COMMENT_BODY" | grep -E '^/bug-check' | head -1)
 
-          if echo "$CMD_LINE" | grep -qE '^/bug-check\s+list-rules(\s|$)'; then
+          if echo "$CMD_LINE" | grep -qE '^/bug-check\s+run(\s|$)'; then
+            echo "subcommand=run" >> "$GITHUB_OUTPUT"
+            echo "rule-id=" >> "$GITHUB_OUTPUT"
+          elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+list-rules(\s|$)'; then
             echo "subcommand=list-rules" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+check-rule\s+'; then
@@ -53,13 +56,39 @@ jobs:
             echo "subcommand=dry-run" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           else
-            echo "subcommand=run" >> "$GITHUB_OUTPUT"
+            echo "subcommand=help" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Post help comment
+        if: steps.parse.outputs.subcommand == 'help'
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(cat <<'HELPEOF'
+          ## Bug Checker
+
+          LLM-powered bug pattern detection for tt-metal PRs. Scans your diff against a library of known bug patterns using Claude, then reports findings as inline PR comments and SARIF for Code Scanning.
+
+          ### Commands
+
+          | Command | Description |
+          |---------|-------------|
+          | `/bug-check run` | Scan the PR diff against all matching rules |
+          | `/bug-check list-rules` | Show all available rules with their severity, path globs, and labels |
+          | `/bug-check check-rule <id>` | Run a single named rule against this PR |
+          | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
+
+          Rules are matched by **file path globs** and **PR labels** — only rules relevant to your changes will run. Each rule is an independent LLM analysis; no state is shared between rules.
+          HELPEOF
+          | sed 's/^          //')"
 
   bug-check:
     name: Run Bug Checker
     needs: parse-comment
+    if: needs.parse-comment.outputs.subcommand != 'help'
     concurrency:
       group: bug-check-${{ github.event.issue.number }}
       cancel-in-progress: true

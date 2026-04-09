@@ -138,7 +138,8 @@ python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 
 | Command | Description |
 |---------|-------------|
-| `/bug-check` | Run all matching rules (default) |
+| `/bug-check` | Show this help message |
+| `/bug-check run` | Run all matching rules against the PR |
 | `/bug-check list-rules` | List all rules with their severity, paths, and labels |
 | `/bug-check check-rule <id>` | Run only the named rule against the PR |
 | `/bug-check dry-run` | Show which rules match and what diff sections each would analyze (no LLM calls) |
