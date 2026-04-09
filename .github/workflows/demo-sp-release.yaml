@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run"
+        description: "Select which test group to run (SP1 tests can be run between 3 and 7 AM UTC)"
         required: false
         default: "all"
         type: choice
@@ -45,8 +45,8 @@ on:
           - sp1_deepseek
 
   schedule:
-    # Run daily at 4 AM UTC
-    - cron: "0 4 * * *"
+    # Run daily at 3 AM UTC
+    - cron: "0 3 * * *"
 
 permissions:
   contents: write
