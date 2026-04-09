@@ -32,7 +32,7 @@ namespace ckernel::sfpu {
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     sfpi::vFloat y = sfpi::vConstNeg1;
-    v_if(sfpi::abs(val) < sfpi::s2vFloat16b(0.4f)) {
+    v_if(sfpi::abs(val) < sfpi::sFloat16b(0.4f)) {
         // When x is very small, exp(x) is very close to 1. Hence, for improved precision, we use Taylor expansion of
         // expm1(x) = x + (x^2/2) + (x^3/6)
         // In Horner form, on reducing further : y = (val * (val * (val * 0.166f + 0.5f )+ 1)
