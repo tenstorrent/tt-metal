@@ -535,33 +535,45 @@ Two sub-steps:
 
 | max_seq | Baseline BFP8 | TurboQuant 3-bit | Overhead |
 |---------|--------------|-----------------|----------|
-| 128 | 37.0 ms | **44.1 ms** | **1.19×** |
-| 512 | 37.7 ms | 45.3 ms | 1.20× |
-| 2048 | 37.8 ms | 45.3 ms | 1.20× |
-| 4096 | 37.7 ms | 45.3 ms | 1.20× |
-| 8192 | 37.7 ms | 45.3 ms | 1.20× |
+| 128 | 37.0 ms | **43.4 ms** | **1.17×** |
+| 512 | 37.7 ms | 44.7 ms | 1.19× |
+| 2048 | 37.8 ms | 44.7 ms | 1.18× |
+| 4096 | 37.7 ms | 44.7 ms | 1.19× |
+| 8192 | 37.7 ms | 44.7 ms | 1.19× |
 
-Overhead is **flat at 1.20×** across all sequence lengths (was 1.98× at seq=8192
-before the pre-rescale fix).
+Overhead is **flat at ~1.18×** across all sequence lengths.
+
+**Quality (3-bit, on-device):**
+
+| Metric | Value | Paper theoretical |
+|--------|-------|-------------------|
+| MSE | **0.034** | 0.034 |
+| Cosine similarity | **0.999** | — |
+| Index match vs CPU | 99.2% | — |
+
+Quality matches the paper's theoretical bounds exactly. Fixed by removing
+a spurious UINT32 typecast that was destroying BF16 index precision (was
+MSE=0.489 before the fix).
 
 **Optimisation history:**
 
 ```
-A0    183ms/tok  baseline TurboQuant (before optimisation)
+A0    183ms/tok  baseline TurboQuant (before optimisation)         4.2×
 A1    168ms/tok  indices on device via paged_update_cache
 A2    130ms/tok  norms on device, fixed shapes, no CPU roundtrips
-A2t    71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)
-B1+2   47ms     fused bucketize + gather kernels
+A2t    71ms/tok  TTNN trace (1 dispatch/step instead of ~3200)     1.92×
+B1+2   47ms     fused bucketize + gather kernels                   1.27×
 centr  46ms     cache centroid values (gather at quantize time)
 absrb  45.6ms   absorb Π into W_v/W_o weights
 rescl  44.1ms   pre-rescale centroids×norms at scatter (O(1) dequant)
+quant  43.4ms   rsqrt norm + remove UINT32 typecast                1.17×
 base   37.0ms   baseline BFP8 (no TurboQuant)
 ```
 
-Remaining overhead (~7.5ms constant, independent of seq_len):
-- **K rotation + Q pre-rotation**: ~4ms (RoPE forces these to remain)
-- **Quantize** (norm + bucketize + gather on 1 token): ~2ms
-- **Scatter** (2× paged_update_cache for K/V): ~1.5ms
+Remaining overhead (~6.4ms constant, independent of seq_len):
+- **K rotation + Q pre-rotation**: ~4ms (32 layers × 2 matmuls, RoPE dependency)
+- **Quantize** (norm + bucketize + gather on 1 token): ~1.5ms
+- **Scatter** (2× paged_update_cache for K/V): ~1ms
 
 ---
 
