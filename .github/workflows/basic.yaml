@@ -96,7 +96,7 @@ jobs:
           name: ${{ inputs.product }} ${{ inputs.runner }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
-          working-directory: /work
+          working-directory: ${{ github.workspace }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}

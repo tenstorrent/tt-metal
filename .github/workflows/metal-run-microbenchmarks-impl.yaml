@@ -92,7 +92,7 @@ jobs:
         TT_METAL_DEVICE_PROFILER: 1
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -102,13 +102,18 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -132,7 +137,7 @@ jobs:
       - name: Check for benchmark/latency data
         id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') }}
-        uses: ./docker-job/.github/actions/check-latency-bw-results
+        uses: ./.github/actions/check-latency-bw-results
         with:
           path: /work
           arch: ${{ matrix.test-group.arch }}
@@ -158,4 +163,4 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
