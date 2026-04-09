@@ -35,10 +35,20 @@ There are four distinct stage configurations:
      through a single shared socket pair.
 """
 
+from dataclasses import dataclass
+
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+
+
+@dataclass
+class StageMetadata:
+    """Per-stage routing info: which MPI rank owns the stage and its mesh ID."""
+
+    rank: int
+    mesh_id: int
 
 
 class PipelineBlock:
@@ -59,9 +69,8 @@ class PipelineBlock:
         embedding_tensor=None,
         initialize_loopback=True,
         my_stage_idx=None,
-        stage_to_rank=None,
+        stages_metadata=None,
     ):
-        print("here1")
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
         ), "Upstream D2D Socket FIFO Size must be greater than or equal to upstream D2D Socket Page Size"
@@ -75,11 +84,10 @@ class PipelineBlock:
         self.my_stage_idx = my_stage_idx
         self.num_procs = int(ttnn.distributed_context_get_size())
         self.initialize_loopback = initialize_loopback
-        if stage_to_rank is None:
-            self._stage_to_rank = {i: i for i in range(self.num_procs)}
+        if stages_metadata is None:
+            self._stages = {i: StageMetadata(rank=i, mesh_id=i) for i in range(self.num_procs)}
         else:
-            self._stage_to_rank = stage_to_rank
-        print("here2")
+            self._stages = stages_metadata
 
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         if initialize_loopback:
@@ -203,9 +211,7 @@ class PipelineBlock:
 
         print("here3")
         next_stage = self.my_stage_idx + 1
-        next_rank = self._stage_to_rank[next_stage]
-        print("next_rank", next_rank)
-        print("next_stage", next_stage)
+        ns = self._stages[next_stage]
         self.exit_socket_interface = SocketInterface(
             downstream_d2d_socket_page_size,
             downstream_d2d_socket_fifo_size,
@@ -214,17 +220,12 @@ class PipelineBlock:
             ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
             upstream_socket=self.host_io.get_downstream_socket(),
             sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(rank=next_rank),
+            receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
         )
-        print("here4")
 
         last_stage = self.num_procs - 1
-        last_rank = self._stage_to_rank[last_stage]
-        print("here5")
-        print("last_rank", last_rank)
-        print("last_stage", last_stage)
+        ls = self._stages[last_stage]
         if self.initialize_loopback:
-            print("here6")
             self.entry_socket_interface = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
@@ -232,7 +233,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[last_stage].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
                 downstream_socket=self.host_io.get_upstream_socket(),
-                sender_mesh=MeshWrapper(rank=last_rank),
+                sender_mesh=MeshWrapper(rank=ls.rank, mesh_id=ls.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
 
@@ -278,9 +279,7 @@ class PipelineBlock:
 
         print("here7")
         prev_stage = self.my_stage_idx - 1
-        print("prev_stage", prev_stage)
-        prev_rank = self._stage_to_rank[prev_stage]
-        print("prev_rank", prev_rank)
+        ps = self._stages[prev_stage]
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
             upstream_d2d_socket_fifo_size,
@@ -288,7 +287,7 @@ class PipelineBlock:
             ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
             ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
             downstream_socket=self.host_io.get_upstream_socket(),
-            sender_mesh=MeshWrapper(rank=prev_rank),
+            sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
             receiver_mesh=MeshWrapper(mesh_device),
         )
 
@@ -306,7 +305,7 @@ class PipelineBlock:
         exit_upstream_page_size=None,
     ):
         prev_stage = self.my_stage_idx - 1
-        prev_rank = self._stage_to_rank[prev_stage]
+        ps = self._stages[prev_stage]
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
             upstream_d2d_socket_fifo_size,
@@ -316,12 +315,12 @@ class PipelineBlock:
             downstream_core_coord=entry_node_downstream
             if entry_node_downstream
             else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
-            sender_mesh=MeshWrapper(rank=prev_rank),
+            sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
             receiver_mesh=MeshWrapper(mesh_device),
         )
 
         next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
-        next_rank = self._stage_to_rank[next_stage]
+        ns = self._stages[next_stage]
         # pipeline_config index: always my_stage_idx+1 (sequential), even for
         # the last stage where it points to the loopback config entry at
         # pipeline_config[num_procs] rather than wrapping to 0.
@@ -336,7 +335,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, pipeline_core_coord),
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(rank=next_rank),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                 upstream_core_coords=exit_node_upstream,
                 upstream_page_size=exit_upstream_page_size,
             )
@@ -350,9 +349,8 @@ class PipelineBlock:
                 upstream_core_coord=exit_node_upstream,
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(rank=next_rank),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
             )
-        print("here8")
 
     def run(self):
         if self.is_pipeline_start:

@@ -17,7 +17,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
@@ -39,7 +39,7 @@ class StageContext:
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
     my_stage_idx: int
-    stage_to_rank: dict[int, int] | None = None
+    stages_metadata: dict[int, StageMetadata] | None = None
 
 
 class StageKind(ABC):
@@ -106,7 +106,7 @@ class EmbeddingStage(StageKind):
             d2h_socket_page_size=d2h_page,
             embedding_tensor=self._weights.embedding,
             my_stage_idx=my_stage_idx,
-            stage_to_rank=ctx.stage_to_rank,
+            stages_metadata=ctx.stages_metadata,
         )
 
 
@@ -133,7 +133,7 @@ class PassthroughStage(StageKind):
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
             my_stage_idx=my_stage_idx,
-            stage_to_rank=ctx.stage_to_rank,
+            stages_metadata=ctx.stages_metadata,
         )
 
 
@@ -185,7 +185,7 @@ class LMHeadStage(StageKind):
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
             my_stage_idx=my_stage_idx,
-            stage_to_rank=ctx.stage_to_rank,
+            stages_metadata=ctx.stages_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:

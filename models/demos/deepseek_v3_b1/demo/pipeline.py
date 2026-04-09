@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -302,7 +302,7 @@ class PipelineConfiguration:
         self,
         mesh_device: ttnn.MeshDevice,
         my_stage_idx: int | None = None,
-        stage_to_rank: dict[int, int] | None = None,
+        stages_metadata: dict[int, StageMetadata] | None = None,
     ) -> Pipeline:
         """Create a Pipeline for this process's stage.
 
@@ -310,13 +310,15 @@ class PipelineConfiguration:
             mesh_device: The MeshDevice (or submesh) for this stage.
             my_stage_idx: Which stage this process runs. Defaults to
                 ``mesh_device.get_system_mesh_id()`` for backwards compatibility.
-            stage_to_rank: Mapping from stage index to MPI rank. When omitted,
-                the identity mapping ``{i: i}`` is assumed (stage 0 on rank 0, etc.).
+            stages_metadata: Mapping from stage index to ``StageMetadata(rank, mesh_id)``.
+                When omitted, the identity ``{i: StageMetadata(i, i)}`` is assumed
+                (stage i on rank i with mesh_id i).
+                For same-mesh submeshes, pass mesh_id=0 for every stage.
         """
         if my_stage_idx is None:
             my_stage_idx = mesh_device.get_system_mesh_id()
         stage = self._stage_factories[my_stage_idx](mesh_device)
-        return Pipeline(mesh_device, stage, my_stage_idx, stage_to_rank=stage_to_rank)
+        return Pipeline(mesh_device, stage, my_stage_idx, stages_metadata=stages_metadata)
 
 
 class Pipeline:
@@ -327,7 +329,7 @@ class Pipeline:
         mesh_device: ttnn.MeshDevice,
         stage_kind: StageKind,
         my_stage_idx: int,
-        stage_to_rank: dict[int, int] | None = None,
+        stages_metadata: dict[int, StageMetadata] | None = None,
     ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
@@ -337,7 +339,7 @@ class Pipeline:
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
             my_stage_idx=self._my_stage_idx,
-            stage_to_rank=stage_to_rank,
+            stages_metadata=stages_metadata,
         )
         self._pipeline_block: PipelineBlock | None = None
 

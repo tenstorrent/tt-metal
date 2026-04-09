@@ -525,7 +525,8 @@ void ControlPlane::init_control_plane(
         local_rank_mapping[fnode] = local_id;
     }
 
-    if (true) {
+    const bool use_hardcoded_chip_mapping = (std::getenv("TT_HARDCODED_CHIP_MAPPING") != nullptr);
+    if (use_hardcoded_chip_mapping) {
         for (const auto& [fnode, local_phys] : local_rank_mapping) {
             log_info(tt::LogFabric, "  mesh={} chip={} -> local_phys={}", *fnode.mesh_id, fnode.chip_id, local_phys);
         }

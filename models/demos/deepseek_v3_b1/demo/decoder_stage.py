@@ -93,7 +93,7 @@ class DecoderStage(StageKind):
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
             my_stage_idx=my_stage_idx,
-            stage_to_rank=ctx.stage_to_rank,
+            stages_metadata=ctx.stages_metadata,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
