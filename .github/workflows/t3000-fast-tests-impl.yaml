@@ -67,7 +67,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
       options: --device /dev/tenstorrent --memory 256g
@@ -76,14 +76,19 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           ref: ${{ inputs.ref || github.sha }}
-          filter: blob:none
-          path: docker-job
+          submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -123,13 +128,6 @@ jobs:
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ccl_tests
-      - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
-        run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
-          echo "::endgroup::"
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 17
         if: ${{ !cancelled() }}
