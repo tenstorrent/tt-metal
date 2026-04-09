@@ -165,7 +165,8 @@ bool TestProgressMonitor::check_for_hung_devices(
     uint32_t hung_count = 0;
 
     for (const auto& [device_id, prog] : progress) {
-        if (prog.num_senders == 0 || prog.current_packets >= prog.total_packets) {
+        const bool device_complete = prog.total_packets > 0 && prog.current_packets >= prog.total_packets;
+        if (prog.num_senders == 0 || device_complete) {
             continue;
         }
 
