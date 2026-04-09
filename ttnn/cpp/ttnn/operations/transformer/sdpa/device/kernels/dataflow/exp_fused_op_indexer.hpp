@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "api/compute/common.h"
 #include "api/debug/assert.h"
 #include "exp_ring_utils.hpp"
 
@@ -14,12 +13,11 @@ struct RingSDPAOpIndexer {
 
     RingSDPAOpIndexer() {}
 
+    // RT arg layout: ring_size, ring_index, direction (3 values)
     RingSDPAOpIndexer(uint32_t& rt_args_idx) {
         uint32_t ring_size = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t ring_index = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t direction = get_arg_val<uint32_t>(rt_args_idx++);
-
-        rt_args_idx += 1;  // Skip the semaphore address
 
         seq = RingIdSequencer(ring_index, ring_size, direction);
         initialized = true;

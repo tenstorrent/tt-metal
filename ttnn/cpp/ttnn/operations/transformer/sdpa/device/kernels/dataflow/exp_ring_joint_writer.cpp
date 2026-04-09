@@ -6,7 +6,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "exp_fused_op_receiver.hpp"
+#include "exp_fused_op_indexer.hpp"
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -384,15 +384,9 @@ void kernel_main() {
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
 
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        false, /* wait_for_op_signal */
-        argidx);
+    RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
 #ifdef USE_MUX
-    // push_ring_sdpa_fused_op_rt_args appends 4 values (ring_size, ring_index, direction, semaphore_id).
-    // The writer's RingSDPAOpReceiver reads only the 3 ring params (wait_for_op_signal=false),
-    // so skip the 1 trailing semaphore ID before reading MUX args.
-    argidx += 1;
 
     // Parse fabric MUX client connection RT args (17 values).
     // mux_connection_valid, is_termination_master, mux_x, mux_y,
@@ -552,10 +546,10 @@ void kernel_main() {
     }
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
 
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;

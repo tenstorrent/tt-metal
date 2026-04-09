@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
-#include "exp_fused_op_receiver.hpp"
+#include "exp_fused_op_indexer.hpp"
 void kernel_main() {
     noc_async_write_barrier();
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -74,10 +74,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
     }
 
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        // true, /* wait_for_op_signal */
-        is_injector,
-        argidx);
+    RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
@@ -162,7 +159,7 @@ void kernel_main() {
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
@@ -177,7 +174,7 @@ void kernel_main() {
      */
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;

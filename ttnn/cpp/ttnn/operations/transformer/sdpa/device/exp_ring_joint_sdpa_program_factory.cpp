@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
-#include "ttnn/operations/transformer/sdpa/device/exp_ring_fusion.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -190,18 +189,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
-    std::optional<ttnn::prim::ExpRingSDPAFusedOpSignaler> sdpa_fused_op_signaler =
-        ttnn::prim::ExpRingSDPAFusedOpSignaler();
-
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
-        args.ring_size, device_index, args.topology);
-    if (args.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
-        std::swap(num_targets_forward, num_targets_backward);
-    }
-
-    // Minimally use matmul fused op signaler
-    sdpa_fused_op_signaler->init_all_gather(args.ring_size, device_index);
-
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
@@ -286,15 +273,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
-
-    // Init fused op signaler
-    sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
-
-    // Override the fused-op semaphore with the global out-ready semaphore so that
-    // the reader injector waits on the same semaphore that MUX writers increment.
-    const uint32_t out_ready_global_sem_addr = args.semaphore[0].address();
-    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[0] = out_ready_global_sem_addr;
-    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[1] = out_ready_global_sem_addr;
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
@@ -1263,13 +1241,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             .compile_args = compute_compile_time_args,
             .defines = defines});
 
-    // ---- AllGatherFusedOpSignaler for integrated all-gather on MUX client columns 9-10 ----
-    auto all_gather_fused_op_signaler = ttnn::experimental::ccl::AllGatherFusedOpSignaler();
-    all_gather_fused_op_signaler.init_fused_op(
-        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
-        sdpa_fused_op_signaler->fused_op_signaler_mode);
-
     // Build backward and forward termination master core sets (1 per link per direction)
     // Backward masters: row 0 of both MUX client columns (top half = backward direction).
     // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
@@ -1284,8 +1255,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         ag_backward_master_ranges.insert(CoreRange(bwd_master));
         ag_forward_master_ranges.insert(CoreRange(fwd_master));
     }
-    auto fused_op_signaler_backward = all_gather_fused_op_signaler;
-    auto fused_op_signaler_forward = all_gather_fused_op_signaler;
+
     // Pass the full direction-half range across both MUX client columns so that
     // CreateSemaphore inside init_all_gather allocates the AG sync semaphore on ALL
     // workers in each direction group.  This ensures every core (both term-masters
@@ -1293,11 +1263,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // fabric_mux_connection_rt_args runs, keeping termination_sync IDs consistent.
     CoreRange all_backward_clients({grid_size.x - 2, 0}, {grid_size.x - 1, args.num_workers_per_link - 1});
     CoreRange all_forward_clients({grid_size.x - 2, args.num_workers_per_link}, {grid_size.x - 1, grid_size.y - 1});
-    fused_op_signaler_backward.init_all_gather(
-        program, mesh_device, CoreRangeSet({all_backward_clients}), ag_backward_master_cores);
-    fused_op_signaler_forward.init_all_gather(
-        program, mesh_device, CoreRangeSet({all_forward_clients}), ag_forward_master_cores);
-
     // K/V tensor shape info for all-gather RT args
     const auto& ag_input_shape = input_tensor_k.padded_shape();
     const auto& ag_output_shape = gathered_input_tensor_k.padded_shape();
@@ -1310,8 +1275,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     uint32_t writer_fabric_ag_rt_offset = 0;
     bool ag_rt_offset_set = false;
 
-    // Track the RT arg offset for the fused-op global semaphore address in reader args
-    uint32_t reader_fused_op_sem_rt_offset = 0;
     // Track the RT arg offset for per-link semaphore addresses in reader args
     uint32_t reader_per_link_sem_rt_offset = 0;
 
@@ -1405,10 +1368,10 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             reader_args.push_back(args.semaphore[lnk].address());
         }
 
-        // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        // The semaphore address is the 4th value pushed (index = current size + 3)
-        reader_fused_op_sem_rt_offset = reader_args.size() + 3;
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, direction);
+        // Inject fused-op synchronization RT args: ring_size, ring_index, direction (3 values)
+        reader_args.push_back(args.ring_size);
+        reader_args.push_back(device_index);
+        reader_args.push_back(direction);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1420,7 +1383,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, direction);
+        writer_args.push_back(args.ring_size);
+        writer_args.push_back(device_index);
+        writer_args.push_back(direction);
 
         if (is_mux_client) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
@@ -1513,13 +1478,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(ag_output_Ht);
                 writer_args.push_back(gathered_k_addr);
                 writer_args.push_back(gathered_v_addr);
-
-                const uint32_t ag_direction = is_backward ? 0 : 1;
-                if (ag_direction == 1) {
-                    fused_op_signaler_forward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 1);
-                } else {
-                    fused_op_signaler_backward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 0);
-                }
             }
             SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
         } else {
@@ -1531,7 +1489,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args, direction);
+        compute_args.push_back(args.ring_size);
+        compute_args.push_back(device_index);
+        compute_args.push_back(direction);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
@@ -1587,7 +1547,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .writer_fabric_kernels_id = writer_fabric_kernels_id,
          .compute_kernels_id = compute_kernels_id,
          .writer_fabric_ag_rt_offset = writer_fabric_ag_rt_offset,
-         .reader_fused_op_sem_rt_offset = reader_fused_op_sem_rt_offset,
          .reader_per_link_sem_rt_offset = reader_per_link_sem_rt_offset,
          .num_links = args.num_links}};
 }
@@ -1652,11 +1611,6 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                     reader_args[shared_vars.reader_per_link_sem_rt_offset + 1 + lnk] =
                         args.semaphore[lnk].address();
                 }
-            }
-
-            // Update fused-op global semaphore address (used by injector readers)
-            if (shared_vars.reader_fused_op_sem_rt_offset > 0) {
-                reader_args[shared_vars.reader_fused_op_sem_rt_offset] = args.semaphore[0].address();
             }
 
             // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
