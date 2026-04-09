@@ -510,7 +510,7 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     uint32_t previous_heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
 
-    if (device_id == 1 && virtual_core == CoreCoord(28, 25)) {
+    if (virtual_core.y == 25) {
         return;
     }
 
