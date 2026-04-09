@@ -81,16 +81,44 @@ def main():
     state_dict = model_args.load_state_dict()
 
     # ------------------------------------------------------------------ #
+    # Absorb rotation into weights (before model creation)                 #
+    # ------------------------------------------------------------------ #
+    absorb_rotation = not args.no_turbo_quant
+    if absorb_rotation:
+        from turbo_quant.rotation import generate_rotation_matrix
+        from turbo_quant.ttnn_integration import absorb_rotation_into_state_dict
+
+        rotation_cpu = generate_rotation_matrix(model_args.head_dim, seed=42, dtype=torch.float32)
+        print("  Absorbing Π into W_v and Π^T into W_o (before model load)...")
+        absorb_rotation_into_state_dict(
+            state_dict,
+            rotation_cpu,
+            n_layers=model_args.n_layers,
+            n_q_heads=model_args.n_heads,
+            n_kv_heads=model_args.n_kv_heads,
+            head_dim=model_args.head_dim,
+        )
+
+    # ------------------------------------------------------------------ #
     # TT model (non-paged — required for TurboQuant decode path)          #
     # ------------------------------------------------------------------ #
     dtype = ttnn.bfloat8_b
-    print("Loading TT model...")
+    # When rotation is absorbed, use a separate weight cache dir so the modified
+    # state_dict is actually used (default cache has un-rotated weights).
+    if absorb_rotation:
+        from pathlib import Path
+        import tempfile
+
+        wcache = Path(tempfile.mkdtemp(prefix="tq_rotated_weights_"))
+    else:
+        wcache = model_args.weight_cache_path(dtype)
+    print(f"Loading TT model{' (no weight cache — rotation absorbed)' if absorb_rotation else ''}...")
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=wcache,
         paged_attention_config=None,  # non-paged: required for turbo_quant_cache path
     )
     del state_dict  # free CPU memory
@@ -109,7 +137,7 @@ def main():
         print("  (--no-turbo-quant: using standard BFP8 paged_update_cache path)")
     else:
         for layer in tt_model.layers:
-            layer.attention.tq_cache = TTNNTurboQuantCache(
+            tq = TTNNTurboQuantCache(
                 mesh_device,
                 num_layers=1,
                 num_kv_heads=n_local_kv_heads,
@@ -117,6 +145,9 @@ def main():
                 max_seq_len=model_args.max_seq_len,
                 bits=args.bits,
             )
+            if absorb_rotation:
+                tq.rotation_absorbed = True
+            layer.attention.tq_cache = tq
 
     # ------------------------------------------------------------------ #
     # Prepare initial inputs                                               #
