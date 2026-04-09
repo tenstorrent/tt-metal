@@ -1919,6 +1919,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 src1_idx,
                 src2_idx,
                 dst_idx,
+                data_format,
             )
 
         if not skip_tilize and data_format not in (
@@ -2009,9 +2010,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         src1_idx,
         src2_idx,
         dst_idx,
+        data_format=DataFormat.Float32,
     ):
         """
         Add top row operation for tile pairs in untilized format.
+
+        For UInt32, masks results to 32 bits to match hardware's unsigned wraparound.
         """
         src1_idx_start = src1_idx * ELEMENTS_PER_TILE
         src2_idx_start = src2_idx * ELEMENTS_PER_TILE
@@ -2033,10 +2037,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         rows_0_1_src2_start = src2_idx_start + ROWS_0_1_OFFSET
         rows_0_1_src2_end = rows_0_1_src2_start + TWO_ROWS_ELEMENTS
 
-        result[rows_0_1_dst_start:rows_0_1_dst_end] = (
+        added_0_1 = (
             tensor[rows_0_1_src1_start:rows_0_1_src1_end]
             + tensor[rows_0_1_src2_start:rows_0_1_src2_end]
         )
+        if data_format == DataFormat.UInt32:
+            added_0_1 = added_0_1 & 0xFFFFFFFF
+        result[rows_0_1_dst_start:rows_0_1_dst_end] = added_0_1
 
         # Add rows 8-9 (elements 256-319)
         rows_8_9_dst_start = dst_idx_start + ROWS_8_9_OFFSET
@@ -2046,10 +2053,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         rows_8_9_src2_start = src2_idx_start + ROWS_8_9_OFFSET
         rows_8_9_src2_end = rows_8_9_src2_start + TWO_ROWS_ELEMENTS
 
-        result[rows_8_9_dst_start:rows_8_9_dst_end] = (
+        added_8_9 = (
             tensor[rows_8_9_src1_start:rows_8_9_src1_end]
             + tensor[rows_8_9_src2_start:rows_8_9_src2_end]
         )
+        if data_format == DataFormat.UInt32:
+            added_8_9 = added_8_9 & 0xFFFFFFFF
+        result[rows_8_9_dst_start:rows_8_9_dst_end] = added_8_9
 
         return result
 

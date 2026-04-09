@@ -37,9 +37,12 @@ inline void _calculate_add_top_row_(const std::uint32_t tile_idx_0 = 0, const st
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
 
-    // Determine instruction mode and replay buffer parameters based on format
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32)    ? InstrModLoadStore::INT32
-                                                   : (format == DataFormat::UInt32) ? InstrModLoadStore::INT32_2S_COMP
+    // Determine instruction mode and replay buffer parameters based on format.
+    // Int32 is packed as sign+magnitude in L1/dest; use INT32_2S_COMP so SFPLOAD/SFPSTORE
+    // auto-converts sign+magnitude <-> two's complement (SFPIADD operates in two's complement).
+    // UInt32 is packed as raw unsigned bits; use INT32 (no conversion) for correct unsigned arithmetic.
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32)    ? InstrModLoadStore::INT32_2S_COMP
+                                                   : (format == DataFormat::UInt32) ? InstrModLoadStore::INT32
                                                                                     : InstrModLoadStore::FP32;
 
     constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;

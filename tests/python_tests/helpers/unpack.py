@@ -29,7 +29,12 @@ def unpack_fp32(packed_list):
 
 
 def unpack_int32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
+    # INT32 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 31 = sign, bits 30:0 = magnitude
+    uint32_array = np.frombuffer(bytes(packed_list), dtype=np.uint32)
+    sign = (uint32_array & 0x80000000).astype(bool)
+    magnitude = (uint32_array & 0x7FFFFFFF).astype(np.int64)
+    return np.where(sign, -magnitude, magnitude).astype(np.int32).tolist()
 
 
 def unpack_uint32(packed_list):
