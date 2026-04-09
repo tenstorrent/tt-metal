@@ -180,10 +180,15 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
-    {
-        std::lock_guard<std::mutex> lock(other.pending_events_mutex_);
-        pending_events_ = std::move(other.pending_events_);
+    // std::atomic is non-movable; transfer each slot manually.
+    // Caller must guarantee no concurrent access to either object during the move.
+    for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+        pending_event_ids_[i].store(
+            other.pending_event_ids_[i].exchange(0, std::memory_order_relaxed),
+            std::memory_order_relaxed);
     }
+    // The moved-to object is freshly constructed — deallocation is not in progress.
+    deallocation_in_progress_.store(false, std::memory_order_relaxed);
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -199,11 +204,15 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
-        {
-            std::scoped_lock lock(pending_events_mutex_, other.pending_events_mutex_);
-            pending_events_ = std::move(other.pending_events_);
+        // std::atomic is non-movable; transfer each slot manually.
+        // Caller must guarantee no concurrent access to either object during the move.
+        for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+            pending_event_ids_[i].store(
+                other.pending_event_ids_[i].exchange(0, std::memory_order_relaxed),
+                std::memory_order_relaxed);
         }
-
+        // After move-assign, deallocation is not in progress on this object.
+        deallocation_in_progress_.store(false, std::memory_order_relaxed);
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
@@ -212,10 +221,41 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
 }
 
 void MeshBuffer::add_pending_event(const MeshEvent& event) {
-    std::lock_guard<std::mutex> lock(pending_events_mutex_);
-    auto it = pending_events_.find(event.mesh_cq_id());
-    if (it == pending_events_.end() || it->second.id() < event.id()) {
-        pending_events_.insert_or_assign(event.mesh_cq_id(), event);
+    const uint32_t cq = event.mesh_cq_id();
+    TT_FATAL(cq < kMaxMeshCQs, "CQ id {} exceeds kMaxMeshCQs ({})", cq, kMaxMeshCQs);
+    const uint32_t new_id = event.id();
+
+    // CAS loop: only advance the stored ID if new_id is strictly greater.
+    // memory_order_seq_cst on success participates in the total order with the
+    // seq_cst drain in wait_for_pending_events() and the seq_cst store of
+    // deallocation_in_progress_ in deallocate(), closing the add/drain race window.
+    // See proof below.
+    uint32_t current = pending_event_ids_[cq].load(std::memory_order_relaxed);
+    while (current < new_id &&
+           !pending_event_ids_[cq].compare_exchange_weak(
+               current, new_id, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+    }
+
+    // Deallocation race guard.
+    //
+    // Without this check, the following window exists:
+    //   Thread A: enqueue_record_event_to_host() → [api_mutex released] → add_pending_event(E)
+    //   Thread B: deallocate() → sets deallocation_in_progress_ → drain slots (gets 0) → frees buffer
+    //   Thread A: stores E → returns → device still executing → buffer address reused → corruption
+    //
+    // Closed by seq_cst total order:
+    //   Thread B program order: deallocation_in_progress_.store(true, seq_cst) → exchange(0, seq_cst)
+    //   Thread A program order: CAS(seq_cst) → load(deallocation_in_progress_, seq_cst)
+    //
+    //   For the bad case (exchange sees 0 = CAS not yet done):
+    //     In seq_cst total order: dealloc_store → exchange → [CAS] → load
+    //     Since dealloc_store precedes CAS precedes load in total order, the seq_cst load MUST
+    //     observe true → Thread A self-synchronizes before returning. ✓
+    //
+    //   For the good case (exchange sees new_id = CAS already done):
+    //     Thread B waits. Thread A's load may also see true (harmless double-wait). ✓
+    if (deallocation_in_progress_.load(std::memory_order_seq_cst)) {
+        EventSynchronize(event);
     }
 }
 
@@ -224,24 +264,31 @@ void MeshBuffer::wait_for_pending_events() {
     if (!mesh_device) {
         return;  // MeshDevice destroyed, nothing to wait for
     }
-    static_cast<void>(mesh_device);
 
-    std::unordered_map<uint32_t, MeshEvent> events_to_wait;
-    {
-        std::lock_guard<std::mutex> lock(pending_events_mutex_);
-        events_to_wait = std::move(pending_events_);
-        pending_events_.clear();
-    }
+    // For the device_operation.hpp dispatch path, enqueue_record_event_to_host() is called
+    // without an explicit range, so it always targets the full mesh.
+    const MeshCoordinateRange device_range(mesh_device->shape());
 
-    // Wait for the latest host-visible event on each CQ that touched this buffer.
-    for (const auto& [_, event] : events_to_wait) {
-        EventSynchronize(event);
+    // Drain each slot with seq_cst to participate in the total order with the
+    // seq_cst CAS in add_pending_event and the seq_cst store of deallocation_in_progress_
+    // in deallocate(). See proof in add_pending_event.
+    for (uint32_t cq_id = 0; cq_id < kMaxMeshCQs; ++cq_id) {
+        const uint32_t event_id =
+            pending_event_ids_[cq_id].exchange(0, std::memory_order_seq_cst);
+        if (event_id == 0) {
+            continue;
+        }
+        EventSynchronize(MeshEvent(event_id, mesh_device.get(), cq_id, device_range));
     }
 }
 
 bool MeshBuffer::has_pending_events() const {
-    std::lock_guard<std::mutex> lock(pending_events_mutex_);
-    return !pending_events_.empty();
+    for (const auto& id : pending_event_ids_) {
+        if (id.load(std::memory_order_relaxed) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void MeshBuffer::deallocate() {
@@ -251,8 +298,14 @@ void MeshBuffer::deallocate() {
 
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
-        // Wait for all pending operations to complete before deallocating
-        // This prevents address reuse while operations are still in-flight on other CQs
+        // Signal that deallocation is in progress BEFORE draining pending_event_ids_.
+        // This participates in the seq_cst total order with the CAS in add_pending_event:
+        // any add_pending_event that runs after this store will observe true and
+        // self-synchronize, closing the window between drain and a late add_pending_event call.
+        deallocation_in_progress_.store(true, std::memory_order_seq_cst);
+
+        // Wait for all pending operations to complete before deallocating.
+        // This prevents address reuse while operations are still in-flight on other CQs.
         wait_for_pending_events();
 
         // Now safe to deallocate the backing buffer

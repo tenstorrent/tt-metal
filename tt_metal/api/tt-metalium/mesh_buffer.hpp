@@ -5,10 +5,10 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
+#include <array>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -136,8 +136,9 @@ public:
     // Pending Event Tracking for Multi-CQ Safety
     //
     // In multi-CQ scenarios, operations on one CQ may reference a buffer while another CQ
-    // deallocates and reallocates the same address. To prevent this race, we track "pending
-    // events" - events representing in-flight operations that reference this buffer.
+    // deallocates and reallocates the same address. To prevent this race, we track the latest
+    // pending event ID per CQ (lock-free via std::atomic<uint32_t>).
+    // Wormhole and Blackhole support at most 2 hardware CQs, so a fixed-size array suffices.
     // The buffer's address cannot be safely reused until all pending events complete.
 
     // Registers a host-visible completion event for work that references this buffer.
@@ -204,11 +205,19 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
-    // Pending events tracking for multi-CQ safety. These events represent in-flight
-    // operations that reference this buffer. The buffer address cannot be reused
-    // until all pending events complete.
-    mutable std::mutex pending_events_mutex_;
-    std::unordered_map<uint32_t, MeshEvent> pending_events_;  // latest host-visible event per mesh CQ
+    // Pending event tracking for multi-CQ safety (lock-free).
+    // Stores the latest in-flight event ID per CQ. 0 = no pending event.
+    // IDs are monotonically increasing; CAS-updated so only the latest is kept.
+    // Wormhole/Blackhole support at most 2 hardware CQs — fixed array, no heap.
+    static constexpr size_t kMaxMeshCQs = 2;
+    mutable std::array<std::atomic<uint32_t>, kMaxMeshCQs> pending_event_ids_{};
+
+    // Deallocation-race sentinel (seq_cst closes the add/drain window).
+    // Set to true by deallocate() BEFORE draining pending_event_ids_.
+    // add_pending_event() checks this AFTER its CAS; if true, it self-synchronizes
+    // immediately to cover the case where the drain already ran and missed the event.
+    // See detailed proof in mesh_buffer.cpp.
+    std::atomic<bool> deallocation_in_progress_{false};
 };
 
 class AnyBuffer {
