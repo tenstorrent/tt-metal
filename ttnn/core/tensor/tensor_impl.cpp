@@ -1419,26 +1419,6 @@ HostTensor view(
     return HostTensor(buffer, new_spec, tensor.tensor_topology());
 }
 
-HostTensor unchecked_force_reinterpret(
-    const HostTensor& tensor,
-    const tt::tt_metal::TensorSpec& new_spec,
-    const tt::tt_metal::TensorTopology& new_topology) {
-    return HostTensor(tensor.buffer(), new_spec, new_topology);
-}
-
-MeshTensor unchecked_force_reinterpret(
-    const MeshTensor& tensor,
-    const tt::tt_metal::TensorSpec& new_spec,
-    const tt::tt_metal::TensorTopology& new_topology) {
-    auto original_buffer = tensor.mesh_buffer_invariant_breaking();
-    auto new_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        original_buffer->global_config(),
-        original_buffer->device_local_config(),
-        original_buffer->device(),
-        original_buffer->address());
-    return MeshTensor(new_buffer, new_spec, new_topology);
-}
-
 // ======================================================================================
 //                                  .extract_shard()
 // ======================================================================================

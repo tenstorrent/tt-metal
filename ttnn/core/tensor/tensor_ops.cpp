@@ -346,23 +346,29 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 
 Tensor view(const Tensor& input_tensor, const Shape& new_shape) { return view(input_tensor, new_shape, new_shape); }
 
-Tensor unchecked_force_reinterpret(
-    const Tensor& input_tensor,
-    const tt::tt_metal::TensorSpec& new_spec,
-    const tt::tt_metal::TensorTopology& new_topology) {
-    Tensor output;
+Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout) {
+    const auto& old_spec = input_tensor.tensor_spec();
+    const auto& old_layout = old_spec.tensor_layout();
+
+    TensorLayout new_tensor_layout(
+        old_layout.get_data_type(), PageConfig(target_layout), old_layout.get_memory_config());
+    TensorSpec new_spec(old_spec.logical_shape(), new_tensor_layout);
+    const auto& topology = input_tensor.tensor_topology();
+
     if (is_cpu_tensor(input_tensor)) {
-        output = Tensor(tensor_impl::unchecked_force_reinterpret(input_tensor.host_tensor(), new_spec, new_topology));
-    } else {
-        // Here reinterpreted_mesh_tensor does not own the device memory, and the ownership of the device memory is
-        // managed by the input_tensor. Thus we need to use the special constructor of DeviceStorage to keep the
-        // reinterpreted_mesh_tensor alive.
-        auto reinterpreted_mesh_tensor =
-            tensor_impl::unchecked_force_reinterpret(input_tensor.mesh_tensor(), new_spec, new_topology);
-        DeviceStorage reinterpreted_device_storage(input_tensor.device_storage(), std::move(reinterpreted_mesh_tensor));
-        output = Tensor(std::move(reinterpreted_device_storage));
+        return Tensor(HostTensor(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
-    return output;
+
+    const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
+    auto new_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+        input_buffer.global_config(),
+        input_buffer.device_local_config(),
+        input_buffer.device(),
+        input_buffer.address());
+
+    MeshTensor reinterpreted(std::move(new_mesh_buffer), new_spec, topology);
+    DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
+    return Tensor(std::move(reinterpreted_storage));
 }
 
 // ======================================================================================
