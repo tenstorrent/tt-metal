@@ -59,31 +59,51 @@ class StageKind(ABC):
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
 
-class EmbeddingStage(StageKind):
-    """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
-
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            embedding_tensor=self._weights.embedding,
-        )
-
-
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
+
+
+class EmbeddingStage(StageKind):
+    """Stage 0: H2D + embedding lookup, forwards activation; loopback payload is configurable."""
+
+    def __init__(
+        self,
+        weights: DeepSeekV3EmbeddingLayerWeights,
+        *,
+        loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
+    ) -> None:
+        self._weights = weights
+        self._loopback_payload = loopback_payload
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        # Loopback entry + D2H must use the same page size (see PipelineBlock._init_first_stage).
+        # Token-sized: LMHead / sampling returns a token page to the host (default).
+        # Activation-sized: embed → passthrough chain returns an embedding row on loopback.
+        if self._loopback_payload == PassthroughPayload.ACTIVATION:
+            up_fifo = ACTIVATION_FIFO_SIZE
+            up_page = ACTIVATION_PAGE_SIZE_BYTES
+            d2h_fifo = ACTIVATION_FIFO_SIZE
+            d2h_page = ACTIVATION_PAGE_SIZE_BYTES
+        else:
+            up_fifo = TOKEN_FIFO_SIZE
+            up_page = TOKEN_PAGE_SIZE_BYTES
+            d2h_fifo = TOKEN_FIFO_SIZE
+            d2h_page = TOKEN_PAGE_SIZE_BYTES
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=up_fifo,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=up_page,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            d2h_socket_fifo_size=d2h_fifo,
+            d2h_socket_page_size=d2h_page,
+            embedding_tensor=self._weights.embedding,
+        )
 
 
 class PassthroughStage(StageKind):
