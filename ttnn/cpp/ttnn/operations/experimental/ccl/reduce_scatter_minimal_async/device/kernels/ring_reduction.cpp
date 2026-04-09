@@ -1,77 +1,130 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
-    constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
-    constexpr uint32_t slice_C = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_input_id = get_named_compile_time_arg_val("cb_input_id");
+    constexpr uint32_t cb_interm_id = get_named_compile_time_arg_val("cb_interm_id");
+    constexpr uint32_t cb_interm2_id = get_named_compile_time_arg_val("cb_interm2_id");
+    constexpr uint32_t cb_compute_output_id = get_named_compile_time_arg_val("cb_compute_output_id");
+    constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+    constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+    constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
+    constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    // Initialize binary operations - use the same constants consistently
-    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
-    add_tiles_init(input_cb_id, intermediate_cb, false);
+    compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
-    for (uint32_t b = 0; b < input_tensor_B; b++) {
-        // Don't reduce on the first slice
-        for (uint32_t i = 0; i < ring_size - 1; i++) {
-            for (uint32_t c = 0; c < slice_C; c++) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
-
-                if (!direction) {
-                    uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                    tiles_read += backwards_offset;
-                }
-
-                // Wait for input data once before beginning processing
-                while (tiles_read < tiles_to_read) {
-                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t num_pages_to_read = 0;
-                    if (direction) {
-                        num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
-                        num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-                    }
-                    cb_wait_front(input_cb_id, tile_granularity);
-                    cb_wait_front(intermediate_cb, tile_granularity);
-                    cb_reserve_back(output_cb, tile_granularity);
-                    acquire_dst();
-                    for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
-                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                        pack_tile(tile_id, output_cb);
-                    }
-                    release_dst();
-                    cb_pop_front(input_cb_id, tile_granularity);
-                    cb_pop_front(intermediate_cb, tile_granularity);
-                    cb_push_back(output_cb, tile_granularity);
-                    tiles_read += num_pages_to_read;
-
-                    // Skip the tiles going the other direction
-                    tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    if (tiles_remaining_to_read > 0) {
-                        num_pages_to_read = 0;
-                        if (!direction) {
-                            num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                        } else {
-                            num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-                        }
-                        tiles_read += num_pages_to_read;
-                    }
-                }
+    for (uint32_t b = 0; b < input_tensor_B; ++b) {
+        constexpr uint32_t ring_size_by_2 = ring_size / 2;
+        uint32_t num_iters = ring_size_by_2 + 1;
+        for (uint32_t i = 0; i < num_iters; ++i) {
+            // State machine for control variables
+            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
+            if (i == 0) {
+                even_chunks = direction;     // process the even chunks (half the tensor slice)
+                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
+                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_output =
+                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
+            } else if (i == ring_size_by_2) {
+                even_chunks = direction;
+                odd_chunks = !direction;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = true;
+            } else if (i == 1) {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = direction;
+                reduce_odd_chunks = !direction;
+                reduce_output = false;
+            } else {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = false;
             }
-        }
-    }
+
+            for (uint32_t c = 0; c < slice_C; ++c) {
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t total_tiles_to_read = start_tiles_to_read;
+
+                bool is_even_chunk = true;
+                while (tiles_read < total_tiles_to_read) {
+                    uint32_t tiles_to_read = 0;
+                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
+                    if (is_even_chunk) {
+                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
+                    } else {
+                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
+                    }
+
+                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
+                        // Skip this chunk
+                        tiles_read += tiles_to_read;
+                    } else {
+                        const bool reduce_interm =
+                            (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
+
+                        if (reduce_interm) {
+                            // If reduce_output, add 3 tensors. Else add 2 tensors.
+                            if (reduce_output) {
+                                cb_wait_front(cb_interm2_id, tile_granularity);
+                            }
+                            cb_wait_front(cb_input_id, tile_granularity);
+                            cb_wait_front(cb_interm_id, tile_granularity);
+
+                            tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
+                            if (reduce_output) {
+                                copy_tile_init(cb_interm2_id);
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                    copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
+                                }
+                                add_tiles_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
+                            } else {
+                                add_tiles_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
+                            }
+                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
+                            }
+                            tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
+
+                            if (reduce_output) {
+                                cb_pop_front(cb_interm2_id, tile_granularity);
+                            }
+                            cb_pop_front(cb_input_id, tile_granularity);
+                            cb_pop_front(cb_interm_id, tile_granularity);
+
+                            cb_reserve_back(cb_compute_output_id, tile_granularity);
+                            tile_regs_wait();  // acquire lock on DST for PACK thread
+                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
+                                                                                    // to output circular buffers
+                            }
+                            tile_regs_release();  // release lock on DST by PACK thread
+                            cb_push_back(cb_compute_output_id, tile_granularity);
+                        }
+                        tiles_read += tiles_to_read;
+
+                    }  // if skip or process
+
+                    is_even_chunk = !is_even_chunk;
+                }  // while total_tiles_to_read
+            }  // for slice_C
+        }  // for num_iters
+    }  // for input_tensor_B
 }

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <cstdint>
+#include <utility>
 #include <unistd.h>
 
 #include <tt-metalium/device.hpp>
@@ -33,32 +34,32 @@ PinnedMemoryImpl::PinnedMemoryImpl(
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
 
-PinnedMemoryImpl::~PinnedMemoryImpl() { device_buffers_.clear(); }
+PinnedMemoryImpl::~PinnedMemoryImpl() {
+    drain_barrier_events();
+    device_buffers_.clear();
+}
 
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
-    buffer_size_(other.buffer_size_),
-    map_to_noc_(other.map_to_noc_),
-    host_offset_(other.host_offset_),
+    buffer_size_(std::exchange(other.buffer_size_, 0)),
+    map_to_noc_(std::exchange(other.map_to_noc_, false)),
+    use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
+    host_offset_(std::exchange(other.host_offset_, 0)),
     device_buffers_(std::move(other.device_buffers_)),
-    device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
-    other.buffer_size_ = 0;
-    other.map_to_noc_ = false;
-    other.host_offset_ = 0;
-}
+    device_to_mmio_map_(std::move(other.device_to_mmio_map_)),
+    barrier_events_(std::move(other.barrier_events_)) {}
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
     if (this != &other) {
+        drain_barrier_events();
         device_buffers_.clear();
 
-        buffer_size_ = other.buffer_size_;
-        map_to_noc_ = other.map_to_noc_;
-        host_offset_ = other.host_offset_;
+        buffer_size_ = std::exchange(other.buffer_size_, 0);
+        map_to_noc_ = std::exchange(other.map_to_noc_, false);
+        use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
+        host_offset_ = std::exchange(other.host_offset_, 0);
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
-
-        other.buffer_size_ = 0;
-        other.map_to_noc_ = false;
-        other.host_offset_ = 0;
+        barrier_events_ = std::move(other.barrier_events_);
     }
     return *this;
 }
@@ -266,12 +267,16 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
 
 bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
 
-void* PinnedMemoryImpl::lock() {
+void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
         distributed::EventSynchronize(event);
         barrier_events_.pop_front();
     }
+}
+
+void* PinnedMemoryImpl::lock() {
+    drain_barrier_events();
     return get_host_ptr();
 }
 
