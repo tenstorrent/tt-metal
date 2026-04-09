@@ -181,11 +181,39 @@ def set_tensix_soft_reset(
     )
 
 
+def commit_tensix_soft_reset(
+    value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
+):
+    soft_reset = get_register_store(location, device_id).read_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0"
+    )
+    if value:
+        soft_reset |= get_soft_reset_mask(cores)
+    else:
+        soft_reset &= ~get_soft_reset_mask(cores)
+
+    get_register_store(location, device_id).write_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
+    )
+
+    end_time = time.time() + 0.1  # 100ms
+    while time.time() < end_time:
+        temp_reg_value = get_register_store(location, device_id).read_register(
+            "RISCV_DEBUG_REG_SOFT_RESET_0"
+        )
+        if temp_reg_value == soft_reset:
+            return
+
+    raise TimeoutError(
+        f"Polling for committed soft reset value times out | Last read value: {temp_reg_value}"
+    )
+
+
 common_counter = 0
 
 
 def commit_brisc_command(
-    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=0.1
+    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
 ):
     global common_counter
 
@@ -203,7 +231,14 @@ def commit_brisc_command(
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
-    raise TimeoutError("Polling brisc command timed out")
+    raise TimeoutError(
+        (
+            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
+            f"Start counter: 0x{read_from_device(location, Mailboxes.BriscBread0.value, 0)} | "
+            f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
+            f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"
+        )
+    )
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):

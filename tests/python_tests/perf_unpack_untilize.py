@@ -28,7 +28,10 @@ from helpers.test_variant_parameters import (
     full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_unpack_untilize(
-    perf_report, formats, full_rt_dim, full_ct_dim, workers_tensix_coordinates
+    perf_report,
+    formats,
+    full_rt_dim,
+    full_ct_dim,
 ):
     tile_count = full_rt_dim * full_ct_dim
     input_dimensions = [full_rt_dim * 32, full_ct_dim * 32]
@@ -51,4 +54,4 @@ def test_perf_unpack_untilize(
         ),
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

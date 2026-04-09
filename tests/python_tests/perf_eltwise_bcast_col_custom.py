@@ -52,7 +52,6 @@ def test_perf_eltwise_bcast_col_custom(
     broadcast_type,
     ct_dim,
     loop_factor,
-    workers_tensix_coordinates,
 ):
     configuration = PerfConfig(
         "sources/eltwise_bcast_col_custom_perf.cpp",
@@ -86,4 +85,4 @@ def test_perf_eltwise_bcast_col_custom(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

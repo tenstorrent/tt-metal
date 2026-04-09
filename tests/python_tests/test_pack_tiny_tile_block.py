@@ -44,7 +44,6 @@ def _make_config(
     num_tiles,
     formats,
     dest_acc,
-    workers_tensix_coordinates,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
@@ -152,13 +151,12 @@ def test_pack_tiny_tile_block(
     dest_acc,
     tile_dims,
     num_tiles,
-    workers_tensix_coordinates,
 ):
     configuration, golden_tensor, torch_format = _make_config(
-        tile_dims, num_tiles, formats, dest_acc, workers_tensix_coordinates
+        tile_dims, num_tiles, formats, dest_acc
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -190,13 +188,7 @@ def test_pack_tiny_tile_block(
     ],
     num_tiles=[2, 4, 8],
 )
-def test_pack_tiny_tile_reconfig(
-    formats,
-    dest_acc,
-    tile_dims,
-    num_tiles,
-    workers_tensix_coordinates,
-):
+def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
     """Init pack for 32x32, then full re-init for tiny tiles, then multi-tile
     block-contiguous pack. Validates the transition between tile shapes."""
     tile_r, tile_c = tile_dims
@@ -264,7 +256,7 @@ def test_pack_tiny_tile_reconfig(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

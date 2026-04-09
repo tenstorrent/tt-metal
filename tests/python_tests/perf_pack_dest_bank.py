@@ -91,7 +91,6 @@ def test_perf_pack_dest_bank(
     num_blocks,
     num_tiles_in_block,
     loop_factor,
-    workers_tensix_coordinates,
 ):
     if (num_blocks, num_tiles_in_block) not in {(1, 4), (2, 4), (1, 8)}:
         pytest.skip(
@@ -146,4 +145,4 @@ def test_perf_pack_dest_bank(
         unpack_to_dest=unpack_to_dest,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

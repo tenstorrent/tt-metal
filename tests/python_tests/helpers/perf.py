@@ -19,7 +19,7 @@ from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
-from .test_config import ProfilerBuild, TestConfig, TestMode
+from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 # Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
@@ -256,6 +256,9 @@ def combine_perf_reports():
                     continue
                 dfs_regular.append(df)
 
+            if len(dfs_regular) == 0:
+                continue
+
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
             combined_regular = combined_regular.sort_values(
                 by=combined_regular.columns.tolist()
@@ -272,6 +275,9 @@ def combine_perf_reports():
                 except:
                     continue
                 dfs_post.append(df)
+
+            if len(dfs_post) == 0:
+                continue
 
             combined_post = pd.concat(dfs_post, ignore_index=True)
             combined_post = combined_post.sort_values(
@@ -347,11 +353,11 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
-    def run(self, perf_report: PerfReport, run_count=2, location="0,0"):
+    def run(self, perf_report: PerfReport, run_count=2):
         results = []
         code_sizes = {}
 
-        if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
+        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
@@ -366,7 +372,7 @@ class PerfConfig(TestConfig):
                 self.generate_variant_hash()
                 self.build_elfs()
 
-        if TestConfig.MODE == TestMode.PRODUCE:
+        if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
         PerfConfig.TEST_COUNTER += 1
@@ -396,12 +402,12 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             for run_index in range(run_count):
-                self.write_runtimes_to_L1(location)
-                self.run_elf_files(location)
-                self.wait_for_tensix_operations_finished(location)
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
 
                 profiler_data = Profiler.get_data(
-                    self.test_name, self.variant_id, location
+                    self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
 
                 # TODO You add additional data collections you want here
