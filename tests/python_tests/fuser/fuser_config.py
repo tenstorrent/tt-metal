@@ -8,20 +8,20 @@ from typing import List
 
 import pandas as pd
 import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import data_formats, is_format_combination_outlier
 from helpers.device import (
     collect_pipeline_results,
     write_pipeline_operands_to_l1,
 )
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
+from helpers.logger import logger
+from helpers.perf import PerfReport
+from helpers.profiler import Profiler, ProfilerData
+from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 from ttexalens.tt_exalens_lib import read_words_from_device
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .data_format_inference import data_formats, is_format_combination_outlier
 from .fused_operation import FusedOperation
-from .llk_params import DestAccumulation, DestSync, PerfRunType
-from .logger import logger
-from .perf import PerfReport
-from .profiler import Profiler, ProfilerData
-from .test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
 
 @dataclass
@@ -69,6 +69,8 @@ class FuserConfig:
 
             operation.unpack_a_in = formats_config.unpack_A_src
             operation.unpack_a_out = formats_config.unpack_A_dst
+            operation.unpack_b_in = formats_config.unpack_B_src
+            operation.unpack_b_out = formats_config.unpack_B_dst
             operation.math_format = formats_config.math
             operation.pack_in = formats_config.pack_src
             operation.pack_out = formats_config.pack_dst
@@ -87,14 +89,6 @@ class FuserConfig:
             if operation.block_tiles_x * operation.block_tiles_y > dest_capacity:
                 raise ValueError(
                     f"Block size ({operation.block_size}) is bigger than dest capacity ({dest_capacity})"
-                )
-
-            if (
-                self.global_config.architecture == ChipArchitecture.BLACKHOLE
-                and operation.math.bh_unpack_tilize_check()
-            ):
-                raise ValueError(
-                    "Cannot fuse UnpackerTilizeA and other unpackers inside one l1-to-l1 run on Blackhole"
                 )
 
     def create_test_config(self, cpp_path, profiler_enabled: bool) -> TestConfig:

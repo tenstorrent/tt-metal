@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List
 
 import torch
+from fuser.fused_operation import FusedOperation
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
@@ -28,7 +29,6 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from .fused_operation import FusedOperation
 from .llk_params import (
     BriscCmd,
     DataFormat,

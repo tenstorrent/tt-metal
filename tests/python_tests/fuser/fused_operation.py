@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,20 +6,17 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import torch
-
-from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .format_config import DataFormat
-from .fused_math import ComputePipeline
-from .fused_operand import Operand, OperandMapping
-from .fused_unpacker import UnpackerTilizeA
-from .llk_params import (
+from helpers.format_config import DataFormat
+from helpers.llk_params import (
     DestSync,
-    MathFidelity,
     StochasticRounding,
     Tilize,
     format_tile_sizes,
 )
-from .matmul_sweep import validate_tile_dimensions
+from helpers.matmul_sweep import validate_tile_dimensions
+
+from .fused_math import ComputePipeline
+from .fused_operand import Operand, OperandMapping
 
 
 @dataclass
@@ -28,7 +25,6 @@ class FusedOperation:
     operand_mapping: OperandMapping
     stage_id: int = 0
     num_stages: int = 1
-    math_fidelity: MathFidelity = MathFidelity.HiFi4
     unpack_to_dest: bool = False
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
@@ -40,6 +36,7 @@ class FusedOperation:
     dst_index: int = 0
     srca_reuse_count: int = 4
     block_size: Tuple[int, int] = (32, 32)
+    bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
         mapping = self.operand_mapping
@@ -100,23 +97,6 @@ class FusedOperation:
         validate_tile_dimensions(self.src_b.dimensions[1], num_cols)
 
         self.kt_dim = self.src_a.dimensions[1] // num_cols
-
-        if (
-            self.block_size[0] > self.output.dimensions[0]
-            or self.block_size[1] > self.output.dimensions[1]
-        ):
-            raise ValueError(
-                f"Block size {self.block_size} exceeds output dimensions {self.output.dimensions}"
-            )
-
-        if (
-            get_chip_architecture() == ChipArchitecture.BLACKHOLE
-            and self.math.has_unpacker(UnpackerTilizeA)
-            and self.src_a.data_format != DataFormat.Bfp8_b
-        ):
-            self.bh_tilize = Tilize.Yes
-        else:
-            self.bh_tilize = Tilize.No
 
     @property
     def src_a(self) -> Operand:
@@ -184,7 +164,6 @@ class FusedOperation:
             f"  Src_A: {self.src_a}\n"
             f"  Src_B: {self.src_b}\n"
             f"  Output: {self.output}\n"
-            f"  Math Fidelity: {self.math_fidelity}\n"
             f"  Block Size: {self.block_size}\n"
             f"  Dest Sync: {self.dest_sync}\n"
             f"  Tile Shape: {self.output.tile_shape}\n"

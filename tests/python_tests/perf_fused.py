@@ -4,7 +4,7 @@
 
 import pytest
 from conftest import skip_for_blackhole, skip_for_wormhole
-from helpers.fuser_config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from fuser.fuser_config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
 test_names = [f.stem for f in yaml_files]
