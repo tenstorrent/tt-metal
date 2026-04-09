@@ -74,3 +74,24 @@ Analyzed the SFPU kernel implementation for the `prelu_sfpu` unary operation (`U
 - `.claude-analysis/rrelu-1/prelu_sfpu_analysis.md`
 
 ### Status: COMPLETED (source code nuked, analysis reconstructed from artifacts)
+
+---
+
+## Operation: hardtanh
+## Date: 2026-04-09
+
+### Summary
+Analyzed the SFPU kernel implementation for the `hardtanh` unary operation (`UnaryOpType::HARDTANH`). The core SFPU implementation survives in the repository. The API header and LLK dispatch layers have been removed (nuked repo).
+
+### Key Findings
+- **Kernel style**: SFPI-based (Style A) -- uses `vFloat`, `dst_reg`, `v_if`/`v_endif`
+- **Algorithm**: Implements clamping via shifted arithmetic and sign-bit comparisons against 0, avoiding full-precision threshold comparisons
+- **Parameters**: 3 pre-computed FP16_B values representing negated thresholds: `-(neg_threshold)`, `-(pos_threshold - neg_threshold)`, `-(pos_threshold)`
+- **APPROXIMATION_MODE**: Template parameter is declared but never referenced in the function body -- has no effect
+- **Address mode**: ADDR_MOD_7 with `dest.incr=0` (same for Wormhole and Blackhole)
+- **Instructions**: SFPLOAD, SFPLOADI, SFPMAD (x3 for additions), SFPSETCC (x2 for conditionals), SFPENCC/SFPPUSHC/SFPPOPC (CC management), SFPSTORE
+
+### Files Produced
+- `.claude-analysis/rrelu-1/hardtanh_analysis.md`
+
+### Status: SUCCESS
