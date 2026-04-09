@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.demos.wormhole.bge_m3.tt.device_kernels import bge_m3_matmul_compute_kernel_config
 
 
 @dataclass
@@ -130,18 +131,6 @@ class BgeM3MLP(LightweightModule):
         return output
 
 
-def _default_mlp_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
-    """
-    Default matmul kernel for BF16-oriented inference bring-up.
-    """
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-
-
 def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     """
     Resolve MLP config defaults and materialize LazyWeight metadata.
@@ -165,11 +154,6 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     if config.activation_memcfg is None:
         to_set["activation_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
-    if config.wi_compute_kernel_cfg is None:
-        to_set["wi_compute_kernel_cfg"] = _default_mlp_compute_kernel_config()
-    if config.wo_compute_kernel_cfg is None:
-        to_set["wo_compute_kernel_cfg"] = _default_mlp_compute_kernel_config()
-
     # All parameters must target a single device.
     param_devices = [
         param.device
@@ -188,6 +172,11 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     )
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for BgeM3MLP")
+
+    if config.wi_compute_kernel_cfg is None:
+        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+    if config.wo_compute_kernel_cfg is None:
+        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
 
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
