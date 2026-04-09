@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_name:
-        description: "Workflow file name to inspect (e.g., galaxy-quick)"
+        description: "Workflow file name to inspect (e.g., galaxy-sanity)"
         required: true
         type: string
       job_name:

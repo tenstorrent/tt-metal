@@ -1,7 +1,14 @@
-name: "(TG) TG op perf tests"
+name: "(Galaxy) Sanity"
+
 on:
   workflow_dispatch:
     inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+        default: wormhole_b0
       platform:
         required: false
         type: choice
@@ -26,24 +33,31 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    # Every 2 hours (UTC)
+    - cron: "0 */2 * * *"
+  push:
+    branches: ["roseli/0-refactor-galaxy-quick2"]
+
+run-name: "(Galaxy) Sanity"
 
 jobs:
-  build-artifact-profiler:
+  build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      tracy: true
-      build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  tg-op-perf-tests:
-    needs: build-artifact-profiler
+      build-wheel: true
+
+  galaxy-sanity-test:
+    needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-op-perf-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
