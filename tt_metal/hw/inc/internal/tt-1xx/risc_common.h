@@ -217,8 +217,9 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Flush i$ on ethernet riscs
-inline __attribute__((always_inline)) void flush_erisc_icache() {
+// Flush i$ by executing enough NOPs to evict all cache lines.
+// Required on ERISC and DRISC cores which lack MMIO-based cache flush registers.
+inline __attribute__((always_inline)) void manually_flush_icache() {
 #ifdef ARCH_BLACKHOLE
     // 2K is enough to touch all entries but after running base firmware there seems to be some
     // state in the i$ which is sticking and adding 1K more nops resolves it.

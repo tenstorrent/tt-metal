@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -16,9 +17,10 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import click
 import yaml
@@ -1171,6 +1173,86 @@ def parse_binding_config(
     return config
 
 
+DEFAULT_TRACY_BASE_PORT = 8087
+
+
+@dataclass
+class TracyConfig:
+    output_root: Path
+    base_port: int
+    passthrough_args: List[str]
+
+
+def parse_tracy_args(raw: str) -> TracyConfig:
+    """Parse a raw tracy argument string, extracting port and output root for per-rank handling.
+
+    Recognises -t/--port and -o/--output-folder from python -m tracy's interface.
+    Those two values are consumed (they become per-rank); everything else is
+    forwarded verbatim so that new tracy options work without ttrun changes.
+    """
+    tokens = shlex.split(raw) if raw else []
+    base_port = DEFAULT_TRACY_BASE_PORT
+    output_root: Optional[Path] = None
+    passthrough: List[str] = []
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Handle --port=8087 / -t=8087 styles
+        if token.startswith("--port=") or token.startswith("-t="):
+            value = token.split("=", 1)[1]
+            if not value:
+                raise ValueError("Tracy port option -t/--port requires a value")
+            base_port = int(value)
+            i += 1
+        # Handle --output-folder=/path / -o=/path styles
+        elif token.startswith("--output-folder=") or token.startswith("-o="):
+            value = token.split("=", 1)[1]
+            if not value:
+                raise ValueError("Tracy output option -o/--output-folder requires a value")
+            output_root = Path(value)
+            i += 1
+        # Handle space-separated -t 8087 / --port 8087
+        elif token in ("-t", "--port"):
+            if i + 1 >= len(tokens):
+                raise ValueError("Tracy port option -t/--port requires a value")
+            base_port = int(tokens[i + 1])
+            i += 2
+        # Handle space-separated -o /path / --output-folder /path
+        elif token in ("-o", "--output-folder"):
+            if i + 1 >= len(tokens):
+                raise ValueError("Tracy output option -o/--output-folder requires a value")
+            output_root = Path(tokens[i + 1])
+            i += 2
+        else:
+            passthrough.append(token)
+            i += 1
+
+    if output_root is None:
+        # Match tt-run's environment propagation: prefer TT_METAL_HOME, then ORIGINAL_CWD,
+        # and finally fall back to the module-level ORIGINAL_CWD captured at import time.
+        tt_metal_home = os.environ.get("TT_METAL_HOME")
+        if tt_metal_home is None:
+            original_cwd_env = os.environ.get("ORIGINAL_CWD")
+            base_dir = Path(original_cwd_env) if original_cwd_env is not None else ORIGINAL_CWD
+        else:
+            base_dir = Path(tt_metal_home)
+        output_root = base_dir / "generated/profiler/ttrun"
+
+    output_root = output_root.expanduser().resolve()
+    try:
+        output_root.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as exc:
+        # Surface filesystem issues as user-level configuration errors; the CLI wraps ValueError into ClickException.
+        raise ValueError(f"Unable to create tracy output directory '{output_root}': {exc}") from exc
+
+    if base_port <= 0:
+        raise ValueError("Tracy base port must be a positive integer")
+
+    return TracyConfig(output_root=output_root, base_port=base_port, passthrough_args=passthrough)
+
+
 # Environment variable prefixes that should be automatically passed through to MPI processes
 ENV_PASSTHROUGH_PREFIXES = (
     "TT_",  # TT-Metal/TTNN variables
@@ -1246,6 +1328,7 @@ def get_rank_environment(
     config: TTRunConfig,
     *,
     parent_env_prefix: Optional[Dict[str, str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
@@ -1312,6 +1395,9 @@ def get_rank_environment(
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
+    if extra_env:
+        env.update(extra_env)
+
     return env
 
 
@@ -1320,6 +1406,7 @@ def build_rank_environment_args(
     config: TTRunConfig,
     *,
     parent_env_prefix: Optional[Dict[str, str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     """Build environment variable arguments for mpirun.
 
@@ -1333,7 +1420,7 @@ def build_rank_environment_args(
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config, parent_env_prefix=parent_env_prefix)
+    env = get_rank_environment(binding, config, parent_env_prefix=parent_env_prefix, extra_env=extra_env)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -1574,6 +1661,7 @@ def build_mpi_command(
     mpi_args: Optional[List[str]] = None,
     debug_gdbserver: bool = False,
     rankfile_syntax: Optional[RankfileSyntax] = None,
+    tracy_config: Optional[TracyConfig] = None,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     mpi_launcher = get_mpi_launcher()
@@ -1608,18 +1696,122 @@ def build_mpi_command(
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config, parent_env_prefix=parent_env_prefix))
-        program_to_run = program
+        tracy_env: Dict[str, str] = {}
+        rank_program = program
+        if tracy_config:
+            rank_program, tracy_env = wrap_program_with_tracy(program, binding, tracy_config)
+        cmd.extend(
+            build_rank_environment_args(binding, config, parent_env_prefix=parent_env_prefix, extra_env=tracy_env)
+        )
         if debug_gdbserver:
             port = 20000 + binding.rank
             echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
             gdbserver_part = f"exec gdbserver :{port}"
-            quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
+            quoted_program_args = " ".join(shlex.quote(arg) for arg in rank_program)
             cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
-            program_to_run = ["bash", "-c", cmd_str]
-        cmd.extend(program_to_run)
+            rank_program = ["bash", "-c", cmd_str]
+        cmd.extend(rank_program)
 
     return cmd
+
+
+def _is_python_entry_point(path: str) -> bool:
+    """Check if an executable is a Python console_scripts entry point by examining its shebang."""
+    try:
+        with open(path, "r") as f:
+            shebang = f.readline(256)
+        return shebang.startswith("#!") and "python" in shebang
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _normalize_program_for_tracy(program: List[str]) -> List[str]:
+    """Normalize a program command for use under ``python -m tracy``.
+
+    Handles three invocation styles:
+      1. ``python3 script.py …``  — strip the interpreter (tracy provides its own)
+      2. ``python3 -m module …``  — strip the interpreter, keep ``-m module``
+      3. ``pytest …`` (bare entry point) — convert to ``-m pytest …``
+
+    Case 3 detects Python console_scripts entry points (installed via pip) by
+    resolving the executable on PATH and checking for a Python shebang.  The
+    entry point name is assumed to match the importable module name, which holds
+    for the vast majority of tools (pytest, coverage, mypy, black, etc.).
+    """
+    if not program:
+        return program
+
+    first = program[0]
+    name = Path(first).name
+
+    # Cases 1 & 2: explicit Python interpreter — strip it
+    if name in ("python", "python3") or name.startswith("python3."):
+        return program[1:]
+    if Path(first).resolve() == Path(sys.executable).resolve():
+        return program[1:]
+
+    # Case 3: bare command that may be a Python entry point (e.g. pytest)
+    if not first.endswith(".py"):
+        resolved = shutil.which(first)
+        if resolved and _is_python_entry_point(resolved):
+            logger.debug(
+                f"{TT_RUN_PREFIX} Detected Python entry point '{first}' (shebang), "
+                f"converting to '-m {name}' for tracy compatibility"
+            )
+            return ["-m", name] + program[1:]
+
+        # Fallback: shebang check can fail for binary entry point launchers
+        # (e.g. uv-installed tools). Check if the name is importable as a module.
+        try:
+            if importlib.util.find_spec(name) is not None:
+                logger.debug(
+                    f"{TT_RUN_PREFIX} Detected importable module '{name}', "
+                    f"converting to '-m {name}' for tracy compatibility"
+                )
+                return ["-m", name] + program[1:]
+        except (ModuleNotFoundError, ValueError) as exc:
+            # Best-effort detection: failure to probe importability is non-fatal;
+            # fall back to leaving the command unchanged.
+            logger.debug(
+                f"{TT_RUN_PREFIX} Failed to probe importability for module '{name}': {exc}; "
+                "leaving program command unchanged"
+            )
+
+    return program
+
+
+def wrap_program_with_tracy(
+    program: List[str], binding: RankBinding, tracy_config: TracyConfig
+) -> Tuple[List[str], Dict[str, str]]:
+    """Return the tracy-wrapped command and any extra env for a rank.
+
+    Only --port and -o are injected per-rank; every other tracy flag comes
+    from the user's original --tracy string via passthrough_args.
+    """
+    rank_output_dir = (tracy_config.output_root / f"rank{binding.rank}").resolve()
+    rank_output_dir.mkdir(parents=True, exist_ok=True)
+    port = tracy_config.base_port + binding.rank
+
+    tracy_cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "--port",
+        str(port),
+        "-o",
+        str(rank_output_dir),
+    ]
+
+    if tracy_config.passthrough_args:
+        tracy_cmd.extend(tracy_config.passthrough_args)
+
+    tracy_cmd.extend(_normalize_program_for_tracy(program))
+
+    extra_env = {
+        "TT_METAL_PROFILER_DIR": str(rank_output_dir),
+    }
+
+    return tracy_cmd, extra_env
 
 
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
@@ -1659,6 +1851,7 @@ def legacy_flow(
     rankfile: Optional[Path] = None,
     rankfile_syntax: Optional[RankfileSyntax] = None,
     phase2_failure_hint: Phase2FailureHint = "legacy",
+    tracy_args: Optional[str] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1880,9 +2073,8 @@ def legacy_flow(
         tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Section 2.4: Distributed Process Launch with tt-run
     """
-    program = ctx.args
+    program = list(ctx.args)
 
-    # Log diagnostic information for path resolution debugging
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
         logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
@@ -2006,12 +2198,20 @@ def legacy_flow(
         logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (multiple processes per host from rankfile or --host)")
 
     # Build MPI command
+    tracy_config = None
+    if tracy_args is not None:
+        try:
+            tracy_config = parse_tracy_args(tracy_args)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
     mpi_cmd = build_mpi_command(
         config,
         program,
         effective_mpi_args if effective_mpi_args else None,
         debug_gdbserver=debug_gdbserver,
         rankfile_syntax=effective_rankfile_syntax,
+        tracy_config=tracy_config,
     )
 
     if verbose or dry_run:
@@ -2108,6 +2308,7 @@ def new_mode_flow(
     tcp_interface: Optional[str],
     rankfile_syntax: Optional[RankfileSyntax] = None,
     force_rediscovery: bool = False,
+    tracy_args: Optional[str] = None,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor.
 
@@ -2311,6 +2512,7 @@ def new_mode_flow(
         rankfile=rankfile_path,  # Pass generated rankfile
         rankfile_syntax=rankfile_syntax,
         phase2_failure_hint=phase2_failure_hint,
+        tracy_args=tracy_args,
     )
 
 
@@ -2398,6 +2600,20 @@ def new_mode_flow(
     help="New mode only: always run Phase 1 (generate_rank_bindings) and overwrite the Phase 1 cache for "
     "this MGD/host fingerprint, even if a cache hit would otherwise skip it (e.g. after a host link failure).",
 )
+@click.option(
+    "--tracy",
+    "tracy_args",
+    type=str,
+    default=None,
+    help=(
+        "Enable Tracy profiling for every rank. "
+        "Accepts the full `python -m tracy` argument string (quoted). "
+        "--port/-t and -o/--output-folder are automatically made per-rank "
+        f"(default base port {DEFAULT_TRACY_BASE_PORT}, output $TT_METAL_HOME/generated/profiler/ttrun). "
+        "All other tracy flags are forwarded verbatim. "
+        'Examples: --tracy "-r -v --no-device" or --tracy "" for defaults.'
+    ),
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -2415,6 +2631,7 @@ def main(
     tcp_interface: Optional[str],
     rankfile_syntax: str,
     force_rediscovery: bool,
+    tracy_args: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -2476,6 +2693,7 @@ def main(
             bare,
             tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
+            tracy_args=tracy_args,
         )
         return
 
@@ -2504,6 +2722,7 @@ def main(
             tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
+            tracy_args=tracy_args,
         )
         return
 

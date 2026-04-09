@@ -6,9 +6,26 @@
 
 #include <cstdint>
 #include <optional>
+
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::normalization {
+
+struct GroupNormShardedConfigAndGridSize {
+    ttnn::MemoryConfig memory_config;
+    ttnn::CoreGrid core_grid;
+};
+
+// Port of Python ``determine_expected_group_norm_sharded_config_and_grid_size`` (L1 shard spec + CoreGrid).
+GroupNormShardedConfigAndGridSize determine_expected_group_norm_sharded_config_and_grid_size(
+    tt::tt_metal::CoreCoord device_compute_grid,
+    uint32_t num_channels,
+    int num_groups,
+    uint32_t input_nhw,
+    bool is_height_sharded,
+    bool is_row_major);
 
 // Compute the number of virtual columns for DRAM group-norm.
 // Finds the largest nvc <= min(grid_x, num_groups) such that:

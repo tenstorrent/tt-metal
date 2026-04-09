@@ -127,11 +127,18 @@ class Pipeline:
                 self._copy_to_structured_host_tensor(
                     device_output_struct, host_output_struct, self.executor.get_read_cq()
                 )
+                # Signal that the D2H transfer has been enqueued. Executors that use a
+                # dedicated I/O command queue (e.g. MultiCQTracedModelPipelinedIOExecutor)
+                # record read_event here so CQ_OPS cannot overwrite dram_output_tensor
+                # until this transfer completes.
+                self.executor.signal_read_complete()
         else:
             self.output_tensors = []
             for device_output_struct in device_outputs:
                 host_output_struct = self._cpu_structured_tensor(device_output_struct, self.executor.get_read_cq())
                 self.output_tensors.append(host_output_struct)
+                # Signal that the D2H transfer has been enqueued (see preallocated path above).
+                self.executor.signal_read_complete()
         return self
 
     def _create_structured_host_tensor(self, schema):
