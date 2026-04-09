@@ -23,12 +23,17 @@ namespace ttnn::transformer {
 /// n = n_q / n_kv Q heads per KV group:
 ///   [Q_g0_h0, ..., Q_g0_h(n-1), K_g0, V_g0, Q_g1_h0, ..., K_g1, V_g1, ...]
 ///
+/// AUTO — infer from memory config: GROUPED for sharded, CONCATENATED for
+/// interleaved (matches the pre-#41718 implicit convention; existing callers
+/// do not need to change).
+///
 /// SD U-Net cross-attention and ViT WH (the only two production sharded callers)
 /// both manually repack their nn.Linear weights into GROUPED layout to match the
 /// kernel's expectation — see concatenate_qkv() in stable_diffusion/wormhole/tt/
 /// ttnn_functional_cross_attention.py:81-117 and the query_key_value weight
 /// construction in vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py:559-566.
 enum class QkvLayout : uint8_t {
+    AUTO,
     CONCATENATED,
     GROUPED,
 };
@@ -41,11 +46,11 @@ enum class QkvLayout : uint8_t {
  * If kv_input_tensor is passed in, then input_tensor of shape [batch_size, sequence_size, hidden_size] is only used
  * for Query, and kv_input_tensor of shape [batch_size, sequence_size, 2 * hidden_size] is used for Key and Value.
  *
- * @param qkv_layout Optional explicit input layout. When unset, defaults to GROUPED for sharded inputs and
+ * @param qkv_layout Explicit input layout. AUTO (the default) infers GROUPED for sharded inputs and
  *   CONCATENATED for interleaved inputs (matches the pre-#41718 implicit convention; existing callers do not
- *   need to change). Pass an explicit value to make the layout convention part of the call site instead of
- *   relying on the default. Mismatched combinations (e.g. CONCATENATED + sharded, the cause of the original
- *   bug from #41526) are rejected with a clear TT_FATAL.
+ *   need to change). Pass CONCATENATED or GROUPED explicitly to make the layout convention part of the call
+ *   site instead of relying on inference. Mismatched combinations (e.g. CONCATENATED + sharded, the cause of
+ *   the original bug from #41526) are rejected with a clear TT_FATAL.
  */
 std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const Tensor& input_tensor,
@@ -55,6 +60,6 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     bool transpose_key,
     const std::optional<MemoryConfig>& memory_config,
     bool use_falcon7b_backend = false,
-    std::optional<QkvLayout> qkv_layout = std::nullopt);
+    QkvLayout qkv_layout = QkvLayout::AUTO);
 
 }  // namespace ttnn::transformer

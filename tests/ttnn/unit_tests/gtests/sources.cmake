@@ -9,6 +9,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
+    test_split_qkv_heads_matrix.cpp
 )
 
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
@@ -30,7 +31,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_rsub_int.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp
-    test_split_qkv_heads_matrix.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
 )
