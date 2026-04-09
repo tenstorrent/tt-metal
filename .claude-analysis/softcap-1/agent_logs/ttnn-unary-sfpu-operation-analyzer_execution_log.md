@@ -80,3 +80,34 @@ Analyzed the SFPU kernel implementation for the `tanhshrink` unary operation. Th
 - LLK dispatch `llk_math_eltwise_unary_sfpu_tanh` confirmed NUKED (grep returns 0 results in `tt_metal/hw/ckernels/`)
 - `_calculate_tanh_` confirmed NUKED (grep returns 0 results in `tt_metal/hw/ckernels/`)
 - `SFPNONLINEAR` confirmed Quasar-only (only in `tt_llk_quasar/common/inc/ckernel_ops.h`)
+
+---
+
+## Operation: sinh
+## Date: 2026-04-09
+## Status: SUCCESS
+
+### Summary
+Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel uses SFPI abstractions (Style A) with the exp_21f algorithm (Moroz et al. 2022) for fast 2^z computation, implementing sinh(x) = (exp(x) - exp(-x)) / 2. Includes a Taylor approximation fallback (x + x^3/6) for |x| < 0.5 to avoid catastrophic cancellation. Critical finding: `_float_to_int32_positive_` is called twice in the exp_21f helper but is not defined anywhere in the codebase.
+
+### Key Findings
+- **Compute kernel**: `eltwise_sfpu.cpp` (standard unary)
+- **SFPU chain**: `sinh_tile_init(); sinh_tile(0);`
+- **Approximation mode**: `APPROX = false` (default); kernel does not branch on APPROXIMATION_MODE (parameter forwarded to exp_21f which also does not branch on it)
+- **Kernel style**: A_sfpi (pure SFPI abstractions, no raw TTI instructions)
+- **WH/BH identical**: Both architectures use identical implementations
+- **ADDR_MOD**: ADDR_MOD_7 (all zero increments) for both WH and BH
+- **Key instructions**: SFPLOAD, SFPSTORE, SFPMUL, SFPADD, SFPDIVP2 (addexp), SFPEXEXP, SFPEXMAN, SFPSETEXP, SFPSETSGN, SFPCAST, SFPSTOCHRND, SFPIADD, SFPLOADI
+- **CRITICAL**: `_float_to_int32_positive_` is called but not defined in the codebase -- kernel would not compile as-is
+- **Explicit bfloat16 rounding**: `float_to_fp16b(y, 0)` used for deterministic output rounding
+
+### Files Produced
+- `.claude-analysis/softcap-1/sinh_analysis.md`
+
+### Verification
+- Function name `calculate_sinh` verified via grep in `tt_metal/hw/ckernels/` (found in WH and BH)
+- Function name `sinh_init` verified via grep in `tt_metal/hw/ckernels/` (found in WH and BH)
+- Helper function `exp_21f` verified via grep in `tt_metal/hw/ckernels/` (found in WH and BH)
+- All SFPI intrinsics verified present in ckernel_sfpu_sinh.h (addexp, exexp, exman9, setexp, setsgn, int32_to_float, float_to_fp16b, reinterpret, dst_reg, v_if, v_endif)
+- `_float_to_int32_positive_` confirmed NOT DEFINED anywhere in codebase (full repo grep returns only usage sites in ckernel_sfpu_sinh.h)
+- All file paths verified to exist (API header, LLK dispatch, core SFPU, params dispatch)
