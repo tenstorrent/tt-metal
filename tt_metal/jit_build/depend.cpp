@@ -10,6 +10,7 @@
 #include <fstream>
 #include <istream>
 #include <iterator>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -79,6 +80,12 @@ uint64_t hash_file_content(std::istream& file) {
     return hasher.digest();
 }
 
+struct PathHash {
+    size_t operator()(const std::filesystem::path& p) const {
+        return std::hash<std::filesystem::path::string_type>{}(p.native());
+    }
+};
+
 class FileHashCache {
 public:
     static FileHashCache& instance() {
@@ -90,7 +97,7 @@ public:
         std::shared_ptr<Entry> entry;
         {
             std::lock_guard<std::mutex> lock(map_mutex_);
-            auto [it, inserted] = cache_.try_emplace(path.string());
+            auto [it, inserted] = cache_.try_emplace(path);
             if (inserted) {
                 it->second = std::make_shared<Entry>();
             }
@@ -158,7 +165,7 @@ private:
     }
 
     std::mutex map_mutex_;
-    std::unordered_map<std::string, std::shared_ptr<Entry>> cache_;
+    std::unordered_map<std::filesystem::path, std::shared_ptr<Entry>, PathHash> cache_;
 };
 
 }  // namespace
