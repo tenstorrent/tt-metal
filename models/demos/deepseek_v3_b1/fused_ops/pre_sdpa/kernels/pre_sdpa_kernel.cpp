@@ -316,6 +316,16 @@ if constexpr (!Core::skip_ccl) {
                 get_named_compile_time_arg_val("mla_sender_noc_y_6"),
                 get_named_compile_time_arg_val("mla_sender_noc_y_7"),
             },
+        .knope_core_index = get_named_compile_time_arg_val("knope_core_index"),
+        .nope_mcast_dest_noc_start_x = get_named_compile_time_arg_val("nope_mcast_dest_noc_start_x"),
+        .nope_mcast_dest_noc_start_y = get_named_compile_time_arg_val("nope_mcast_dest_noc_start_y"),
+        .nope_mcast_dest_noc_end_x = get_named_compile_time_arg_val("nope_mcast_dest_noc_end_x"),
+        .nope_mcast_dest_noc_end_y = get_named_compile_time_arg_val("nope_mcast_dest_noc_end_y"),
+        .nope_mcast_sender_semaphore_addr = get_named_compile_time_arg_val("nope_mcast_sender_semaphore_addr"),
+        .nope_mcast_receiver_semaphore_addr = get_named_compile_time_arg_val("nope_mcast_receiver_semaphore_addr"),
+        .nope_mcast_data_size_bytes = get_named_compile_time_arg_val("nope_mcast_data_size_bytes"),
+        .nope_mcast_num_dests = get_named_compile_time_arg_val("nope_mcast_num_dests"),
+        .kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -504,6 +514,7 @@ if constexpr (!Core::skip_ccl) {
         .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+        .knope_core_index = get_named_compile_time_arg_val("knope_core_index"),
     };
 
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
@@ -516,6 +527,9 @@ if constexpr (!Core::skip_ccl) {
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .num_mcast_dests = get_named_compile_time_arg_val("mla_num_mcast_dests"),
             .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .St = get_named_compile_time_arg_val("St"),
             .DHt = get_named_compile_time_arg_val("DHt"),
@@ -995,7 +1009,8 @@ if constexpr (!Core::skip_ccl) {
         // Non-owning SP devices skip the entire branch and just signal the
         // KV-cache-ready semaphore so FlashMLA can proceed.
         // ====================================================================
-        deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+        deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_knope_core, Core::is_krope_core>
+            kv_cache_update;
         kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
         if (!skip_kv_cache_update) {
             DeviceZoneScopedN("KV CACHE");
@@ -1039,8 +1054,7 @@ if constexpr (!Core::skip_ccl) {
             }
 
             // ================================================================
-            // KV Cache Update: Write results to DRAM interleaved tensor
-            // BRISC handles writing from output CBs to DRAM
+            // KV Cache Update: NOPE mcast + write results to DRAM
             // ================================================================
             {
                 DeviceZoneScopedN("KV_CACHE_UPDATE");

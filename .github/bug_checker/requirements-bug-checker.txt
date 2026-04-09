@@ -1,0 +1,3 @@
+anthropic==0.91.0
+loguru==0.7.3
+pyyaml==6.0.3

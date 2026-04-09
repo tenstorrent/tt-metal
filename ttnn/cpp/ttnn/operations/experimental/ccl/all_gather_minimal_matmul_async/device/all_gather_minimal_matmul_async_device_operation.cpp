@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -206,6 +206,13 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     if (attributes.config.has_value()) {
         const auto& cfg = attributes.config.value();
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
+
+        const uint32_t K_tiles_per_device = a_padded[-1] / TILE_WIDTH;
+        TT_FATAL(
+            K_tiles_per_device % cfg.K_block_size == 0,
+            "K_block_size ({}) must evenly divide the number of K tiles per device ({})",
+            cfg.K_block_size,
+            K_tiles_per_device);
         TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");
         TT_FATAL(
             (cfg.M_block_size % cfg.subblock_h) == 0,

@@ -50,15 +50,17 @@ void execute_program_and_verify(
     bool verify_output = true) {
     distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
 
-    // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+        // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    std::vector<uint32_t> rdback_dram;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), rdback_dram, in_buffer, zero_coord, true);
+        std::vector<uint32_t> rdback_dram;
+        distributed::ReadShard(mesh_device->mesh_command_queue(), rdback_dram, in_buffer, zero_coord, true);
 
-    tt_driver_atomics::mfence();
+        tt_driver_atomics::mfence();
 
-    EXPECT_EQ(rdback_dram, input);
+        EXPECT_EQ(rdback_dram, input);
+    }
 
     // Execute using slow dispatch (DFBs not yet supported in MeshWorkload path)
     IDevice* device = mesh_device->get_devices()[0];
@@ -105,6 +107,21 @@ void run_single_dfb_program(
             (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
         "Multi-core DFB programs only support DM producer and consumer.");
 
+    const auto arch = mesh_device->get_devices()[0]->arch();
+    const bool is_quasar = (arch == ARCH::QUASAR);
+
+    if (!is_quasar) {
+        // WH/BH DM: one BRISC (RISCV_0) as producer and one NCRISC (RISCV_1) as consumer.
+        // Configs with num_producers > 1 or num_consumers > 1 require multi-threaded DM
+        // which is not available on WH/BH.
+        if (dfb_config.num_producers > 1 || dfb_config.num_consumers > 1) {
+            GTEST_SKIP() << "WH/BH DFB supports only 1 DM producer (BRISC) and 1 DM consumer (NCRISC)";
+        }
+        // read_in / write_out are Quasar-only; the device-side kernel would fail to compile
+        // if enable_implicit_sync=true is propagated as a compile-time arg.
+        dfb_config.enable_implicit_sync = false;
+    }
+
     Program program = CreateProgram();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
 
@@ -132,18 +149,34 @@ void run_single_dfb_program(
 
     KernelHandle producer_kernel;
     if (producer_type == DFBPorCType::DM) {
-        producer_kernel = experimental::quasar::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-            core_range_set,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+        const std::string dm_producer_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp";
+        if (is_quasar) {
+            producer_kernel = experimental::quasar::CreateKernel(
+                program,
+                dm_producer_kernel_path,
+                core_range_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+        } else {
+            producer_kernel = CreateKernel(
+                program,
+                dm_producer_kernel_path,
+                core_range_set,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .compile_args = producer_cta});
+        }
     } else {
-        producer_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
-            core_range_set,
-            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+        const std::string t6_producer_kernel_path = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp";
+        if (is_quasar) {
+            producer_kernel = CreateKernel(
+                program,
+                t6_producer_kernel_path,
+                core_range_set,
+                experimental::quasar::QuasarComputeConfig{
+                    .num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+        } else {
+            producer_kernel = CreateKernel(
+                program, t6_producer_kernel_path, core_range_set, ComputeConfig{.compile_args = producer_cta});
+        }
     }
 
     uint32_t num_entries_per_consumer = is_blocked ? entries_per_core : entries_per_core / dfb_config.num_consumers;
@@ -156,18 +189,34 @@ void run_single_dfb_program(
 
     KernelHandle consumer_kernel;
     if (consumer_type == DFBPorCType::DM) {
-        consumer_kernel = experimental::quasar::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-            core_range_set,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+        const std::string dm_consumer_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp";
+        if (is_quasar) {
+            consumer_kernel = experimental::quasar::CreateKernel(
+                program,
+                dm_consumer_kernel_path,
+                core_range_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+        } else {
+            consumer_kernel = CreateKernel(
+                program,
+                dm_consumer_kernel_path,
+                core_range_set,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .compile_args = consumer_cta});
+        }
     } else {
-        consumer_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
-            core_range_set,
-            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+        const std::string t6_consumer_kernel_path = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp";
+        if (is_quasar) {
+            consumer_kernel = CreateKernel(
+                program,
+                t6_consumer_kernel_path,
+                core_range_set,
+                experimental::quasar::QuasarComputeConfig{
+                    .num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+        } else {
+            consumer_kernel = CreateKernel(
+                program, t6_consumer_kernel_path, core_range_set, ComputeConfig{.compile_args = consumer_cta});
+        }
     }
 
     auto logical_dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, dfb_config);
@@ -346,8 +395,8 @@ void run_in_dfb_out_dfb_program(
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    if (devices_.at(0)->arch() != ARCH::QUASAR and GetParam()) {
+        GTEST_SKIP();
     }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
@@ -359,12 +408,13 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 18;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    if (devices_.at(0)->arch() != ARCH::QUASAR and GetParam()) {
+        GTEST_SKIP();
     }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
@@ -379,8 +429,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
 }
 
 TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    if (devices_.at(0)->arch() != ARCH::QUASAR and GetParam()) {
+        GTEST_SKIP();
     }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
@@ -575,7 +625,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 29;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
@@ -623,7 +674,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 21;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4S) {

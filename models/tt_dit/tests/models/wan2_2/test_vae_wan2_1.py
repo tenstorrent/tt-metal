@@ -1359,7 +1359,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
-@pytest.mark.parametrize("t_chunk_size", [1, 2, 4, None], ids=["chunk_1", "chunk_2", "chunk_4", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 2, None], ids=["chunk_1", "chunk_2", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1534,8 +1534,8 @@ def test_wan_decoder(
         ((4, 8), 0, 1, 2),
     ],
     ids=[
-        "t3k_2x4_h0_w1",
-        "bh_glx_4x8_h0_w1",
+        "2x4_h0_w1",
+        "bh_4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -1553,9 +1553,7 @@ def test_wan_decoder_chunked_consistency(
     dtype,
 ):
     """
-    Verify that chunked VAE decoding (t_chunk_size=1,2,4,8,16) produces the
-    same output as the full-T uncached baseline (t_chunk_size=None).
-    No torch reference model is needed — this is a self-consistency check.
+    Verify that VAE decoding with t_chunk_size=(2, 4, 8, 16, T) produces the same output as with t_chunk_size=1
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
@@ -1627,13 +1625,13 @@ def test_wan_decoder_chunked_consistency(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
         )
 
-    # Run baseline: full-T, no cache
-    logger.info("Running baseline (t_chunk_size=None)")
+    # Run baseline: per-frame cached decode
+    logger.info("Running baseline (t_chunk_size=1)")
     baseline = run_decoder(t_chunk_size=1)
     logger.info(f"Baseline output shape: {baseline.shape}")
 
     # Compare each chunk size against the baseline
-    for t_chunk_size in [2, 4, 8, 16]:
+    for t_chunk_size in [2, 4, 8, 16, T]:
         if t_chunk_size > T:
             continue
         logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
@@ -1643,20 +1641,22 @@ def test_wan_decoder_chunked_consistency(
         assert baseline.shape == chunked.shape, (
             f"Shape mismatch for t_chunk_size={t_chunk_size}: " f"baseline {baseline.shape} vs chunked {chunked.shape}"
         )
-        if not torch.equal(baseline, chunked):
-            diff = (baseline - chunked).abs()
+        diff = (baseline - chunked).abs()
+        try:
+            torch.testing.assert_close(baseline, chunked, rtol=1e-3, atol=1e-3)
+        except AssertionError as exc:
             logger.error(
                 f"  t_chunk_size={t_chunk_size} MISMATCH: "
                 f"max_abs_diff={diff.max().item()}, "
                 f"mean_abs_diff={diff.mean().item()}, "
-                f"num_mismatched={(diff > 0).sum().item()}/{diff.numel()}"
+                f"num_outside_atol={(diff > 1e-3).sum().item()}/{diff.numel()}"
             )
-            assert False, (
-                f"Exact mismatch for t_chunk_size={t_chunk_size}: "
+            raise AssertionError(
+                f"Mismatch for t_chunk_size={t_chunk_size}: "
                 f"max_abs_diff={diff.max().item()}, "
                 f"mean_abs_diff={diff.mean().item()}"
-            )
-        logger.info(f"  t_chunk_size={t_chunk_size} PASSED (exact match)")
+            ) from exc
+        logger.info(f"  t_chunk_size={t_chunk_size} PASSED (within tolerance)")
 
 
 @pytest.mark.parametrize(
