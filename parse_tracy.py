@@ -10,9 +10,34 @@ import glob
 from typing import List, Dict, Tuple, Optional, Union, Callable
 
 
+# ── Data types: Parsing layer ────────────────────────────────────────────────
+
+
 @dataclass
-class KernelZoneEvent:
-    """POD for kernel zone trace event."""
+class TraceMetadata:
+    """Metadata from the profile_log_device.csv header line."""
+
+    arch: str
+    chip_freq_mhz: int
+    max_compute_cores: int
+
+
+@dataclass
+class TraceEvent:
+    """A single row from profile_log_device.csv — no interpretation."""
+
+    device_id: int
+    core_x: int
+    core_y: int
+    risc_type: str
+    zone_name: str
+    zone_type: str  # "ZONE_START" or "ZONE_END"
+    time_cycles: int
+
+
+@dataclass
+class TraceSpan:
+    """A matched ZONE_START/ZONE_END pair = one duration measurement."""
 
     device_id: int
     core_x: int
@@ -22,27 +47,21 @@ class KernelZoneEvent:
     start_cycles: int
     end_cycles: int
 
+    @property
+    def duration_cycles(self) -> int:
+        return self.end_cycles - self.start_cycles
 
-@dataclass
-class TensixCore:
-    """POD for Tensix core profiling data."""
+    def duration_us(self, freq_mhz: int) -> float:
+        return self.duration_cycles / freq_mhz
 
-    device_id: int
-    core_x: int
-    core_y: int
-    duration_cycles: int
-    duration_ns: float
+    def duration_ns(self, freq_mhz: int) -> float:
+        return (self.duration_cycles / freq_mhz) * 1000
+
+    def duration_ms(self, freq_mhz: int) -> float:
+        return self.duration_cycles / freq_mhz / 1000
 
 
-@dataclass
-class ZoneDuration:
-    """POD for individual zone duration measurement."""
-
-    device_id: int
-    core_x: int
-    core_y: int
-    zone_name: str
-    duration_us: float
+# ── Data types: Ops perf (separate CSV) ──────────────────────────────────────
 
 
 @dataclass
@@ -51,6 +70,9 @@ class OpsPerfData:
 
     fpu_util: float
     device_kernel_duration_ns: float
+
+
+# ── Data types: Statistics & reporting ───────────────────────────────────────
 
 
 @dataclass
@@ -105,6 +127,9 @@ DEVICE_STATS = [
 ]
 
 
+# ── Utilities ────────────────────────────────────────────────────────────────
+
+
 def percentile(data: List[float], p: float) -> float:
     """Calculate the p-th percentile of data."""
     sorted_data = sorted(data)
@@ -122,32 +147,101 @@ def percentile(data: List[float], p: float) -> float:
     return sorted_data[f] + (k - f) * (sorted_data[c] - sorted_data[f])
 
 
-def validate_tracy_directory(tracy_dir: str) -> None:
-    """Validate that the Tracy directory exists."""
-    if not os.path.isdir(tracy_dir):
-        logging.error(f"Tracy directory not found: {tracy_dir}")
-        sys.exit(1)
+# ── Parsing layer ────────────────────────────────────────────────────────────
 
 
-def find_ops_perf_results(tracy_dir: str) -> str:
-    """Find and return the ops_perf_results CSV file path."""
-    ops_perf_files = glob.glob(os.path.join(tracy_dir, "ops_perf_results_*.csv"))
-    if not ops_perf_files:
-        logging.error(f"No ops_perf_results CSV file found in {tracy_dir}")
-        sys.exit(1)
-    return ops_perf_files[0]
+def parse_profile_log(path: str) -> Tuple[TraceMetadata, List[TraceEvent]]:
+    """Parse profile_log_device.csv into metadata and typed events.
+
+    Single pass. No filtering, no pairing, no unit conversion.
+
+    Raises:
+        FileNotFoundError: if path does not exist
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"profile_log_device.csv not found: {path}")
+
+    events: List[TraceEvent] = []
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+        # Parse metadata from first line
+        # Format: "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120"
+        metadata_parts: Dict[str, str] = {}
+        for part in lines[0].strip().split(","):
+            part = part.strip()
+            if ":" in part:
+                key, value = part.split(":", 1)
+                metadata_parts[key.strip()] = value.strip()
+
+        metadata = TraceMetadata(
+            arch=metadata_parts.get("ARCH", ""),
+            chip_freq_mhz=int(metadata_parts.get("CHIP_FREQ[MHz]", "0")),
+            max_compute_cores=int(metadata_parts.get("Max Compute Cores", "0")),
+        )
+
+        # Parse CSV data (header is line 2, data starts line 3)
+        reader = csv.DictReader(lines[1:])
+        for row in reader:
+            row = {k.strip(): v.strip() for k, v in row.items()}
+            events.append(
+                TraceEvent(
+                    device_id=int(row["PCIe slot"]),
+                    core_x=int(row["core_x"]),
+                    core_y=int(row["core_y"]),
+                    risc_type=row["RISC processor type"],
+                    zone_name=row["zone name"],
+                    zone_type=row["type"],
+                    time_cycles=int(row["time[cycles since reset]"]),
+                )
+            )
+
+    return metadata, events
 
 
-def extract_report_date(ops_perf_file: str) -> str:
-    """Extract report date from ops_perf_results filename."""
-    basename = os.path.basename(ops_perf_file)
-    report_timestamp = basename.replace("ops_perf_results_", "").replace(".csv", "")
-    # Convert to readable format: YYYY-MM-DD HH:MM:SS
-    return f"{report_timestamp[:4]}-{report_timestamp[5:7]}-{report_timestamp[8:10]} {report_timestamp[11:13]}:{report_timestamp[14:16]}:{report_timestamp[17:19]}"
+def pair_events(events: List[TraceEvent]) -> List[TraceSpan]:
+    """Pair ZONE_START/ZONE_END events into TraceSpans using FIFO matching.
+
+    Groups by (device_id, core_x, core_y, risc_type, zone_name).
+    Drops pairs with non-positive duration.
+    """
+    pending_starts: Dict[Tuple[int, int, int, str, str], List[int]] = defaultdict(list)
+    spans: List[TraceSpan] = []
+
+    for event in events:
+        key = (event.device_id, event.core_x, event.core_y, event.risc_type, event.zone_name)
+
+        if event.zone_type == "ZONE_START":
+            pending_starts[key].append(event.time_cycles)
+        elif event.zone_type == "ZONE_END":
+            if pending_starts[key]:
+                start_cycles = pending_starts[key].pop(0)
+                if event.time_cycles > start_cycles:
+                    spans.append(
+                        TraceSpan(
+                            device_id=event.device_id,
+                            core_x=event.core_x,
+                            core_y=event.core_y,
+                            risc_type=event.risc_type,
+                            zone_name=event.zone_name,
+                            start_cycles=start_cycles,
+                            end_cycles=event.time_cycles,
+                        )
+                    )
+
+    return spans
 
 
 def parse_ops_perf_data(ops_perf_file: str) -> Dict[int, OpsPerfData]:
-    """Parse ops perf results data from ops_perf_results CSV."""
+    """Parse ops perf results data from ops_perf_results CSV.
+
+    Raises:
+        FileNotFoundError: if ops_perf_file does not exist
+    """
+    if not os.path.exists(ops_perf_file):
+        raise FileNotFoundError(f"ops_perf_results file not found: {ops_perf_file}")
+
     ops_perf_data: Dict[int, OpsPerfData] = {}
     with open(ops_perf_file, "r") as f:
         reader = csv.DictReader(f)
@@ -171,195 +265,49 @@ def parse_ops_perf_data(ops_perf_file: str) -> Dict[int, OpsPerfData]:
     return ops_perf_data
 
 
-def parse_tracy_events(tracy_dir: str) -> Tuple[List[KernelZoneEvent], int]:
-    """Parse all trace events from profile_log_device.csv and return list of KernelZoneEvent objects and chip frequency."""
-    ZONE_START_TAG = "ZONE_START"
-    ZONE_END_TAG = "ZONE_END"
-
-    profile_log_path = os.path.join(tracy_dir, "profile_log_device.csv")
-    if not os.path.exists(profile_log_path):
-        logging.error(f"profile_log_device.csv not found in {tracy_dir}")
-        sys.exit(1)
-
-    # Temporary storage for pairing start/end events
-    event_pairs: Dict[Tuple[int, int, int, str, str], Dict[str, int]] = {}
-    chip_freq_mhz: int = 0
-
-    with open(profile_log_path, "r") as f:
-        lines = f.readlines()
-
-        # Parse metadata from first line
-        metadata = lines[0].strip()
-        for part in metadata.split(","):
-            if "CHIP_FREQ[MHz]" in part:
-                chip_freq_mhz = int(part.split(":")[1].strip())
-
-        # Parse CSV data starting from line 2
-        reader = csv.DictReader(lines[1:])
-
-        for row in reader:
-            # Strip whitespace from column names
-            row = {k.strip(): v.strip() for k, v in row.items()}
-
-            device = int(row["PCIe slot"])
-            core_x = int(row["core_x"])
-            core_y = int(row["core_y"])
-            risc_type = row["RISC processor type"]
-            zone_name = row["zone name"]
-            zone_type = row["type"]
-            time_cycles = int(row["time[cycles since reset]"])
-
-            # Pair start/end events for all zones
-            event_key = (device, core_x, core_y, risc_type, zone_name)
-            if event_key not in event_pairs:
-                event_pairs[event_key] = {}
-
-            if zone_type == ZONE_START_TAG:
-                event_pairs[event_key]["start"] = time_cycles
-            elif zone_type == ZONE_END_TAG:
-                event_pairs[event_key]["end"] = time_cycles
-
-    # Convert paired events to KernelZoneEvent objects
-    kernel_events: List[KernelZoneEvent] = []
-    for (device_id, core_x, core_y, risc_type, zone_name), event_data in event_pairs.items():
-        if "start" in event_data and "end" in event_data:
-            kernel_events.append(
-                KernelZoneEvent(
-                    device_id=device_id,
-                    core_x=core_x,
-                    core_y=core_y,
-                    risc_type=risc_type,
-                    zone_name=zone_name,
-                    start_cycles=event_data["start"],
-                    end_cycles=event_data["end"],
-                )
-            )
-
-    return kernel_events, chip_freq_mhz
+# ── File discovery helpers ───────────────────────────────────────────────────
 
 
-def parse_zone_durations(tracy_dir: str, zone_names: List[str]) -> Tuple[Dict[str, List[ZoneDuration]], int]:
-    """Parse all zone durations for specified zone names.
+def find_ops_perf_results(tracy_dir: str) -> str:
+    """Find and return the ops_perf_results CSV file path.
 
-    Collects ALL start/end pairs (not just one per key) using FIFO matching.
-
-    Returns:
-        Tuple of (dict mapping zone_name -> list of ZoneDuration, chip_freq_mhz)
+    Raises:
+        FileNotFoundError: if no matching file found
     """
-    profile_log_path = os.path.join(tracy_dir, "profile_log_device.csv")
-    if not os.path.exists(profile_log_path):
-        logging.error(f"profile_log_device.csv not found in {tracy_dir}")
-        sys.exit(1)
-
-    pending_starts: Dict[Tuple[int, int, int, str], List[int]] = defaultdict(list)
-    durations: Dict[str, List[ZoneDuration]] = {name: [] for name in zone_names}
-    chip_freq_mhz = 0
-
-    with open(profile_log_path, "r") as f:
-        lines = f.readlines()
-
-        # Parse metadata from first line
-        for part in lines[0].strip().split(","):
-            if "CHIP_FREQ[MHz]" in part:
-                chip_freq_mhz = int(part.split(":")[1].strip())
-
-        reader = csv.DictReader(lines[1:])
-        for row in reader:
-            row = {k.strip(): v.strip() for k, v in row.items()}
-            zone_name = row["zone name"]
-
-            if zone_name not in zone_names:
-                continue
-
-            device = int(row["PCIe slot"])
-            core_x = int(row["core_x"])
-            core_y = int(row["core_y"])
-            zone_type = row["type"]
-            time_cycles = int(row["time[cycles since reset]"])
-
-            key = (device, core_x, core_y, zone_name)
-
-            if zone_type == "ZONE_START":
-                pending_starts[key].append(time_cycles)
-            elif zone_type == "ZONE_END":
-                if pending_starts[key]:
-                    start_cycles = pending_starts[key].pop(0)  # FIFO matching
-                    duration_cycles = time_cycles - start_cycles
-                    if duration_cycles > 0:
-                        duration_us = duration_cycles / chip_freq_mhz  # cycles / MHz = us
-                        durations[zone_name].append(
-                            ZoneDuration(
-                                device_id=device,
-                                core_x=core_x,
-                                core_y=core_y,
-                                zone_name=zone_name,
-                                duration_us=duration_us,
-                            )
-                        )
-
-    return durations, chip_freq_mhz
+    ops_perf_files = glob.glob(os.path.join(tracy_dir, "ops_perf_results_*.csv"))
+    if not ops_perf_files:
+        raise FileNotFoundError(f"No ops_perf_results CSV file found in {tracy_dir}")
+    return ops_perf_files[0]
 
 
-def calculate_core_durations(kernel_events: List[KernelZoneEvent], chip_freq_mhz: int) -> List[TensixCore]:
-    """Calculate kernel durations per core from KernelZoneEvent objects.
-
-    Filters for BRISC-KERNEL events only and returns list of TensixCore objects.
-    """
-    KERNEL_ZONE_NAME = "BRISC-KERNEL"
-    RISC_TYPE = "BRISC"
-
-    def cycles_to_ns(cycles: int) -> float:
-        return (cycles / chip_freq_mhz) * 1000
-
-    tensix_cores: List[TensixCore] = []
-
-    for event in kernel_events:
-        # Filter for BRISC-KERNEL zones only
-        if event.zone_name == KERNEL_ZONE_NAME and event.risc_type == RISC_TYPE:
-            duration_cycles = event.end_cycles - event.start_cycles
-            duration_ns = cycles_to_ns(duration_cycles)
-
-            if duration_cycles > 0:
-                tensix_cores.append(
-                    TensixCore(
-                        device_id=event.device_id,
-                        core_x=event.core_x,
-                        core_y=event.core_y,
-                        duration_cycles=duration_cycles,
-                        duration_ns=duration_ns,
-                    )
-                )
-
-    return tensix_cores
+def extract_report_date(ops_perf_file: str) -> str:
+    """Extract report date from ops_perf_results filename."""
+    basename = os.path.basename(ops_perf_file)
+    report_timestamp = basename.replace("ops_perf_results_", "").replace(".csv", "")
+    # Convert to readable format: YYYY-MM-DD HH:MM:SS
+    return f"{report_timestamp[:4]}-{report_timestamp[5:7]}-{report_timestamp[8:10]} {report_timestamp[11:13]}:{report_timestamp[14:16]}:{report_timestamp[17:19]}"
 
 
-def calculate_device_stats(cores: List[TensixCore], ops_perf: OpsPerfData) -> Optional[DeviceStats]:
-    """Calculate statistics for a single device.
+# ── Statistics ───────────────────────────────────────────────────────────────
 
-    Args:
-        cores: List of TensixCore objects for this device
-        ops_perf: OpsPerfData object containing FPU utilization and kernel duration
 
-    Returns:
-        DeviceStats object or None if no cores
-    """
-    if not cores:
+def calculate_device_stats(spans: List[TraceSpan], chip_freq_mhz: int, ops_perf: OpsPerfData) -> Optional[DeviceStats]:
+    """Calculate statistics for a single device from its kernel spans."""
+    if not spans:
         return None
 
-    durations_ms: List[float] = [c.duration_ns / 1_000_000 for c in cores]  # Convert ns to ms
+    durations_ms: List[float] = [s.duration_ms(chip_freq_mhz) for s in spans]
 
-    # Calculate workload balance: sum(duration) / (#cores * max(duration))
     num_cores: int = len(durations_ms)
     max_duration: float = max(durations_ms)
     sum_duration: float = sum(durations_ms)
-    workload_balance: float = (sum_duration / (num_cores * max_duration)) * 100  # as percentage
+    workload_balance: float = (sum_duration / (num_cores * max_duration)) * 100
 
-    # Create statistics object
     return DeviceStats(
         cores=num_cores,
         min=min(durations_ms),
         max=max_duration,
-        avg=sum(durations_ms) / len(durations_ms),
+        avg=sum_duration / num_cores,
         p50=percentile(durations_ms, 50),
         p75=percentile(durations_ms, 75),
         p90=percentile(durations_ms, 90),
@@ -370,55 +318,45 @@ def calculate_device_stats(cores: List[TensixCore], ops_perf: OpsPerfData) -> Op
     )
 
 
-def generate_device_report(device: int, cores: List[TensixCore], stats: Optional[DeviceStats]) -> List[str]:
-    """Generate analysis report for a single device.
+# ── Report generation ────────────────────────────────────────────────────────
 
-    Args:
-        device: Device ID (int)
-        cores: List of TensixCore objects for this device
-        stats: DeviceStats object or None if no data
 
-    Returns:
-        List of report lines
-    """
+def generate_device_report(
+    device: int, spans: List[TraceSpan], chip_freq_mhz: int, stats: Optional[DeviceStats]
+) -> List[str]:
+    """Generate analysis report for a single device."""
     device_report: List[str] = []
     device_report.append(f"## Device {device}\n\n")
 
-    if not cores or not stats:
+    if not spans or not stats:
         device_report.append("No kernel data found.\n\n")
         return device_report
 
-    # Determine grid dimensions
-    x_coords = sorted(set(c.core_x for c in cores))
-    y_coords = sorted(set(c.core_y for c in cores))
+    x_coords = sorted(set(s.core_x for s in spans))
+    y_coords = sorted(set(s.core_y for s in spans))
 
-    # Create grid lookup
     grid: Dict[Tuple[int, int], float] = {}
-    for core in cores:
-        grid[(core.core_x, core.core_y)] = core.duration_ns
+    for s in spans:
+        grid[(s.core_x, s.core_y)] = s.duration_ms(chip_freq_mhz)
 
     # Generate table
     device_report.append("### Kernel Duration Per Core (milliseconds)\n\n")
 
-    # Header row
     header = "| Y\\X |"
     for x in x_coords:
         header += f" {x:2d} |"
     device_report.append(header + "\n")
 
-    # Separator
     separator = "|-----|"
     for _ in x_coords:
         separator += "--------|"
     device_report.append(separator + "\n")
 
-    # Data rows
     for y in y_coords:
         row = f"| {y:2d}  |"
         for x in x_coords:
             if (x, y) in grid:
-                duration_ms = grid[(x, y)] / 1_000_000  # Convert ns to ms
-                row += f" {duration_ms:6.2f} |"
+                row += f" {grid[(x, y)]:6.2f} |"
             else:
                 row += "      - |"
         device_report.append(row + "\n")
@@ -441,19 +379,16 @@ def generate_summary_table(device_stats: Dict[int, DeviceStats]) -> List[str]:
 
     devices_sorted = sorted(device_stats.keys())
 
-    # Generate header dynamically
     header = "| Metric |"
     for dev in devices_sorted:
         header += f" Device {dev} |"
     summary.append(header + "\n")
 
-    # Generate separator dynamically
     separator = "|--------|"
     for _ in devices_sorted:
         separator += "----------|"
     summary.append(separator + "\n")
 
-    # Generate rows from shared metrics configuration
     for metric in DEVICE_STATS:
         row = f"| {metric.get_table_label()} |"
         for dev in devices_sorted:
@@ -464,25 +399,17 @@ def generate_summary_table(device_stats: Dict[int, DeviceStats]) -> List[str]:
     return summary
 
 
-def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDuration]) -> List[str]:
-    """Generate percentile report for a specific zone.
-
-    Args:
-        zone_name: Name of the zone
-        measurements: List of ZoneDuration objects
-
-    Returns:
-        List of report lines in markdown format
-    """
+def generate_zone_percentile_report(zone_name: str, spans: List[TraceSpan], chip_freq_mhz: int) -> List[str]:
+    """Generate percentile report for a specific zone."""
     report: List[str] = []
     report.append(f"## Zone: {zone_name}\n\n")
 
-    if not measurements:
+    if not spans:
         report.append("No measurements found.\n\n")
         return report
 
-    durations_us = [m.duration_us for m in measurements]
-    report.append(f"**Total measurements:** {len(measurements)}\n\n")
+    durations_us = [s.duration_us(chip_freq_mhz) for s in spans]
+    report.append(f"**Total measurements:** {len(spans)}\n\n")
 
     # Overall stats table
     report.append("### Overall (all devices)\n\n")
@@ -497,15 +424,13 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
     report.append(f"| Mean       | {sum(durations_us)/len(durations_us):>13.2f} |\n")
     report.append("\n")
 
-    # Per-device breakdown
+    # Group by device and by (device, core)
     by_device: Dict[int, List[float]] = defaultdict(list)
     by_device_core: Dict[int, Dict[Tuple[int, int], List[float]]] = defaultdict(lambda: defaultdict(list))
-    # Track iteration order per core: by_device_core_iter[device][(x,y)] = [dur0, dur1, dur2, ...]
-    by_device_core_iter: Dict[int, Dict[Tuple[int, int], List[float]]] = defaultdict(lambda: defaultdict(list))
-    for m in measurements:
-        by_device[m.device_id].append(m.duration_us)
-        by_device_core[m.device_id][(m.core_x, m.core_y)].append(m.duration_us)
-        by_device_core_iter[m.device_id][(m.core_x, m.core_y)].append(m.duration_us)
+    for s in spans:
+        dur = s.duration_us(chip_freq_mhz)
+        by_device[s.device_id].append(dur)
+        by_device_core[s.device_id][(s.core_x, s.core_y)].append(dur)
 
     if len(by_device) > 1:
         report.append("### Per Device Summary\n\n")
@@ -519,20 +444,18 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
             )
         report.append("\n")
 
-    # Per-core tables for each device
+    # Per-core min/max tables for each device
     for device in sorted(by_device_core.keys()):
         core_data = by_device_core[device]
         x_coords = sorted(set(k[0] for k in core_data.keys()))
         y_coords = sorted(set(k[1] for k in core_data.keys()))
 
-        # Build grids of min and max durations
         grid_max: Dict[Tuple[int, int], float] = {}
         grid_min: Dict[Tuple[int, int], float] = {}
         for (cx, cy), durations in core_data.items():
             grid_max[(cx, cy)] = max(durations)
             grid_min[(cx, cy)] = min(durations)
 
-        # Helper to generate a per-core table
         def generate_core_table(grid: Dict[Tuple[int, int], float], title: str) -> None:
             report.append(f"### Device {device} - {title} (us)\n\n")
             header = "| Y\\X |"
@@ -559,10 +482,9 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
         generate_core_table(grid_max, "Max Duration Per Core")
 
     # Per-iteration analysis across all devices
-    # Find max iterations across all cores
     max_iters = 0
-    for device in by_device_core_iter:
-        for core, durations in by_device_core_iter[device].items():
+    for device in by_device_core:
+        for core, durations in by_device_core[device].items():
             max_iters = max(max_iters, len(durations))
 
     if max_iters > 0:
@@ -570,11 +492,10 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
         report.append("| Iter | Min (us) | P50 (us) | P75 (us) | P90 (us) | Max (us) | Cores |\n")
         report.append("|------|----------|----------|----------|----------|----------|-------|\n")
 
-        # Collect durations for each iteration across all devices/cores
-        for iter_idx in range(min(max_iters, 50)):  # Limit to first 50 iterations
+        for iter_idx in range(min(max_iters, 50)):
             iter_durations: List[float] = []
-            for device in by_device_core_iter:
-                for core, durations in by_device_core_iter[device].items():
+            for device in by_device_core:
+                for core, durations in by_device_core[device].items():
                     if iter_idx < len(durations):
                         iter_durations.append(durations[iter_idx])
 
@@ -590,17 +511,16 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
         report.append("\n")
 
     # Per-iteration core tables for device 0
-    if 0 in by_device_core_iter:
-        core_data = by_device_core_iter[0]
+    if 0 in by_device_core:
+        core_data = by_device_core[0]
         x_coords = sorted(set(k[0] for k in core_data.keys()))
         y_coords = sorted(set(k[1] for k in core_data.keys()))
 
-        # Find max iterations for device 0
         dev0_max_iters = max(len(durations) for durations in core_data.values())
 
         report.append("### Device 0 - Duration Per Core By Iteration (us)\n\n")
 
-        for iter_idx in range(min(dev0_max_iters, 20)):  # First 20 iterations
+        for iter_idx in range(min(dev0_max_iters, 20)):
             report.append(f"**Iteration {iter_idx}**\n\n")
 
             header = "| Y\\X |"
@@ -632,7 +552,7 @@ def generate_zone_percentile_report(zone_name: str, measurements: List[ZoneDurat
 def write_report(
     output_path: str,
     report_date: str,
-    chip_freq_mhz: int,
+    metadata: TraceMetadata,
     device_stats: Dict[int, DeviceStats],
     device_reports: List[List[str]],
     zone_reports: Optional[List[List[str]]] = None,
@@ -641,8 +561,8 @@ def write_report(
     report: List[str] = []
     report.append("# Tracy Profiling Analysis\n")
     report.append(f"**Report Date:** {report_date}\n")
-    report.append(f"**Architecture:** Blackhole\n")
-    report.append(f"**Chip Frequency:** {chip_freq_mhz} MHz\n")
+    report.append(f"**Architecture:** {metadata.arch.title()}\n")
+    report.append(f"**Chip Frequency:** {metadata.chip_freq_mhz} MHz\n")
     report.append(f"**Operation:** RingJointSDPADeviceOperation\n\n")
 
     # Add summary table
@@ -666,7 +586,6 @@ def write_report(
 
 
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = argparse.ArgumentParser(description="Parse Tracy profiling logs and generate analysis report")
     parser.add_argument(
         "tracy_dir", help="Directory containing Tracy profiling logs (profile_log_device.csv, ops_perf_results_*.csv)"
@@ -677,44 +596,50 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Configure logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    # Validate and setup paths
     tracy_dir = os.path.abspath(args.tracy_dir)
-    validate_tracy_directory(tracy_dir)
+    if not os.path.isdir(tracy_dir):
+        logging.error(f"Tracy directory not found: {tracy_dir}")
+        sys.exit(1)
     output_path = os.path.abspath(args.output) if args.output else os.path.join(tracy_dir, "analysis.md")
 
-    # Parse data
+    # Parse — single pass through profile_log_device.csv
     ops_perf_file = find_ops_perf_results(tracy_dir)
     report_date = extract_report_date(ops_perf_file)
     ops_perf_data = parse_ops_perf_data(ops_perf_file)
-    kernel_events, chip_freq_mhz = parse_tracy_events(tracy_dir)
-    tensix_cores = calculate_core_durations(kernel_events, chip_freq_mhz)
+    metadata, events = parse_profile_log(os.path.join(tracy_dir, "profile_log_device.csv"))
+    spans = pair_events(events)
 
-    # Group cores by device
-    cores_by_device = defaultdict(list)
-    for core in tensix_cores:
-        cores_by_device[core.device_id].append(core)
+    # Filter kernel spans for device reports (replaces calculate_core_durations)
+    kernel_spans = [s for s in spans if s.zone_name == "BRISC-KERNEL" and s.risc_type == "BRISC"]
 
-    # Calculate statistics and generate reports
+    # Group by device
+    spans_by_device: Dict[int, List[TraceSpan]] = defaultdict(list)
+    for s in kernel_spans:
+        spans_by_device[s.device_id].append(s)
+
+    # Calculate statistics and generate device reports
     device_stats: Dict[int, DeviceStats] = {}
     device_reports: List[List[str]] = []
-    for device in sorted(cores_by_device.keys()):
+    for device in sorted(spans_by_device.keys()):
         ops_perf = ops_perf_data.get(device, OpsPerfData(fpu_util=0.0, device_kernel_duration_ns=0.0))
-        stats = calculate_device_stats(cores_by_device[device], ops_perf)
-        report = generate_device_report(device, cores_by_device[device], stats)
+        stats = calculate_device_stats(spans_by_device[device], metadata.chip_freq_mhz, ops_perf)
+        report = generate_device_report(device, spans_by_device[device], metadata.chip_freq_mhz, stats)
         if stats:
             device_stats[device] = stats
         device_reports.append(report)
 
-    # Parse zone durations if zones specified
+    # Zone percentile reports — filter from the same span list, no re-parse
     zone_reports: Optional[List[List[str]]] = None
     if args.zones:
-        zone_durations, _ = parse_zone_durations(tracy_dir, args.zones)
-        zone_reports = []
-        for zone_name in args.zones:
-            zone_reports.append(generate_zone_percentile_report(zone_name, zone_durations[zone_name]))
+        zone_names_set = set(args.zones)
+        zone_spans: Dict[str, List[TraceSpan]] = {name: [] for name in args.zones}
+        for s in spans:
+            if s.zone_name in zone_names_set:
+                zone_spans[s.zone_name].append(s)
+        zone_reports = [
+            generate_zone_percentile_report(name, zone_spans[name], metadata.chip_freq_mhz) for name in args.zones
+        ]
 
-    # Write output
-    write_report(output_path, report_date, chip_freq_mhz, device_stats, device_reports, zone_reports)
+    write_report(output_path, report_date, metadata, device_stats, device_reports, zone_reports)
