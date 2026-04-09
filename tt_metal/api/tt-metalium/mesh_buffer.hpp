@@ -214,7 +214,7 @@ private:
     // CQ0 and CQ1 are written by different dispatch threads; without padding they
     // would share a cache line and cause unnecessary coherence traffic.
     static constexpr size_t kMaxMeshCQs = 2;
-    struct alignas(64) CacheLinePaddedEventId {
+    struct alignas(64) CacheLinePaddedEventId {  // 64 hardcoded for compatibility; std::hardware_destructive_interference_size not available before clang-19
         std::atomic<uint32_t> value{};
     };
     mutable std::array<CacheLinePaddedEventId, kMaxMeshCQs> pending_event_ids_{};
