@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import pytest
 import torch
 import ttnn
-import sys
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc
@@ -18,7 +16,8 @@ from models.common.utility_functions import is_blackhole, torch_random, comp_all
 @pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), None])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_std(device, batch_size, h, w, dim, correction, keepdim):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -26,30 +25,38 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
+    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
     # test for equivalance
+
+    rtol = 0.01
+    atol = 0.01
+    frobenius = 0.005
+    # All values are close to 1, and we're using bfloat16, so even a rounding error
+    # of 1 ULP impacts PCC.
+    # Therefore PCC threshold has to be lower than for other tests.
+    # ATOL/RTOL/Frobenius should catch any significant errors.
+    pcc = 0.98
+    if use_legacy:
+        # Legacy implementation is even less accurate.
+        pcc = 0.975
+
     outputs_all_finite = torch.isfinite(torch_output_tensor).all() and torch.isfinite(output_tensor).all()
     if outputs_all_finite and torch_output_tensor.numel() > 0:
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
-            pcc_threshold=0.98,
-            rtol=0.01,
-            atol=0.01,
-            frobenius_threshold=0.005,
+            pcc_threshold=pcc,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius,
         )
-
-    atol = rtol = 0.01
-    # All values are close to 1, and we're using bfloat16, so even a rounding error
-    # of 1 ULP has a significant impact on PCC.
-    # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
-    pcc = 0.98
-    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+    else:
+        passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+        assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -58,7 +65,8 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 @pytest.mark.parametrize("dim", [None, [], -1, -2, (-2, -1)])
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("correction", [True, False])
-def test_var(device, batch_size, h, w, dim, keepdim, correction):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -66,21 +74,32 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
+    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
+
     # test for equivalance
+    rtol = 0.01
+    atol = 0.01
+    pcc = 0.99999
+    frobenius = 0.007
+
+    if use_legacy:
+        # Legacy implementation is less accurate.
+        pcc = 0.993
+        frobenius = 0.0085
+
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.99999,
-        rtol=0.01,
-        atol=0.01,
-        frobenius_threshold=0.007,
+        pcc_threshold=pcc,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius,
     )
 
 
@@ -789,7 +808,8 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
         ([32, 32, 32, 0], False, 3, "var"),
     ],
 )
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -797,12 +817,19 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    if op not in ("std", "var") and use_legacy:
+        pytest.skip("use_legacy only applies to std and var")
+
     rank = len(tensor_shape)
 
     torch_tensor = torch.randn(*tensor_shape) if rank > 0 else torch.randn(())
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+
+    ttnn_extra_kwargs = {}
+    if op in ("std", "var"):
+        ttnn_extra_kwargs["use_legacy"] = use_legacy
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -813,7 +840,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, **ttnn_extra_kwargs)
     except RuntimeError:
         ttnn_errored = True
 
@@ -845,13 +872,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
         )
 
     atol = rtol = 0.1
-    # There is a scale factor difference between torch and ttnn for std and var
-    # But for other operations, it should be close. Issue #19478
-    if op == "std":
-        atol, rtol = sys.maxsize, 0.1 + math.sqrt(2)
-    elif op == "var":
-        atol, rtol = sys.maxsize, 0.1 + 2
-
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"torch: {torch_result}, ttnn: {ttnn_result}"

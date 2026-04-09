@@ -186,7 +186,8 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
-def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op, use_legacy):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -194,6 +195,9 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    if op not in ("var", "std") and use_legacy:
+        pytest.skip("use_legacy only applies to std and var")
+
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
 
@@ -241,7 +245,9 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     ttnn_errored = False
     try:
         # ttnn.prod doesn't support the correction argument.
-        if op != "prod":
+        if op in ("var", "std"):
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+        elif op != "prod":
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
         else:
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
@@ -266,12 +272,15 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-    rtol = 0.05
     if op == "sum" and tensor_shape == (3, 6, 40, 63, 20):
         # Summing large number of bfloat16 values accumulates rounding errors,
         # and results also vary from near 0 to relatively large values (in hundreds)
         # PCC should catch any significant errors.
         atol = 1.5
+    elif use_legacy and op == "std":
+        # Legacy two-pass method (E[X^2] - E[X]^2) suffers from more catastrophic cancellation
+        # than the Welford single-pass path, especially in bfloat16, so thresholds are slightly relaxed.
+        atol = 0.25
     else:
         atol = 0.1
 
@@ -286,6 +295,9 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         pcc = 0.98
     else:
         pcc = 0.999
+
+    rtol = 0.05
+
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 

@@ -76,7 +76,7 @@ Tensor std(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_welford = true);
+    bool use_legacy = false);
 
 Tensor var(
     const Tensor& input_tensor_arg,
@@ -87,6 +87,6 @@ Tensor var(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_welford = true);
+    bool use_legacy = false);
 
 }  // namespace ttnn

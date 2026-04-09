@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ static std::string get_welford_reduction_doc(const char* op_name, const char* qu
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
             correction (bool, optional): Whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.
-            use_welford (bool, optional): When True, uses the numerically stable Welford algorithm. When False, uses the classical two-pass method. Defaults to `True`.
+            use_legacy (bool, optional): When True, uses the legacy two-pass implementation. When False, uses the numerically stable Welford algorithm. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -81,7 +81,7 @@ void bind_welford_reductions(nb::module_& mod) {
             nb::arg("scalar") = 1.0f,
             nb::arg("correction") = true,
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("use_welford") = true));
+            nb::arg("use_legacy") = false));
 
     const auto var_doc = get_welford_reduction_doc("var", "ttnn.var");
     ttnn::bind_function<"var">(
@@ -98,7 +98,7 @@ void bind_welford_reductions(nb::module_& mod) {
             nb::arg("scalar") = 1.0f,
             nb::arg("correction") = true,
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("use_welford") = true));
+            nb::arg("use_legacy") = false));
 }
 
 }  // namespace ttnn::operations::reduction::detail

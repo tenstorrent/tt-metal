@@ -20,6 +20,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include <cmath>
 #include <numeric>
 
 namespace ttnn::operations::reduction {
@@ -35,7 +36,7 @@ Tensor reduce(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_welford = true);
+    bool use_legacy = false);
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -273,7 +274,7 @@ static Tensor std_var_impl(
     const ttnn::SmallVector<int>& non_height_width_dims,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_welford) {
+    bool use_legacy) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -312,9 +313,35 @@ static Tensor std_var_impl(
     int divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
-    if (!use_welford) {
-        // Classical two-pass method: Var(X) = E[X^2] - (E[X])^2, scaled by 1/divisor.
-        float two_pass_scalar = scalar / divisor;
+    if (use_legacy) {
+        // Classical two-pass variance via the identity  Var = E[X^2] - (E[X])^2.
+        // Let N = reduced_volume,  D = divisor  (D = N-1 when correction=true, D = N otherwise).
+        // The target formula is:
+        //   Var = Sum(X^2) / D  -  Sum(X)^2 / (N * D)
+        // This gives population variance when D = N, and sample variance
+        // (Bessel-corrected) when D = N-1.
+        // We bake the correction into the reduction scalars to minimize number of
+        // operations. The code computes:
+        //   mean_sq_tensor = Sum(X^2) * sq_scalar          ... (A)
+        //   mean_tensor    = Sum(X)   * mean_scalar         ... (B)
+        //   output         = (A) - (B)^2
+        //                  = Sum(X^2) * sq_scalar  -  Sum(X)^2 * mean_scalar^2
+        //
+        // Matching term-by-term against the target formula:
+        //   sq_scalar       = 1 / D
+        //   mean_scalar^2   = 1 / (N * D)   =>   mean_scalar = 1 / sqrt(N * D)
+        //
+        // For correction=false  (D = N):
+        //   sq_scalar   = 1/N and mean_scalar = 1/sqrt(N^2) = 1/N
+        //   (both equal -> population variance)
+        // For correction=true   (D = N-1):
+        //   sq_scalar   = 1/(N-1)
+        //   mean_scalar = 1/sqrt(N*(N-1))
+        //   output      = Sum(X^2)/(N-1) - Sum(X)^2/(N*(N-1))  (sample variance)
+        float N = static_cast<float>(reduced_volume);
+        float D = static_cast<float>(divisor);
+        float sq_scalar = scalar / D;
+        float mean_scalar = scalar / std::sqrt(N * D);
 
         auto mean_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
             input_tensor_arg,
@@ -322,7 +349,7 @@ static Tensor std_var_impl(
             keepdim,
             memory_config_arg,
             compute_kernel_config,
-            two_pass_scalar,
+            mean_scalar,
             non_height_width_dims,
             sub_core_grids);
 
@@ -332,12 +359,18 @@ static Tensor std_var_impl(
             keepdim,
             memory_config_arg,
             compute_kernel_config,
-            two_pass_scalar,
+            sq_scalar,
             non_height_width_dims,
             sub_core_grids);
 
         Tensor output_tensor = ttnn::subtract(
             mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
+
+        // The two-pass formula can yield slightly negative values due to
+        // catastrophic cancellation, especially in low-precision (bfloat16).
+        // Clamp to zero because negative variance is meaningless, and sqrt of
+        // a negative value would produce inf when computing std.
+        output_tensor = ttnn::relu(output_tensor, memory_config);
 
         if constexpr (reduce_type == reduction_common::ReduceType::Std) {
             output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
@@ -482,7 +515,7 @@ Tensor reduce(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_welford) {
+    bool use_legacy) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
@@ -500,7 +533,7 @@ Tensor reduce(
             non_height_width_dims,
             correction,
             sub_core_grids,
-            use_welford);
+            use_legacy);
     }
 
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
@@ -658,7 +691,7 @@ Tensor std(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_welford) {
+    bool use_legacy) {
     return operations::reduction::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -668,7 +701,7 @@ Tensor std(
         scalar,
         correction,
         sub_core_grids,
-        use_welford);
+        use_legacy);
 }
 
 Tensor var(
@@ -680,7 +713,7 @@ Tensor var(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_welford) {
+    bool use_legacy) {
     return operations::reduction::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
@@ -690,7 +723,7 @@ Tensor var(
         scalar,
         correction,
         sub_core_grids,
-        use_welford);
+        use_legacy);
 }
 
 }  // namespace ttnn
