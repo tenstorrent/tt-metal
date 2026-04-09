@@ -267,6 +267,20 @@ def run(
                     value = int(value)
                 setattr(conv_config, attr, value)
 
+    # Parse tensor dtypes from traced args
+    dtype_str_map = {
+        "DataType.BFLOAT16": ttnn.bfloat16,
+        "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+        "DataType.BFLOAT4_B": ttnn.bfloat4_b,
+        "DataType.FLOAT32": ttnn.float32,
+        "DataType.UINT16": ttnn.uint16,
+        "DataType.UINT32": ttnn.uint32,
+        "DataType.INT32": ttnn.int32,
+    }
+    parsed_input_dtype = dtype_str_map.get(kwargs.get("input_tensor_dtype"))
+    parsed_weight_dtype = dtype_str_map.get(kwargs.get("weight_tensor_dtype"))
+    parsed_bias_dtype = dtype_str_map.get(kwargs.get("bias_tensor_dtype"))
+
     # Call the short sweep function with parsed ttnn objects
     if is_conv1d:
         result = run_conv1d_short_sweep(input_specs, device)
@@ -278,6 +292,9 @@ def run(
             output_dtype=parsed_dtype,
             compute_config=parsed_compute_config,
             conv_config=conv_config,
+            input_dtype=parsed_input_dtype,
+            weight_dtype=parsed_weight_dtype,
+            bias_dtype=parsed_bias_dtype,
         )
 
     # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]

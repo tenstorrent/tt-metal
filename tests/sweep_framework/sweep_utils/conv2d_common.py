@@ -181,6 +181,9 @@ def run_conv2d_short_sweep(
     output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
     compute_config=None,  # ttnn compute config object
     conv_config=None,  # optional pre-built ttnn.Conv2dConfig
+    input_dtype=None,  # ttnn dtype for input tensor (e.g., ttnn.bfloat16)
+    weight_dtype=None,  # ttnn dtype for weight tensor (e.g., ttnn.bfloat8_b)
+    bias_dtype=None,  # ttnn dtype for bias tensor
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -297,11 +300,11 @@ def run_conv2d_short_sweep(
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
     else:
-        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, weight_dtype or ttnn.bfloat16)
         if has_bias:
-            tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
+            tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, bias_dtype or ttnn.bfloat16)
 
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, input_dtype or ttnn.bfloat16, device=device)
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
