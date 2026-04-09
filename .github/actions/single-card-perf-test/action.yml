@@ -33,7 +33,6 @@ runs:
         TRACY_NO_INVARIANT_CHECK: 1
       run: |
         set -euo pipefail
-        cd docker-job
 
         # E2E perf tests need git config
         if [[ -z "${{ inputs.device_perf_model_name }}" ]]; then
@@ -72,7 +71,6 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cd docker-job
         : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
 
         if [[ ! -s "$CI_LOG_FILE" ]]; then
