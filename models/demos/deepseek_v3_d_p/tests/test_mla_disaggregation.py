@@ -129,15 +129,15 @@ def test_mla_disaggregation(
 
     # Create and populate KV chunk address table using utility function
     CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
-    config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    config.num_layers = num_kvpe_cache_layers
-    config.max_sequence_length = seq_len
-    config.num_slots = 1
-    config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    config.chunk_size_bytes = CHUNK_SIZE_BYTES
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_kvpe_cache_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     lookup_table = create_kv_chunk_address_table(
-        config=config,
+        config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
         seq_len=seq_len,
