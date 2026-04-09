@@ -194,6 +194,77 @@ CpuQkvSplitResult cpu_split_qkv_reference(
     return result;
 }
 
+// CPU reference for the separate Q + KV input case (matches the
+// `input_tensor_kv.has_value()` branch of the op). Q is `[B, S, num_q*head_dim]`
+// in concatenated layout (`[Q_h0, Q_h1, ..., Q_h(n_q-1)]` per row). KV is
+// `[B, S, 2*num_kv*head_dim]` in concatenated layout
+// (`[K_h0,..,K_h(n_kv-1), V_h0,..,V_h(n_kv-1)]` per row). Output canonical form
+// matches `cpu_split_qkv_reference`.
+CpuQkvSplitResult cpu_split_qkv_separate_reference(
+    const std::vector<float>& q_input,
+    const std::vector<float>& kv_input,
+    uint32_t batch,
+    uint32_t seq,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k) {
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
+    TT_FATAL(num_q_heads > 0, "num_q_heads must be > 0");
+    TT_FATAL(head_dim > 0, "head_dim must be > 0");
+    const uint32_t q_hidden = num_q_heads * head_dim;
+    const uint32_t kv_hidden = 2 * num_kv_heads * head_dim;
+    TT_FATAL(
+        q_input.size() == static_cast<size_t>(batch) * seq * q_hidden,
+        "q_input size {} != batch*seq*q_hidden {}",
+        q_input.size(),
+        static_cast<size_t>(batch) * seq * q_hidden);
+    TT_FATAL(
+        kv_input.size() == static_cast<size_t>(batch) * seq * kv_hidden,
+        "kv_input size {} != batch*seq*kv_hidden {}",
+        kv_input.size(),
+        static_cast<size_t>(batch) * seq * kv_hidden);
+
+    CpuQkvSplitResult result;
+    result.q.resize(static_cast<size_t>(batch) * num_q_heads * seq * head_dim);
+    result.k.resize(static_cast<size_t>(batch) * num_kv_heads * seq * head_dim);
+    result.v.resize(static_cast<size_t>(batch) * num_kv_heads * seq * head_dim);
+
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t s = 0; s < seq; ++s) {
+            const size_t q_base = (static_cast<size_t>(b) * seq + s) * q_hidden;
+            const size_t kv_base = (static_cast<size_t>(b) * seq + s) * kv_hidden;
+            // Q
+            for (uint32_t h = 0; h < num_q_heads; ++h) {
+                for (uint32_t d = 0; d < head_dim; ++d) {
+                    result.q[((static_cast<size_t>(b) * num_q_heads + h) * seq + s) * head_dim + d] =
+                        q_input[q_base + h * head_dim + d];
+                }
+            }
+            // K (first half of KV)
+            const uint32_t k_section = num_kv_heads * head_dim;
+            for (uint32_t h = 0; h < num_kv_heads; ++h) {
+                for (uint32_t d = 0; d < head_dim; ++d) {
+                    const float v_in = kv_input[kv_base + h * head_dim + d];
+                    if (transpose_k) {
+                        result.k[((static_cast<size_t>(b) * num_kv_heads + h) * head_dim + d) * seq + s] = v_in;
+                    } else {
+                        result.k[((static_cast<size_t>(b) * num_kv_heads + h) * seq + s) * head_dim + d] = v_in;
+                    }
+                }
+            }
+            // V (second half of KV)
+            for (uint32_t h = 0; h < num_kv_heads; ++h) {
+                for (uint32_t d = 0; d < head_dim; ++d) {
+                    result.v[((static_cast<size_t>(b) * num_kv_heads + h) * seq + s) * head_dim + d] =
+                        kv_input[kv_base + k_section + h * head_dim + d];
+                }
+            }
+        }
+    }
+    return result;
+}
+
 // Build an interleaved tensor on device from a flat float vector. Caller picks the
 // dtype (BFLOAT16 or BFLOAT8_B) and the memory config (typically DRAM/L1 interleaved).
 tt::tt_metal::Tensor make_interleaved_tensor(
@@ -348,6 +419,81 @@ PccTriple run_block_sharded_to_height_sharded_cell(
     auto q_vec = ttnn::from_device(q_interleaved).to_vector<float>();
     auto k_vec = ttnn::from_device(k_interleaved).to_vector<float>();
     auto v_vec = ttnn::from_device(v_interleaved).to_vector<float>();
+
+    return {
+        ttnn::test_utils::pcc(cpu_ref.q, q_vec),
+        ttnn::test_utils::pcc(cpu_ref.k, k_vec),
+        ttnn::test_utils::pcc(cpu_ref.v, v_vec),
+    };
+}
+
+// Run a separate-Q-and-KV interleaved cell. The op routes through
+// `nlp_create_qkv_heads` with two input tensors (the `input_tensor_kv.has_value()`
+// branch). The CPU reference uses `cpu_split_qkv_separate_reference`.
+PccTriple run_separate_kv_interleaved_cell(
+    tt::tt_metal::distributed::MeshDevice* device,
+    uint32_t batch,
+    uint32_t seq,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k,
+    DataType dtype,
+    const tt::tt_metal::MemoryConfig& q_mem_config,
+    const tt::tt_metal::MemoryConfig& kv_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const uint32_t q_hidden = num_q_heads * head_dim;
+    const uint32_t kv_hidden = 2 * num_kv_heads * head_dim;
+
+    // Two distinct seeds so Q and KV don't have correlated values (any cross-tensor
+    // mixup would still show up as a PCC drop on either Q or K/V).
+    auto q_data = make_random_qkv_input(kFixedSeed, batch, seq, num_q_heads, /*num_kv_heads=*/0, head_dim);
+    // make_random_qkv_input bakes the (Q+KV) hidden into its computation; for this
+    // separate-KV case we want a Q-only tensor with the right size, so call it again
+    // with num_q=num_q, num_kv=0. That gives us batch*seq*num_q*head_dim floats.
+    // Re-derive q_data via direct generation to avoid the helper's assumptions.
+    q_data.clear();
+    q_data.reserve(static_cast<size_t>(batch) * seq * q_hidden);
+    {
+        std::mt19937 rng(kFixedSeed);
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        for (uint32_t i = 0; i < batch * seq * q_hidden; ++i) {
+            q_data.push_back(dist(rng));
+        }
+    }
+    std::vector<float> kv_data;
+    kv_data.reserve(static_cast<size_t>(batch) * seq * kv_hidden);
+    {
+        std::mt19937 rng(kFixedSeed ^ 0xDEADBEEFu);  // distinct seed for KV
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        for (uint32_t i = 0; i < batch * seq * kv_hidden; ++i) {
+            kv_data.push_back(dist(rng));
+        }
+    }
+
+    auto cpu_ref =
+        cpu_split_qkv_separate_reference(q_data, kv_data, batch, seq, num_q_heads, num_kv_heads, head_dim, transpose_k);
+
+    auto q_tensor = make_interleaved_tensor(device, q_data, {batch, seq, q_hidden}, dtype, q_mem_config);
+    auto kv_tensor = make_interleaved_tensor(device, kv_data, {batch, seq, kv_hidden}, dtype, kv_mem_config);
+
+    // For MHA we pass num_kv_heads as nullopt; for GQA we pass it explicitly.
+    std::optional<uint32_t> num_kv_arg =
+        (num_kv_heads == num_q_heads) ? std::nullopt : std::optional<uint32_t>{num_kv_heads};
+
+    auto [q_tt, k_tt, v_tt] = ttnn::transformer::split_query_key_value_and_split_heads(
+        q_tensor,
+        /*input_tensor_kv=*/kv_tensor,
+        /*num_heads=*/num_q_heads,
+        /*num_kv_heads=*/num_kv_arg,
+        /*transpose_key=*/transpose_k,
+        /*memory_config=*/output_mem_config,
+        /*use_falcon7b_backend=*/false,
+        /*qkv_layout=*/QkvLayout::CONCATENATED);
+
+    auto q_vec = ttnn::from_device(q_tt).to_vector<float>();
+    auto k_vec = ttnn::from_device(k_tt).to_vector<float>();
+    auto v_vec = ttnn::from_device(v_tt).to_vector<float>();
 
     return {
         ttnn::test_utils::pcc(cpu_ref.q, q_vec),
@@ -833,6 +979,255 @@ TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutHeightSharded__
     EXPECT_GE(pcc.q, kBf8PccThreshold) << "Q PCC " << pcc.q;
     EXPECT_GE(pcc.k, kBf8PccThreshold) << "K PCC " << pcc.k;
     EXPECT_GE(pcc.v, kBf8PccThreshold) << "V PCC " << pcc.v;
+}
+
+// =========================================================================
+// Coverage gap fill (self-review follow-up)
+//
+// Adds cells covering the code paths the original commits 1-4 missed:
+//   - Cells 20-21: separate Q+KV input tensors (the
+//     `input_tensor_kv.has_value()` branch in the .cpp). Both PASS expected.
+//   - Cell 22: separate KV with a sharded Q tensor. The op rejects this with
+//     a clear FATAL ("KV tensor should not be provided when sharded") — the
+//     existing validation that this PR preserves.
+//   - Cells 23-25: input mem configs other than INTERLEAVED / BLOCK_SHARDED
+//     (WIDTH_SHARDED, HEIGHT_SHARDED) and output mem config other than
+//     HEIGHT_SHARDED for sharded inputs. All REJECTED by validators in
+//     `experimental::create_qkv_heads`.
+//   - Cell 26: Falcon7B backend (`use_falcon7b_backend=true`) with the only
+//     shape its validator accepts (`[B, S, 4672]`, `num_q=71, num_kv=1,
+//     head_dim=64`).
+// =========================================================================
+
+// Cell 20: separate Q + KV input tensors, MHA, interleaved. Mirrors the existing
+// Python `test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor`
+// but as a first-class C++ unit test.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__SeparateKv__InDramInterleaved__OutDramInterleaved__seq128__bf16) {
+    auto pcc = run_separate_kv_interleaved_cell(
+        device_,
+        /*batch=*/1,
+        /*seq=*/128,
+        /*n_q=*/8,
+        /*n_kv=*/8,
+        /*head_dim=*/64,
+        /*transpose_k=*/false,
+        DataType::BFLOAT16,
+        /*q_mem_config=*/ttnn::DRAM_MEMORY_CONFIG,
+        /*kv_mem_config=*/ttnn::DRAM_MEMORY_CONFIG,
+        /*output_mem_config=*/ttnn::DRAM_MEMORY_CONFIG);
+    log_debug(tt::LogTest, "MHA_8H_64D SeparateKV seq=128: q={:.6f} k={:.6f} v={:.6f}", pcc.q, pcc.k, pcc.v);
+    EXPECT_GE(pcc.q, kDefaultPccThreshold) << "Q PCC " << pcc.q;
+    EXPECT_GE(pcc.k, kDefaultPccThreshold) << "K PCC " << pcc.k;
+    EXPECT_GE(pcc.v, kDefaultPccThreshold) << "V PCC " << pcc.v;
+}
+
+// Cell 21: separate Q + KV input, GQA (n_q=24, n_kv=8, head_dim=128), transpose_k=true.
+// Matches the existing Python `..._with_kv_input_tensor_and_num_kv_heads` test.
+TEST_F(SplitQkvMatrixTest, GQA_24_8_128D__SeparateKv__InDramInterleaved__OutDramInterleaved__seq256__bf16__TransposeK) {
+    auto pcc = run_separate_kv_interleaved_cell(
+        device_,
+        /*batch=*/1,
+        /*seq=*/256,
+        /*n_q=*/24,
+        /*n_kv=*/8,
+        /*head_dim=*/128,
+        /*transpose_k=*/true,
+        DataType::BFLOAT16,
+        /*q_mem_config=*/ttnn::DRAM_MEMORY_CONFIG,
+        /*kv_mem_config=*/ttnn::DRAM_MEMORY_CONFIG,
+        /*output_mem_config=*/ttnn::DRAM_MEMORY_CONFIG);
+    log_debug(
+        tt::LogTest, "GQA_24_8_128D SeparateKV seq=256 transpose_k: q={:.6f} k={:.6f} v={:.6f}", pcc.q, pcc.k, pcc.v);
+    EXPECT_GE(pcc.q, kDefaultPccThreshold) << "Q PCC " << pcc.q;
+    EXPECT_GE(pcc.k, kDefaultPccThreshold) << "K PCC " << pcc.k;
+    EXPECT_GE(pcc.v, kDefaultPccThreshold) << "V PCC " << pcc.v;
+}
+
+// Cell 22: separate KV input with a SHARDED Q tensor. The op rejects this with
+// "KV tensor should not be provided when the input tensor is sharded" — preserves
+// the existing validation. We construct the sharded Q via to_memory_config from a
+// DRAM-staged interleaved buffer; the resharding may itself fail before we reach
+// the op, which is also an acceptable REJECTED outcome.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__SeparateKv__InBlockSharded__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            const uint32_t batch = 2;
+            const uint32_t seq = 64;
+            const uint32_t num_q = 8;
+            const uint32_t num_kv = 8;
+            const uint32_t head_dim = 64;
+            const uint32_t q_hidden = num_q * head_dim;
+            const uint32_t kv_hidden = 2 * num_kv * head_dim;
+            std::vector<float> q_data(static_cast<size_t>(batch) * seq * q_hidden, 0.0f);
+            std::vector<float> kv_data(static_cast<size_t>(batch) * seq * kv_hidden, 0.0f);
+            // Sharded Q tensor on an 8-wide grid (matches Cell 6 grid)
+            auto q_sharded = make_block_sharded_tensor(
+                device_,
+                q_data,
+                {batch, seq, q_hidden},
+                DataType::BFLOAT16,
+                /*num_w_cores=*/8,
+                /*num_h_cores=*/2);
+            auto kv_tensor = make_interleaved_tensor(
+                device_, kv_data, {batch, seq, kv_hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
+            (void)ttnn::transformer::split_query_key_value_and_split_heads(
+                q_sharded,
+                /*input_tensor_kv=*/kv_tensor,
+                /*num_heads=*/num_q,
+                /*num_kv_heads=*/std::nullopt,
+                /*transpose_key=*/false,
+                /*memory_config=*/ttnn::L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                /*use_falcon7b_backend=*/false,
+                /*qkv_layout=*/QkvLayout::GROUPED);
+        },
+        std::exception);
+}
+
+// Cell 23: WIDTH_SHARDED input → REJECTED. The `experimental::create_qkv_heads`
+// validator only accepts BLOCK_SHARDED. We construct a width-sharded staging
+// tensor via to_memory_config; the conversion or the op call must throw.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InWidthSharded__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            const uint32_t batch = 2;
+            const uint32_t seq = 64;
+            const uint32_t num_q = 8;
+            const uint32_t head_dim = 64;
+            const uint32_t hidden = fused_hidden_dim(num_q, num_q, head_dim);
+            std::vector<float> data(static_cast<size_t>(batch) * seq * hidden, 0.0f);
+            auto staging = make_interleaved_tensor(
+                device_, data, {batch, seq, hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
+            // Width-sharded mem config across 8 cores along width
+            tt::tt_metal::CoreRange grid_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 0));
+            tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
+            tt::tt_metal::ShardSpec shard_spec(
+                grid_set, {batch * seq, hidden / 8}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+            tt::tt_metal::MemoryConfig width_sharded(
+                tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+            auto width_sharded_tensor = ttnn::to_memory_config(staging, width_sharded);
+            (void)ttnn::transformer::split_query_key_value_and_split_heads(
+                width_sharded_tensor,
+                /*input_tensor_kv=*/std::nullopt,
+                /*num_heads=*/num_q,
+                /*num_kv_heads=*/std::nullopt,
+                /*transpose_key=*/false,
+                /*memory_config=*/ttnn::L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                /*use_falcon7b_backend=*/false,
+                /*qkv_layout=*/QkvLayout::GROUPED);
+        },
+        std::exception);
+}
+
+// Cell 24: HEIGHT_SHARDED input → REJECTED. Same expectation as Cell 23 — the
+// `experimental::create_qkv_heads` validator only accepts BLOCK_SHARDED.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InHeightSharded__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            const uint32_t batch = 2;
+            const uint32_t seq = 64;
+            const uint32_t num_q = 8;
+            const uint32_t head_dim = 64;
+            const uint32_t hidden = fused_hidden_dim(num_q, num_q, head_dim);
+            std::vector<float> data(static_cast<size_t>(batch) * seq * hidden, 0.0f);
+            auto staging = make_interleaved_tensor(
+                device_, data, {batch, seq, hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
+            // Height-sharded mem config across 4 cores along height
+            tt::tt_metal::CoreRange grid_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 3));
+            tt::tt_metal::CoreRangeSet grid_set(std::set<tt::tt_metal::CoreRange>({grid_range}));
+            tt::tt_metal::ShardSpec shard_spec(
+                grid_set, {(batch * seq) / 4, hidden}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+            tt::tt_metal::MemoryConfig height_sharded(
+                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+            auto height_sharded_tensor = ttnn::to_memory_config(staging, height_sharded);
+            (void)ttnn::transformer::split_query_key_value_and_split_heads(
+                height_sharded_tensor,
+                /*input_tensor_kv=*/std::nullopt,
+                /*num_heads=*/num_q,
+                /*num_kv_heads=*/std::nullopt,
+                /*transpose_key=*/false,
+                /*memory_config=*/ttnn::L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                /*use_falcon7b_backend=*/false,
+                /*qkv_layout=*/QkvLayout::GROUPED);
+        },
+        std::exception);
+}
+
+// Cell 25: BLOCK_SHARDED input + BLOCK_SHARDED output → REJECTED. The
+// `experimental::create_qkv_heads` validator requires HEIGHT_SHARDED output:
+//   "Output memory config layout must be HEIGHT_SHARDED but got ..."
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedGrouped__OutBlockSharded__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            const uint32_t batch = 2;
+            const uint32_t seq = 64;
+            const uint32_t num_q = 8;
+            const uint32_t head_dim = 64;
+            const uint32_t hidden = fused_hidden_dim(num_q, num_q, head_dim);
+            std::vector<float> data(static_cast<size_t>(batch) * seq * hidden, 0.0f);
+            auto sharded = make_block_sharded_tensor(
+                device_,
+                data,
+                {batch, seq, hidden},
+                DataType::BFLOAT16,
+                /*num_w_cores=*/8,
+                /*num_h_cores=*/2);
+            (void)ttnn::transformer::split_query_key_value_and_split_heads(
+                sharded,
+                /*input_tensor_kv=*/std::nullopt,
+                /*num_heads=*/num_q,
+                /*num_kv_heads=*/std::nullopt,
+                /*transpose_key=*/false,
+                /*memory_config=*/ttnn::L1_BLOCK_SHARDED_MEMORY_CONFIG,
+                /*use_falcon7b_backend=*/false,
+                /*qkv_layout=*/QkvLayout::GROUPED);
+        },
+        std::exception);
+}
+
+// Cell 26: Falcon7B backend with the exact shape its validator hard-codes.
+// `nlp_create_qkv_heads_falcon7b_device_operation.cpp:33` requires
+//   `input_shape == [batch, 1, seq, 4672]` where 4672 = (71 + 2*1) * 64.
+// We exercise the path with `use_falcon7b_backend=true` and the canonical
+// num_q=71, num_kv=1, head_dim=64 config. The CPU reference uses CONCATENATED
+// layout — if the Falcon7B backend kernel expects a different layout the test
+// will surface it as PCC < threshold; if the layout matches it will PASS.
+TEST_F(SplitQkvMatrixTest, Falcon7B__InDramInterleaved__OutDramInterleaved__seq32__bf16) {
+    constexpr uint32_t batch = 1;
+    constexpr uint32_t seq = 32;
+    constexpr uint32_t num_q = 71;
+    constexpr uint32_t num_kv = 1;
+    constexpr uint32_t head_dim = 64;
+    const uint32_t hidden = fused_hidden_dim(num_q, num_kv, head_dim);  // 4672
+
+    auto float_input = make_random_qkv_input(kFixedSeed, batch, seq, num_q, num_kv, head_dim);
+    auto cpu_ref = cpu_split_qkv_reference(
+        float_input, batch, seq, num_q, num_kv, head_dim, /*transpose_k=*/false, QkvLayout::CONCATENATED);
+
+    auto input_tensor = make_interleaved_tensor(
+        device_, float_input, {batch, seq, hidden}, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
+
+    auto [q_tt, k_tt, v_tt] = ttnn::transformer::split_query_key_value_and_split_heads(
+        input_tensor,
+        /*input_tensor_kv=*/std::nullopt,
+        /*num_heads=*/num_q,
+        /*num_kv_heads=*/num_kv,
+        /*transpose_key=*/false,  // Falcon7B backend requires transpose_key=false
+        /*memory_config=*/ttnn::DRAM_MEMORY_CONFIG,
+        /*use_falcon7b_backend=*/true,
+        /*qkv_layout=*/QkvLayout::CONCATENATED);
+
+    auto q_vec = ttnn::from_device(q_tt).to_vector<float>();
+    auto k_vec = ttnn::from_device(k_tt).to_vector<float>();
+    auto v_vec = ttnn::from_device(v_tt).to_vector<float>();
+
+    const float q_pcc = ttnn::test_utils::pcc(cpu_ref.q, q_vec);
+    const float k_pcc = ttnn::test_utils::pcc(cpu_ref.k, k_vec);
+    const float v_pcc = ttnn::test_utils::pcc(cpu_ref.v, v_vec);
+    log_debug(tt::LogTest, "Falcon7B 71/1/64 seq=32: q={:.6f} k={:.6f} v={:.6f}", q_pcc, k_pcc, v_pcc);
+
+    EXPECT_GE(q_pcc, kDefaultPccThreshold) << "Q PCC " << q_pcc;
+    EXPECT_GE(k_pcc, kDefaultPccThreshold) << "K PCC " << k_pcc;
+    EXPECT_GE(v_pcc, kDefaultPccThreshold) << "V PCC " << v_pcc;
 }
 
 }  // namespace ttnn::operations::transformer::test
