@@ -51,6 +51,14 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Debug - Show extracted MGD
+        run: |
+          echo "=== Extracted MGD content ==="
+          cat << 'DEBUG_EOF'
+          ${{ steps.extract-mgd.outputs.mgd }}
+          DEBUG_EOF
+          echo "=== End MGD ==="
+
       - name: Verify test timeouts against budget
         run: |
           set -e

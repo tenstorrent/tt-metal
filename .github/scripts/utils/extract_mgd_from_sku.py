@@ -30,10 +30,14 @@ def main():
         print(f"::error::SKU '{sku_name}' has no 'mgd' field", file=sys.stderr)
         sys.exit(1)
 
-    # Print MGD content with 2-space indentation for each line (required for YAML block scalars)
+    # Print MGD content preserving exact whitespace structure
+    # The MGD value from YAML should already have proper relative indentation
     mgd_content = skus[sku_name]["mgd"]
-    for line in mgd_content.splitlines():
-        print(f"  {line}")
+    # Ensure we output it exactly as stored (with trailing newline if present)
+    if mgd_content.endswith("\n"):
+        print(mgd_content, end="")
+    else:
+        print(mgd_content)
 
 
 if __name__ == "__main__":
