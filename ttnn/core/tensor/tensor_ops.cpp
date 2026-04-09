@@ -346,6 +346,25 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 
 Tensor view(const Tensor& input_tensor, const Shape& new_shape) { return view(input_tensor, new_shape, new_shape); }
 
+Tensor unchecked_force_reinterpret(
+    const Tensor& input_tensor,
+    const tt::tt_metal::TensorSpec& new_spec,
+    const tt::tt_metal::TensorTopology& new_topology) {
+    Tensor output;
+    if (is_cpu_tensor(input_tensor)) {
+        output = Tensor(tensor_impl::unchecked_force_reinterpret(input_tensor.host_tensor(), new_spec, new_topology));
+    } else {
+        // Here reinterpreted_mesh_tensor does not own the device memory, and the ownership of the device memory is
+        // managed by the input_tensor. Thus we need to use the special constructor of DeviceStorage to keep the
+        // reinterpreted_mesh_tensor alive.
+        auto reinterpreted_mesh_tensor =
+            tensor_impl::unchecked_force_reinterpret(input_tensor.mesh_tensor(), new_spec, new_topology);
+        DeviceStorage reinterpreted_device_storage(input_tensor.device_storage(), std::move(reinterpreted_mesh_tensor));
+        output = Tensor(std::move(reinterpreted_device_storage));
+    }
+    return output;
+}
+
 // ======================================================================================
 //                                  .tensor_reshape()
 // ======================================================================================

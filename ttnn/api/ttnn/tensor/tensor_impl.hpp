@@ -156,6 +156,16 @@ HostTensor view(
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
+HostTensor unchecked_force_reinterpret(
+    const HostTensor& tensor,
+    const tt::tt_metal::TensorSpec& new_spec,
+    const tt::tt_metal::TensorTopology& new_topology);
+
+MeshTensor unchecked_force_reinterpret(
+    const MeshTensor& tensor,
+    const tt::tt_metal::TensorSpec& new_spec,
+    const tt::tt_metal::TensorTopology& new_topology);
+
 // ======================================================================================
 //                                         Print
 // ======================================================================================
