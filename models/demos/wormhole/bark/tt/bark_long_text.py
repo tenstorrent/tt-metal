@@ -149,7 +149,7 @@ def generate_long_text_audio(
         verbose: Print per-chunk progress.
 
     Returns:
-        numpy int16 audio array at 24 kHz.
+        NumPy float32 audio array at 24 kHz with values clipped to [-1.0, 1.0].
     """
     chunks = split_long_text(text, max_chars=250)
     if verbose:
