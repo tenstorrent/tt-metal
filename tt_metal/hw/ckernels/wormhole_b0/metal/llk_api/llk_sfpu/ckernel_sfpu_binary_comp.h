@@ -247,7 +247,6 @@ inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint ds
         TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
         // Store the result in the destination register
         TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        // Increment the destination register
         dst_reg++;
     }
 }
