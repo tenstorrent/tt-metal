@@ -24,6 +24,7 @@ public:
 
     const DistributedHostBuffer& buffer() const& { return buffer_; }
     DistributedHostBuffer buffer() const&& { return buffer_; }
+    DistributedHostBuffer& buffer() & { return buffer_; }
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
     void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
@@ -91,6 +92,11 @@ const TensorTopology& HostTensor::tensor_topology() const {
 }
 
 const DistributedHostBuffer& HostTensor::buffer() const {
+    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    return impl->buffer();
+}
+
+DistributedHostBuffer& HostTensor::buffer() {
     TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
     return impl->buffer();
 }
