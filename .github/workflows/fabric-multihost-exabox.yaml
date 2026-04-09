@@ -3,7 +3,7 @@ name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    - cron: "0 3 * * 1-5" # Runs weekdays at 8:00 AM GMT+1 (7:00 UTC/9:00 CEST)
+    - cron: "0 3 * * 1-5" # Runs weekdays at 3:00 AM UTC
   workflow_dispatch:
     inputs:
       note:
