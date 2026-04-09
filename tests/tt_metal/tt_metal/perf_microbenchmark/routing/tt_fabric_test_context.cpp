@@ -5,8 +5,12 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <filesystem>
+
 #include "impl/context/metal_context.hpp"
+#include "tt_fabric_test_constants.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
     for (const auto& sync_config : config.sync_configs) {
@@ -86,7 +90,6 @@ void TestContext::wait_for_programs_with_progress() {
         return;
     }
 
-    // Create progress monitor (but don't start polling thread yet)
     progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
@@ -106,6 +109,89 @@ void TestContext::wait_for_programs_with_progress() {
     }
 
     log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
+    if (progress_config_.granular) {
+        // Post-launch barrier: ensures all hosts have dispatched programs before
+        // the granular monitor starts reading device memory
+        fixture_->barrier();
+
+        log_info(
+            tt::LogTest,
+            "Progress monitoring started (poll interval: {}s, hung threshold: {}s, "
+            "granular mode, confirmation rounds: {})",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds,
+            progress_config_.hung_confirmation_rounds);
+    } else {
+        log_info(
+            tt::LogTest,
+            "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds);
+    }
+
+    if (progress_config_.granular) {
+        auto result = monitor.poll_until_complete_or_hung();
+
+        if (result == MonitorResult::HUNG_DETECTED) {
+            const auto& records = monitor.get_hung_records();
+            log_warning(tt::LogTest, "Hang detected: {} endpoint(s) confirmed hung on this host", records.size());
+
+            for (const auto& rec : records) {
+                const char* role_str =
+                    (rec.endpoint_id.role == tt::tt_fabric::fabric_tests::EndpointRole::Sender) ? "Sender" : "Receiver";
+                log_warning(
+                    tt::LogTest,
+                    "  HUNG: {} flow_uid={} on {} core ({},{}) config#{} — "
+                    "packets {}/{}, stalled {}s ({} rounds)",
+                    role_str,
+                    rec.flow_uid,
+                    tt::tt_fabric::fabric_tests::format_device_label(rec.endpoint_id.node_id),
+                    rec.endpoint_id.logical_core.x,
+                    rec.endpoint_id.logical_core.y,
+                    rec.endpoint_id.config_idx,
+                    rec.packets_processed,
+                    rec.packets_expected,
+                    rec.stall_seconds,
+                    rec.confirmation_rounds);
+            }
+
+            // Phase 4: MPI exchange and report generation
+            auto all_wire_records = monitor.exchange_hung_records();
+
+            using namespace tt::tt_metal::distributed::multihost;
+            const auto& dist_ctx = DistributedContext::get_current_world();
+            int my_rank = *dist_ctx->rank();
+
+            if (my_rank == 0 && !all_wire_records.empty()) {
+                monitor.write_summary_report(progress_config_.summary_file, all_wire_records, flow_descriptors_);
+                monitor.write_detailed_report(progress_config_.detail_file, all_wire_records, flow_descriptors_);
+            }
+
+            if (progress_config_.wait_on_hang) {
+                log_warning(tt::LogTest, "--wait-on-hang is set: blocking indefinitely. Ctrl-C to abort.");
+                while (true) {
+                    std::this_thread::sleep_for(std::chrono::seconds(60));
+                }
+            }
+
+            auto report_dir = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+                              std::string(tt::tt_fabric::fabric_tests::OUTPUT_DIR);
+            TT_THROW(
+                "Test aborted: {} endpoint(s) confirmed hung. "
+                "Reports written to: {}/{}  {}/{}",
+                records.size(),
+                report_dir.string(),
+                progress_config_.summary_file,
+                report_dir.string(),
+                progress_config_.detail_file);
+        }
+
+        log_info(tt::LogTest, "All endpoints complete, waiting for programs to finish...");
+    } else {
+        monitor.poll_until_complete();
+        log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
+    }
+
     fixture_->wait_for_programs();
 }
 
@@ -259,6 +345,7 @@ void TestContext::reset_devices() {
     test_devices_.clear();
     device_global_sync_cores_.clear();
     device_local_sync_cores_.clear();
+    flow_descriptors_.clear();
     this->allocator_->reset();
 
     code_profiler_.reset();
@@ -630,6 +717,25 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
 
     uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
 
+    // Build flow descriptor before local ownership checks so every host
+    // assigns the same deterministic flow_uid for cross-host collation.
+    std::vector<FabricNodeId> descriptor_dsts = dst_node_ids;
+    std::sort(descriptor_dsts.begin(), descriptor_dsts.end());
+
+    FlowUid flow_uid = static_cast<FlowUid>(flow_descriptors_.size());
+    flow_descriptors_.push_back(FlowDescriptor{
+        .src_node_id = src_node_id,
+        .src_logical_core = src_logical_core,
+        .dst_node_ids = std::move(descriptor_dsts),
+        .dst_logical_core = dst_logical_core,
+        .link_id = traffic_config.link_id,
+        .vc_id = traffic_config.vc_id,
+        .chip_send_type = traffic_config.parameters.chip_send_type,
+        .noc_send_type = traffic_config.parameters.noc_send_type,
+        .num_packets = traffic_config.parameters.num_packets,
+        .payload_size_bytes = traffic_config.parameters.payload_size_bytes,
+    });
+
     TestTrafficSenderConfig sender_config = {
         .parameters = traffic_config.parameters,
         .src_node_id = traffic_config.src_node_id,
@@ -643,7 +749,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .payload_buffer_size = payload_buffer_size,
         .link_id = traffic_config.link_id,
         .noc_id = traffic_config.noc_id,
-        .vc_id = traffic_config.vc_id};
+        .vc_id = traffic_config.vc_id,
+        .flow_uid = flow_uid};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
@@ -651,7 +758,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .target_address = target_address,
         .atomic_inc_address = atomic_inc_address,
         .payload_buffer_size = payload_buffer_size,
-        .link_id = traffic_config.link_id};
+        .link_id = traffic_config.link_id,
+        .flow_uid = flow_uid};
 
     if (traffic_config.parameters.enable_flow_control) {
         TT_FATAL(

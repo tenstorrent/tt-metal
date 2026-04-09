@@ -979,6 +979,7 @@ void TestDevice::create_sender_kernels() {
 
         // Only clear result buffer from host if progress monitoring is enabled
         if (progress_monitoring_enabled_) {
+            sender_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(sender.configs_.size()));
             addresses_and_size_to_clear.push_back(
                 {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
         }
@@ -1072,6 +1073,7 @@ void TestDevice::create_receiver_kernels() {
 
         // Only clear result buffer from host if progress monitoring is enabled
         if (progress_monitoring_enabled_) {
+            receiver_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(receiver.configs_.size()));
             addresses_and_size_to_clear.push_back(
                 {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()});
         }

@@ -53,6 +53,8 @@ void kernel_main() {
     bool failed = false;
     uint64_t total_packets_received = 0;
 
+    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;
+
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
@@ -82,6 +84,17 @@ void kernel_main() {
                 traffic_config->advance();  // Automatically handles credit return
                 total_packets_received++;
 
+                if (total_packets_received % PROGRESS_UPDATE_INTERVAL == 0) {
+                    auto* per_config_results = get_per_config_results(receiver_config->get_result_buffer_address());
+                    uint64_t progress_packets_received = 0;
+                    for (uint8_t j = 0; j < NUM_TRAFFIC_CONFIGS; j++) {
+                        uint64_t config_packets = receiver_config->traffic_configs()[j]->num_packets_processed;
+                        progress_packets_received += config_packets;
+                        write_per_config_result(&per_config_results[j], config_packets);
+                    }
+                    write_test_packets(receiver_config->get_result_buffer_address(), progress_packets_received);
+                }
+
                 packets_left_to_validate |= traffic_config->has_packets_to_validate();
             } else {
                 total_packets_received += traffic_config->metadata.num_packets;
@@ -98,6 +111,18 @@ void kernel_main() {
 
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
+
+    // Final per-config flush so per-config data matches aggregate completion
+    {
+        auto* per_config_results = get_per_config_results(receiver_config->get_result_buffer_address());
+        uint64_t final_packets_received = 0;
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            uint64_t config_packets = receiver_config->traffic_configs()[i]->num_packets_processed;
+            final_packets_received += config_packets;
+            write_per_config_result(&per_config_results[i], config_packets);
+        }
+        total_packets_received = final_packets_received;
+    }
 
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);

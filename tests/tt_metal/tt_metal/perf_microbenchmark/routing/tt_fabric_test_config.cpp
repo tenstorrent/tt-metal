@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_config.hpp"
+#include "tt_fabric_test_constants.hpp"
 #include <optional>
 #include <variant>
 #include "routing/tt_fabric_test_common_types.hpp"
@@ -888,15 +889,42 @@ void CmdlineParser::print_help() {
     log_info(LogTest, "");
     log_info(LogTest, "Progress Monitoring Options:");
     log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
+    log_info(
+        LogTest,
+        "  --show-progress-detail                       Enable per-endpoint granular monitoring (implies "
+        "--show-progress).");
     log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
     log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
+    log_info(
+        LogTest,
+        "  --hung-confirmation-rounds <N>               Consecutive stall rounds before confirming hung (default: "
+        "3).");
+    log_info(
+        LogTest,
+        "  --wait-on-hang                               Block indefinitely on confirmed hang (interactive bringup "
+        "mode).");
+    log_info(
+        LogTest,
+        "  --validation-summary-file <path>              Summary report file path (default: "
+        "pairwise_validation_summary.log).");
+    log_info(
+        LogTest,
+        "  --validation-detail-file <path>               Detailed report file path (default: "
+        "pairwise_validation_detailed.log).");
 }
 
 // Display methods
 bool CmdlineParser::show_workers() { return test_args::has_command_option(input_args_, "--show-workers"); }
 
 // Progress monitoring methods
-bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
+bool CmdlineParser::show_progress() {
+    return test_args::has_command_option(input_args_, "--show-progress") ||
+           test_args::has_command_option(input_args_, "--show-progress-detail");
+}
+
+bool CmdlineParser::show_progress_detail() {
+    return test_args::has_command_option(input_args_, "--show-progress-detail");
+}
 
 uint32_t CmdlineParser::get_progress_interval() {
     return test_args::get_command_option_uint32(input_args_, "--progress-interval", 2);
@@ -904,6 +932,22 @@ uint32_t CmdlineParser::get_progress_interval() {
 
 uint32_t CmdlineParser::get_hung_threshold() {
     return test_args::get_command_option_uint32(input_args_, "--hung-threshold", 30);
+}
+
+uint32_t CmdlineParser::get_hung_confirmation_rounds() {
+    return test_args::get_command_option_uint32(input_args_, "--hung-confirmation-rounds", 3);
+}
+
+bool CmdlineParser::wait_on_hang() { return test_args::has_command_option(input_args_, "--wait-on-hang"); }
+
+std::string CmdlineParser::get_validation_summary_file() {
+    return test_args::get_command_option(
+        input_args_, "--validation-summary-file", std::string(DEFAULT_VALIDATION_SUMMARY_FILE));
+}
+
+std::string CmdlineParser::get_validation_detail_file() {
+    return test_args::get_command_option(
+        input_args_, "--validation-detail-file", std::string(DEFAULT_VALIDATION_DETAIL_FILE));
 }
 
 // YamlConfigParser private helpers

@@ -97,6 +97,26 @@ inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buff
     }
 }
 
+// Per-config result entry for per-endpoint progress tracking.
+// Layout must match the host-side definition in tt_fabric_test_memory_map.hpp exactly.
+struct PerConfigResult {
+    uint32_t packets_low;
+    uint32_t packets_high;
+};
+
+// Word index in the result buffer where per-config results begin
+static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
+
+inline tt_l1_ptr PerConfigResult* get_per_config_results(uint32_t result_buffer_base) {
+    return reinterpret_cast<tt_l1_ptr PerConfigResult*>(
+        result_buffer_base + PER_CONFIG_RESULT_BASE_WORD_INDEX * sizeof(uint32_t));
+}
+
+inline void write_per_config_result(tt_l1_ptr PerConfigResult* entry, uint64_t packets) {
+    entry->packets_low = static_cast<uint32_t>(packets);
+    entry->packets_high = static_cast<uint32_t>(packets >> 32);
+}
+
 struct SequentialDataPattern {
     static constexpr uint32_t WORD_SIZE = sizeof(uint32_t);
 

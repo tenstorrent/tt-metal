@@ -118,10 +118,12 @@ void kernel_main() {
             // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
             if constexpr (!BENCHMARK_MODE) {
                 if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
-                    // Calculate total packets sent across all traffic configs
+                    auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
                     uint64_t progress_packets_sent = 0;
                     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-                        progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                        uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                        progress_packets_sent += config_packets;
+                        write_per_config_result(&per_config_results[i], config_packets);
                     }
                     write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
                 }
@@ -143,10 +145,12 @@ void kernel_main() {
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
 
-    // Collect results from all traffic configs
+    // Final per-config flush so per-config data matches aggregate completion
+    auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-        auto* traffic_config = sender_config->traffic_config_ptrs[i];
-        total_packets_sent += traffic_config->num_packets_processed;
+        uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+        total_packets_sent += config_packets;
+        write_per_config_result(&per_config_results[i], config_packets);
     }
 
     // Write test results

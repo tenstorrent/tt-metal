@@ -59,8 +59,11 @@ struct ConnectionKey {
 // Hash function for ConnectionKey to enable unordered_map
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
-        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
-               (std::hash<uint8_t>()(key.vc_id) << 2) ^ (std::hash<FabricNodeId>()(key.dst_node_id) << 3);
+        std::size_t h = std::hash<int>()(static_cast<int>(key.direction));
+        h ^= std::hash<uint32_t>()(key.link_idx) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint8_t>()(key.vc_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<FabricNodeId>()(key.dst_node_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
     }
 };
 
