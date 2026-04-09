@@ -36,6 +36,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      force-scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Force a full scan even if no C++ changes are detected"
   workflow_dispatch:
     inputs:
       architecture:
@@ -66,6 +71,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      force-scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Force a full scan even if no C++ changes are detected"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -92,8 +102,9 @@ jobs:
       - id: compute-outputs
         shell: bash
         run: |
-          # Full scan on main or when .clang-tidy config changed
-          if [[ "${{ github.ref_name }}" == "main" ]] || \
+          # Full scan on main, when .clang-tidy config changed, or when forced
+          if [[ "${{ inputs.force-scan }}" == "true" ]] || \
+             [[ "${{ github.ref_name }}" == "main" ]] || \
              [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
             do_full_scan="true"
           else
