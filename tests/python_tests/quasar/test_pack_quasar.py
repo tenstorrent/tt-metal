@@ -64,9 +64,10 @@ def generate_qsr_pack_combinations(
 
     def get_dest_acc_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
-        # Having Int16 in src registers and Int32 in the dest register is not supported
+        # Int16 requires 16bit mode dest register
         if in_fmt == DataFormat.Int16:
             return (DestAccumulation.No,)
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
         if in_fmt.is_32_bit():
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)

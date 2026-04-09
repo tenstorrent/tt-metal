@@ -44,34 +44,45 @@ def generate_pack_untilize_combinations(
 
     Returns: List of (format, dest_acc, dest_sync, input_dimensions) tuples
     """
-    dest_sync_modes = (DestSync.Half, DestSync.Full)
+
+    def is_supported_format_conversion(in_fmt, out_fmt):
+        # Skip if mixing integer and non-integer formats
+        if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        # If input format is Int16, output format must also be Int16, and vice versa
+        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
+            return False
+        return True
+
+    def get_dest_acc_modes(in_fmt):
+        # Int16 requires 16bit mode dest register
+        if in_fmt == DataFormat.Int16:
+            return (DestAccumulation.No,)
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
+        if in_fmt.is_32_bit():
+            return (DestAccumulation.Yes,)
+        return (DestAccumulation.No, DestAccumulation.Yes)
+
     dimensions_cache = {
         (dest_acc, dest_sync): tuple(
             generate_unary_input_dimensions(dest_acc, dest_sync)
         )
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in dest_sync_modes
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
     combinations = []
-
     for fmt in formats_list:
-        in_fmt = fmt.input_format
+        in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (
-                (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Int16, DataFormat.Float16]
-                else (DestAccumulation.No, DestAccumulation.Yes)
-            )
-        )
+        if not is_supported_format_conversion(in_fmt, out_fmt):
+            continue
 
-        for dest_acc in dest_acc_modes:
-            for sync in dest_sync_modes:
-                for dimensions in dimensions_cache[(dest_acc, sync)]:
-                    combinations.append((fmt, dest_acc, sync, dimensions))
+        for dest_acc in get_dest_acc_modes(in_fmt):
+            for dest_sync in dest_sync_modes:
+                for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                    combinations.append((fmt, dest_acc, dest_sync, dimensions))
 
     return combinations
 
@@ -83,7 +94,6 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Int16,
         DataFormat.Int32,
     ],
-    same=True,
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
