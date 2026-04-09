@@ -120,10 +120,16 @@ jobs:
       - ${{ inputs.extra-tag || 'in-service' }}
     name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
