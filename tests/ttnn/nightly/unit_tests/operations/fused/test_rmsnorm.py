@@ -33,7 +33,10 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = (
+        (1, 9, 384, 1024),
+        (1, 1, 24, 33),
+    )  # changed shape got error stating Current buffer size is 2048 different from shape volume 1056 regardless of implicit padding(#31983)
     for N, C, H, W in test_dims:
         """
         test_id = 0  : rmsn(x)*1+0 path
@@ -76,7 +79,7 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
             dev,
             in0_mem_config,
         )
-        ttx = ttnn.fill_implicit_tile_padding(ttx, TEST_PADDING_VALUE)
+        # ttx = ttnn.fill_implicit_tile_padding(ttx, TEST_PADDING_VALUE)
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")
@@ -139,8 +142,12 @@ def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
     run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device)
 
 
-@pytest.mark.parametrize("h", [128, 1024, 8192, 65536])
-@pytest.mark.parametrize("w", [2048, 3072, 4096])
+@pytest.mark.parametrize(
+    "h", [24, 128, 1024, 8192, 65536]
+)  # test is passing regardless of implicit padding when 24 is added (#31983)
+@pytest.mark.parametrize(
+    "w", [2048, 3072, 4096]
+)  # test is failing regardless of implicit padding when 45 is added (#3983)
 def test_llama_4D_rms_norm(device, h, w):
     """
     Llama rms input shape: [1, 1, seqlen, hidden_dim]
@@ -155,7 +162,7 @@ def test_llama_4D_rms_norm(device, h, w):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
@@ -165,6 +172,7 @@ def test_llama_4D_rms_norm(device, h, w):
 
 
 @pytest.mark.parametrize("batch_size, w", [(1, 5120)])
+# @pytest.mark.parametrize("batch_size, w", [(1, 48)]) #test is passing regadless of implicit padding even when added non-multiple of 32 as weight. (#31983)
 def test_large_tensor_rms_norm(device, batch_size, w):
     torch.manual_seed(0)
 

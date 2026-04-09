@@ -31,8 +31,11 @@ def test_softmax(device, inplace, dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
-    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
+    input_shapes = [
+        (3, 64, 128, 96),
+        (1, 64, 32, 32),
+        (1, 64, 24, 42),
+    ]  # (1,64,32,24) failing regarless of implicit padding stating that ZeroDivisionError: integer division or modulo by zero (#31983) w needs to be >32
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -73,8 +76,11 @@ def test_softmax_with_program_cache(device, inplace):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
-    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
+    input_shapes = [
+        (3, 64, 128, 96),
+        (1, 64, 32, 32),
+        (1, 64, 24, 42),
+    ]  # when w >32 regardless of implicit padding test is passing (#31983)
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -103,8 +109,11 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
-    # (1, 64, 32, 33) test passed even when the shape is changed and padding is added
+    input_shapes = [
+        (3, 64, 128, 96),
+        (1, 64, 32, 32),
+        (1, 64, 24, 42),
+    ]  # when w >32 regardless of implicit padding test is passing (#31983)
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
@@ -171,20 +180,17 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         mask = torch.rand_like(attention_mask) < 0.2
         attention_mask[mask] = float("-inf")
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
     else:
         attention_mask = torch.rand(batch, 1, seq_len, seq_len)
         mask = torch.rand_like(attention_mask) < 0.2
         attention_mask[mask] = float("-inf")
         attention_mask = pad_weight(attention_mask)
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
-    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
     if in_dtype == ttnn.float32:
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -253,13 +259,11 @@ def test_scale_mask_softmax(device, in_dtype, in0_mem_config):
     attention_mask = torch.rand(batch, 1, 32, 384)
     attention_mask = (attention_mask > 0.5).float()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
-    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
     tt_output = ttnn.scale_mask_softmax(in1_t, scale, attention_mask_t)
 

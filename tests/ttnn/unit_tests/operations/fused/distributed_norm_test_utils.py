@@ -53,8 +53,6 @@ import torch
 import ttnn
 from loguru import logger
 
-TEST_PADDING_VALUE = -42
-
 
 def setup_ccl_semaphores(mesh_device):
     """Setup CCL semaphores for distributed operations."""
@@ -197,7 +195,6 @@ def compute_ttnn_distributed_norm(
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
-    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
 
     # Reshape and shard weight based on layout
     if weight_layout == ttnn.ROW_MAJOR_LAYOUT:

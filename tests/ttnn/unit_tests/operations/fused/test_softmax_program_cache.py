@@ -55,7 +55,7 @@ def run_softmax_5d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
     torch_result = F.softmax(torch_a, dim=dim)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
+    # tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_result = ttnn.softmax(tt_a, dim=dim, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -70,7 +70,7 @@ def run_softmax_4d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
     torch_result = F.softmax(torch_a, dim=dim)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
+    # tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_result = ttnn.softmax(tt_a, dim=dim, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)

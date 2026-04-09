@@ -20,8 +20,8 @@ shapes = [
     [1, 1, 32, 32],
     [1, 1, 32, 128],
     [1, 2, 128, 128],
-    [1, 1, 32, 33],
-]  # [1, 1, 32, 33] Implicit padding case - softmax handles padding correctly #31984
+    [1, 1, 28, 42],  # [1, 1, 28, 42] passing regardless of implicit padding #31983
+]
 
 
 @pytest.mark.parametrize("shape", shapes)

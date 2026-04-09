@@ -26,7 +26,10 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = (
+        (1, 9, 384, 1024),
+        (1, 1, 24, 42),
+    )  # test is passing even for the non-multiple of 32 dims with implicit padding #(#31983)
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
@@ -219,8 +222,12 @@ def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config,
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
 
 
-@pytest.mark.parametrize("h", [1632, 8192, 16384])
-@pytest.mark.parametrize("w", [1280])
+@pytest.mark.parametrize(
+    "h", [1632, 8192, 16384, 22]
+)  # here 22 is added as non-multiple of 32 for implicit padding check (#31983)
+@pytest.mark.parametrize(
+    "w", [1280, 45]
+)  # here 45 is added as non-multiple of 32 for implicit padding check (#31983) test is passing
 @pytest.mark.parametrize("num_chunks", [1, 4])
 def test_layer_norm_4D_llama(device, h, w, num_chunks):
     """
