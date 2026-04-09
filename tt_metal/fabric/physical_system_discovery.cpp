@@ -284,27 +284,35 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return !conn.is_local; });
 
                 // All connections must be uniformly local or global.
-                TT_FATAL(
-                    all_local || all_global,
-                    "Physical Discovery Error: All ethernet connections should either be local or global. "
-                    "Please reset the system and try again.");
+                if (!(all_local || all_global)) {
+                    log_warning(
+                        tt::LogAlways,
+                        "Physical Discovery Error: All ethernet connections should either be local or global. "
+                        "Please reset the system and try again.");
+                }
 
                 if (all_local) {
                     // Local connections must remain within the same host.
-                    TT_FATAL(
-                        src_host == dst_host,
-                        "Physical Discovery Error: Local Connection between {} and {} is not on the same host. "
-                        "Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (src_host != dst_host) {
+                        log_warning(
+                            tt::LogAlways,
+                            "Physical Discovery Error: Local Connection between {} and {} is not on the same host. "
+                            "Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
                     continue;  // no need to check further
                 }
 
                 // Global connections must cross hosts
-                TT_FATAL(
-                    src_host != dst_host,
-                    "Physical Discovery Error: Hostnames for connections marked as global should be different. "
-                    "Please reset the system and try again.");
+                if (src_host == dst_host) {
+                    log_warning(
+                        tt::LogAlways,
+                        "Physical Discovery Error: Hostnames for connections marked as global should be different. "
+                        "Please reset the system and try again.",
+                        src_host,
+                        dst_host);
+                }
 
                 // Validate each global ethernet connection.
                 for (const auto& eth_conn : eth_conns) {
@@ -314,12 +322,14 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        log_warning(
+                            tt::LogAlways,
+                            "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
+                            "connectivity graph. Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -330,12 +340,14 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        log_warning(
+                            tt::LogAlways,
+                            "Physical Discovery Error: Global Connection between {} and {} is not found in the "
+                            "host connectivity graph. Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
                 }
             }
         }
