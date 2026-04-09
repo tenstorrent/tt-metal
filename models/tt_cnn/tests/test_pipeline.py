@@ -393,3 +393,78 @@ def test_get_dram_sharded_memory_config_for_tensor_invalid_grid_size():
     shape = (1, 1, 64, 64)
     with pytest.raises(ValueError):
         get_memory_config_for_persistent_dram_tensor(shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, dram_grid_size)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_multicq_pipelined_read_event_ordering(device):
+    """
+    Regression test for the MultiCQ read_event race condition (issue #41720).
+
+    The bug: MultiCQTracedModelPipelinedIOExecutor._read_output_from_device() recorded
+    read_event on CQ_IO *before* yielding dram_output_tensor to Pipeline for D2H transfer.
+    CQ_OPS then saw read_event as already signaled and overwrote dram_output_tensor while
+    the D2H was still in flight, producing silent data corruption.
+
+    The fix: read_event must be recorded AFTER Pipeline enqueues the D2H transfer
+    via Executor.signal_read_complete(). This test enforces that contract by:
+      1. Counting signal_read_complete() calls and asserting one call per output tensor.
+      2. Running multiple rounds with known inputs and asserting output correctness —
+         any reintroduction of the pre-D2H recording will corrupt results.
+    """
+    input_shape = (1, 1, 512, 64)
+    dram_cores = 4
+    l1_cores = 8
+
+    # Use identity model: input == expected output, making corruption trivially detectable.
+    model, reference_model = create_identity_test_model(input_shape)
+
+    pipelined_config = next(c for c in EXECUTOR_CONFIGS if c.name == "MultiCQTracedModelPipelinedIOExecutor")
+    pipe = create_pipeline_for_executor_config(pipelined_config, model, device, input_shape, dram_cores, l1_cores)
+
+    # Instrument signal_read_complete() to verify it is called exactly once per output.
+    signal_call_count = [0]
+    original_signal = pipe.executor.signal_read_complete
+
+    def counting_signal():
+        signal_call_count[0] += 1
+        original_signal()
+
+    pipe.executor.signal_read_complete = counting_signal
+
+    sample_input, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+    pipe.compile(sample_input)
+
+    num_rounds = 3
+    round_size = 32
+    all_outputs = []
+    all_references = []
+
+    for _ in range(num_rounds):
+        round_inputs = []
+        round_references = []
+        for _ in range(round_size):
+            ttnn_input, torch_input = create_input_tensors(input_shape, device=None, memory_config=None)
+            round_inputs.append(ttnn_input)
+            round_references.append(reference_model(torch_input))
+
+        outputs = pipe.enqueue(round_inputs).pop_all()
+        all_outputs.extend(outputs)
+        all_references.extend(round_references)
+
+    pipe.cleanup()
+
+    expected_calls = num_rounds * round_size
+    assert signal_call_count[0] == expected_calls, (
+        f"signal_read_complete() was called {signal_call_count[0]} times but expected {expected_calls}. "
+        "Pipeline must call signal_read_complete() exactly once per output, after enqueueing D2H, "
+        "so that CQ_OPS cannot overwrite dram_output_tensor before the transfer completes."
+    )
+
+    assert len(all_outputs) == len(all_references)
+    for i, (output, reference) in enumerate(zip(all_outputs, all_references)):
+        assert output.storage_type() == ttnn.StorageType.HOST, f"Output {i} not on host"
+        assert_equal(ttnn.to_torch(output), reference)

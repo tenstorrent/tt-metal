@@ -193,6 +193,12 @@ jobs:
         # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
         # for now. No forks!
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        # The merge queue uses an ephemeral temporary SHA. phoenix-actions creates a check run
+        # against github.sha, but between create() and update() the merge queue can discard that
+        # commit → 404 Not Found. The action is also unmaintained (last commit May 2024) so this
+        # will never be fixed upstream. continue-on-error prevents this from blocking the gate.
+        # Proper fix (replace with mikepenz/action-junit-report): #41519
+        continue-on-error: true
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
           name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})

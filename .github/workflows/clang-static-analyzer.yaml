@@ -14,11 +14,6 @@ on:
         type: string
         default: ""
 
-env:
-  # Always use the latest ci-build image — CSA runs on main HEAD and
-  # is unlikely to be paired with container changes.
-  CSA_IMAGE: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
-
 jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
@@ -26,7 +21,9 @@ jobs:
     timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
-      image: ${{ env.CSA_IMAGE }}
+      # Always use the latest ci-build image — CSA runs on main HEAD and
+      # is unlikely to be paired with container changes.
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
       volumes:
         - ${{ github.workspace }}:/work
         # HACK: make actions available inside container
