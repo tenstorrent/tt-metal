@@ -7,6 +7,35 @@ import math
 import ttnn
 
 
+def _infer_hw_from_flattened(sf, expected_h, expected_w):
+    if sf <= 0:
+        return expected_h, expected_w
+    if sf % expected_w == 0:
+        return sf // expected_w, expected_w
+    if sf % expected_h == 0:
+        return expected_h, sf // expected_h
+    s = int(math.sqrt(sf))
+    if s * s == sf:
+        return s, s
+
+    expected_ratio = expected_h / max(expected_w, 1)
+    best_h, best_w = 1, sf
+    best_err = abs((best_h / best_w) - expected_ratio)
+    d = 1
+    while d * d <= sf:
+        if sf % d == 0:
+            h1, w1 = d, sf // d
+            h2, w2 = sf // d, d
+            err1 = abs((h1 / max(w1, 1)) - expected_ratio)
+            err2 = abs((h2 / max(w2, 1)) - expected_ratio)
+            if err1 < best_err:
+                best_h, best_w, best_err = h1, w1, err1
+            if err2 < best_err:
+                best_h, best_w, best_err = h2, w2, err2
+        d += 1
+    return best_h, best_w
+
+
 def untilize_tile_for_conv2d_dram(x):
     """TILE activations + conv2d_DRAM can hit reshape volume mismatches; ROW_MAJOR avoids it."""
     if x.get_layout() == ttnn.TILE_LAYOUT:
@@ -92,24 +121,23 @@ class Yolov11Conv2D:
             input_width = x.shape[2]
             batch_size = x.shape[0]
         else:
-            batch_size = self.conv.batch_size
+            # Keep batch consistent with runtime tensor to avoid conv2d internal reshape volume mismatches.
+            batch_size = x.shape[0]
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        # Match flattened spatial size to conv2d reshape expectations. TILE activations can report padded sf; trim on
-        # TILE can mismatch conv2d_DRAM — untilize when sf > H*W only. Do not blanket TILE→ROW_MAJOR for every conv:
-        # that breaks SPPF max_pool2d (halo segfault). Use bottleneck untilize and selective calls in ttnn_yolov11.py.
+        # Match flattened spatial size to conv2d reshape expectations.
+        # Runtime flattened spatial can differ from static model metadata in either direction.
         if not self.is_detect and not self.is_dfl:
             sf = x.shape[2]
             logical_hw = input_height * input_width
-            if sf > logical_hw:
+            if sf != logical_hw:
                 if x.get_layout() == ttnn.TILE_LAYOUT:
                     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                x = x[:, :, :logical_hw, :]
-                sf = logical_hw
-            s = int(math.sqrt(sf))
-            if s * s == sf:
-                input_height = input_width = s
+                if sf > logical_hw:
+                    x = x[:, :, :logical_hw, :]
+                    sf = logical_hw
+                input_height, input_width = _infer_hw_from_flattened(sf, input_height, input_width)
 
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
@@ -145,31 +173,17 @@ class Yolov11Conv2D:
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
-    for i in range(len(input_tensors)):
-        if input_tensors[i].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            input_tensors[i] = ttnn.to_layout(input_tensors[i], ttnn.ROW_MAJOR_LAYOUT)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-    shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    out_shard_width = 0
-    for i in range(len(input_tensors)):
-        w = input_tensors[i].shape[-1]
-        out_shard_width += w
-        per_tensor_sharded_memory_config = ttnn.create_sharded_memory_config(
-            (shard_height, w),
-            core_grid=shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], per_tensor_sharded_memory_config)
-    output_sharded_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, out_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
-    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+    interleaved_inputs = []
+    for tensor in input_tensors:
+        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        if tensor.is_sharded():
+            interleaved_inputs.append(ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        else:
+            interleaved_inputs.append(ttnn.to_memory_config(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    output = ttnn.concat(tuple(interleaved_inputs), dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if to_interleaved:
-        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return output
 

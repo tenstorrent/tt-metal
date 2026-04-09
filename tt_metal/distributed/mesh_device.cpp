@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -402,7 +402,14 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::shared_ptr<MeshDevice>(),
         context_id);
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    mesh_device->pimpl_->initialize_impl(
+        mesh_device.get(),
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        l1_bank_remap,
+        /*minimal=*/false);
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {

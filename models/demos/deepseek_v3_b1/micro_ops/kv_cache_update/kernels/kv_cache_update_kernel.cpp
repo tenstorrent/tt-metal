@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // KV Cache Update kernel: uses KVCacheUpdate Op from kv_cache_update.hpp
@@ -30,17 +30,17 @@ void kernel_main() {
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
         .local_cur_pos = 0,
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
-        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
         .kv_cache_cur_pos_ready_semaphore_addr =
             get_semaphore(get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_id")),
+        .k_chunk_size = 0,
+        .num_cores_per_head = 0,
+        .mla_sender_noc_x = {},
+        .mla_sender_noc_y = {},
     };
 #elif defined(COMPILE_FOR_BRISC)
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs args{
@@ -54,6 +54,7 @@ void kernel_main() {
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
     };
 
     deepseek_compute_kernel_init();

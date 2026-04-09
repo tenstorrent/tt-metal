@@ -5,6 +5,8 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_free_list_opt_allocator.cpp
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
+    allocator/test_per_core_bank_manager.cpp
+    allocator/test_per_core_allocation.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
@@ -21,6 +23,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_program_spec.cpp
+    metal2_host_api/test_program_run_params.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp

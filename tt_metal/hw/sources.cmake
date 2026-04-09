@@ -5,7 +5,9 @@ set(HW_JIT_API_HEADERS
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
+    inc/api/debug/checkpoint.h
     inc/api/debug/dprint.h
+    inc/api/debug/dump.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
     inc/api/debug/dprint_pages.h
@@ -25,6 +27,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/page.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
+    inc/api/compute/atan2.h
     inc/api/compute/bcast.h
     inc/api/compute/binary_bitwise_sfpu.h
     inc/api/compute/binary_comp.h
@@ -182,6 +185,8 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/tt-1xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/dataflow_buffer.inl
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h

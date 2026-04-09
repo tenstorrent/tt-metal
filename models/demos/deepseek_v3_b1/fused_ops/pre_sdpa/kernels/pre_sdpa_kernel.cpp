@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Pre-SDPA unified kernel
@@ -234,21 +234,33 @@ if constexpr (!Core::skip_ccl) {
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
 
-    // Gather sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::SenderArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_src_cb"),
-        get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("dkv_gather_row_major"),
-        get_write_ptr(get_named_compile_time_arg_val(
-            "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+    // Gather args: both sender and receiver on NCRISC (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
+                get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_src_cb"),
+                get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("dkv_gather_row_major"),
+                get_write_ptr(get_named_compile_time_arg_val(
+                    "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+            },
+        .receiver =
+            {
+                get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_dst_cb"),
+                get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+            },
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -273,17 +285,37 @@ if constexpr (!Core::skip_ccl) {
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(5),
         .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
-        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
         .kv_cache_cur_pos_ready_semaphore_addr =
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
+        .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+        .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+        .mla_sender_noc_x =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_x_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_7"),
+            },
+        .mla_sender_noc_y =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_y_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_7"),
+            },
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -453,14 +485,10 @@ if constexpr (!Core::skip_ccl) {
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
 
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_dst_cb"),
-        get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+    // Gather: BRISC is no-op (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender = {},
+        .receiver = {},
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -488,6 +516,9 @@ if constexpr (!Core::skip_ccl) {
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .num_mcast_dests = get_named_compile_time_arg_val("mla_num_mcast_dests"),
             .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .St = get_named_compile_time_arg_val("St"),
             .DHt = get_named_compile_time_arg_val("DHt"),
@@ -685,6 +716,7 @@ if constexpr (!Core::skip_ccl) {
         .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
         .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
         .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
+        .kv_cache_intermed_sync_cb = get_common_arg_val<uint32_t>(7),
     };
     deepseek_b1_ops::FlashMLADecode::ComputeArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
@@ -798,7 +830,7 @@ if constexpr (!Core::skip_ccl) {
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(6);
 #elif defined(COMPILE_FOR_TRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(8);
 #endif
 
     // ========================================================================
@@ -986,7 +1018,8 @@ if constexpr (!Core::skip_ccl) {
             // ================================================================
             {
                 DeviceZoneScopedN("DKV_GATHER");
-                deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+                deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
+                    dkv_gather;
                 dkv_gather(dkv_gather_args);
             }
 

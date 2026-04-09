@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -227,7 +227,7 @@ class Pipeline:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
         self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
@@ -294,6 +294,11 @@ class Pipeline:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
+
+    def export_host_socket_descriptors(self, prefix: str) -> None:
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.setup_and_run() must complete before exporting host socket descriptors")
+        self._pipeline_block.export_host_socket_descriptors(prefix)
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()

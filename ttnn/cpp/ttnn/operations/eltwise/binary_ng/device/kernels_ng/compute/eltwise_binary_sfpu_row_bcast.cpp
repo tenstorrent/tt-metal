@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include "api/compute/quantization.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_fmod.h"
+#include "api/compute/atan2.h"
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"

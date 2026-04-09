@@ -8,7 +8,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
-from models.demos.yolov8l.common import load_torch_model
+from models.demos.yolov8l.common import YOLOV8L_INPUT_H, YOLOV8L_INPUT_W, load_torch_model
 from models.demos.yolov8l.tt.tt_yolov8l_utils import create_custom_mesh_preprocessor
 from models.demos.yolov8l.tt.ttnn_yolov8l import TtYolov8lModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -23,6 +23,8 @@ class YOLOv8lPerformanceRunnerInfra:
         mesh_mapper=None,
         mesh_composer=None,
         weights_mesh_mapper=None,
+        inp_h=None,
+        inp_w=None,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -37,11 +39,14 @@ class YOLOv8lPerformanceRunnerInfra:
         self.mesh_composer = mesh_composer
         self.weights_mesh_mapper = weights_mesh_mapper
         self.num_devices = device.get_num_devices()
-        input_shape = (self.batch_size, 3, 640, 640)
-        inp_h, inp_w = input_shape[2], input_shape[3]
+        inp_h = YOLOV8L_INPUT_H if inp_h is None else inp_h
+        inp_w = YOLOV8L_INPUT_W if inp_w is None else inp_w
+        input_shape = (self.batch_size, 3, inp_h, inp_w)
         parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(device, self.weights_mesh_mapper),
+            custom_preprocessor=create_custom_mesh_preprocessor(
+                device, self.weights_mesh_mapper, inp_h=inp_h, inp_w=inp_w
+            ),
             device=device,
         )
         self.ttnn_yolov8_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
@@ -80,7 +85,7 @@ class YOLOv8lPerformanceRunnerInfra:
         return tt_inputs_host, input_mem_config
 
     def _setup_dram_sharded_input(self, device, torch_input_tensor=None):
-        tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(device)
+        tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(device, torch_input_tensor=torch_input_tensor)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet(
@@ -114,3 +119,27 @@ class YOLOv8lPerformanceRunnerInfra:
                     ttnn.deallocate(sub_t)
             else:
                 ttnn.deallocate(t)
+
+
+def yolov8l_dram_sharded_input_from_torch(device, torch_input_tensor):
+    """Upload NCHW tensor to device in DRAM height-sharded layout (same as performant-runner staging)."""
+    assert torch_input_tensor.ndim == 4, "Expected input shape (N, C, H, W)"
+    input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+    tt_inputs_host = ttnn.from_host_shards(
+        [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+    )
+    dram_grid_size = device.dram_grid_size()
+    dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+        ),
+        [
+            divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
+            tt_inputs_host.shape[-1],
+        ],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config_DRAM = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+    )
+    return tt_inputs_host.to(device, sharded_mem_config_DRAM)

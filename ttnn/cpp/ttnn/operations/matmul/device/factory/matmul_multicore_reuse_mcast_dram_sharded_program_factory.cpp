@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -327,7 +327,8 @@ create_program_dram_sharded(
         // semahpre valid
         (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
         //
-        (std::uint32_t)num_blocks_per_shard};
+        (std::uint32_t)num_blocks_per_shard,
+        (std::uint32_t)in0_block_w};
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         (std::uint32_t)in1_buffer_page_size,

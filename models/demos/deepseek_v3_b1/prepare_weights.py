@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,13 +26,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, ShardMeshMapper, SourceTensorSelection, TensorTarget
 
-# Bump when any standalone tensor preprocessing logic changes to invalidate caches.
-CURRENT_TRANSFORM_VERSION = 1
-
+OverlappedTensor = ttnn.OverlappedTensor
 
 # Serialization: manifest version and dtype name mapping
 _MANIFEST_VERSION = 1
@@ -620,40 +618,43 @@ def prepare_attention_weights(
     logger.debug("Loaded raw tensors in {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
-    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
-        q_a, q_b, kv_a, move_to_device=move_to_device
-    )
-    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device)
-    logger.debug("Converted q_ab_kv_a + kv_b12 in {:.3f}s", time.perf_counter() - t0)
+    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=move_to_device)
+    q_a_proj, q_b_proj, kv_a_proj = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
+    kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device)
+    kv_b1_proj, kv_b2_proj = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
+    logger.debug("  convert q_ab_kv_a + kv_b12: {:.3f}s", time.perf_counter() - t0)
 
     if is_moe:
         gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
             o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
-        o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-
-        _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
+        o_proj_ot = o_norms["o_proj"]
+        gate_mm_ot = o_norms["gate_mm"]
+        attn_norm_ot = o_norms["attn_norm"]
+        q_norm_ot = o_norms["q_norm"]
+        ffn_norm_ot = o_norms["ffn_norm"]
+        kv_norm_ot = o_norms["kv_norm"]
+        _gate_bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
         if cache_config is not None:
             target = _gate_bias_target(layer_idx)
             fingerprint = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=(_bias_key,)),
+                source=SourceTensorSelection(names=(_gate_bias_key,)),
                 target=target,
             )
             gate_bias_tt = cache_config.cache.get_or_create(
                 fingerprint,
                 bdw._device,
-                preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
-                raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
+                preprocess=lambda t: {target.name: t[_gate_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
+                raw_tensors=lambda: {_gate_bias_key: state_dict[_gate_bias_key]},
             )
         else:
             gate_bias_tt = create_gate_bias_tensor(
-                state_dict[_bias_key],
+                state_dict[_gate_bias_key],
                 bdw._device,
                 move_to_device=move_to_device,
             )
-
-        logger.debug("Converted o_proj_gate_mm_norms (MoE) in {:.3f}s", time.perf_counter() - t0)
+        logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
@@ -675,8 +676,12 @@ def prepare_attention_weights(
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
             o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
-        o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-        logger.debug("Converted o_proj_gate_mm_norms (dense) in {:.3f}s", time.perf_counter() - t0)
+        o_proj_ot = o_norms["o_proj"]
+        attn_norm_ot = o_norms["attn_norm"]
+        q_norm_ot = o_norms["q_norm"]
+        ffn_norm_ot = o_norms["ffn_norm"]
+        kv_norm_ot = o_norms["kv_norm"]
+        logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
@@ -1332,14 +1337,10 @@ _OVERLAPPED_SERIALIZED_FIELDS = {
     "byte_offset",
     "total_size",
 }
-_OVERLAPPED_SKIP_FIELDS = {"fused_tensor"}
 
 
 def _overlapped_tensor_to_json(ot: OverlappedTensor) -> dict:
     """Serialize one OverlappedTensor's metadata to a JSON-serializable dict."""
-    all_fields = {f.name for f in fields(OverlappedTensor)}
-    missing = all_fields - _OVERLAPPED_SERIALIZED_FIELDS - _OVERLAPPED_SKIP_FIELDS
-    assert not missing, f"OverlappedTensor has new fields not serialized: {missing}"
     dtype_str = _DTYPE_TO_STR.get(ot.dtype)
     if dtype_str is None:
         dtype_str = str(ot.dtype)
@@ -1426,18 +1427,20 @@ def _dump_overlapped_fusion_groups(
     layer_dir: Path,
     field_tuples: list[tuple[str, OverlappedTensor]],
 ) -> dict:
-    """Dump fused tensors for the given (field_name, OverlappedTensor) pairs; return fusion_groups dict."""
-    by_fused: dict[int, list[tuple[str, OverlappedTensor]]] = {}
+    """Dump fused tensors for the given (field_name, OverlappedTensor) pairs; return fusion_groups dict.
+
+    Groups fields by their fusion group name (from ``_FIELD_TO_FUSION_GROUP``)
+    rather than by Python object identity, because the C++ OverlappedTensor may
+    return a fresh wrapper from ``.fused_tensor`` on each access.
+    """
+    by_group: dict[str, list[tuple[str, OverlappedTensor]]] = {}
     for name, ot in field_tuples:
-        fid = id(ot.fused_tensor)
-        if fid not in by_fused:
-            by_fused[fid] = []
-        by_fused[fid].append((name, ot))
-    fusion_groups: dict[str, dict] = {}
-    for fid, group_fields in by_fused.items():
-        group_name = _FIELD_TO_FUSION_GROUP.get(group_fields[0][0])
+        group_name = _FIELD_TO_FUSION_GROUP.get(name)
         if group_name is None:
-            raise KeyError(f"Unknown field for fusion group: {group_fields[0][0]}")
+            raise KeyError(f"Unknown field for fusion group: {name}")
+        by_group.setdefault(group_name, []).append((name, ot))
+    fusion_groups: dict[str, dict] = {}
+    for group_name, group_fields in by_group.items():
         tensorbin_name = f"{group_name}.tensorbin"
         ttnn.dump_tensor(layer_dir / tensorbin_name, group_fields[0][1].fused_tensor)
         fusion_groups[group_name] = {

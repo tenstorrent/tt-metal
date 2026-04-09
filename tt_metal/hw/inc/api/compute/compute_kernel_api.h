@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -199,6 +199,11 @@ ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init<A
  */
 // clang-format on
 ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst))); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void signbit_tile_int32_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_int32_init<APPROX>())); }
 
 // clang-format off
 /**

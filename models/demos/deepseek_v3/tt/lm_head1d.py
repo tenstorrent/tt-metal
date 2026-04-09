@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -63,8 +63,8 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
-            1, 0
+        weight_tensor = (
+            get_dequantized_tensor(state_dict, "weight").permute(1, 0).contiguous()
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
 

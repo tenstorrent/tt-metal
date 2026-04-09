@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -176,6 +176,58 @@
             std::nullopt,                                                            \
             std::nullopt,                                                            \
             lhs,                                                                     \
+            post_activations,                                                        \
+            lhs_activations,                                                         \
+            rhs_activations,                                                         \
+            use_legacy,                                                              \
+            /*fast_and_approximate_mode*/ false,                                     \
+            sub_core_grids);                                                         \
+    }
+
+#define TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(NAME, OP_TYPE)                     \
+    Tensor NAME(                                                                     \
+        const Tensor& lhs,                                                           \
+        const Tensor& rhs,                                                           \
+        const std::optional<MemoryConfig>& memory_config,                            \
+        const std::optional<Tensor>& output,                                         \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
+        std::optional<bool> use_legacy,                                              \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                         \
+        return ttnn::detail::invoke_binary_ng(                                       \
+            lhs,                                                                     \
+            rhs,                                                                     \
+            operations::binary::BinaryOpType::OP_TYPE,                               \
+            std::nullopt,                                                            \
+            memory_config,                                                           \
+            output,                                                                  \
+            post_activations,                                                        \
+            lhs_activations,                                                         \
+            rhs_activations,                                                         \
+            use_legacy,                                                              \
+            /*fast_and_approximate_mode*/ false,                                     \
+            sub_core_grids);                                                         \
+    }
+
+#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(NAME, OP_TYPE)                      \
+    Tensor NAME(                                                                     \
+        const Tensor& lhs,                                                           \
+        int32_t rhs,                                                                 \
+        const std::optional<MemoryConfig>& memory_config,                            \
+        const std::optional<Tensor>& output,                                         \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
+        std::optional<bool> use_legacy,                                              \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                         \
+        return ttnn::detail::invoke_binary_ng(                                       \
+            lhs,                                                                     \
+            rhs,                                                                     \
+            operations::binary::BinaryOpType::OP_TYPE,                               \
+            std::nullopt,                                                            \
+            memory_config,                                                           \
+            output,                                                                  \
             post_activations,                                                        \
             lhs_activations,                                                         \
             rhs_activations,                                                         \
@@ -1148,6 +1200,18 @@ TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_INPLACE_IMPL(squared_difference_, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_right_shift, RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_right_shift, RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(logical_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(xlogy, XLOGY)
 TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(xlogy, XLOGY)
 
@@ -1386,6 +1450,8 @@ TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(rsub_, RSUB)
 TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(bias_gelu_, BIAS_GELU)
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_IMPL
 #undef TTNN_BINARY_OP_TENSOR_FLOAT_IMPL
+#undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL
+#undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL_IMPL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE_IMPL

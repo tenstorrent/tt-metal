@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -278,7 +278,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
         try:
             import ttnn.operation_tracer
 
-            ttnn.operation_tracer._ENABLE_TRACE = True
+            ttnn.operation_tracer.enable_tracing(True)
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
@@ -341,7 +341,7 @@ def _create_main_proc_runner(module_name, input_queue, output_queue, config):
         try:
             import ttnn.operation_tracer
 
-            ttnn.operation_tracer._ENABLE_TRACE = True
+            ttnn.operation_tracer.enable_tracing(True)
             logger.info("Operation tracing enabled in main process mode")
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
@@ -654,7 +654,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("status")
             test_vector.pop("validity")
 
+            import ttnn.operation_tracer
+
             try:
+                ttnn.operation_tracer.set_sweep_source_hash(input_hash)
                 result = _execute_vector_with_retry(
                     test_vector,
                     module_name,
@@ -700,6 +703,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                 result["exception"] = str(e)
                 result["e2e_perf"] = None
+            finally:
+                ttnn.operation_tracer.set_sweep_source_hash(None)
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -277,7 +277,7 @@ def _verify_layer_on_4x2_grid(
     # q_ab_kv_a
     if not _check_on_device(loaded.q_a_proj.fused_tensor, "q_a_proj.fused_tensor"):
         return False
-    fid = id(loaded.q_a_proj.fused_tensor)
+    fid = loaded.q_a_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         if not _check_topology(loaded.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "q_ab_kv_a"):
@@ -285,7 +285,7 @@ def _verify_layer_on_4x2_grid(
     # o_proj_gate_mm_norms
     if not _check_on_device(loaded.o_proj.fused_tensor, "o_proj.fused_tensor"):
         return False
-    fid = id(loaded.o_proj.fused_tensor)
+    fid = loaded.o_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         if not _check_topology(loaded.o_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "o_proj_gate_mm_norms"):
@@ -293,7 +293,7 @@ def _verify_layer_on_4x2_grid(
     # kv_b12
     if not _check_on_device(loaded.kv_b1_proj.fused_tensor, "kv_b1_proj.fused_tensor"):
         return False
-    fid = id(loaded.kv_b1_proj.fused_tensor)
+    fid = loaded.kv_b1_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         if not _check_topology(loaded.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_0, "kv_b12"):
@@ -301,7 +301,7 @@ def _verify_layer_on_4x2_grid(
     # gate_up
     if not _check_on_device(loaded.shared_gate_proj.fused_tensor, "shared_gate_proj.fused_tensor"):
         return False
-    fid = id(loaded.shared_gate_proj.fused_tensor)
+    fid = loaded.shared_gate_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         if not _check_topology(loaded.shared_gate_proj.fused_tensor, _PLACEMENTS_SHARD_0_1, "gate_up"):

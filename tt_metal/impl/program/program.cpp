@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -225,6 +225,11 @@ Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
+Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::move(impl)) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+}
+
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
@@ -374,6 +379,90 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     TT_ASSERT(false, "Did not find kernel id across all core types!");
     return nullptr;
 }
+
+// ============================================================================
+// Metal 2.0 Name Registry Methods
+// ============================================================================
+
+void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->kernel_handles.try_emplace(name, handle);
+    TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
+}
+
+void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->dfb_handles.try_emplace(name, dfb_id);
+    TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
+}
+
+void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->semaphore_handles.try_emplace(name, sem_id);
+    TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
+}
+
+KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->kernel_handles.find(name);
+    TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
+    return it->second;
+}
+
+uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->dfb_handles.find(name);
+    TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
+    return it->second;
+}
+
+uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->semaphore_handles.find(name);
+    TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
+    return it->second;
+}
+
+void ProgramImpl::register_kernel_rta_schema(
+    const KernelSpecName& name,
+    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+    size_t num_common_runtime_args) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
+        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
+    TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
+}
+
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->kernel_rta_schemas.find(name);
+    if (it == metal2_registry_->kernel_rta_schemas.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<KernelSpecName> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->kernel_handles.size());
+        for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+// ============================================================================
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
@@ -852,6 +941,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
 CBHandle detail::ProgramImpl::add_circular_buffer(
     const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config);
@@ -863,6 +954,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     const CircularBufferConfig& config,
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
@@ -1888,6 +1981,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.offset,
             state.dfb_offset,
             state.dfb_size);
+
+        // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
+        // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
+        if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
+        }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

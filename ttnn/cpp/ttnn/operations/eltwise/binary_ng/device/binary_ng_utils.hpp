@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        ATAN2,
         LT,
         GT,
         GE,
