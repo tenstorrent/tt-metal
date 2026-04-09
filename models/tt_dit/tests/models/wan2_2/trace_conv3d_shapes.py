@@ -39,7 +39,7 @@ PRODUCTION_CONFIGS = [
 ]
 
 
-def trace_shapes_for_config(mesh_device, config_name, resolution, h_factor, w_factor, num_frames, use_cache):
+def trace_shapes_for_config(mesh_device, config_name, resolution, h_factor, w_factor, num_frames, t_chunk_size):
     """Run decoder and capture conv3d shapes from logger output."""
     H_out, W_out = resolution
     vae_temporal_scale = 4
@@ -52,7 +52,7 @@ def trace_shapes_for_config(mesh_device, config_name, resolution, h_factor, w_fa
     z_dim = 16
 
     logger.info(f"\n{'='*80}")
-    logger.info(f"CONFIG: {config_name} | use_cache={use_cache}")
+    logger.info(f"CONFIG: {config_name} | t_chunk_size={t_chunk_size}")
     logger.info(f"  Resolution: {H_out}x{W_out}, Frames: {num_frames}")
     logger.info(f"  h_factor={h_factor}, w_factor={w_factor}")
     logger.info(f"  Latent: T={latent_T}, H={latent_H}, W={latent_W}, C={z_dim}")
@@ -124,7 +124,7 @@ def trace_shapes_for_config(mesh_device, config_name, resolution, h_factor, w_fa
     logger.info(f"  Running decoder... (input shape: {tt_input.shape})")
     start = time.time()
     try:
-        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, use_cache=use_cache)
+        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
         elapsed = time.time() - start
         logger.info(f"  Done in {elapsed:.1f}s")
     except Exception as e:
@@ -145,7 +145,7 @@ def main():
         for config_name, resolution, h_factor, w_factor, num_frames in PRODUCTION_CONFIGS:
             # Uncached run
             trace_shapes_for_config(
-                mesh_device, config_name, resolution, h_factor, w_factor, num_frames, use_cache=False
+                mesh_device, config_name, resolution, h_factor, w_factor, num_frames, t_chunk_size=None
             )
     finally:
         ttnn.close_mesh_device(mesh_device)

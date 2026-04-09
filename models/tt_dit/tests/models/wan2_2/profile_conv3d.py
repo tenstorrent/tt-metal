@@ -152,8 +152,9 @@ def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, 
         grid_size,
         h_factor=H_FACTOR,
         w_factor=W_FACTOR,
-        H_out=H_out,
-        W_out=W_out,
+        T=T,
+        H=H,
+        W=W,
     )
 
     print(f"\n{'='*80}")
