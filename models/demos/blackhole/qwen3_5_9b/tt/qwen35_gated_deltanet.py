@@ -375,6 +375,22 @@ class Qwen35GatedDeltaNet:
         """Enable inplace state updates for trace capture."""
         self.use_inplace_state = True
 
+    def set_external_state(self, recurrent_state, conv_state):
+        """Point layer at externally-allocated state buffers.
+        Sets use_inplace_state=True so all forward passes write state inplace (preserving buffer addresses).
+        Does NOT create split_conv_state — that happens after prefill when there is real data to split.
+        """
+        expected_rec = [1, self.num_v_heads, self.head_k_dim, self.head_v_dim]
+        assert (
+            list(recurrent_state.shape) == expected_rec
+        ), f"recurrent_state shape mismatch: {list(recurrent_state.shape)} != {expected_rec}"
+        assert (
+            conv_state.shape[1] == self.conv_kernel_size - 1
+        ), f"conv_state dim 1 mismatch: {conv_state.shape[1]} != {self.conv_kernel_size - 1}"
+        self.recurrent_state = recurrent_state
+        self.fused_conv_state = conv_state
+        self.use_inplace_state = True
+
     def _split_fused_conv_state(self):
         """Convert fused conv state [B, 3, D_total] into list of 3 [B, 1, D_total] tensors."""
         if self.fused_conv_state is None:
@@ -386,6 +402,19 @@ class Qwen35GatedDeltaNet:
             buf = ttnn.clone(s_k, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(s_k)
             self.split_conv_state.append(buf)
+
+    def _restore_split_conv_from_fused(self):
+        """Copy fused_conv_state slices into existing split_conv_state buffers.
+        Preserves device addresses (critical for trace replay).
+        Use instead of _split_fused_conv_state() when split buffers already exist.
+        """
+        if self.split_conv_state is None:
+            return
+        for k in range(self.conv_kernel_size - 1):
+            s_k = self.fused_conv_state[:, k : k + 1, :]
+            s_k = ttnn.to_layout(s_k, ttnn.TILE_LAYOUT)
+            ttnn.copy(s_k, self.split_conv_state[k])
+            ttnn.deallocate(s_k)
 
     def reset_state(self, batch_size=None):
         if batch_size is not None:
