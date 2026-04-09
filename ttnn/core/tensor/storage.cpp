@@ -278,12 +278,8 @@ DeviceStorage DeviceStorage::combine_device_storages(
 
     DeviceStorage res(
         model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
-    res.update_tensor_topology(topology);
+    res.get_mesh_tensor().update_tensor_topology(topology);
     return res;
-}
-
-void DeviceStorage::update_tensor_topology(const TensorTopology& tensor_topology) {
-    get_mesh_tensor().update_tensor_topology(tensor_topology);
 }
 
 const TensorSpec& DeviceStorage::get_tensor_spec() const {
