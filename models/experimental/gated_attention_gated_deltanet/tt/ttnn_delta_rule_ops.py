@@ -954,8 +954,12 @@ def chunk_gated_delta_rule_ttnn(
 
     # For large chunk sizes, tensors shaped [batch, chunk_size, chunk_size] (e.g. 512MB at
     # chunk_size=2048) overflow L1 when auto-placed alongside matmul circular buffers.
-    # Force DRAM placement for all large intermediate tensors.
-    _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
+    # Force DRAM placement for large batched 4D tensors in the pre-loop section.
+    _batch_mc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
+    # Inner loop per-iteration tensors are small ([BH, chunk_size, K/V] ≈ 2MB = 512 tiles,
+    # ~4 tiles per L1 bank across 130 banks). L1 gives ~10-20x lower latency than DRAM
+    # for these memory-bound small matmuls that run on only 2-8 cores.
+    _loop_mc = ttnn.L1_MEMORY_CONFIG if chunk_size > 64 else None
 
     # HiFi2 + fp32 accumulation for all chunk matmuls. The default compute kernel uses
     # lower fidelity, which introduces per-matmul rounding errors that compound across
@@ -970,31 +974,31 @@ def chunk_gated_delta_rule_ttnn(
 
     decay_col = ttnn.reshape(decay, [batch, chunk_size, 1], memory_config=None)
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=None)
-    L_diff = ttnn.subtract(decay_col, decay_row, memory_config=_cmc)
+    L_diff = ttnn.subtract(decay_col, decay_row, memory_config=_batch_mc)
     del decay_col, decay_row
 
     # Clamp before exp to prevent overflow/underflow
-    L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=_cmc)
+    L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=_batch_mc)
     ttnn.deallocate(L_diff)
     L_diff_clamped = ttnn.clip(L_diff_masked, min=-20.0, max=0.0)
     ttnn.deallocate(L_diff_masked)
-    L_mask = ttnn.multiply(ttnn.exp(L_diff_clamped, memory_config=_cmc), tril_mask, memory_config=_cmc)
+    L_mask = ttnn.multiply(ttnn.exp(L_diff_clamped, memory_config=_batch_mc), tril_mask, memory_config=_batch_mc)
     ttnn.deallocate(L_diff_clamped)
 
     del k
     k_c = ttnn.move(k_c)
-    k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_cmc)
+    k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_batch_mc)
     prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
     if prog_config_kk:
         kk = ttnn.matmul(
-            k_beta_c, k_c_t, program_config=prog_config_kk, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+            k_beta_c, k_c_t, program_config=prog_config_kk, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg
         )
     else:
-        kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+        kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_t)
 
     # Compute -(kk * L_mask) = lower-triangular correction matrix including diagonal.
-    attn_raw = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
+    attn_raw = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=_batch_mc), memory_config=_batch_mc)
     ttnn.deallocate(kk)
 
     # Forward substitution: compute R = (I - A)^{-1} where A is lower triangular.
@@ -1008,25 +1012,31 @@ def chunk_gated_delta_rule_ttnn(
     del A
     attn_cpu = torch.linalg.solve_triangular(I_minus_A, eye.expand_as(I_minus_A), upper=False)
     del I_minus_A
-    attn = ttnn.from_torch(attn_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_cmc)
+    attn = ttnn.from_torch(
+        attn_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_batch_mc
+    )
     del attn_cpu
 
     prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     if prog_config_vcorr:
         v_corrected = ttnn.matmul(
-            attn, v_beta_c, program_config=prog_config_vcorr, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+            attn, v_beta_c, program_config=prog_config_vcorr, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg
         )
     else:
-        v_corrected = ttnn.matmul(attn, v_beta_c, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+        v_corrected = ttnn.matmul(attn, v_beta_c, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg)
     del v_beta_c
 
-    k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
+    k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_batch_mc)
     if prog_config_vcorr:
         k_cumdecay = ttnn.matmul(
-            attn, k_beta_decay, program_config=prog_config_vcorr, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+            attn,
+            k_beta_decay,
+            program_config=prog_config_vcorr,
+            memory_config=_batch_mc,
+            compute_kernel_config=_hifi_cfg,
         )
     else:
-        k_cumdecay = ttnn.matmul(attn, k_beta_decay, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+        k_cumdecay = ttnn.matmul(attn, k_beta_decay, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg)
 
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K], memory_config=None)
     q_c_4d = ttnn.to_layout(q_c_4d, ttnn.TILE_LAYOUT, memory_config=None)
@@ -1057,12 +1067,12 @@ def chunk_gated_delta_rule_ttnn(
     else:
         lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
 
-    S = ttnn.zeros([BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=None)
+    S = ttnn.zeros([BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=_loop_mc)
     if initial_state is not None:
         S = ttnn.typecast(
             ttnn.reshape(initial_state, [BH, K, V], memory_config=None),
             ttnn.float32,
-            memory_config=None,
+            memory_config=_loop_mc,
         )
 
     prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
@@ -1075,44 +1085,44 @@ def chunk_gated_delta_rule_ttnn(
     # utilization and reducing Python dispatch overhead in the sequential loop.
 
     # 1. Batched qk: [BH, num_chunks, cs, K] @ [BH, num_chunks, K, cs] → [BH, num_chunks, cs, cs]
-    k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_batch_mc)
+    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_batch_mc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_4d_t)
 
     # 2. Batched intra_attn: qk * L_mask * lower_causal
     lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
-    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
-    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
+    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_batch_mc)
+    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_batch_mc)
     ttnn.deallocate(qk_4d)
     ttnn.deallocate(combined_mask_4d)
 
     # 3. Batched q_decay: q * exp(clip(decay_raw)) for inter-chunk state query
     # decay_raw_3d: [BH, num_chunks, cs] → [BH, num_chunks, cs, 1] for broadcast
     decay_raw_exp_4d = ttnn.reshape(
-        ttnn.exp(ttnn.clip(decay_raw_3d, min=-20.0, max=0.0), memory_config=_cmc),
+        ttnn.exp(ttnn.clip(decay_raw_3d, min=-20.0, max=0.0), memory_config=_batch_mc),
         [BH, num_chunks, chunk_size, 1],
-        memory_config=_cmc,
+        memory_config=_batch_mc,
     )
-    q_decay_4d = ttnn.multiply(q_c_4d, decay_raw_exp_4d, memory_config=_cmc)
+    q_decay_4d = ttnn.multiply(q_c_4d, decay_raw_exp_4d, memory_config=_batch_mc)
     ttnn.deallocate(decay_raw_exp_4d)
 
     # 4. Batched k_decay_t: k * exp(clip(decay_last - decay)) then transpose
     # decay_diff = decay_last_normalized - decay (per-chunk normalized coordinates)
-    decay_last_norm_4d = ttnn.reshape(decay_last_normalized, [BH, num_chunks, 1], memory_config=_cmc)
-    decay_diff_3d = ttnn.subtract(decay_last_norm_4d, decay_3d, memory_config=_cmc)
+    decay_last_norm_4d = ttnn.reshape(decay_last_normalized, [BH, num_chunks, 1], memory_config=_batch_mc)
+    decay_diff_3d = ttnn.subtract(decay_last_norm_4d, decay_3d, memory_config=_batch_mc)
     decay_diff_exp_4d = ttnn.reshape(
-        ttnn.exp(ttnn.clip(decay_diff_3d, min=-20.0, max=0.0), memory_config=_cmc),
+        ttnn.exp(ttnn.clip(decay_diff_3d, min=-20.0, max=0.0), memory_config=_batch_mc),
         [BH, num_chunks, chunk_size, 1],
-        memory_config=_cmc,
+        memory_config=_batch_mc,
     )
-    k_decay_4d = ttnn.multiply(k_c_4d, decay_diff_exp_4d, memory_config=_cmc)
+    k_decay_4d = ttnn.multiply(k_c_4d, decay_diff_exp_4d, memory_config=_batch_mc)
     ttnn.deallocate(decay_diff_exp_4d)
-    k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_cmc)
+    k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_batch_mc)
     ttnn.deallocate(k_decay_4d)
 
     # 5. Batched state decay factors: exp(clip(decay_last_raw))
     # decay_last_raw: [BH, num_chunks, 1] → dl_exp_3d: [BH, num_chunks, 1]
-    dl_exp_3d = ttnn.exp(ttnn.clip(decay_last_raw, min=-20.0, max=0.0), memory_config=_cmc)
+    dl_exp_3d = ttnn.exp(ttnn.clip(decay_last_raw, min=-20.0, max=0.0), memory_config=_batch_mc)
 
     outputs = []
     for i in range(num_chunks):
@@ -1125,19 +1135,23 @@ def chunk_gated_delta_rule_ttnn(
         # v_prime = k_cumdecay @ S (state-dependent)
         if prog_config_vprime:
             v_prime = ttnn.matmul(
-                k_cum_i, S, program_config=prog_config_vprime, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+                k_cum_i, S, program_config=prog_config_vprime, memory_config=_loop_mc, compute_kernel_config=_hifi_cfg
             )
         else:
-            v_prime = ttnn.matmul(k_cum_i, S, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
-        v_new = ttnn.subtract(v_i, v_prime, memory_config=_cmc)
+            v_prime = ttnn.matmul(k_cum_i, S, memory_config=_loop_mc, compute_kernel_config=_hifi_cfg)
+        v_new = ttnn.subtract(v_i, v_prime, memory_config=_loop_mc)
 
         # o_inter = q_decay @ S (state-dependent)
         if prog_config_o_inter:
             o_inter = ttnn.matmul(
-                q_decay_i, S, program_config=prog_config_o_inter, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+                q_decay_i,
+                S,
+                program_config=prog_config_o_inter,
+                memory_config=_loop_mc,
+                compute_kernel_config=_hifi_cfg,
             )
         else:
-            o_inter = ttnn.matmul(q_decay_i, S, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+            o_inter = ttnn.matmul(q_decay_i, S, memory_config=_loop_mc, compute_kernel_config=_hifi_cfg)
 
         # intra_v = intra_attn @ v_new (depends on v_new which depends on S)
         if prog_config_intra:
@@ -1145,33 +1159,33 @@ def chunk_gated_delta_rule_ttnn(
                 intra_attn_i,
                 v_new,
                 program_config=prog_config_intra,
-                memory_config=_cmc,
+                memory_config=_loop_mc,
                 compute_kernel_config=_hifi_cfg,
             )
         else:
-            intra_v = ttnn.matmul(intra_attn_i, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+            intra_v = ttnn.matmul(intra_attn_i, v_new, memory_config=_loop_mc, compute_kernel_config=_hifi_cfg)
 
-        o_i = ttnn.add(o_inter, intra_v, memory_config=_cmc)
-        outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=_cmc))
+        o_i = ttnn.add(o_inter, intra_v, memory_config=_loop_mc)
+        outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=_loop_mc))
 
         # State update: S = S * decay_factor + k_decay_t @ v_new
         dl_i_exp = dl_exp_3d[:, i]
         S = ttnn.multiply(
             S,
-            ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=_cmc),
-            memory_config=_cmc,
+            ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=_loop_mc),
+            memory_config=_loop_mc,
         )
         if prog_config_state:
             state_update = ttnn.matmul(
                 k_decay_t_i,
                 v_new,
                 program_config=prog_config_state,
-                memory_config=_cmc,
+                memory_config=_loop_mc,
                 compute_kernel_config=_hifi_cfg,
             )
         else:
-            state_update = ttnn.matmul(k_decay_t_i, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
-        S = ttnn.add(S, state_update, memory_config=_cmc)
+            state_update = ttnn.matmul(k_decay_t_i, v_new, memory_config=_loop_mc, compute_kernel_config=_hifi_cfg)
+        S = ttnn.add(S, state_update, memory_config=_loop_mc)
 
     o = ttnn.concat(outputs, dim=1, memory_config=None)
     # o shape: [BH, num_chunks, chunk_size, V]
