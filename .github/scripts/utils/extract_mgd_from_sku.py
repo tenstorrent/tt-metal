@@ -37,9 +37,10 @@ def main():
         print(f"::error::SKU '{sku_name}' has no 'mgd' field", file=sys.stderr)
         sys.exit(1)
 
-    # Print MGD content with 4-space indentation
-    # This will be used in spec: | block which gets 2 more spaces from sed
-    # Final result: 2 (spec) + 2 (mgd block) + content indentation
+    # Print MGD content with 4-space base indentation.
+    # When embedded in workflow's `mgd: |` block and processed by
+    # ttop-create-allocation's sed 's/^/  /', this produces the correct
+    # 6-space indentation in the final Allocation manifest.
     mgd_content = skus[sku_name]["mgd"]
     for line in mgd_content.splitlines():
         print(f"    {line}")
