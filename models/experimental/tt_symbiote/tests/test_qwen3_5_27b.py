@@ -47,9 +47,7 @@ def reset_ttnn_states(all_modules):
         if isinstance(module, TTNNQwen35DecoderLayer):
             attn = module.attention
             if isinstance(attn, TTNNQwen35GatedDeltaNet):
-                attn.conv_states = None
-                attn.rec_states = None
-                attn.rec_output = None
+                attn.reset_state()
             # Full attention layers use external paged KV cache (re-created after reset)
 
 
@@ -188,11 +186,11 @@ def test_qwen3_5_27b(mesh_device, max_new_tokens):
     # Warmup run
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_kv_cache)
     reset_ttnn_states(all_modules)
-    paged_kv_cache = create_paged_kv_cache(model.config, mesh_device)
+    paged_kv_cache.reset()
     # Second warmup
     outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_kv_cache)
     reset_ttnn_states(all_modules)
-    paged_kv_cache = create_paged_kv_cache(model.config, mesh_device)
+    paged_kv_cache.reset()
 
     DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True, past_key_values=paged_kv_cache)

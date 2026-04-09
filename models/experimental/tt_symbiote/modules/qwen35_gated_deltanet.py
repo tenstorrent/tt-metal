@@ -26,6 +26,10 @@ import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
+from models.experimental.tt_symbiote.modules.gdn_kernel.gdn_kernel_op import (
+    gdn_recurrence_fused_inplace,
+    gdn_recurrence_mt_fused_inplace,
+)
 
 
 def _l2_norm_dev(x):
@@ -312,6 +316,10 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
             mesh_mapper=mesh_mapper,
         )
 
+        # Pre-allocate fused kernel output buffer (decode path)
+        # Will be lazily allocated on first forward since batch_size isn't known yet
+        self._fused_output_allocated = False
+
     def _reset_decode_state(self, batch_size):
         """Reset conv and recurrence states for decode (creates new tensors).
 
@@ -343,7 +351,36 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
             mesh_mapper=mesh_mapper,
         )
 
-        self.rec_output = None
+        # Pre-allocate output buffer for fused kernel
+        self.rec_output = ttnn.from_torch(
+            _torch.zeros(batch_size * self.num_v_heads, 1, self.head_v_dim, dtype=_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+    def reset_state(self):
+        """Zero-fill conv and recurrence state buffers WITHOUT deallocating.
+
+        Preserves device buffer addresses so traced replay can still
+        read/write the correct DRAM locations. If states haven't been
+        allocated yet (first generate() call), this is a no-op.
+        """
+        if self.conv_states is not None:
+            for state in self.conv_states:
+                zero = ttnn.multiply(state, 0.0)
+                ttnn.copy(zero, state)
+                ttnn.deallocate(zero)
+        if self.rec_states is not None:
+            zero = ttnn.multiply(self.rec_states, 0.0)
+            ttnn.copy(zero, self.rec_states)
+            ttnn.deallocate(zero)
+        if self.rec_output is not None:
+            zero = ttnn.multiply(self.rec_output, 0.0)
+            ttnn.copy(zero, self.rec_output)
+            ttnn.deallocate(zero)
 
     def forward(
         self,
@@ -379,11 +416,11 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
         if seq_len == 1 and cache_params is not None:
             return self._forward_decode(hidden_states, batch_size, cache_params)
 
-        # Prefill path: device-side recurrence
-        return self._forward_prefill(hidden_states, batch_size, seq_len, cache_params)
+        # Prefill path: device-side recurrence (legacy per-token path, trace-compatible)
+        return self._forward_prefill_legacy(hidden_states, batch_size, seq_len, cache_params)
 
-    def _forward_prefill(self, hidden_states, batch_size, seq_len, cache_params):
-        """GDN prefill: batched projections, per-token device-side recurrence.
+    def _forward_prefill_legacy(self, hidden_states, batch_size, seq_len, cache_params):
+        """GDN prefill (legacy): batched projections, per-token device-side recurrence.
 
         All computation stays on device. Projections are batched over the full
         sequence; conv1d + recurrence runs per-token using the same shift-register
@@ -496,8 +533,23 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
             beta_fused = _retile(ttnn.reshape(beta_tt, (num_pairs, 1, 1)))
             ttnn.deallocate(beta_tt)
 
-            # DeltaNet recurrence on device (same function as decode path)
-            rec_output = _gdn_recurrence_ttnn(q_fused, k_row, k_col, v_fused, g_fused, beta_fused, self.rec_states)
+            # DeltaNet recurrence on device (fused kernel with ttnn ops fallback)
+            # Pre-allocate output if needed (first call)
+            if self.rec_output is None or self.rec_output.shape != list(q_fused.shape):
+                self.rec_output = ttnn.zeros_like(q_fused)
+
+            gdn_recurrence_fused_inplace(
+                q_fused,
+                k_row,
+                k_col,
+                v_fused,
+                g_fused,
+                beta_fused,
+                self.rec_states,
+                self.rec_output,
+                num_cores=10,
+            )
+            rec_output = self.rec_output
 
             ttnn.deallocate(q_fused)
             ttnn.deallocate(k_row)
@@ -507,8 +559,8 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
             ttnn.deallocate(beta_fused)
 
             # Post-processing: RMSNorm + SiLU gate (same as decode path)
+            # NOTE: rec_output is self.rec_output (persistent buffer) — do NOT deallocate
             out_r = ttnn.reshape(rec_output, (batch_size, Nv, Dv))
-            ttnn.deallocate(rec_output)
             out_n = ttnn.rms_norm(out_r, weight=self.tt_norm_weight, epsilon=self.rms_norm_eps)
             ttnn.deallocate(out_r)
 
@@ -547,6 +599,206 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
         ttnn.deallocate(gated_seq)
 
         # conv_states and rec_states are already updated in-place during the loop
+        return output
+
+    def _forward_prefill(self, hidden_states, batch_size, seq_len, cache_params):
+        """GDN prefill: batched ops + single multi-token kernel call (trace-compatible)."""
+        Nk = self.num_k_heads
+        Nv = self.num_v_heads
+        Dk = self.head_k_dim
+        Dv = self.head_v_dim
+        repeat_factor = Nv // Nk
+        num_pairs = batch_size * Nv
+
+        # ---- Step 1: Batched projections (already batched) ----
+        qkv_all = self.in_proj_qkv(hidden_states)
+        z_all = self.in_proj_z(hidden_states)
+        b_all = self.in_proj_b(hidden_states)
+        a_all = self.in_proj_a(hidden_states)
+        qkv_all = self._maybe_all_gather(qkv_all)
+        z_all = self._maybe_all_gather(z_all)
+
+        # ---- Step 2: Init states if needed ----
+        if self.conv_states is None:
+            self._reset_decode_state(batch_size)
+
+        # ---- Step 3: Batched causal conv1d ----
+        # Reshape conv states for concat: [1, batch, conv_dim] -> [batch, 1, conv_dim]
+        s1 = ttnn.reshape(self.conv_states[1], (batch_size, 1, self.conv_dim))
+        s2 = ttnn.reshape(self.conv_states[2], (batch_size, 1, self.conv_dim))
+        s3 = ttnn.reshape(self.conv_states[3], (batch_size, 1, self.conv_dim))
+
+        qkv_padded = ttnn.concat([s1, s2, s3, qkv_all], dim=1)
+        ttnn.deallocate(s1)
+        ttnn.deallocate(s2)
+        ttnn.deallocate(s3)
+
+        w0 = ttnn.slice(qkv_padded, (0, 0, 0), (batch_size, seq_len, self.conv_dim))
+        w1 = ttnn.slice(qkv_padded, (0, 1, 0), (batch_size, seq_len + 1, self.conv_dim))
+        w2 = ttnn.slice(qkv_padded, (0, 2, 0), (batch_size, seq_len + 2, self.conv_dim))
+        w3 = ttnn.slice(qkv_padded, (0, 3, 0), (batch_size, seq_len + 3, self.conv_dim))
+
+        conv_out = ttnn.multiply(w0, self.tt_conv_taps[0])
+        conv_out = ttnn.mac(w1, self.tt_conv_taps[1], conv_out)
+        conv_out = ttnn.mac(w2, self.tt_conv_taps[2], conv_out)
+        conv_out = ttnn.mac(w3, self.tt_conv_taps[3], conv_out)
+        ttnn.deallocate(w0)
+        ttnn.deallocate(w1)
+        ttnn.deallocate(w2)
+        ttnn.deallocate(w3)
+        ttnn.deallocate(qkv_padded)
+        conv_out = ttnn.silu(conv_out)
+
+        # ---- Step 4: Update conv states for future decode ----
+        # The shift register needs the last conv_kernel_size tokens.
+        # When seq_len < conv_kernel_size, some slots keep their prior values.
+        for i in range(self.conv_kernel_size):
+            offset = seq_len - self.conv_kernel_size + i
+            if offset < 0:
+                continue
+            tok = ttnn.slice(qkv_all, (0, offset, 0), (batch_size, offset + 1, self.conv_dim))
+            tok_r = ttnn.reshape(tok, (1, batch_size, self.conv_dim))
+            ttnn.copy(tok_r, self.conv_states[i])
+            ttnn.deallocate(tok_r)
+            ttnn.deallocate(tok)
+
+        # ---- Step 5: Split Q/K/V, L2 norm, expand heads, gates (all batched) ----
+        q_sl = ttnn.slice(conv_out, (0, 0, 0), (batch_size, seq_len, self.key_dim))
+        k_sl = ttnn.slice(conv_out, (0, 0, self.key_dim), (batch_size, seq_len, 2 * self.key_dim))
+        v_sl = ttnn.slice(conv_out, (0, 0, 2 * self.key_dim), (batch_size, seq_len, self.conv_dim))
+        ttnn.deallocate(conv_out)
+
+        q_h = ttnn.reshape(q_sl, (batch_size * seq_len, Nk, Dk))
+        ttnn.deallocate(q_sl)
+        k_h = ttnn.reshape(k_sl, (batch_size * seq_len, Nk, Dk))
+        ttnn.deallocate(k_sl)
+        v_h = ttnn.reshape(v_sl, (batch_size * seq_len, Nv, Dv))
+        ttnn.deallocate(v_sl)
+
+        q_normed = _l2_norm_dev(q_h)
+        ttnn.deallocate(q_h)
+        k_normed = _l2_norm_dev(k_h)
+        ttnn.deallocate(k_h)
+
+        q_exp = ttnn.repeat_interleave(q_normed, repeat_factor, dim=1)
+        ttnn.deallocate(q_normed)
+        q_scaled = ttnn.multiply(q_exp, self.scale)
+        ttnn.deallocate(q_exp)
+
+        k_exp = ttnn.repeat_interleave(k_normed, repeat_factor, dim=1)
+        ttnn.deallocate(k_normed)
+
+        beta_all = ttnn.sigmoid(b_all)
+        ttnn.deallocate(b_all)
+        sp = ttnn.softplus(ttnn.add(a_all, self.tt_dt_bias))
+        ttnn.deallocate(a_all)
+        g_all = ttnn.multiply(self.tt_neg_exp_A, sp)
+        ttnn.deallocate(sp)
+
+        # ---- Step 6: Reshape to kernel layout [num_pairs, seq_len, D] ----
+        q_4d = ttnn.reshape(q_scaled, (batch_size, seq_len, Nv, Dk))
+        ttnn.deallocate(q_scaled)
+        q_t = ttnn.transpose(q_4d, 1, 2)
+        ttnn.deallocate(q_4d)
+        q_mt = _retile(ttnn.reshape(q_t, (num_pairs, seq_len, Dk)))
+        ttnn.deallocate(q_t)
+
+        k_4d = ttnn.reshape(k_exp, (batch_size, seq_len, Nv, Dk))
+        ttnn.deallocate(k_exp)
+        k_t = ttnn.transpose(k_4d, 1, 2)
+        ttnn.deallocate(k_4d)
+        k_row_mt = _retile(ttnn.reshape(k_t, (num_pairs, seq_len, Dk)))
+        ttnn.deallocate(k_t)
+
+        # k_col: each token's k as a column vector [Dk, 1]
+        k_row_flat = ttnn.reshape(k_row_mt, (num_pairs * seq_len, 1, Dk))
+        k_col_mt = _retile(ttnn.transpose(k_row_flat, -2, -1))
+        ttnn.deallocate(k_row_flat)
+
+        v_4d = ttnn.reshape(v_h, (batch_size, seq_len, Nv, Dv))
+        ttnn.deallocate(v_h)
+        v_t = ttnn.transpose(v_4d, 1, 2)
+        ttnn.deallocate(v_4d)
+        v_mt = _retile(ttnn.reshape(v_t, (num_pairs, seq_len, Dv)))
+        ttnn.deallocate(v_t)
+
+        # g_all: [batch, seq_len, Nv] -> [num_pairs, seq_len, 1]
+        g_r = ttnn.reshape(g_all, (batch_size, seq_len, Nv, 1))
+        ttnn.deallocate(g_all)
+        g_t = ttnn.transpose(g_r, 1, 2)
+        ttnn.deallocate(g_r)
+        g_mt = _retile(ttnn.reshape(g_t, (num_pairs, seq_len, 1)))
+        ttnn.deallocate(g_t)
+
+        beta_r = ttnn.reshape(beta_all, (batch_size, seq_len, Nv, 1))
+        ttnn.deallocate(beta_all)
+        beta_t = ttnn.transpose(beta_r, 1, 2)
+        ttnn.deallocate(beta_r)
+        beta_mt = _retile(ttnn.reshape(beta_t, (num_pairs, seq_len, 1)))
+        ttnn.deallocate(beta_t)
+
+        # ---- Step 7: Pre-allocate output, call MT kernel ----
+        import torch as _torch
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        rec_output_mt = ttnn.from_torch(
+            _torch.zeros(num_pairs, seq_len, Dv, dtype=_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        gdn_recurrence_mt_fused_inplace(
+            q_mt,
+            k_row_mt,
+            k_col_mt,
+            v_mt,
+            g_mt,
+            beta_mt,
+            self.rec_states,
+            rec_output_mt,
+            num_tokens=seq_len,
+            num_cores=10,
+        )
+
+        ttnn.deallocate(q_mt)
+        ttnn.deallocate(k_row_mt)
+        ttnn.deallocate(k_col_mt)
+        ttnn.deallocate(v_mt)
+        ttnn.deallocate(g_mt)
+        ttnn.deallocate(beta_mt)
+
+        # ---- Step 8: Batched post-processing ----
+        # [num_pairs, seq_len, Dv] -> [batch, Nv, seq_len, Dv] -> [batch, seq_len, Nv, Dv] -> [batch*seq_len, Nv, Dv]
+        out_4d = ttnn.reshape(rec_output_mt, (batch_size, Nv, seq_len, Dv))
+        ttnn.deallocate(rec_output_mt)
+        out_t = ttnn.transpose(out_4d, 1, 2)
+        ttnn.deallocate(out_4d)
+        out_r = ttnn.reshape(out_t, (batch_size * seq_len, Nv, Dv))
+        ttnn.deallocate(out_t)
+
+        out_n = ttnn.rms_norm(out_r, weight=self.tt_norm_weight, epsilon=self.rms_norm_eps)
+        ttnn.deallocate(out_r)
+
+        z_r = ttnn.reshape(z_all, (batch_size * seq_len, Nv, Dv))
+        ttnn.deallocate(z_all)
+        z_act = ttnn.silu(z_r)
+        ttnn.deallocate(z_r)
+
+        gated = ttnn.multiply(out_n, z_act)
+        ttnn.deallocate(out_n)
+        ttnn.deallocate(z_act)
+
+        gated_seq = ttnn.reshape(gated, (batch_size, seq_len, self.value_dim))
+        ttnn.deallocate(gated)
+
+        # Output projection
+        output = self.out_proj(gated_seq)
+        ttnn.deallocate(gated_seq)
+        ttnn.deallocate(qkv_all)
+
         return output
 
     def _forward_decode(self, hidden_states, batch_size, cache_params):
@@ -656,8 +908,23 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
         beta_fused = _retile(ttnn.reshape(beta_tt, (num_pairs, 1, 1)))
         ttnn.deallocate(beta_tt)
 
-        # ---- DeltaNet recurrence (ttnn ops fallback) ----
-        rec_output = _gdn_recurrence_ttnn(q_fused, k_row, k_col, v_fused, g_fused, beta_fused, self.rec_states)
+        # ---- DeltaNet recurrence (fused kernel with ttnn ops fallback) ----
+        # Pre-allocate output if needed (first call)
+        if self.rec_output is None or self.rec_output.shape != list(q_fused.shape):
+            self.rec_output = ttnn.zeros_like(q_fused)
+
+        gdn_recurrence_fused_inplace(
+            q_fused,
+            k_row,
+            k_col,
+            v_fused,
+            g_fused,
+            beta_fused,
+            self.rec_states,
+            self.rec_output,
+            num_cores=10,
+        )
+        rec_output = self.rec_output
 
         ttnn.deallocate(q_fused)
         ttnn.deallocate(k_row)
@@ -667,8 +934,8 @@ class TTNNQwen35GatedDeltaNet(TTNNModule):
         ttnn.deallocate(beta_fused)
 
         # ---- Post-processing: RMSNorm + SiLU gate ----
+        # NOTE: rec_output is self.rec_output (persistent buffer) — do NOT deallocate
         out_r = ttnn.reshape(rec_output, (batch_size, Nv, Dv))
-        ttnn.deallocate(rec_output)
         out_n = ttnn.rms_norm(out_r, weight=self.tt_norm_weight, epsilon=self.rms_norm_eps)
         ttnn.deallocate(out_r)
 

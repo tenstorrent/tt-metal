@@ -21,6 +21,11 @@ from models.experimental.tt_symbiote.core.utils import (
 )
 from models.tt_transformers.tt.ccl import TT_CCL
 
+# Module-level flag: True while inside ttnn.begin_trace_capture / end_trace_capture.
+# Custom fused kernels cannot run during trace capture, so they check this flag
+# and fall back to standard TTNN ops when it is set.
+_IN_TRACE_CAPTURE = False
+
 
 @dataclass
 class CCLManagerConfig:
@@ -1133,9 +1138,12 @@ class TracedRun(LightweightRun):
         ttnn.synchronize_device(device)
         # Capture — the output from THIS forward is the trace_output whose
         # device buffer will be rewritten by every subsequent execute_trace.
+        global _IN_TRACE_CAPTURE
+        _IN_TRACE_CAPTURE = True
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
         trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+        _IN_TRACE_CAPTURE = False
         ttnn.synchronize_device(device)
 
         entry = TraceEntry(

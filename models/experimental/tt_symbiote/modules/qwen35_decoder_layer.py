@@ -16,6 +16,7 @@ import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, DistributedTensorConfig
 from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
 from models.experimental.tt_symbiote.modules.qwen35_attention import TTNNQwen35FullAttention
 from models.experimental.tt_symbiote.modules.qwen35_gated_deltanet import TTNNQwen35GatedDeltaNet
 from models.experimental.tt_symbiote.modules.qwen35_mlp import TTNNQwen35MLP
@@ -276,5 +277,106 @@ class TTNNQwen35DecoderLayer(TTNNModule):
         hs = ttnn.add(residual, mlp_out)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(residual)
+
+        return hs
+
+
+class TTNNQwen35DecoderLayerPadded(TTNNModule):
+    """Decoder layer that pads the input sequence length to the next power of 2.
+
+    Padding to a power-of-2 sequence length reduces the number of unique trace
+    cache keys during prefill, since many different prompt lengths map to the
+    same padded length. This improves trace reuse across turns.
+
+    The pad is applied before the forward pass and the output is sliced back
+    to the original sequence length afterward.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        """Create from Qwen3_5DecoderLayer.
+
+        Args:
+            torch_layer: HuggingFace Qwen3_5DecoderLayer instance.
+        """
+        new_layer = cls()
+        new_layer.layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
+        return new_layer
+
+    @staticmethod
+    def _pad_dim(tensor, dim, pad_amount, value=0.0):
+        """Pad a single dimension of a tensor by ``pad_amount``."""
+        rank = len(tensor.shape)
+        padding = tuple((0, pad_amount if i == dim else 0) for i in range(rank))
+        return ttnn.pad(tensor, padding=padding, value=value)
+
+    @staticmethod
+    def _slice_dim(tensor, dim, length):
+        """Slice a tensor along ``dim`` to ``length``."""
+        starts = [0] * len(tensor.shape)
+        ends = list(tensor.shape)
+        ends[dim] = length
+        return ttnn.slice(tensor, starts, ends)
+
+    def forward(
+        self,
+        hidden_states,
+        position_embeddings=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        rank = len(hidden_states.shape)
+        seq_dim = rank - 2  # sequence length is always second-to-last
+        seq_len = hidden_states.shape[seq_dim]
+        padded_seq_len = _next_power_of_2(seq_len)
+        pad_amount = padded_seq_len - seq_len
+
+        if pad_amount > 0:
+            hidden_states = self._pad_dim(hidden_states, seq_dim, pad_amount, value=0.0)
+
+            # attention_mask: [..., seq_len, seq_len] -- pad last two dims
+            if attention_mask is not None:
+                mask_rank = len(attention_mask.shape)
+                attention_mask = self._pad_dim(attention_mask, mask_rank - 2, pad_amount, value=float("-inf"))
+                attention_mask = self._pad_dim(attention_mask, mask_rank - 1, pad_amount, value=float("-inf"))
+
+            # position_ids: [batch, seq_len] -- pad seq dim with 0
+            if position_ids is not None:
+                pid_seq_dim = len(position_ids.shape) - 1
+                position_ids = self._pad_dim(position_ids, pid_seq_dim, pad_amount, value=0)
+
+            # position_embeddings (cos, sin): [batch, seq_len, head_dim]
+            if position_embeddings is not None:
+                cos, sin = position_embeddings
+                cos_seq_dim = len(cos.shape) - 2
+                cos = self._pad_dim(cos, cos_seq_dim, pad_amount, value=0.0)
+                sin = self._pad_dim(sin, cos_seq_dim, pad_amount, value=0.0)
+                position_embeddings = (cos, sin)
+
+        # Pass cache_position explicitly (not padded) so the inner layer's
+        # trace infrastructure can pre-allocate a device buffer for it.
+        hs = self.layer(
+            hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+        if pad_amount > 0:
+            # TTNNQwen35DecoderLayer.forward() returns a bare tensor (not a tuple)
+            if isinstance(hs, (tuple, list)):
+                sliced = self._slice_dim(hs[0], seq_dim, seq_len)
+                if isinstance(hs, tuple):
+                    hs = (sliced,) + hs[1:]
+                else:
+                    hs = [sliced] + list(hs[1:])
+            else:
+                hs = self._slice_dim(hs, seq_dim, seq_len)
 
         return hs

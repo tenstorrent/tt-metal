@@ -155,6 +155,19 @@ class TTNNQwenPagedAttentionKVCache(TTNNPagedAttentionKVCache):
         cache_idx = self._get_cache_idx(layer_idx) if layer_idx != 0 else 0
         return super().get_seq_length(cache_idx)
 
+    def reset(self) -> None:
+        """Reset KV cache tracking and linear attention states for a new turn.
+
+        Extends the parent reset (which clears sequence tracking while preserving
+        device buffer addresses for trace stability) by also clearing the hybrid
+        attention state: _has_previous_state flag, conv_states, and recurrent_states
+        used by GDN (Gated DeltaNet) linear attention layers.
+        """
+        super().reset()
+        self._has_previous_state = False
+        self.conv_states = {}
+        self.recurrent_states = {}
+
 
 class TTNNQwen3FullAttention(TTNNModule):
     """TTNN-accelerated Full Attention for Qwen3.5-35B-A3B.
@@ -1397,7 +1410,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
             print(f"  type={type(hs_input).__name__}")
 
         # If TTNN projections disabled or no device, use pure PyTorch fallback
-        if not self.use_ttnn_projections or self.device is None:
+        use_ttnn = os.environ.get("TTNN_LINEAR_ATTN_PROJECTIONS", "1") == "1"
+        if not use_ttnn or self.device is None:
             # Layer 0: input from embedding is REPLICATED (full hidden_size on each device)
             # Layers 1-39: input from previous MoE is COL-SHARDED (hidden_size/num_devices)
             # Auto-detect via _is_tensor_replicated() to handle both cases correctly
