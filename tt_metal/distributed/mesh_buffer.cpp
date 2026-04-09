@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_event.hpp>
@@ -179,6 +180,10 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
+    {
+        std::lock_guard<std::mutex> lock(other.pending_events_mutex_);
+        pending_events_ = std::move(other.pending_events_);
+    }
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -194,6 +199,10 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
+        {
+            std::scoped_lock lock(pending_events_mutex_, other.pending_events_mutex_);
+            pending_events_ = std::move(other.pending_events_);
+        }
 
         other.state_ = DeallocatedState{};
         other.address_ = 0;
@@ -204,7 +213,10 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
 
 void MeshBuffer::add_pending_event(const MeshEvent& event) {
     std::lock_guard<std::mutex> lock(pending_events_mutex_);
-    pending_events_.insert({event.id(), event.mesh_cq_id()});
+    auto it = pending_events_.find(event.mesh_cq_id());
+    if (it == pending_events_.end() || it->second.id() < event.id()) {
+        pending_events_.insert_or_assign(event.mesh_cq_id(), event);
+    }
 }
 
 void MeshBuffer::wait_for_pending_events() {
@@ -212,18 +224,18 @@ void MeshBuffer::wait_for_pending_events() {
     if (!mesh_device) {
         return;  // MeshDevice destroyed, nothing to wait for
     }
+    static_cast<void>(mesh_device);
 
-    std::set<std::pair<uint32_t, uint32_t>> events_to_wait;
+    std::unordered_map<uint32_t, MeshEvent> events_to_wait;
     {
         std::lock_guard<std::mutex> lock(pending_events_mutex_);
         events_to_wait = std::move(pending_events_);
         pending_events_.clear();
     }
 
-    // Wait for all pending events to complete
-    for (const auto& [event_id, cq_id] : events_to_wait) {
-        auto& cq = mesh_device->mesh_command_queue(cq_id);
-        cq.finish();
+    // Wait for the latest host-visible event on each CQ that touched this buffer.
+    for (const auto& [_, event] : events_to_wait) {
+        EventSynchronize(event);
     }
 }
 
@@ -233,6 +245,10 @@ bool MeshBuffer::has_pending_events() const {
 }
 
 void MeshBuffer::deallocate() {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return;
+    }
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         // Wait for all pending operations to complete before deallocating

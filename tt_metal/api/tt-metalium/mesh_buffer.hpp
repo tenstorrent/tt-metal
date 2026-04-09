@@ -8,7 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -140,9 +140,9 @@ public:
     // events" - events representing in-flight operations that reference this buffer.
     // The buffer's address cannot be safely reused until all pending events complete.
 
-    // Registers an event as pending on this buffer. The event represents an in-flight
-    // operation that references this buffer. The buffer will wait for this event
-    // during deallocation before releasing its address back to the allocator.
+    // Registers a host-visible completion event for work that references this buffer.
+    // Deallocation will wait for the latest pending event on each CQ before releasing
+    // the address back to the allocator.
     void add_pending_event(const MeshEvent& event);
 
     // Waits for all pending events to complete. Called during deallocation to ensure
@@ -208,7 +208,7 @@ private:
     // operations that reference this buffer. The buffer address cannot be reused
     // until all pending events complete.
     mutable std::mutex pending_events_mutex_;
-    std::set<std::pair<uint32_t, uint32_t>> pending_events_;  // (event_id, mesh_cq_id) pairs
+    std::unordered_map<uint32_t, MeshEvent> pending_events_;  // latest host-visible event per mesh CQ
 };
 
 class AnyBuffer {

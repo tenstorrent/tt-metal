@@ -126,8 +126,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             auto input_tensor = create_device_tensor(TensorSpec(shape, tensor_layout), device_);
             ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
             auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
-            // Track the write event on the input buffer to prevent premature deallocation
-            ttnn::track_event_on_tensor(input_tensor, write_event);
             // Wait until cq 1 write is complete
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
@@ -145,10 +143,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
             // Record cq 0 prog execution
             auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
-            // Track the workload event on the output buffer - this is critical for multi-CQ safety
-            // The output buffer contains data written by ops on workload_dispatch_cq, and we must
-            // ensure those ops complete before the buffer can be deallocated/reused
-            ttnn::track_event_on_tensor(output_tensor, workload_event);
             // Wait until cq 0 prog execution is done
             ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
             // Read using cq 1

@@ -36,10 +36,4 @@ tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::Mes
 // Record an event for device to host synchronization. This event should be passed to `event_synchronize`.
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq);
 
-// Track an event on a tensor's underlying buffer. The buffer will wait for this event
-// to complete before deallocation, preventing address reuse while operations are in-flight.
-// This is critical for multi-CQ safety when one CQ writes/reads a buffer while another
-// CQ may cause the buffer to be deallocated and its address reused.
-void track_event_on_tensor(const Tensor& tensor, const tt::tt_metal::distributed::MeshEvent& event);
-
 }  // namespace ttnn

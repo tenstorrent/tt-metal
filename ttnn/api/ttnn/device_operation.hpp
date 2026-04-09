@@ -181,6 +181,31 @@ inline void log_operation(
 
 #endif
 
+inline void track_completion_event_on_tensor(
+    const Tensor& tensor, const tt::tt_metal::distributed::MeshEvent& completion_event) {
+    if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+        return;
+    }
+
+    auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
+    for (const auto& device_tensor : device_tensors) {
+        if (device_tensor.storage_type() != StorageType::DEVICE) {
+            continue;
+        }
+        auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+        if (mesh_buffer) {
+            mesh_buffer->add_pending_event(completion_event);
+        }
+    }
+}
+
+template <typename T>
+inline void track_completion_event_on_tensors(
+    const T& object, const tt::tt_metal::distributed::MeshEvent& completion_event) {
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) { track_completion_event_on_tensor(tensor, completion_event); }, object);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -216,7 +241,15 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+
+    // Record a host-visible completion event after the workload so buffers referenced by
+    // this op cannot be deallocated and immediately reused while the device is still using
+    // their addresses on this CQ.
+    auto completion_event = mesh_cq.enqueue_record_event_to_host();
+    detail::track_completion_event_on_tensors(tensor_args, completion_event);
+    detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
 
     TracyOpMeshWorkload(
         mesh_device,
