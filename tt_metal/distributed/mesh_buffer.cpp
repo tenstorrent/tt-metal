@@ -183,8 +183,8 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     // std::atomic is non-movable; transfer each slot manually.
     // Caller must guarantee no concurrent access to either object during the move.
     for (size_t i = 0; i < kMaxMeshCQs; ++i) {
-        pending_event_ids_[i].store(
-            other.pending_event_ids_[i].exchange(0, std::memory_order_relaxed),
+        pending_event_ids_[i].value.store(
+            other.pending_event_ids_[i].value.exchange(0, std::memory_order_relaxed),
             std::memory_order_relaxed);
     }
     // The moved-to object is freshly constructed — deallocation is not in progress.
@@ -207,8 +207,8 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         // std::atomic is non-movable; transfer each slot manually.
         // Caller must guarantee no concurrent access to either object during the move.
         for (size_t i = 0; i < kMaxMeshCQs; ++i) {
-            pending_event_ids_[i].store(
-                other.pending_event_ids_[i].exchange(0, std::memory_order_relaxed),
+            pending_event_ids_[i].value.store(
+                other.pending_event_ids_[i].value.exchange(0, std::memory_order_relaxed),
                 std::memory_order_relaxed);
         }
         // After move-assign, deallocation is not in progress on this object.
@@ -230,9 +230,9 @@ void MeshBuffer::add_pending_event(const MeshEvent& event) {
     // seq_cst drain in wait_for_pending_events() and the seq_cst store of
     // deallocation_in_progress_ in deallocate(), closing the add/drain race window.
     // See proof below.
-    uint32_t current = pending_event_ids_[cq].load(std::memory_order_relaxed);
+    uint32_t current = pending_event_ids_[cq].value.load(std::memory_order_relaxed);
     while (current < new_id &&
-           !pending_event_ids_[cq].compare_exchange_weak(
+           !pending_event_ids_[cq].value.compare_exchange_weak(
                current, new_id, std::memory_order_seq_cst, std::memory_order_relaxed)) {
     }
 
@@ -274,7 +274,7 @@ void MeshBuffer::wait_for_pending_events() {
     // in deallocate(). See proof in add_pending_event.
     for (uint32_t cq_id = 0; cq_id < kMaxMeshCQs; ++cq_id) {
         const uint32_t event_id =
-            pending_event_ids_[cq_id].exchange(0, std::memory_order_seq_cst);
+            pending_event_ids_[cq_id].value.exchange(0, std::memory_order_seq_cst);
         if (event_id == 0) {
             continue;
         }
@@ -284,7 +284,7 @@ void MeshBuffer::wait_for_pending_events() {
 
 bool MeshBuffer::has_pending_events() const {
     for (const auto& id : pending_event_ids_) {
-        if (id.load(std::memory_order_relaxed) != 0) {
+        if (id.value.load(std::memory_order_relaxed) != 0) {
             return true;
         }
     }

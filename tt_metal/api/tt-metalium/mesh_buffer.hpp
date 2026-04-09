@@ -209,8 +209,15 @@ private:
     // Stores the latest in-flight event ID per CQ. 0 = no pending event.
     // IDs are monotonically increasing; CAS-updated so only the latest is kept.
     // Wormhole/Blackhole support at most 2 hardware CQs — fixed array, no heap.
+    //
+    // Each slot is padded to a full cache line (64 bytes) to prevent false sharing:
+    // CQ0 and CQ1 are written by different dispatch threads; without padding they
+    // would share a cache line and cause unnecessary coherence traffic.
     static constexpr size_t kMaxMeshCQs = 2;
-    mutable std::array<std::atomic<uint32_t>, kMaxMeshCQs> pending_event_ids_{};
+    struct alignas(64) CacheLinePaddedEventId {
+        std::atomic<uint32_t> value{};
+    };
+    mutable std::array<CacheLinePaddedEventId, kMaxMeshCQs> pending_event_ids_{};
 
     // Deallocation-race sentinel (seq_cst closes the add/drain window).
     // Set to true by deallocate() BEFORE draining pending_event_ids_.
