@@ -23,8 +23,11 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void _calculate_rrelu_(const uint32_t lower_u, const uint32_t range_u, const uint32_t seed_u) {
-    sfpi::vFloat lower_v = sfpi::s2vFloat16b(lower_u);
-    sfpi::vFloat range_v = sfpi::s2vFloat16b(range_u);
+    // lower_u and range_u are bit-cast float32 representations.
+    // s2vFloat16b(uint32_t) expects a 16-bit bfloat16 value, so shift right by 16
+    // to extract the upper 16 bits (sign + exponent + 7 mantissa bits).
+    sfpi::vFloat lower_v = sfpi::s2vFloat16b(lower_u >> 16);
+    sfpi::vFloat range_v = sfpi::s2vFloat16b(range_u >> 16);
 
     if (seed_u != 0) {
         // Training mode: per-element random slope in [lower, upper)
@@ -37,7 +40,9 @@ inline void _calculate_rrelu_(const uint32_t lower_u, const uint32_t range_u, co
             //   2. abs() clears the sign bit
             //   3. setexp(_, 127) forces exponent to 127 → [1.0, 2.0)
             //   4. Subtract 1.0 → [0.0, 1.0)
-            sfpi::vFloat rand_raw(__builtin_rvtt_sfpmov(sfpi::vConst0.get(), SFPMOV_MOD1_CONFIG));
+            // instr_mod1=8 triggers PRNG mode on SFPMOV (see dropout TTI_SFPMOV usage)
+            // Source register is ignored in PRNG mode; use v (already loaded) as dummy
+            sfpi::vFloat rand_raw(__builtin_rvtt_sfpmov(v.get(), 8));
             sfpi::vFloat rand_01 = sfpi::setexp(sfpi::abs(rand_raw), 127) - sfpi::vConst1;
 
             // slope = lower + rand_01 * range → uniform in [lower, upper)
