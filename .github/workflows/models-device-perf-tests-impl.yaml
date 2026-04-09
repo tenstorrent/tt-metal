@@ -126,7 +126,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
       - name: Merge test reports
         id: generate-device-perf-report
