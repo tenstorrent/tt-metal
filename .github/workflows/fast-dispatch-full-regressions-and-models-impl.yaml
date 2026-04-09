@@ -172,10 +172,16 @@ jobs:
         shell: bash
     runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
@@ -259,10 +265,16 @@ jobs:
         shell: bash
     runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
@@ -317,7 +329,7 @@ jobs:
         ARCH_NAME: wormhole_b0
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -325,13 +337,18 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -348,7 +365,7 @@ jobs:
           fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        uses: ./.github/actions/prepare-tracy-reports
         with:
           profiler-dir: /work/generated/profiler
           model-name: ${{ matrix.test-config.model }}
@@ -386,7 +403,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         # CIv2 uses LFC via TT_GH_CI_INFRA, no HF_HUB_CACHE needed
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -394,13 +411,18 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -421,7 +443,7 @@ jobs:
           fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        uses: ./.github/actions/prepare-tracy-reports
         with:
           profiler-dir: /work/generated/profiler
           model-name: ${{ matrix.test-config.model }}

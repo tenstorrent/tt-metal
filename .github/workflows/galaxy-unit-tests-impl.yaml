@@ -54,7 +54,7 @@ jobs:
        LOGURU_LEVEL: INFO
        LD_LIBRARY_PATH: /work/build/lib
      volumes:
-       - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+       - ${{ github.workspace }}:/work
        - /dev/hugepages-1G:/dev/hugepages-1G
      options: "--device /dev/tenstorrent"
    defaults:
@@ -62,13 +62,18 @@ jobs:
        shell: bash
        working-directory: /work # https://github.com/actions/runner/issues/878
    steps:
-     - name: 🧬 Checkout Repository
+     - name: Bootstrap local actions
        uses: actions/checkout@v4
        with:
+         sparse-checkout: .github/actions
+         sparse-checkout-cone-mode: false
+     - name: 🧬 Checkout Repository
+       uses: ./.github/actions/checkout
+       with:
          submodules: recursive
-         path: docker-job
+         private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
      - name: ⬇️  Setup Job
-       uses: ./docker-job/.github/actions/setup-job
+       uses: ./.github/actions/setup-job
        timeout-minutes: 10
        with:
          build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -78,7 +83,7 @@ jobs:
        run: |
          ${{ matrix.test-group.cmd }}
 
-     - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+     - uses: ./.github/actions/cleanup
        if: always()
 
   generate-matrix:
@@ -144,7 +149,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - ${{ matrix.test-group.mlperf && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
@@ -153,13 +158,18 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -185,7 +195,7 @@ jobs:
       - name: Run Multi-Process tests
         if: ${{ matrix.test-group.model == 'multiprocess' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./docker-job/.github/actions/run-multi-process-tests
+        uses: ./.github/actions/run-multi-process-tests
       - name: Run Llama3-70b unit tests
         if: ${{ matrix.test-group.model == 'llama3-70b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -269,5 +279,5 @@ jobs:
         with:
           test-report-path: generated/test_reports/
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()

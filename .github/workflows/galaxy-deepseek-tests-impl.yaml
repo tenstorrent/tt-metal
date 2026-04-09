@@ -103,7 +103,7 @@ jobs:
         # Indicate if Tracy profiling is available in this build
         TT_METAL_TRACY_BUILD: ${{ inputs.enable-tracy && '1' || '0' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
         - ${{ inputs.recreate_weights_cache == 'Yes' && '/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache' || '/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:ro' }}
@@ -113,13 +113,18 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -226,4 +231,4 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup

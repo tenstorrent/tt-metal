@@ -38,10 +38,16 @@ jobs:
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/release_tests.yaml
     steps:
-      - name: Checkout the repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Checkout the repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Install dependencies
         run: |
           pip3 install PyYAML
@@ -124,7 +130,7 @@ jobs:
         NO_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.NO_PROXY) || '' }}
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && !contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
         - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
@@ -137,16 +143,21 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -213,7 +224,7 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()
       - name: Disable Performance mode
         if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && matrix.test-group.sku != 'bh_p100' && matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' && always() }}
