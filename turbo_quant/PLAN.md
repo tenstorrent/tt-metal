@@ -576,6 +576,24 @@ Remaining overhead (~6.5ms constant, independent of seq_len):
 - **Quantize** (norm + bucketize + gather on 1 token): ~1.5ms
 - **Scatter** (2× paged_update_cache for K/V): ~1ms
 
+**Memory problem:** Current implementation stores pre-rescaled BF16 values (2 bytes/elem)
+— same size as FP16, 1.83× LARGER than BFP8 baseline. The latency-optimal pre-rescale
+approach sacrificed the memory savings that are the whole point of KV cache quantization.
+
+**KV cache memory at seq=4096 (Llama-3.1-8B, 32 layers):**
+
+| Format | Memory | vs BFP8 |
+|--------|--------|---------|
+| FP16 (unquantized) | 537 MB | 1.83× larger |
+| BFP8 (baseline) | **293 MB** | 1.0× |
+| TQ BF16 pre-rescaled (current) | 537 MB | 1.83× larger |
+| **TQ 3-bit packed (target)** | **105 MB** | **2.8× smaller** |
+
+Next target: implement 3-bit packed storage on device to realize the paper's
+memory compression promise (5.1× vs FP16, 2.8× vs BFP8). This re-introduces
+O(max_seq) dequantize cost per step but is the correct tradeoff for the
+long-context use case that TurboQuant targets.
+
 ---
 
 ## B1 — Fused Bucketize Kernel — DONE (2026-04-08, hardware-validated, 47ms/tok)
