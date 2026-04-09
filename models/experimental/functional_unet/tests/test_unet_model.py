@@ -29,11 +29,17 @@ from models.experimental.functional_unet.tests.common import (
 def test_unet_model(batch, groups, mesh_device, reset_seeds):
     num_devices = mesh_device.get_num_devices()
 
-    if num_devices == 1 and not is_wormhole_b0(mesh_device) and (
-        mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 110
-        and mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 130
+    if (
+        num_devices == 1
+        and not is_wormhole_b0(mesh_device)
+        and (
+            mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 110
+            and mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 130
+        )
     ):
-        pytest.skip(f"Shallow UNet only supports 110 or 130 cores on BH (was {mesh_device.compute_with_storage_grid_size()})")
+        pytest.skip(
+            f"Shallow UNet only supports 110 or 130 cores on BH (was {mesh_device.compute_with_storage_grid_size()})"
+        )
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
