@@ -172,6 +172,10 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dt
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for dtype round-trip references: create from the root mesh, not nested under
+    # `submesh`. Nested submeshes are not enumerated by `bh_2d_mesh_device_context` teardown and
+    # trigger CQ/parent-child close ordering failures (see MeshDeviceImpl::close_impl).
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
     mesh_shape = (mesh_rows, mesh_cols)
     q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
@@ -187,7 +191,6 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dt
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract all three sub-tensors while fused buffer is alive -----------
     logger.info("Extracting q_a_proj from fused buffer ...")
@@ -243,8 +246,6 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dt
             dtype=q_b.dtype,
         )
         q_b_tp_refs.append(ref)
-
-    ttnn.close_mesh_device(single_device)
 
     q_a_h = q_a.tensor_shape[0]
     q_b_h = q_b.tensor_shape[0]
@@ -303,6 +304,8 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     mesh_shape = (mesh_rows, mesh_cols)
     o_proj_tp = cfg.o_proj.tp(mesh_shape)
@@ -336,7 +339,6 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract o_proj (BFP8) while fused buffer is alive -------------------
     logger.info("Extracting o_proj from fused buffer ...")
@@ -419,8 +421,6 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
             tile=tile_1x32,
         )
 
-    ttnn.close_mesh_device(single_device)
-
     o_h = o_proj.tensor_shape[0]
     g_h = gate_mm.tensor_shape[0]
 
@@ -476,6 +476,8 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     mla_tp = mesh_cols
     cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 
@@ -489,7 +491,6 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract kv_b1 (HEIGHT_SHARDED, BFP8) while fused buffer is alive ----
     logger.info("Extracting kv_b1_proj from fused buffer ...")
@@ -555,8 +556,6 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
         )
         kv_b2_tp_refs.append(ref)
 
-    ttnn.close_mesh_device(single_device)
-
     kv_b1_h = kv_b1.tensor_shape[0]
     kv_b2_h = cfg.kv_b2_proj_shape[0]
 
@@ -610,6 +609,8 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     moe_tp = num_devices
     cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 
@@ -620,7 +621,6 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     logger.info("Building fused gate + up proj weights ...")
     gate, up, _ = fuse_gate_up(gate_raw, up_raw, down_raw, submesh, dtype=dtype)
@@ -683,8 +683,6 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         up_tp_refs.append(ref)
-
-    ttnn.close_mesh_device(single_device)
 
     # -- Verify per-device ---------------------------------------------------
     gate_h = cfg.stacked_shape[0]
