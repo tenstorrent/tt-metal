@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import inspect
 from types import NoneType
 from typing import TYPE_CHECKING, Any
 
@@ -33,33 +32,21 @@ class Tracer:
        overwrites previous results in place.
     """
 
-    _traces_live: int = 0
-
     def __init__(
         self,
         function: Callable[..., Any],
         /,
         *,
         device: ttnn.MeshDevice,
-        prep_run: bool = True,
-        clone_prep_inputs: bool = True,
     ) -> None:
         """Initialize the tracer.
-
-        If the function modifies its input tensors in place, set ``clone_prep_inputs`` to ``True``
-        so that preparation runs operate on cloned inputs, leaving the originals intact for trace
-        capture.
 
         Args:
             function: Function to be traced.
             device: Device on which to capture and execute the trace.
-            prep_run: Whether to run the function once before capturing the trace.
-            clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
         self._function = function
         self._device = device
-        self._prep_run = prep_run
-        self._clone_prep_inputs = clone_prep_inputs
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
@@ -70,24 +57,21 @@ class Tracer:
         *args: Any,
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
-        tracer_execute_on_capture: bool = True,
         **kwargs: Any,
     ) -> Any:
         """Capture or execute trace.
 
-        On the first call, runs the wrapped function to capture the trace. On subsequent calls,
-        executes the captured trace. On the first call, inputs initialize the trace inputs. On
-        subsequent calls, they update the trace inputs. Only ``ttnn.Tensor`` inputs can be changed.
-        Aside from omitting positional inputs to reuse previous values, a value of ``None`` can be
-        passed to reuse the previous value for tensor inputs as well. Host tensor inputs will
-        automatically be moved to the tracer device.
+        On the first call, runs the wrapped function twice to compile and capture the trace, then
+        executes the trace to compute outputs. On subsequent calls, executes the captured trace.
+        On the first call, inputs initialize the trace inputs. On subsequent calls, they update the
+        trace inputs. Only ``ttnn.Tensor`` inputs can be changed. Aside from omitting positional
+        inputs to reuse previous values, a value of ``None`` can be passed to reuse the previous
+        value for tensor inputs as well. Host tensor inputs will automatically be moved to the
+        tracer device.
 
         Args:
             tracer_cq_id: Command queue id.
             tracer_blocking_execution: Whether ``ttnn.execute_trace`` should block.
-            tracer_execute_on_capture: Whether to execute the trace immediately after capturing it
-                on the first call. If ``False``, only the trace is captured and outputs are not
-                computed.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
 
@@ -108,16 +92,8 @@ class Tracer:
             self._args = _tree_map(self._tensor_to_device, args, path_label="args")
             self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
-            if self._prep_run:
-                if self._clone_prep_inputs:
-                    prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
-                    prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
-                else:
-                    prep_args = self._args
-                    prep_kwargs = self._kwargs
-
-                self._function(*prep_args, **prep_kwargs)
-                del prep_args, prep_kwargs
+            # compile
+            self._function(*self._args, **self._kwargs)
 
             # capture trace
             logger.debug("capturing trace...")
@@ -133,16 +109,14 @@ class Tracer:
                 ttnn.release_trace(self._device, trace_id)
                 raise
 
-            if tracer_execute_on_capture:
-                # Trace capture records commands but does not execute them. Execute the trace to
-                # actually compute outputs.
-                ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            # Trace capture records commands but does not execute them. Execute the trace to
+            # actually compute outputs.
+            ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
             # Allow resources referenced by the function to be freed, which might be used to offload
             # weights.
             self._function = None
 
-            Tracer._traces_live += 1
             self._trace_id = trace_id
             self._outputs = outputs
         else:
@@ -184,16 +158,7 @@ class Tracer:
             self._args = ()
             self._kwargs = {}
             self._outputs = None
-            Tracer._traces_live -= 1
             ttnn.release_trace(self._device, trace_id)
-
-    @staticmethod
-    def warn_if_live() -> None:
-        """Log a warning if there are any live traces that have not been released."""
-        if Tracer._traces_live > 0:
-            frame = inspect.stack()[1]
-            location = f"{frame.filename}:{frame.lineno} in {frame.function}"
-            logger.warning(f"{Tracer._traces_live} live trace(s) at: {location}")
 
     def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):
@@ -241,11 +206,6 @@ def _verify_value(value: Any, *, path_label: str) -> Any:
         raise TypeError(msg)
 
     return value
-
-
-def _clone_tensor(value: Any, *, path_label: str) -> Any:  # noqa: ARG001
-    """Clone a tensor, passing through non-tensor values unchanged."""
-    return ttnn.clone(value) if isinstance(value, ttnn.Tensor) else value
 
 
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
