@@ -122,12 +122,14 @@ def create_single_galaxy_deepseek_pipeline_configuration(
         return DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=dense_layer_id, device=device),
             layer_idx=dense_layer_id,
+            initialize_loopback=initialize_loopback,
         )
 
     def stage_2(device: ttnn.MeshDevice) -> StageKind:
         return MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=moe_layer_id, device=device),
             layer_idx=moe_layer_id,
+            initialize_loopback=initialize_loopback,
         )
 
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
@@ -141,8 +143,8 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     return PipelineConfiguration(
         {
             0: stage_0,
-            1: stage_1,
-            2: stage_2,
+            1: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
+            2: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
             3: stage_3,
         }
     )

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -43,9 +44,15 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
     // hop[i] connects mesh_ids[i] → mesh_ids[(i+1) % N].
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
     hops.reserve(num_meshes);
+    bool skip_loopback = false;
     for (std::size_t i = 0; i < num_meshes; i++) {
         auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
             mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
+        if (pairs.empty() and i == num_meshes - 1) {
+            // Last hop is a loopback, so we don't need to find a pair.
+            skip_loopback = true;
+            continue;
+        }
         TT_FATAL(
             !pairs.empty(),
             "No inter-mesh connection from mesh {} to mesh {}",
@@ -70,6 +77,26 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
             *mesh_ids[i],
             *mesh_ids[(i + 1) % num_meshes],
             pairs.size());
+    }
+    if (skip_loopback) {
+        auto last_mesh_coord_range = mesh_graph.get_coord_range(mesh_ids[num_meshes - 1]);
+
+        // Find last mesh unclaimed node for d2h if no loopback is used
+        std::vector<tt::tt_fabric::FabricNodeId> unclaimed_last_mesh_nodes;
+        for (const auto& coord : last_mesh_coord_range) {
+            auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[num_meshes - 1], coord);
+            tt::tt_fabric::FabricNodeId fn(mesh_ids[num_meshes - 1], chip_id);
+            if (!used_nodes.contains(fn)) {
+                unclaimed_last_mesh_nodes.push_back(fn);
+            }
+        }
+        TT_FATAL(
+            unclaimed_last_mesh_nodes.size() >= 1,
+            "Need 1 unclaimed node on mesh {} for d2h, found {}",
+            *mesh_ids[num_meshes - 1],
+            unclaimed_last_mesh_nodes.size());
+        auto last_mesh_exit_fn = unclaimed_last_mesh_nodes[0];
+        hops.push_back(std::make_pair(last_mesh_exit_fn, last_mesh_exit_fn));
     }
 
     // Pipeline data flow:
@@ -122,12 +149,14 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
             .exit_node_coord = fn_to_coord(hops[i].first)});
     }
 
-    // Loopback stage (on mesh_0): entry from hop[N-1] (connected to stage N-1 exit),
-    // exit is intra-mesh (feeds back into stage 0)
-    stages.emplace_back(BlitzDecodePipelineStage{
-        .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
-        .entry_node_coord = fn_to_coord(hops[num_meshes - 1].second),
-        .exit_node_coord = fn_to_coord(loopback_exit_fn)});
+    if (!skip_loopback) {
+        // Loopback stage (on mesh_0): entry from hop[N-1] (connected to stage N-1 exit),
+        // exit is intra-mesh (feeds back into stage 0)
+        stages.emplace_back(BlitzDecodePipelineStage{
+            .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
+            .entry_node_coord = fn_to_coord(hops[num_meshes - 1].second),
+            .exit_node_coord = fn_to_coord(loopback_exit_fn)});
+    }
 
     return stages;
 }
@@ -141,12 +170,7 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
 
     auto coord_str = [](const MeshCoordinate& c) { return fmt::format("({}, {})", c[0], c[1]); };
 
-    TT_FATAL(
-        stages.size() == num_meshes + 1,
-        "Expected {} stages (num_meshes={} + 1 loopback), got {}",
-        num_meshes + 1,
-        num_meshes,
-        stages.size());
+    TT_FATAL(stages.size() >= num_meshes, "Expected at least {} stages, got {}", num_meshes, stages.size());
 
     // 1. No stage has identical entry and exit coords
     for (std::size_t i = 0; i < stages.size(); i++) {
@@ -222,13 +246,16 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
     }
 
     // 4. Loopback stage (last) must have different entry/exit than stage 0
-    const auto& stage_0 = stages[0];
-    const auto& loopback = stages.back();
-    TT_FATAL(
-        loopback.entry_node_coord != stage_0.entry_node_coord || loopback.exit_node_coord != stage_0.exit_node_coord,
-        "Loopback stage has identical entry/exit as stage 0: entry={}, exit={}",
-        coord_str(loopback.entry_node_coord),
-        coord_str(loopback.exit_node_coord));
+    if (stages.size() == num_meshes + 1) {
+        const auto& stage_0 = stages[0];
+        const auto& loopback = stages.back();
+        TT_FATAL(
+            loopback.entry_node_coord != stage_0.entry_node_coord ||
+                loopback.exit_node_coord != stage_0.exit_node_coord,
+            "Loopback stage has identical entry/exit as stage 0: entry={}, exit={}",
+            coord_str(loopback.entry_node_coord),
+            coord_str(loopback.exit_node_coord));
+    }
 }
 
 }  // namespace
@@ -236,6 +263,7 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline() {
     auto stages = build_pipeline_from_topology();
     validate_pipeline(stages);
+    auto coord_str = [](const MeshCoordinate& c) { return fmt::format("({}, {})", c[0], c[1]); };
 
     // Synchronize all ranks before returning so that downstream socket creation
     // (which cascades sequentially through stages) starts from a common point.

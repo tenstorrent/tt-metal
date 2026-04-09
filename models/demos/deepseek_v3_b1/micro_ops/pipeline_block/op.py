@@ -90,6 +90,7 @@ class PipelineBlock:
         token_size_bytes = 64
 
         if self.is_pipeline_start:
+            print("start stage")
             self._init_first_stage(
                 mesh_device,
                 pipeline_config,
@@ -105,6 +106,7 @@ class PipelineBlock:
                 embedding_tensor,
             )
         elif self.is_last_stage and not initialize_loopback:
+            print("last stage with d2h")
             self._init_last_stage_with_d2h(
                 mesh_device,
                 pipeline_config,
@@ -118,6 +120,7 @@ class PipelineBlock:
                 exit_node_upstream,
             )
         else:
+            print("forwarding stage")
             self._init_forwarding_stage(
                 mesh_device,
                 pipeline_config,
@@ -185,7 +188,9 @@ class PipelineBlock:
             h2d_downstream_core=ttnn.MeshCoreCoord(
                 pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
             ),
-            d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
+            d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord)
+            if self.initialize_loopback
+            else None,
             embedding_tensor=embedding_tensor,
         )
 
@@ -360,9 +365,9 @@ class PipelineBlock:
         self.d2h_socket.read_tensor(output_tensor)
 
     def get_upstream_socket(self):
-        if hasattr(self, "exit_socket_interface"):
+        if self.has_exit:
             return self.exit_socket_interface.get_upstream_socket()
-        elif hasattr(self, "host_io"):
+        elif self.has_d2h:
             return self.host_io.get_upstream_socket()
 
     def get_downstream_socket(self):

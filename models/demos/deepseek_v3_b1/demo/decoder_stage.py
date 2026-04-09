@@ -49,6 +49,7 @@ class DecoderStage(StageKind):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        initialize_loopback: bool,
     ) -> None:
         if state_dict is None and weights is None:
             raise ValueError("Either state_dict or weights must be provided")
@@ -66,6 +67,7 @@ class DecoderStage(StageKind):
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
         self._state: dict[str, Any] = {}
+        self._initialize_loopback = initialize_loopback
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
@@ -92,6 +94,7 @@ class DecoderStage(StageKind):
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            initialize_loopback=self._initialize_loopback,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -278,6 +281,7 @@ class MoEDecoderStage(DecoderStage):
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
+        initialize_loopback: bool = True,
     ) -> None:
         super().__init__(
             state_dict,
@@ -291,6 +295,7 @@ class MoEDecoderStage(DecoderStage):
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
+            initialize_loopback=initialize_loopback,
         )
 
 
@@ -313,6 +318,7 @@ class DenseDecoderStage(DecoderStage):
         max_seq_len: int = 32 * 1024,
         persistent_mode: bool = True,
         is_torus: bool = True,
+        initialize_loopback: bool = True,
     ) -> None:
         super().__init__(
             state_dict,
@@ -326,4 +332,5 @@ class DenseDecoderStage(DecoderStage):
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
+            initialize_loopback=initialize_loopback,
         )
