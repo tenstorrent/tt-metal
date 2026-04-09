@@ -91,8 +91,11 @@ def run(
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
-    # Scale factor (arg1 in JSON, passed as scalar by loader)
-    scale = float(scalar) if scalar is not None else 1.0
+    # Scale factor — the V2 loader stores positional args as arg0, arg1, …
+    # The scale is arg1 (after the input tensor).  Accept either the named
+    # ``scalar`` parameter or the ``arg1`` kwarg from the loader.
+    raw_scale = scalar if scalar is not None else kwargs.get("arg1", None)
+    scale = float(raw_scale) if raw_scale is not None else 1.0
 
     # Generate input tensor
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype)(
@@ -212,6 +215,10 @@ def run(
         )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output.shape)]
 
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

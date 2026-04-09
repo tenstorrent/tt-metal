@@ -130,6 +130,10 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs)
 
+    # V2 loader stores the mask tensor shape as input_b_shape (positional arg1 → input_b_*)
+    if mask_shape is None:
+        mask_shape = kwargs.get("input_b_shape", None)
+
     # Skip tests with tiled masks due to C++ implementation limitation
     if mask_shape is not None:
         shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -150,8 +154,11 @@ def run(
     # Parse input_a_shape
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Parse scale value (default to 1.0 if not provided)
-    scale = float(scalar) if scalar is not None else 1.0
+    # Parse scale value — the V2 loader stores positional args as arg0, arg1, …
+    # The scale is arg1 (after the input tensor).  Accept either the named
+    # ``scalar`` parameter or the ``arg1`` kwarg from the loader.
+    raw_scale = scalar if scalar is not None else kwargs.get("arg1", None)
+    scale = float(raw_scale) if raw_scale is not None else 1.0
 
     # Generate input tensor
     torch_input_a = gen_func_with_cast_tt(
@@ -256,6 +263,10 @@ def run(
         )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output.shape)]
 
     # Check PCC
     pcc_result = check_with_pcc(torch_output, output_tensor, 0.999)
