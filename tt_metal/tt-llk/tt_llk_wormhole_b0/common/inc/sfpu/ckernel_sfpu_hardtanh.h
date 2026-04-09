@@ -21,9 +21,9 @@ inline void _calculate_hardtanh_(const int iterations, std::uint32_t param0, std
     // param1 = -(pos_threshold - neg_threshold)
     // param2 = -(pos_threshold)
 
-    sfpi::vFloat p0 = sfpi::s2vFloat16b(param0);
-    sfpi::vFloat p1 = sfpi::s2vFloat16b(param1);
-    sfpi::vFloat p2 = sfpi::s2vFloat16b(param2);
+    sfpi::vFloat p0 = sfpi::sFloat16b(param0);
+    sfpi::vFloat p1 = sfpi::sFloat16b(param1);
+    sfpi::vFloat p2 = sfpi::sFloat16b(param2);
 // SFPU microcode
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)

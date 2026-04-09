@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -26,6 +26,9 @@ void kernel_main() {
 
     cb_pop_front(cb_id_out0, 1);
 
-    DPRINT << "Core (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-           << "): Outbound kernel has written tile to DRAM index " << dram_tile_id << "." << ENDL();
+    DEVICE_PRINT(
+        "Core ({},{}): Outbound kernel has written tile to DRAM index {}.\n",
+        get_absolute_logical_x(),
+        get_absolute_logical_y(),
+        dram_tile_id);
 }

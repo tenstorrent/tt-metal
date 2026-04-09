@@ -280,7 +280,6 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
-            bool k_block_iter_odd = false;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -322,14 +321,12 @@ void kernel_main() {
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 
-                uint32_t k_block = 0;
-                uint32_t device_iter = (k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter)) /
-                                       (K_blocks_per_device);  // which device this k_block is coming from
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
-                uint32_t k_left_tiles = k_block_iter_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                uint32_t k_right_tiles = k_block_iter_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
-                k_block_iter_odd = !k_block_iter_odd;
+                uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
+                bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
+                uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 compute_actual_k_block(
                     k_block_iter,
                     K_num_blocks,

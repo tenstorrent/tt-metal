@@ -30,29 +30,46 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+    // Inline helper to process n tiles
+    auto process_tiles = [&](uint32_t n) {
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
+        cb_wait_front(cb_post_lhs, n);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
+        cb_wait_front(cb_post_rhs, n);
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        cb_reserve_back(cb_out, n);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
-        BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
-        PROCESS_POST_ACTIVATIONS(0);
+        for (uint32_t i = 0; i < n; ++i) {
+            BINARY_OP(cb_post_lhs, cb_post_rhs, i, i, i);
+            PROCESS_POST_ACTIVATIONS(i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_out);
+        }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
-        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
+        cb_push_back(cb_out, n);
+        cb_pop_front(cb_post_lhs, n);
+        cb_pop_front(cb_post_rhs, n);
+    };
+
+    // Process full chunks
+    uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
+    for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
+        process_tiles(num_tiles_per_cycle);
+    }
+
+    // Process remainder
+    uint32_t remainder = num_tiles % num_tiles_per_cycle;
+    if (remainder > 0) {
+        process_tiles(remainder);
     }
 }
