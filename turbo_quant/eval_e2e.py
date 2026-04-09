@@ -49,8 +49,14 @@ def main():
     # ------------------------------------------------------------------ #
     # Device + model setup                                                 #
     # ------------------------------------------------------------------ #
-    print("Opening mesh device (1x1)...")
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    # Use all available devices. For Loudbox (8×N150): MeshShape auto-detected.
+    # For single device: MeshShape(1, 1).
+    import os
+
+    num_devices = int(os.environ.get("TT_NUM_DEVICES", 1))
+    mesh_shape = ttnn.MeshShape(1, num_devices)
+    print(f"Opening mesh device ({mesh_shape})...")
+    mesh_device = ttnn.open_mesh_device(mesh_shape)
 
     print("Creating ModelArgs...")
     model_args = ModelArgs(
@@ -115,10 +121,13 @@ def main():
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     # TQ uses BF16 paged cache (2× BFP8 per element).
-    # Baseline: 1024 BFP8 blocks = 32K tokens, ~2GB KV.
-    # TQ BF16: same DRAM budget → 512 blocks = 16K tokens.
-    # With more DRAM headroom, can push to ~1700 blocks ≈ 55K tokens.
-    tq_max_blocks = 768 if not args.no_turbo_quant else 1024
+    # Per device: ~768 BF16 blocks fit (24K tokens) vs ~1024 BFP8 (32K).
+    # With N devices, KV heads are sharded → more blocks fit per device.
+    # Llama-3.1-8B: 8 KV heads. With 8 devices: 1 head/device → 8× more blocks.
+    if args.no_turbo_quant:
+        tq_max_blocks = 1024 * num_devices  # BFP8 baseline: scale with devices
+    else:
+        tq_max_blocks = 768 * num_devices  # BF16 TQ: ~75% of baseline capacity
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=tq_max_blocks)
     print("Loading TT model (paged attention, block_size=32)...")
     tt_model = Transformer(
