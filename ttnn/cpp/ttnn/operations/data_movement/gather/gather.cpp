@@ -161,11 +161,11 @@ Tensor gather(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
-    const auto input_tensor_rank = input_tensor.padded_shape().rank();
+    const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
     // Index tensor
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
-    const auto index_tensor_rank = input_index_tensor.padded_shape().rank();
+    const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
 
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
