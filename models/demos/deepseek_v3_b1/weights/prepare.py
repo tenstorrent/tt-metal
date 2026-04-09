@@ -664,7 +664,8 @@ def prepare_attention_weights(
         q_a = t[q_a_key].T.contiguous()
         attn_norm = t[attn_norm_key].T.contiguous()
         # do mult here
-        q_a = q_a * attn_norm
+        breakpoint()
+        q_a = q_a * attn_norm.unsqueeze(-1)
 
         q_b = deinterleave_q_b_proj(t[q_b_key])
         kv_a = t[kv_a_key].T.contiguous()
@@ -681,7 +682,7 @@ def prepare_attention_weights(
         q_ab_fp,
         device,
         preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, attn_norm_key, q_b_key, kv_a_key)},
     )
     if not isinstance(q_ab_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")

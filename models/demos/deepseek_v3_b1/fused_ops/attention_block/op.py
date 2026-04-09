@@ -128,7 +128,7 @@ class AttentionBlock:
         # RMSNorm (with gamma) for DKV path only; Q path uses raw input
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         # Matmul: [1, K] @ [K, N] -> [1, N] — Q projection on raw activations
-        matmul_result = input_tensor @ matmul_weights_tensor
+        matmul_result = input_tensor @ (matmul_weights_tensor * gamma_tensor.t())
 
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
         matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
