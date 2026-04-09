@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
@@ -154,10 +154,11 @@ def run(
     # Parse input_a_shape
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Parse scale value — the V2 loader stores positional args as arg0, arg1, …
-    # The scale is arg1 (after the input tensor).  Accept either the named
-    # ``scalar`` parameter or the ``arg1`` kwarg from the loader.
-    raw_scale = scalar if scalar is not None else kwargs.get("arg1", None)
+    # Parse scale value — V2 loader stores non-tensor positional args as arg0, arg1, …
+    # scale_mask_softmax_in_place(input, scale, mask, **kw)
+    # → arg1 = scale (float)
+    pos_args = extract_positional_args(kwargs)
+    raw_scale = scalar if scalar is not None else pos_args.get(1, None)
     scale = float(raw_scale) if raw_scale is not None else 1.0
 
     # Generate input tensor

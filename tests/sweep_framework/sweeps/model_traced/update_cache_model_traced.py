@@ -13,7 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -137,15 +137,15 @@ def run(
             return [1.0, 0.0]
 
     # Parse scalars - cache_idx and batch_offset
-    # The V2 loader stores positional args as arg0, arg1, arg2, arg3, …
     # update_cache(cache_tensor, input_tensor, update_index, batch_offset)
     # → arg0=cache (tensor), arg1=input (tensor), arg2=update_index, arg3=batch_offset
+    pos_args = extract_positional_args(kwargs)
     if scalar and isinstance(scalar, dict):
         cache_idx = int(scalar.get("update_index", shape_a[2] // 2))
         batch_offset = int(scalar.get("batch_offset", 0))
     else:
-        raw_idx = kwargs.get("arg2", None)
-        raw_batch = kwargs.get("arg3", None)
+        raw_idx = pos_args.get(2, None)
+        raw_batch = pos_args.get(3, None)
         cache_idx = int(raw_idx) if raw_idx is not None else (shape_a[2] // 2 if len(shape_a) > 2 else 0)
         batch_offset = int(raw_batch) if raw_batch is not None else 0
 
