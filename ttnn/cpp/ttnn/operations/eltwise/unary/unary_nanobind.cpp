@@ -1977,6 +1977,44 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Performs softcap function on :attr:`input_tensor`, :attr:`cap`.
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \verb|cap| \cdot \tanh(\mathrm{{input\_tensor}}_i / \verb|cap|)
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword args:
+                cap (float): the cap parameter (default = 50.0).
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to ``None``.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to ``None``.
+
+            Example:
+                >>> tensor = ttnn.from_torch(torch.randn([1, 1, 32, 32], dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.softcap(tensor, cap=50.0)
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_tensor", "Input Tensor", "Tensor", "", "Yes"
+                "cap", "Cap parameter", "float", "> 0", "No"
+            )doc");
+
+        ttnn::bind_function<"softcap">(
+            mod,
+            doc.c_str(),
+            &unary_4param_to_5param_wrapper<&ttnn::softcap>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("cap") = 50.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary
