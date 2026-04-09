@@ -93,24 +93,15 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t inner_dim,
     uint32_t matmul_stride,
     bool trigger_reduce = false) {
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = in0_cb;
-    cfg.in1_cb_id = in1_cb;
-    cfg.out_cb_id = out_cb;
-    cfg.ct_dim = subblock_w;
-    cfg.rt_dim = subblock_h;
-    cfg.kt_dim = matmul_stride;
-    cfg.transpose = transpose;
-#ifdef ARCH_BLACKHOLE
-    cfg.use_no_mop = true;
-#endif
-    ckernel::BlockMatmulOp mm(cfg);
-
     tile_regs_acquire();
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        mm.matmul(in0_index, in1_index, 0);
+#ifdef ARCH_BLACKHOLE
+        matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, 0, transpose, subblock_w, subblock_h, matmul_stride);
+#else
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, 0, transpose, subblock_w, subblock_h, matmul_stride);
+#endif
         in0_index++;
         in1_index += in1_stride;
     }
@@ -749,21 +740,11 @@ static void sdpa_inner_loop_step(
         if constexpr (!uniform_unpack_format) {
             reconfig_data_format(cb_kt_in, cb_q_in);
         }
-        {
-            ckernel::MatmulOpConfig qkt_cfg{};
-            qkt_cfg.in0_cb_id = cb_q_in;
-            qkt_cfg.in1_cb_id = cb_kt_in;
-            qkt_cfg.out_cb_id = cb_qkt_im;
-            qkt_cfg.ct_dim = actual_sbw;
-            qkt_cfg.rt_dim = qkt_subblock_h;
-            qkt_cfg.kt_dim = in0_block_w;
-            qkt_cfg.transpose = true;
 #ifdef ARCH_BLACKHOLE
-            qkt_cfg.use_no_mop = true;
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+#else
+        mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
 #endif
-            ckernel::BlockMatmulOp qkt_mm(qkt_cfg);
-            qkt_mm.init_short();
-        }
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
