@@ -97,28 +97,28 @@ grid_13_9_configs = {
 # Known best blockings for 11x10 core grid (Blackhole p300c) for specific (M, K, N) shapes
 # Each value is a tuple: (M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w))
 grid_11_10_configs = {
-    # Denoising transformer - spatial sequence (4096)
-    (4096, 3072, 4608): (16, 8, 8, (2, 2)),  # QKV proj: 8×18=144 blocks
-    (4096, 3072, 1536): (16, 8, 4, (2, 2)),  # attn out: 8×12=96 blocks
-    (4096, 3072, 6144): (16, 8, 8, (2, 2)),  # FFN gate/up: 8×24=192 blocks
-    (4096, 6144, 3072): (16, 8, 8, (2, 2)),  # FFN down: 8×12=96 blocks
-    (4096, 3072, 64): (8, 8, 2, (2, 2)),  # proj_out: 16×1=16 blocks
+    # Denoising transformer - spatial sequence (4096) — conservative K_block=4 to avoid L1 overflow
+    (4096, 3072, 4608): (8, 4, 8, (2, 2)),  # QKV proj: 16×18=288 blocks
+    (4096, 3072, 1536): (8, 4, 4, (2, 2)),  # attn out: 16×12=192 blocks
+    (4096, 3072, 6144): (8, 4, 8, (2, 2)),  # FFN gate/up: 16×24=384 blocks
+    (4096, 6144, 3072): (8, 4, 8, (2, 2)),  # FFN down: 16×12=192 blocks
+    (4096, 3072, 64): (8, 4, 2, (2, 2)),  # proj_out: 16×1=16 blocks
     (4096, 64, 1536): (8, 2, 4, (2, 2)),  # small K proj: 16×12=192 blocks
     # Denoising transformer - prompt sequence (512)
-    (512, 3072, 4608): (4, 8, 8, (2, 2)),  # QKV proj: 4×18=72 blocks
-    (512, 3072, 1536): (2, 8, 4, (2, 2)),  # attn out: 8×12=96 blocks
-    (512, 3072, 6144): (4, 8, 8, (2, 2)),  # FFN gate/up: 4×24=96 blocks
-    (512, 6144, 3072): (4, 8, 8, (2, 2)),  # FFN down: 4×12=48 blocks
-    (512, 3584, 1536): (2, 8, 4, (2, 2)),  # txt_in: 8×12=96 blocks
+    (512, 3072, 4608): (2, 4, 8, (2, 2)),  # QKV proj: 8×18=144 blocks
+    (512, 3072, 1536): (2, 4, 4, (2, 2)),  # attn out: 8×12=96 blocks
+    (512, 3072, 6144): (2, 4, 8, (2, 2)),  # FFN gate/up: 8×24=192 blocks
+    (512, 6144, 3072): (2, 4, 8, (2, 2)),  # FFN down: 8×12=96 blocks
+    (512, 3584, 1536): (2, 4, 4, (2, 2)),  # txt_in: 8×12=96 blocks
     # Modulation and embedding layers (small M=32)
-    (32, 3072, 9216): (2, 8, 8, (1, 2)),  # spatial mod 6×dim
-    (32, 3072, 6144): (2, 8, 8, (1, 2)),  # context mod 6×dim
-    (32, 3072, 3072): (2, 4, 16, (2, 2)),  # time embed
-    (32, 256, 3072): (2, 8, 8, (2, 2)),  # img_in / txt_in
+    (32, 3072, 9216): (2, 4, 8, (1, 2)),  # spatial mod 6×dim
+    (32, 3072, 6144): (2, 4, 8, (1, 2)),  # context mod 6×dim
+    (32, 3072, 3072): (2, 4, 8, (2, 2)),  # time embed
+    (32, 256, 3072): (2, 4, 8, (2, 2)),  # img_in / txt_in
     # VAE decoder
-    (16384, 384, 1152): (16, 8, 4, (2, 2)),  # VAE linear
-    (16384, 384, 384): (16, 8, 4, (2, 2)),  # VAE linear
-    (256, 192, 384): (8, 6, 4, (2, 2)),  # VAE linear
+    (16384, 384, 1152): (8, 4, 4, (2, 2)),  # VAE linear
+    (16384, 384, 384): (8, 4, 4, (2, 2)),  # VAE linear
+    (256, 192, 384): (4, 4, 4, (2, 2)),  # VAE linear
     (128, 32, 32): (2, 1, 1, (2, 1)),  # VAE tiny
 }
 
