@@ -95,6 +95,21 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None):
     )
 
 
+def _get_paged_sdpa_decode_program_config(device, max_seq_len):
+    """Build SDPAProgramConfig for paged_scaled_dot_product_attention_decode.
+
+    Uses small chunk sizes to avoid L1 OOM on Blackhole.
+    Note: do NOT pass compute_kernel_config to paged_sdpa_decode on Blackhole —
+    the default is compatible; custom configs can cause incorrect output.
+    """
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=32,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+    )
+
+
 def _get_sdpa_compute_kernel_config():
     """WormholeComputeKernelConfig for SDPA -- HiFi2 with fp32 accumulation."""
     return ttnn.WormholeComputeKernelConfig(
@@ -244,14 +259,13 @@ def gated_attention_forward_ttnn(
             q_decode,
             paged_kv_cache_key,
             paged_kv_cache_value,
-            page_table,
-            is_causal=True,
             cur_pos_tensor=cur_pos_tensor,
+            page_table_tensor=page_table,
+            is_causal=True,
             scale=scaling,
-            program_config=_get_sdpa_program_config(
-                device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2], q_seq_len=T
+            program_config=_get_paged_sdpa_decode_program_config(
+                device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
             ),
-            compute_kernel_config=_get_sdpa_compute_kernel_config(),
         )
         attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
         new_key = paged_kv_cache_key

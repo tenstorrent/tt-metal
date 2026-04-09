@@ -139,10 +139,8 @@ def _warmup_prefill(model, device, token_ids):
     logits = model.prefill(token_ids)
     ttnn.synchronize_device(device)
 
-    # One decode step to compile decode programs (T=1 shape)
-    first_token = ttnn.to_torch(logits).squeeze().argmax().item()
-    model.decode(torch.tensor([[first_token]], dtype=torch.long), current_pos=T)
-    ttnn.synchronize_device(device)
+    # Decode warmup is handled by capture_decode_trace_paged() or decode_paged()
+    # at generation time, so we only warmup prefill here.
 
     compile_time = time.time() - t0
     logger.info(f"Warmup complete: {compile_time:.1f}s (programs now cached)")
@@ -151,35 +149,52 @@ def _warmup_prefill(model, device, token_ids):
     model.reset_state(batch_size=token_ids.shape[0])
 
 
+BLOCK_SIZE = 64
+MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K token capacity
+
+
 @run_for_blackhole()
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
-    "seqlen, max_seq_len, max_generated_tokens, use_trace, use_paged",
+    "seqlen, max_generated_tokens, use_trace",
     [
-        (128, 2048, 50, True, False),
-        (128, 2048, 50, False, True),
-        (4096, 8192, 100, True, False),
-        (8192, 16384, 50, False, False),
-        (65536, 131072, 100, True, False),
-        (65536, 131072, 100, False, True),
-        (131072, 262144, 100, True, False),
+        (128, 50, True),
+        (128, 50, False),
+        (4096, 100, True),
+        (4096, 100, False),
+        (8192, 100, True),
+        (8192, 100, False),
+        (65536, 100, True),
+        (65536, 100, False),
+        (131072, 100, True),
     ],
-    ids=["prefill_128", "paged_128", "prefill_4k", "prefill_8k", "prefill_64k", "paged_64k", "prefill_128k"],
+    ids=[
+        "traced_128",
+        "paged_128",
+        "traced_4k",
+        "paged_4k",
+        "traced_8k",
+        "paged_8k",
+        "traced_64k",
+        "paged_64k",
+        "traced_128k",
+    ],
 )
 def test_demo_text(
     device,
     seqlen,
-    max_seq_len,
     max_generated_tokens,
     use_trace,
-    use_paged,
 ):
     """End-to-end text generation: prefill + decode with performance validation."""
     from transformers import PreTrainedTokenizerFast
 
     device.enable_program_cache()
     tokenizer = PreTrainedTokenizerFast.from_pretrained(CHECKPOINT_DIR)
+
+    # Fixed block budget — max_seq_len derived from it
+    max_seq_len = MAX_NUM_BLOCKS * BLOCK_SIZE
 
     t0 = time.time()
     model = Qwen35Model.from_pretrained(
@@ -192,23 +207,16 @@ def test_demo_text(
 
     token_ids = _get_prompt(seqlen, tokenizer)
     actual_len = token_ids.shape[1]
-    logger.info(f"Prompt: {actual_len} tokens (target: {seqlen}, max_seq_len: {max_seq_len})")
+    logger.info(
+        f"Prompt: {actual_len} tokens (block budget: {MAX_NUM_BLOCKS} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
+    )
 
     # Warmup: compile programs (not counted in TTFT)
     t_compile = time.time()
     _warmup_prefill(model, device, token_ids)
     t_compile = time.time() - t_compile
 
-    if use_paged:
-        generated, perf = _run_paged_generation(
-            model,
-            tokenizer,
-            device,
-            token_ids,
-            max_generated_tokens,
-            max_seq_len,
-        )
-    elif use_trace:
+    if use_trace:
         generated, perf = _run_traced_generation(
             model,
             tokenizer,
@@ -217,7 +225,7 @@ def test_demo_text(
             max_generated_tokens,
         )
     else:
-        generated, perf = _run_eager_generation(
+        generated, perf = _run_paged_generation(
             model,
             tokenizer,
             device,
@@ -231,13 +239,27 @@ def test_demo_text(
     _assert_results(perf, actual_len, len(generated))
 
 
-def _run_eager_generation(model, tokenizer, device, token_ids, max_generated_tokens):
-    """Prefill + eager decode loop. Returns (generated_tokens, perf_dict)."""
-    prompt_len = token_ids.shape[1]
-    model.reset_state(batch_size=1)
+def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
+    """Prefill + paged traced decode loop. Returns (generated_tokens, perf_dict).
 
+    Uses paged attention inside the trace: paged_update_cache + paged_sdpa_decode
+    run inside the captured trace. Between replays, inputs are updated via DMA.
+    No post-trace cache/mask update ops needed.
+    """
+    T = token_ids.shape[1]
+
+    # Allocate paged KV caches + external DeltaNet state (fixed block budget)
+    num_kv_heads = model.args.n_kv_heads
+    head_dim = model.args.head_dim
+    kv_cache_shape = [MAX_NUM_BLOCKS, num_kv_heads, BLOCK_SIZE, head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+
+    # Identity page table (host torch.Tensor — model converts internally)
+    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+
+    # Prefill (fills paged KV cache + accumulates DeltaNet state)
     t0 = time.time()
-    logits = model.prefill(token_ids)
+    logits = model.prefill_paged(token_ids, page_table)
     ttnn.synchronize_device(device)
     ttft = time.time() - t0
 
@@ -245,148 +267,53 @@ def _run_eager_generation(model, tokenizer, device, token_ids, max_generated_tok
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
 
+    # Enable trace + capture
+    model.enable_trace_paged(batch_size=1)
+    model.capture_decode_trace_paged(device, page_table)
+
     generated = [next_token]
     decode_times = []
+    current_pos = T
 
     for i in range(max_generated_tokens - 1):
         next_input = torch.tensor([[next_token]], dtype=torch.long)
 
         t_step = time.time()
-        logits = model.decode(next_input, current_pos=prompt_len + i)
-        ttnn.synchronize_device(device)
-        decode_times.append(time.time() - t_step)
-
-        logits_torch = ttnn.to_torch(logits).squeeze()
-        assert not torch.isnan(logits_torch).any(), f"NaN in decode logits at step {i}"
-        next_token = logits_torch.argmax().item()
-
-        if next_token == tokenizer.eos_token_id:
-            break
-        generated.append(next_token)
-
-    avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
-    return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
-
-
-def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
-    """Prefill + traced decode loop. Returns (generated_tokens, perf_dict).
-
-    Trace captures embedding + full forward + norm + LM head.
-    Before each replay, inputs are updated via fast host-to-device DMA.
-    Post-trace cache ops are dispatched immediately after execute_trace (async)
-    so they queue on the device and execute right after the trace finishes,
-    avoiding host dispatch latency gaps.
-    """
-    T = token_ids.shape[1]
-    model.enable_trace(batch_size=1)
-
-    t0 = time.time()
-    logits = model._prefill_for_trace(token_ids)
-    ttnn.synchronize_device(device)
-    ttft = time.time() - t0
-
-    logits_torch = ttnn.to_torch(logits).squeeze()
-    assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
-    next_token = logits_torch.argmax().item()
-
-    # Warmup decode using staging path (forward_decode without position_tensor)
-    warmup_input = torch.tensor([[next_token]], dtype=torch.long)
-    token_ids_ttnn = ttnn.from_torch(warmup_input, dtype=ttnn.uint32, device=device)
-    x = ttnn.embedding(token_ids_ttnn, model.tok_embeddings, layout=ttnn.TILE_LAYOUT)
-    ttnn.deallocate(token_ids_ttnn)
-    cos, sin = model.rope.get_rot_mats(torch.full((1, 1), T, dtype=torch.long))
-    logits = model.forward_decode(x, cos, sin)
-    ttnn.synchronize_device(device)
-    warmup_token = ttnn.to_torch(logits).squeeze().argmax().item()
-    for layer in model.layers:
-        if layer.is_full_attention:
-            layer.attention.update_cache_after_trace(T)
-            layer.attention.update_mask_for_pos(T + 1)
-
-    # Capture trace (staging path — no position_tensor)
-    model.capture_decode_trace(device)
-
-    # Restore mask after capture (warmup/capture may have modified it)
-    for layer in model.layers:
-        if layer.is_full_attention:
-            layer.attention.update_mask_for_pos(T + 1)
-
-    generated = [next_token, warmup_token]
-    decode_times = []
-    current_token = warmup_token
-    current_pos = T + 1
-
-    for i in range(max_generated_tokens):
-        next_input = torch.tensor([[current_token]], dtype=torch.long)
-
-        t_step = time.time()
-        logits = model.decode_traced(next_input, current_pos=current_pos)
-
-        # Pipeline: dispatch post-trace ops immediately after execute_trace.
-        # They queue on the same command queue and execute right after the trace
-        # finishes on device, avoiding host dispatch latency between sync and ops.
-        for layer in model.layers:
-            if layer.is_full_attention:
-                layer.attention.update_cache_after_trace(current_pos)
-                layer.attention.update_mask_for_pos(current_pos + 1)
-
-        # Single sync: wait for trace + pipelined post-trace ops to complete
-        ttnn.synchronize_device(device)
+        logits = model.decode_traced_paged(next_input, current_pos=current_pos, page_table=page_table)
         decode_times.append(time.time() - t_step)
 
         logits_torch = ttnn.to_torch(logits).squeeze()
         assert not torch.isnan(logits_torch).any(), f"NaN in traced decode at step {i}"
-        current_token = logits_torch.argmax().item()
-        generated.append(current_token)
+        next_token = logits_torch.argmax().item()
+        generated.append(next_token)
         current_pos += 1
 
-        if current_token == tokenizer.eos_token_id:
+        if next_token == tokenizer.eos_token_id:
             break
 
     avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
 
 
-def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens, max_seq_len):
-    """Prefill + paged decode loop. Returns (generated_tokens, perf_dict).
+def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens):
+    """Prefill + paged decode loop (non-traced). Returns (generated_tokens, perf_dict).
 
-    Uses paged KV cache for the 8 full attention layers.
-    DeltaNet layers use their recurrent state as usual.
+    Uses paged KV cache for attention layers. DeltaNet uses external state.
     """
     T = token_ids.shape[1]
-    block_size = 64
-    num_blocks = (max_seq_len + block_size - 1) // block_size
+
+    # Allocate paged KV caches + external DeltaNet state (fixed block budget)
     num_kv_heads = model.args.n_kv_heads
     head_dim = model.args.head_dim
+    kv_cache_shape = [MAX_NUM_BLOCKS, num_kv_heads, BLOCK_SIZE, head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
 
-    # Allocate paged KV caches for the 8 attention layers
-    attention_layer_indices = [i for i in range(model.args.n_layers) if model.args.is_full_attention_layer(i)]
-    kv_caches = []
-    for _ in range(len(attention_layer_indices)):
-        k = ttnn.from_torch(
-            torch.zeros(num_blocks, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v = ttnn.from_torch(
-            torch.zeros(num_blocks, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        kv_caches.append([k, v])
-    model.set_paged_kv_caches(kv_caches)
-
-    # Identity page table: virtual block i -> physical block i
-    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
-    page_table_tt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # Identity page table (host torch.Tensor)
+    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
 
     # Prefill
     t0 = time.time()
-    logits = model.prefill_paged(token_ids, page_table_tt)
+    logits = model.prefill_paged(token_ids, page_table)
     ttnn.synchronize_device(device)
     ttft = time.time() - t0
 
@@ -401,7 +328,7 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
         next_input = torch.tensor([[next_token]], dtype=torch.long)
 
         t_step = time.time()
-        logits = model.decode_paged(next_input, current_pos=T + i, page_table=page_table_tt)
+        logits = model.decode_paged(next_input, current_pos=T + i, page_table=page_table)
         ttnn.synchronize_device(device)
         decode_times.append(time.time() - t_step)
 
