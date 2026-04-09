@@ -22,3 +22,28 @@ Analyzed the SFPU kernel implementation for the `swish` unary operation (`UnaryO
 - `.claude-analysis/rrelu-1/swish_analysis.md`
 
 ### Status: SUCCESS
+
+---
+
+## Operation: leaky_relu
+## Date: 2026-04-09
+
+### Summary
+Analyzed the SFPU kernel implementation for the `leaky_relu` unary operation (`UnaryOpType::LEAKY_RELU`). The operation has been fully nuked from this repository clone (Phase 2 deep nuke). Analysis was reconstructed from surviving artifacts.
+
+### Key Findings
+- **Kernel style**: B_raw_TTI (raw TTI instructions, not SFPI abstractions) -- classification from logging reference
+- **Algorithm**: Piecewise-linear: `x if x >= 0, else negative_slope * x`
+  - Test sign via SFPSETCC (LT0 mode)
+  - Conditionally multiply negative elements by negative_slope via SFPMUL
+  - Simple CC guard pattern: SFPENCC enable -> SFPSETCC -> guarded SFPMUL -> SFPENCC disable
+- **Instructions**: SFPLOADI, SFPLOAD, SFPSETCC, SFPMUL, SFPENCC, SFPSTORE
+- **Approximation mode**: Not applicable (simple piecewise-linear, no approximate/exact paths)
+- **Address mode**: ADDR_MOD_7 with all-zero increments (identical on WH and BH)
+- **Parameter**: negative_slope (float bit-cast to uint32_t, default 0.01)
+- **Nuked**: All source code deleted. Analysis is a reconstruction.
+
+### Files Produced
+- `.claude-analysis/rrelu-1/leaky_relu_analysis.md`
+
+### Status: COMPLETED (source code nuked, analysis reconstructed from artifacts)
