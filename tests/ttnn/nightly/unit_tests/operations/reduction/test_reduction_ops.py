@@ -11,7 +11,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_allclose_and_pcc, torch_random
+from models.common.utility_functions import comp_allclose_and_pcc, torch_random, is_wormhole_b0
 from loguru import logger
 
 
@@ -611,7 +611,11 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     if dtype == ttnn.bfloat8_b:
         # BFLOAT8_B has lower precision.
         atol = 0.25
-        pcc = 0.998
+        pcc = 0.997
+    elif op == "sum" and is_wormhole_b0():
+        # Due to hardware bug (#38306), Wormhole B0 uses lower precision.
+        atol = 0.04
+        pcc = 0.999
     else:
         atol = 0.01
         pcc = 0.999
