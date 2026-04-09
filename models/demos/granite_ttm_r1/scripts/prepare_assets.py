@@ -7,7 +7,7 @@
 
 Usage:
     python scripts/prepare_assets.py --datasets etthi
-    python scripts/prepare_assets.py --datasets etthi weather electricity
+    python scripts/prepare_assets.py --datasets etthi etth2 ettm1 ettm2
 
 Datasets are saved to models/demos/granite_ttm_r1/data/.
 """
@@ -20,17 +20,21 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
-# Raw CSV URLs for each dataset (ETTh1 is publicly hosted on GitHub).
+# Raw CSV URLs for each dataset (ETT variants are publicly hosted on GitHub).
+# Weather and Electricity are no longer available at the old Autoformer URLs;
+# use ETT variants for multi-dataset zero-shot evaluation.
 DATASET_URLS: dict[str, str] = {
-    "etthi": ("https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh1.csv"),
-    "weather": ("https://raw.githubusercontent.com/thuml/Autoformer/main/data/weather/weather.csv"),
-    "electricity": ("https://raw.githubusercontent.com/thuml/Autoformer/main/data/electricity/electricity.csv"),
+    "etthi": "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh1.csv",
+    "etth2": "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh2.csv",
+    "ettm1": "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTm1.csv",
+    "ettm2": "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTm2.csv",
 }
 
 OUTPUT_NAMES: dict[str, str] = {
     "etthi": "etthi.csv",
-    "weather": "weather.csv",
-    "electricity": "electricity.csv",
+    "etth2": "etth2.csv",
+    "ettm1": "ettm1.csv",
+    "ettm2": "ettm2.csv",
 }
 
 
