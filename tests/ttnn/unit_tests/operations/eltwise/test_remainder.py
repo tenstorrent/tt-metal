@@ -8,6 +8,7 @@ import ttnn
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -99,3 +100,61 @@ def test_remainder_scalar(input_shapes, scalar, device):
         assert torch.allclose(output_tensor, torch_output_tensor, equal_nan=True)
     else:
         assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "testing_dtype",
+    ["bfloat16", "float32"],
+)
+def test_remainder_nan(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+    if testing_dtype == "bfloat16":
+        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
+
+    torch_input_a = torch.tensor([1.0, 0.0, -1.0], dtype=torch_dtype)
+    torch_input_b = torch.tensor([0.0, 0.0, 0.0], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+
+    tt_in_a = ttnn.from_torch(
+        torch_input_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_in_b = ttnn.from_torch(
+        torch_input_b,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.remainder(tt_in_a, tt_in_b)
+    output_tensor = ttnn.to_torch(tt_result)
+
+    assert torch.equal(torch.isnan(golden), torch.isnan(output_tensor))
+
+
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_remainder_binary_accuracy(device, dtype):
+    """Test remainder binary operation with specific values."""
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    torch_input_a = torch.tensor([[5.0, 7.0, -5.0, -7.0, 3.5, 10.0, 1.5, -1.5, 9.0, 15.0]], dtype=torch_dtype)
+    torch_input_b = torch.tensor([[2.0, 4.0, 2.0, 4.0, 2.0, 4.0, 0.5, 0.5, -2.0, -4.0]], dtype=torch_dtype)
+
+    golden_fn = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_fn(torch_input_a, torch_input_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.remainder(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+    assert_with_ulp(golden, output, 1)

@@ -497,132 +497,31 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     return result;
 }
 
-Tensor run_remainder(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
-    // explicitly using binary_ng to avoid fallback to legacy because of row broadcast
-    Tensor result = ttnn::subtract(
-        input_a,
-        ttnn::multiply(
-            input_b,
-            ttnn::div(
-                input_a,
-                input_b,
-                false,
-                "floor",
-                std::nullopt,
-                output_mem_config,
-                std::nullopt,
-                FusedActivations{},
-                FusedActivations{},
-                FusedActivations{},
-                std::nullopt,
-                sub_core_grids),
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            std::nullopt,
-            sub_core_grids),
-        std::nullopt,
-        output_mem_config,
-        std::nullopt,
-        FusedActivations{},
-        FusedActivations{},
-        FusedActivations{},
-        false,
-        sub_core_grids);
-
-    result = ttnn::where(
-        ttnn::ge(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        ttnn::subtract(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        result,
-        output_mem_config,
-        std::nullopt,
-        sub_core_grids);
-
-    result = ttnn::where(
-        ttnn::ltz(input_b, output_mem_config, std::nullopt, sub_core_grids),
-        ttnn::add(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        result,
-        output_mem_config,
-        std::nullopt,
-        sub_core_grids);
-
-    return result;
-}
-
-// Binary remainder will be overloaded by unary remainder in another PR
+// REMAINDER result = input − (other * floor(input/other))
 Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    DataType input_dtype = input_a.dtype();
-
-    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
-    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    if (is_int32) {
-        return ttnn::prim::binary_ng(
-            input_a, input_b, binary::BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
-    }
-
-    // No typecast for FP32 input
-    const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
-    const auto& a =
-        do_typecast ? typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_a;
-    const auto& b =
-        do_typecast ? typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_b;
-
-    // Perform the remainder operation
-    Tensor result = run_remainder(a, b, output_mem_config, sub_core_grids);
-
-    // Return the result, typecasted if necessary
-    return do_typecast ? typecast(result, input_dtype, std::nullopt, std::nullopt, sub_core_grids) : result;
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        binary::BinaryOpType::REMAINDER,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 Tensor remainder(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt);
 }
 
 // FMOD result = input − (other * trunc(input/other))

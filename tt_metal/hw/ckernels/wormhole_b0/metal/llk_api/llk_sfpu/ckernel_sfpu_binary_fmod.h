@@ -6,13 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_remainder_int32.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // FMOD = a - trunc(a / b) * b
-// Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_remainder_int32.h)
+// Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_binary_remainder.h)
 sfpi_inline void calculate_fmod_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store

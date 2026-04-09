@@ -115,7 +115,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/reduce.h
     inc/api/compute/reduce_custom.h
     inc/api/compute/reg_api.h
-    inc/api/compute/remainder_int32.h
+    inc/api/compute/binary_remainder.h
     inc/api/compute/reshuffle.h
     inc/api/compute/sentinel/compute_kernel_sentinel.h
     inc/api/compute/sentinel/sentinel_core.h
