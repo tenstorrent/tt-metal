@@ -28,6 +28,7 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -55,6 +56,7 @@ def test_mean_scaling(device, shape, dim, keepdim):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -80,6 +82,7 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -114,6 +117,7 @@ def test_mean_shard(device, mem_config, keepdim):
         device=device,
         memory_config=block_sharded_config,
     )
+
     memory_config = block_sharded_config if mem_config == "block" else mem_config
     output_tensor = ttnn.mean(
         input_tensor,

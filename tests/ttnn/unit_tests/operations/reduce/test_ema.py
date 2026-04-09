@@ -37,6 +37,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
+
     alpha = 0.25
     num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
