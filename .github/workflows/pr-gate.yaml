@@ -301,58 +301,58 @@ jobs:
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
-  # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
-  # enough to run during PRs without bringing infra to a grinding halt.
-  # A proper scan is run in Merge Gate to ensure only clean code lands.
+  # Incremental clang-tidy scan on PR diffs — same checks enforced at merge gate.
+  # Blocking: violations here are exactly what would cause a merge queue eviction.
+  # Posts inline PR comments so developers can fix issues before the merge queue.
   clang-tidy-light:
     needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    timeout-minutes: 140
-    runs-on: ubuntu-latest
-    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+    timeout-minutes: 60
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-images.outputs.ci-build-tag }}
     permissions:
       pull-requests: write
       contents: write  # to allow auto-closing conversations
     steps:
-    - name: Change ownership of /github/home
-      run: sudo chown -R $(whoami) /github/home  # Thanks GH...
     - uses: actions/checkout@v4
       with:
-        ref: >-
-          ${{ github.event_name == 'pull_request' &&
-              github.event.pull_request.head.sha || '' }}
-        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 1
         submodules: "recursive"
     - name: Set safe directory for Git
       run: git config --global --add safe.directory $GITHUB_WORKSPACE
-    - name: Fetch base branch
+    - name: Fetch PR base commit
       timeout-minutes: 5
       run: |
+        # Fetch only the single base commit the PR was opened against.
+        # github.event.pull_request.base.sha is the merge-base equivalent —
+        # no need to fetch the full branch history.
         BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        BASE_SHA="${{ github.event.pull_request.base.sha }}"
         git remote add upstream "https://github.com/${BASE_REPO}"
-        git fetch --no-tags upstream "${BASE_REF}"
-    - name: Install clang-tidy
+        git fetch --no-tags --depth=1 upstream "${BASE_SHA}"
+        git tag _pr_base FETCH_HEAD
+    - name: Set up clang-tidy symlinks
+      run: |
+        # The ci-build image ships clang-tidy-20 and clang-tidy-diff-20.py.
+        # Create unversioned symlinks if they don't already exist so the
+        # rest of the job can reference them without version suffixes.
+        command -v clang-tidy        || sudo ln -sf "$(command -v clang-tidy-20)" /usr/local/bin/clang-tidy
+        command -v clang-tidy-diff-20.py || sudo ln -sf "$(find /usr -name 'clang-tidy-diff-20.py' 2>/dev/null | head -1)" /usr/local/bin/clang-tidy-diff-20.py
+        uv pip install pyyaml  # Needed by clang-tidy-diff-20.py
+    - name: Restore CPM source cache
+      id: cpm-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .cpmcache.tar.zst
+        key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+        restore-keys: cpm-z22-
+    - name: Unpack CPM cache
+      run: |
+        [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+    - name: Prepare compile_commands.json
       timeout-minutes: 10
-      run: |
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          clang-tidy-20 python3.11 python3.11-venv python3.11-dev
-        sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
-    - name: Prepare .clang-tidy with extra checks
-      run: |
-        if [ -f .clang-tidy-light ]; then
-          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
-          mv .clang-tidy-new .clang-tidy
-        fi
-        cat .clang-tidy
-    - name: CMake configure
-      # CPM downloads third-party packages from the internet; give a generous
-      # timeout to accommodate slow network days.
-      # Note: actions/cache doesn't work with containerized jobs (post-step
-      # runs after the container is removed, hashFiles fails). Dropped for now.
-      timeout-minutes: 25
       run: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Debug \
@@ -363,14 +363,21 @@ jobs:
           -DTTNN_BUILD_TESTS=ON \
           -DTT_UNITY_BUILDS=OFF \
           -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+    - name: Pack CPM cache
+      if: steps.cpm-cache.outputs.cache-hit != 'true'
+      run: |
+        [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+    - name: Save CPM source cache
+      if: steps.cpm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .cpmcache.tar.zst
+        key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
     - name: Build generated files
       timeout-minutes: 10
       run: cmake --build build --target all_generated_files
-    - name: 'Install jq'
-      uses: dcarbone/install-jq-action@v2
     - name: Create results directory
-      run: |
-        mkdir clang-tidy-result
+      run: mkdir clang-tidy-result
     - name: Analyze
       # Big PRs will have a LOT to scan, but this should be enough for everyone
       timeout-minutes: 90
@@ -386,9 +393,7 @@ jobs:
         jq --arg prefix "$PREFIX/" -r \
           '.[].file | sub("^" + $prefix; "")' \
           build/compile_commands.json > relative_files_in_build.txt
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff --name-only \
-          "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
+        git diff --name-only "_pr_base" HEAD > changed_files.txt
         grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
         # Exit if there are no modified files known to CMake
@@ -398,19 +403,19 @@ jobs:
         }
 
         # Analyze the relevant diffs of the relevant files
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
+        git diff "_pr_base" \
           -- $(cat common_files.txt) > filtered_changes.diff
         clang-tidy-diff-20.py -p1 -path build \
           -export-fixes clang-tidy-result/fixes.yml \
           -j$(nproc) < filtered_changes.diff
 
-        # TODO: Find a way to fail THIS step if there's some USEFUL issues
-        # detected. For now disable it b/c it fails if it finds things in
-        # non-user code and/or NOLINT's.
-        # # Draw attention to this step (make it an error) if there are fixes
-        # # to be addressed.
-        # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
+        # Fail if clang-tidy found fixable violations in the diff.
+        # These are the same checks enforced at merge gate — catching them here
+        # avoids a merge queue eviction later.
+        if [[ -s clang-tidy-result/fixes.yml ]]; then
+          echo "::error::clang-tidy found violations. See inline PR comments for details."
+          exit 1
+        fi
     - name: Run clang-tidy-pr-comments action
       if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
       # v1.8.0
@@ -418,12 +423,18 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         clang_tidy_fixes: clang-tidy-result/fixes.yml
-        request_changes: false  # TODO: consider enabling this?
+        # Explicitly pass PR number — auto-detection fails inside Docker containers
+        # because the action can't reliably read GITHUB_EVENT_PATH from within the container.
+        pull_request_id: ${{ github.event.pull_request.number }}
+        request_changes: false
         suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
         # Pip fails if the action attempts to install its own Python; Sidestep that
         python_path: python3
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
+        # TT internal runners mount the workspace at /__w/ not /home/runner/work/.
+        # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
+        repo_path_prefix: /__w
 
   # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
   llk-test-wormhole:
@@ -514,6 +525,7 @@ jobs:
         with:
           required-jobs: "asan-build, build"
           optional-jobs: >-
+            clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar
