@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -93,9 +93,10 @@ def run(
     # v2 tracer captures pad args positionally:
     #   Format A: arg1=padding (nested list [[left,right],...]), value=fill_value
     #   Format B: arg1=output_padded_shape (flat list), arg2=input_tensor_start, arg3=fill_value
-    arg1 = kwargs.get("arg1", None)
-    arg2 = kwargs.get("arg2", None)
-    arg3 = kwargs.get("arg3", None)
+    pos_args = extract_positional_args(kwargs)
+    arg1 = pos_args.get(1, None)
+    arg2 = pos_args.get(2, None)
+    arg3 = pos_args.get(3, None)
 
     if padding is None and arg1 is not None:
         is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))

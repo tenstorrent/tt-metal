@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -82,7 +82,8 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "repeat_dims"}, output_memory_config=output_memory_config)
 
     # v2 tracer puts repeat vector in arg1 or repeat_dims
-    repetition_vector = repeat_shape or repeat_dims or kwargs.get("arg1", None)
+    pos_args = extract_positional_args(kwargs)
+    repetition_vector = repeat_shape or repeat_dims or pos_args.get(1, None)
     if repetition_vector is None:
         repetition_vector = (1, 1, 2, 1)  # fallback for sample
 

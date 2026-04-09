@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -170,7 +170,8 @@ def run(
         # Try arg1 as a raw memory config dict
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
-        arg1 = kwargs.get("arg1")
+        pos_args = extract_positional_args(kwargs)
+        arg1 = pos_args.get(1)
         if arg1 is not None and isinstance(arg1, dict):
             reshard_mem_config = parse_dict_value("memory_config", arg1)
     if reshard_mem_config is None:

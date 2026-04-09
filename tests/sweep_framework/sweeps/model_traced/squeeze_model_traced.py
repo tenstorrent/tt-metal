@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -102,8 +102,9 @@ def run(
     )(shape)
 
     # In V2 format, dim comes as arg1 (positional parameter)
+    pos_args = extract_positional_args(kwargs)
     if dim is None:
-        dim = kwargs.get("arg1", 0)
+        dim = pos_args.get(1, 0)
     # Handle __ABSENT__ sentinel from V2 loader
     if dim == "__ABSENT__":
         dim = 0

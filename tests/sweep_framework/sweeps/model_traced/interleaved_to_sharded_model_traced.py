@@ -12,7 +12,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -96,7 +96,8 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
     # arg1 is the target sharded memory config for interleaved_to_sharded
-    arg1 = kwargs.get("arg1", None)
+    pos_args = extract_positional_args(kwargs)
+    arg1 = pos_args.get(1, None)
     if isinstance(arg1, dict):
         arg1 = dict_to_memory_config(arg1)
 

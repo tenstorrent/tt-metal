@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -82,11 +82,12 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
+    pos_args = extract_positional_args(kwargs)
     if k is None:
-        k = kwargs.get("arg1", 5)
+        k = pos_args.get(1, 5)
     k_val = k
     if dim is None:
-        dim = kwargs.get("arg2", -1)
+        dim = pos_args.get(2, -1)
     dim_val = dim
     # Read largest and sorted from op_kwargs (from traced config)
     largest = op_kwargs.get("largest", True)

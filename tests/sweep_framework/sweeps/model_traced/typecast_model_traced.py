@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -80,7 +80,8 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config)
 
-    output_dtype = output_dtype or kwargs.get("dtype", kwargs.get("arg1", ttnn.float32))
+    pos_args = extract_positional_args(kwargs)
+    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
     if isinstance(output_dtype, dict):
         output_dtype = parse_dtype(output_dtype.get("repr", ""))
     elif isinstance(output_dtype, str):
