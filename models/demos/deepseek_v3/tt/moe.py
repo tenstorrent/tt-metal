@@ -44,6 +44,10 @@ class MoE(SharedStateAddOn, AbstractModule):
     PREFILL_TOKEN_CHUNK_SIZE = 16384
     PREFILL_BATCH_CHUNK_SIZE = 256
 
+    @staticmethod
+    def _use_legacy_users_per_row_path(cfg: RunDecodeConfig | RunPrefillConfig) -> bool:
+        return int(cfg.get("batch_size_per_row", USERS_PER_ROW)) == USERS_PER_ROW
+
     @classmethod
     def convert_weights(
         cls,
@@ -201,7 +205,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "batch_size_per_row": batch_size_per_row,
+                "moe_gate": MoEGate.model_config(
+                    hf_config,
+                    mesh_device,
+                    mode,
+                    topk_fallback=topk_fallback,
+                    batch_size_per_row=batch_size_per_row,
+                ),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -252,7 +263,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "batch_size_per_row": batch_size_per_row,
+                "moe_gate": MoEGate.model_config(
+                    hf_config,
+                    mesh_device,
+                    mode,
+                    topk_fallback=topk_fallback,
+                    batch_size_per_row=batch_size_per_row,
+                ),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -372,6 +390,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
+        if cls._use_legacy_users_per_row_path(cfg):
+            # Preserve the pre-f81f6069 output-weight layout for 32 users/row.
+            topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+
         # MOE
         post_combine_output_tensor = cls._fwd_moe(
             x,
@@ -392,6 +414,18 @@ class MoE(SharedStateAddOn, AbstractModule):
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return MoEGate.forward(x, cfg["moe_gate"])
+
+    @classmethod
+    def _fwd_repeat_permute_expert_weights(
+        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
+    ) -> ttnn.Tensor:
+        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_experts_weights)
+        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
+        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(topk_experts_weights_rm)
+        return topk_experts_weights
 
     @classmethod
     def _fwd_moe(
@@ -416,13 +450,25 @@ class MoE(SharedStateAddOn, AbstractModule):
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
 
-        # Chunk along local batch dimension to keep prefill intermediates (especially topk tilize) small.
-        chunk_size = min(batch_size_per_device, cls.PREFILL_BATCH_CHUNK_SIZE)
+        legacy_users_per_row = cls._use_legacy_users_per_row_path(cfg)
+        if legacy_users_per_row:
+            # Pre-f81f6069 behavior: only chunk if explicitly configured.
+            chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
+        else:
+            # Batch-8 path: keep prefill intermediates bounded.
+            chunk_size = min(batch_size_per_device, cls.PREFILL_BATCH_CHUNK_SIZE)
         output_chunks: list[ttnn.Tensor] = []
 
         def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
+            if legacy_users_per_row:
+                return ttnn.slice(
+                    topk_experts_weights,
+                    [0, 0, token_start, 0],
+                    [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
+                )
+
             topk_weights_chunk = ttnn.slice(
                 topk_experts_weights,
                 [0, 0, token_start, 0],
@@ -466,9 +512,12 @@ class MoE(SharedStateAddOn, AbstractModule):
                 shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
             )
             dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
-            dispatch_chunk_rm = dispatch_chunk
-            dispatch_chunk = ttnn.to_layout(dispatch_chunk_rm, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(dispatch_chunk_rm)
+            if legacy_users_per_row:
+                dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
+            else:
+                dispatch_chunk_rm = dispatch_chunk
+                dispatch_chunk = ttnn.to_layout(dispatch_chunk_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(dispatch_chunk_rm)
             ttnn.deallocate(all_to_all_dispatch_output_tensors)
 
             experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
@@ -497,19 +546,25 @@ class MoE(SharedStateAddOn, AbstractModule):
                 all_to_all_combine_output_tensors,
                 shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
             )
-            post_combine_output_tensor_rm = post_combine_output_tensor
-            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor_rm, ttnn.TILE_LAYOUT)
+            if legacy_users_per_row:
+                post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+            else:
+                post_combine_output_tensor_rm = post_combine_output_tensor
+                post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor_rm, ttnn.TILE_LAYOUT)
             ttnn.deallocate(all_to_all_combine_output_tensors)
 
             topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            post_combine_weighted_output_tensor = ttnn.mul(
-                post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
+            post_combine_output_tensor = ttnn.mul(
+                post_combine_output_tensor,
+                topk_weights_chunk,
+                **cfg["mul_experts_output_with_weights"],
             )
-            ttnn.deallocate(post_combine_output_tensor)
             ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_weighted_output_tensor, dim=0, keepdim=True)
-            ttnn.deallocate(post_combine_weighted_output_tensor)
+            if not legacy_users_per_row:
+                post_combine_weighted_output_tensor = post_combine_output_tensor
+                post_combine_output_tensor = ttnn.sum(post_combine_weighted_output_tensor, dim=0, keepdim=True)
+                ttnn.deallocate(post_combine_weighted_output_tensor)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:

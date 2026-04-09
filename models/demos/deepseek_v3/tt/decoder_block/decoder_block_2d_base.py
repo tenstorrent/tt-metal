@@ -133,7 +133,17 @@ class DecoderBlock2DBase(DecoderBlockBase):
             ttnn.deallocate(mla_norm_in)
 
         # MLA
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        mla_reshard_cfg = cfg["mla_reshard"]
+        if hasattr(mla_reshard_cfg, "memory_config"):
+            # New (f81f6069) path uses a direct ReshardConfig wrapper.
+            mla_norm_out = ttnn.to_memory_config(mla_norm_out, **mla_reshard_cfg)
+        else:
+            # Legacy (pre-f81f6069) path for 32 users/row decode.
+            mla_reshard_memory_config = ttnn.create_sharded_memory_config(
+                mla_norm_out.shape,
+                **mla_reshard_cfg,
+            )
+            mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 

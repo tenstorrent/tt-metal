@@ -185,22 +185,31 @@ def _launch_merged_descriptors(op_descriptors):
     if not op_descriptors:
         raise ValueError("op_descriptors cannot be empty")
 
-    merged_descriptor = op_descriptors[0].descriptor
-    if len(op_descriptors) > 1:
-        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
+    try:
+        merged_descriptor = op_descriptors[0].descriptor
+        if len(op_descriptors) > 1:
+            merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
 
-    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
-        tensor for op in op_descriptors for tensor in op.output_tensors
-    ]
-    ttnn.generic_op(io_tensors, merged_descriptor)
-
-    return [op.output_tensors for op in op_descriptors]
+        io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
+            tensor for op in op_descriptors for tensor in op.output_tensors
+        ]
+        ttnn.generic_op(io_tensors, merged_descriptor)
+        return [op.output_tensors for op in op_descriptors]
+    except TypeError as exc:
+        # Some descriptor variants (e.g. newer LayerNorm argument wrappers) can fail
+        # merged generic_op launch; fall back to per-op launch to keep decode functional.
+        logger.warning("Merged descriptor launch failed with TypeError ({}); falling back to sequential launches.", exc)
+        return [op.launch() for op in op_descriptors]
 
 
 class MLA1D(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
     """
+
+    @staticmethod
+    def _use_legacy_users_per_row_path(cfg: RunDecodeConfig | RunPrefillConfig) -> bool:
+        return int(cfg.get("batch_size_per_row", USERS_PER_ROW)) == USERS_PER_ROW
 
     @classmethod
     def convert_weights(
@@ -1847,7 +1856,8 @@ class MLA1D(AbstractModule):
 
         seq_len = x.shape[2]
         batch_size = x.shape[1]
-        row_batched_prefill = batch_size > 1
+        legacy_users_per_row = cls._use_legacy_users_per_row_path(cfg)
+        row_batched_prefill = (batch_size > 1) and not legacy_users_per_row
         if row_batched_prefill:
             expected_batch_size = cfg["batch_size_per_row"]
             assert (
@@ -2003,14 +2013,15 @@ class MLA1D(AbstractModule):
         kv_lora_rank: int,
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        # Shard in0 to L1 WIDTH sharded for qkv_a matmul
-        x_shard_shape = list(x.shape)
-        x_shard_shape[-2] = ttnn.core.roundup(x_shard_shape[-2], ttnn.TILE_SIZE)
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            x_shard_shape,
-            **cfg["wq_kv_a_in0_memory_config"],
-        )
-        x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
+        if not cls._use_legacy_users_per_row_path(cfg):
+            # Shard in0 to L1 WIDTH sharded for qkv_a matmul (batch-8 path).
+            x_shard_shape = list(x.shape)
+            x_shard_shape[-2] = ttnn.core.roundup(x_shard_shape[-2], ttnn.TILE_SIZE)
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                x_shard_shape,
+                **cfg["wq_kv_a_in0_memory_config"],
+            )
+            x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
 
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
@@ -2207,7 +2218,7 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         pad_rows = 0
         padded_bsz = bsz
-        if tt_q.shape[-2] < ttnn.TILE_SIZE:
+        if (not cls._use_legacy_users_per_row_path(cfg)) and tt_q.shape[-2] < ttnn.TILE_SIZE:
             pad_rows = ttnn.TILE_SIZE - tt_q.shape[-2]
             padded_bsz = tt_q.shape[-2] + pad_rows
             tt_q = ttnn.pad(tt_q, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
@@ -2350,17 +2361,31 @@ class MLA1D(AbstractModule):
         # Reshape
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
-        # All_gather
+        if cls._use_legacy_users_per_row_path(cfg):
+            wo_in0_memory_config = ttnn.create_sharded_memory_config(
+                (1, 1, bsz, num_heads * v_head_dim),
+                **cfg["wo_in0_memory_config"],
+            )
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
+            )
+            v_out = ttnn.tilize(v_out)
+            v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+            return v_out
+
+        # Batch-8 decode path.
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         # Decode batch sizes smaller than a tile still need a tiled tensor for `wo`.
         v_out = ttnn.tilize_with_zero_padding(v_out)
-        # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
-
         return v_out
 
     @classmethod
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        if cls._use_legacy_users_per_row_path(cfg):
+            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+            return out
+
         # 1,1,32,16384 L1 interleaved
         # Shard in0 to L1 WIDTH sharded for wo matmul
         v_out_shard_shape = list(v_out.shape)
@@ -2389,38 +2414,69 @@ class MLA1D(AbstractModule):
         dim = x.shape[3]
         batch_size = x.shape[1]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
-        # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
-        # The program config must account for that batch so fuse_batch stays disabled.
-        wq_kv_a_program_config = build_prefill_matmul_program_config(
-            seq_len,
-            k=dim,
-            n=qkv_a_n,
-            batch=batch_size,
-            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
-        )
+        legacy_users_per_row = cls._use_legacy_users_per_row_path(cfg)
+        if legacy_users_per_row:
+            # Pre-f81f6069 path (users_per_row=32): single-user prefill matmul config.
+            wq_kv_a_program_config = build_prefill_matmul_program_config(
+                seq_len,
+                k=dim,
+                n=qkv_a_n,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
+        else:
+            # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
+            # The program config must account for that batch so fuse_batch stays disabled.
+            wq_kv_a_program_config = build_prefill_matmul_program_config(
+                seq_len,
+                k=dim,
+                n=qkv_a_n,
+                batch=batch_size,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        wq_kv_a_ag_args = ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
-        wq_kv_a_reduce_args = dict(cfg["wq_kv_a_r_prefill"])
-        if batch_size > 1:
-            # Keep the user batch intact during TP reduce by borrowing the singleton dim 0 as
-            # the gather/reduce axis; dim 1 already carries the real row batch.
-            wq_kv_a_ag_args = {**wq_kv_a_ag_args, "dim": 0}
-            wq_kv_a_reduce_args = {**wq_kv_a_reduce_args, "dims": [0]}
+        if legacy_users_per_row:
+            tt_q_kv = ttnn.experimental.all_gather_async(
+                tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+            )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+            tt_q_kv = ttnn.experimental.fast_reduce_nc(
+                tt_q_kv, **cfg["wq_kv_a_r_prefill"]
+            )  # [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
 
-        tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **wq_kv_a_ag_args
-        )  # [1, batch, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **wq_kv_a_reduce_args)
+            # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+            tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, seq_len, q_lora_rank])
+            tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, seq_len, q_lora_rank + kv_lora_rank])
+            tt_kv_rope = ttnn.slice(
+                tt_q_kv,
+                [0, 0, 0, q_lora_rank + kv_lora_rank],
+                [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            )
+        else:
+            wq_kv_a_ag_args = ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+            wq_kv_a_reduce_args = dict(cfg["wq_kv_a_r_prefill"])
+            if batch_size > 1:
+                # Keep the user batch intact during TP reduce by borrowing the singleton dim 0 as
+                # the gather/reduce axis; dim 1 already carries the real row batch.
+                wq_kv_a_ag_args = {**wq_kv_a_ag_args, "dim": 0}
+                wq_kv_a_reduce_args = {**wq_kv_a_reduce_args, "dims": [0]}
 
-        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
-        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, batch_size, seq_len, q_lora_rank])
-        tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, batch_size, seq_len, q_lora_rank + kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_q_kv,
-            [0, 0, 0, q_lora_rank + kv_lora_rank],
-            [1, batch_size, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
-        )
+            tt_q_kv = ttnn.experimental.all_gather_async(
+                tt_q_kv, **wq_kv_a_ag_args
+            )  # [1, batch, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+            tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **wq_kv_a_reduce_args)
+
+            # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+            tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, batch_size, seq_len, q_lora_rank])
+            tt_kv_nope = ttnn.slice(
+                tt_q_kv,
+                [0, 0, 0, q_lora_rank],
+                [1, batch_size, seq_len, q_lora_rank + kv_lora_rank],
+            )
+            tt_kv_rope = ttnn.slice(
+                tt_q_kv,
+                [0, 0, 0, q_lora_rank + kv_lora_rank],
+                [1, batch_size, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            )
         ttnn.deallocate(tt_q_kv)
         return tt_q, tt_kv_nope, tt_kv_rope

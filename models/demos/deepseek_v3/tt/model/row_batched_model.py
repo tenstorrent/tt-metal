@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -111,6 +111,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         model_cfg = {
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
@@ -118,7 +121,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
-                    batch_size_per_row=batch_size_per_row,
+                    batch_size_per_row=effective_batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -126,7 +129,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
-                    batch_size_per_row=batch_size_per_row,
+                    batch_size_per_row=effective_batch_size_per_row,
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
@@ -137,7 +140,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 hf_config,
                 mesh_device,
                 get_fabric_config(),
-                batch_size_per_row=batch_size_per_row,
+                batch_size_per_row=effective_batch_size_per_row,
             )
         return model_cfg
 
@@ -149,10 +152,13 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Create the model configuration for decode mode."""
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         norm_config = DistributedRMSNorm.decode_model_config(
             hf_config,
             mesh_device,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         model_cfg = {
             "embedding": Embedding2D.decode_model_config(hf_config, mesh_device),
@@ -161,7 +167,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
-                    batch_size_per_row=batch_size_per_row,
+                    batch_size_per_row=effective_batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -169,7 +175,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
-                    batch_size_per_row=batch_size_per_row,
+                    batch_size_per_row=effective_batch_size_per_row,
                 )
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
@@ -178,7 +184,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         }
         if cls._has_mtp_layer(hf_config):
             model_cfg["mtp"] = MTP2D.decode_model_config(
-                hf_config, mesh_device, get_fabric_config(), batch_size_per_row=batch_size_per_row
+                hf_config,
+                mesh_device,
+                get_fabric_config(),
+                batch_size_per_row=effective_batch_size_per_row,
             )
         return model_cfg
 

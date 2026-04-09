@@ -23,7 +23,12 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     ReshardConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, shard_and_save, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import (
+    COMPUTE_KERNEL_CONFIG_LOFI,
+    USERS_PER_ROW,
+    shard_and_save,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -134,13 +139,16 @@ class MTP2D(AbstractModule):
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         hidden_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         token_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         decoder_block_cfg = MoEDecoderBlock2D.prefill_model_config(
             hf_config,
             mesh_device,
             fabric_config,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         head_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         head_cfg = LMHead1D.prefill_model_config(mesh_device)
@@ -187,17 +195,29 @@ class MTP2D(AbstractModule):
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> ModelDecodeConfig:
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         hidden_norm_cfg = DistributedRMSNorm.decode_model_config(
-            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+            hf_config,
+            mesh_device,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         token_norm_cfg = DistributedRMSNorm.decode_model_config(
-            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+            hf_config,
+            mesh_device,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         decoder_block_cfg = MoEDecoderBlock2D.decode_model_config(
-            hf_config, mesh_device, fabric_config, batch_size_per_row=batch_size_per_row
+            hf_config,
+            mesh_device,
+            fabric_config,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         head_norm_cfg = DistributedRMSNorm.decode_model_config(
-            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+            hf_config,
+            mesh_device,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         head_cfg = LMHead1D.decode_model_config(mesh_device)
         # Decode is single-token, so keep the MTP-specific intermediate tensors in L1.

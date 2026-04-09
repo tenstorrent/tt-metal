@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 
 MODEL_PATH = Path(os.environ["DEEPSEEK_V3_HF_MODEL"])
 CACHE_DIR = Path(os.environ["DEEPSEEK_V3_CACHE"])
@@ -94,6 +95,7 @@ def test_mtp_demp_compare_outputs(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_users_per_row=USERS_PER_ROW,
         repeat_batches=1,
         force_recalculate=force_recalculate_weight_config,
         signpost=True,

@@ -24,6 +24,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
+    USERS_PER_ROW,
     dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
@@ -262,19 +263,23 @@ class MLP(AbstractModule):
             even_int_div(dim, mesh_width) % output_num_cores == 0
         ), "output_num_cores must divide the output tensor width evenly"
 
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
+
         # Calculate input and output memory configurations
 
         input_memory_config = cls._get_decode_activation_memory_config(
             dim,
             input_num_cores,
             mesh_device,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width),
             output_num_cores,
             mesh_device,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
 
         # Construct the config
@@ -289,7 +294,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    batch_size_per_row,
+                    effective_batch_size_per_row,
                     dim,
                     even_int_div(hidden_dim, mesh_width),
                     input_num_cores,
@@ -301,7 +306,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    batch_size_per_row,
+                    effective_batch_size_per_row,
                     even_int_div(hidden_dim, mesh_width),
                     dim,
                     inner_num_cores,
@@ -313,7 +318,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    batch_size_per_row,
+                    effective_batch_size_per_row,
                     dim,
                     even_int_div(hidden_dim, mesh_width),
                     input_num_cores,

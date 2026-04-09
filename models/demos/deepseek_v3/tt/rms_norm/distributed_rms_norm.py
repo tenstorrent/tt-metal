@@ -21,6 +21,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+    USERS_PER_ROW,
     even_int_div,
     get_state_dicts,
     shard_and_save,
@@ -101,10 +102,13 @@ class DistributedRMSNorm(RMSNormBase):
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
+                ttnn.core.roundup(effective_batch_size_per_row, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
                     even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,

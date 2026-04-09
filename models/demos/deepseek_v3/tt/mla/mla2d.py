@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
 )
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -186,10 +187,16 @@ class MLA2D(MLA1D):
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
         batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
+        if int(batch_size_per_row) == USERS_PER_ROW:
+            local_batch_idx = batch_idx % USERS_PER_ROW
+            row_idx = batch_idx // USERS_PER_ROW
+        else:
+            local_batch_idx = batch_idx % batch_size_per_row
+            row_idx = batch_idx // batch_size_per_row
         x_out = super().forward_prefill(
             x_next,
-            batch_idx=batch_idx % batch_size_per_row,
-            row_idx=batch_idx // batch_size_per_row,
+            batch_idx=local_batch_idx,
+            row_idx=row_idx,
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,

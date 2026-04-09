@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -126,7 +126,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
         batch_size = x_gathered.shape[1]
         seq_len = x_gathered.shape[2]
-        if batch_size > 1:
+        use_batch8_prefill_path = int(cfg["moe"].get("batch_size_per_row", USERS_PER_ROW)) == 8
+        if use_batch8_prefill_path and batch_size > 1:
             x_gathered = ttnn.reshape(x_gathered, (x_gathered.shape[0], 1, batch_size * seq_len, x_gathered.shape[3]))
 
         # Run both MoE and SharedExpert with the same gathered input
@@ -148,7 +149,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
             )
             ttnn.deallocate(combined_out)
-            if batch_size > 1:
+            if use_batch8_prefill_path and batch_size > 1:
                 output = ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
             # Cleanup gathered tensor
             if x_gathered is not x:

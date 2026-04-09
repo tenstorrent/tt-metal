@@ -25,6 +25,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TOPK_MIN_WIDTH,
+    USERS_PER_ROW,
     even_int_div,
     get_dequantized_tensor,
     shard_and_save,
@@ -125,6 +126,7 @@ class MoEGate(AbstractModule):
         mode: str,
         topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
         Note: topk_fallback and use_bitonic_sort are defaulted to True and not required in future when we have equivalent topk op.
@@ -200,6 +202,7 @@ class MoEGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
+                "batch_size_per_row": batch_size_per_row,
                 # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
                 #         shape=(USERS_PER_ROW, HIDDEN_SIZE),
                 #         core_grid=ttnn.CoreGrid(y=7, x=8),
@@ -269,6 +272,7 @@ class MoEGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
+                "batch_size_per_row": batch_size_per_row,
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
             }
@@ -280,8 +284,16 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            "decode",
+            topk_fallback,
+            use_bitonic_sort,
+            batch_size_per_row=batch_size_per_row,
+        )
 
     @classmethod
     def prefill_model_config(
@@ -290,8 +302,16 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            "prefill",
+            topk_fallback,
+            use_bitonic_sort,
+            batch_size_per_row=batch_size_per_row,
+        )
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -305,8 +325,13 @@ class MoEGate(AbstractModule):
         # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
+        legacy_users_per_row = int(cfg.get("batch_size_per_row", USERS_PER_ROW)) == USERS_PER_ROW
         token_count = scores.shape[1] * scores.shape[2]
-        scores_flat = scores if scores.shape[1] == 1 else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
+        scores_flat = (
+            scores
+            if (legacy_users_per_row or scores.shape[1] == 1)
+            else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
+        )
         # Add score correction bias
         # Expand bias to match scores shape(dynamic shape)
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
@@ -320,7 +345,7 @@ class MoEGate(AbstractModule):
         )
         scores_with_bias_flat = (
             scores_with_bias
-            if scores_with_bias.shape[1] == 1
+            if (legacy_users_per_row or scores_with_bias.shape[1] == 1)
             else ttnn.reshape(scores_with_bias, (1, 1, token_count, scores_with_bias.shape[3]))
         )
         # Reshape scores to expert groups
@@ -370,12 +395,13 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(topk_expert_groups_scores)
 
         # create full expert_groups_mask(dynamic shape)
+        group_token_count = scores.shape[2] if legacy_users_per_row else token_count
         input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
+        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, group_token_count, 1)))
 
         # create full src tensor of ones
         src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
+        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, group_token_count, 1)))
 
         # scatter top-k expert groups indices to full expert_groups_mask
         active_groups_mask = ttnn.scatter(
@@ -392,7 +418,11 @@ class MoEGate(AbstractModule):
         active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
         ttnn.deallocate(active_groups_mask)
         active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
+        active_experts_scores = ttnn.mul(
+            scores_with_bias if legacy_users_per_row else scores_with_bias_flat,
+            active_experts_mask,
+            **cfg["mul_scores_with_mask"],
+        )
         ttnn.deallocate(scores_with_bias)
         ttnn.deallocate(active_experts_mask)
 
@@ -409,7 +439,9 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(topk_experts_scores_with_bias)
 
         # gather original scores without bias
-        topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)
+        topk_experts_scores = ttnn.gather(
+            scores if legacy_users_per_row else scores_flat, dim=3, index=topk_experts_indices
+        )
         ttnn.deallocate(scores)
 
         # normalize scores

@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -33,10 +34,17 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         mla_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
 
-        mla_config = cls.prefill_mla_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        mla_config = cls.prefill_mla_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=effective_batch_size_per_row,
+        )
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
@@ -57,23 +65,30 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> ModelDecodeConfig:
+        effective_batch_size_per_row = (
+            USERS_PER_ROW if int(batch_size_per_row) == USERS_PER_ROW else int(batch_size_per_row)
+        )
         mla_norm_config = DistributedRMSNorm.decode_model_config(
             hf_config,
             mesh_device,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
         mlp_norm_config = DistributedRMSNorm.decode_model_config(
             hf_config,
             mesh_device,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
 
-        mla_config = cls.decode_mla_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        mla_config = cls.decode_mla_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=effective_batch_size_per_row,
+        )
         mlp_config = cls.decode_mlp_config(
             hf_config,
             mesh_device,
             fabric_config,
-            batch_size_per_row=batch_size_per_row,
+            batch_size_per_row=effective_batch_size_per_row,
         )
 
         # Get the input_memory_config for the mlp_reshard
@@ -83,10 +98,16 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         else:
             mlp_input_memory_config = mlp_config["input_memory_config"]
 
+        # Keep the pre-f81f6069 decode MLA resharding path for 32 users/row.
+        if int(effective_batch_size_per_row) == USERS_PER_ROW:
+            mla_reshard_cfg = mla_config["mla1d"]["wq_kv_a_in0_memory_config"]
+        else:
+            mla_reshard_cfg = ReshardConfig(memory_config=mla_config["input_memory_config"])
+
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
-            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
+            "mla_reshard": mla_reshard_cfg,
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
