@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -118,8 +117,10 @@ def test_sfpu_reduce(
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
-    # if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
-    # pytest.skip(reason="Dest must be in 32bit mode when input is 32bit")
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+        )
 
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
@@ -211,3 +212,113 @@ def test_sfpu_reduce(
         assert passed_test(golden_tensor[:, 0], res_tensor[:, 0], formats.output_format)
     else:
         raise ValueError(f"Unsupported math operation: {mathop}")
+
+
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=[MathOperation.ReduceRow],
+    reduce_pool=[ReducePool.Max],
+    input_bounds=lambda formats: get_format_input_bounds(formats),
+    input_dimensions=lambda mathop, dest_acc, formats: [
+        dim
+        for dim in [[32, 32], [64, 64], [64, 128], [128, 64], [256, 32], [32, 256]]
+        if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
+    ],
+)
+def test_reduce_row_max(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_bounds,
+    input_dimensions,
+    workers_tensix_coordinates,
+):
+    # Row max SFPU kernel uses SFPLOAD/SFPSTORE with format-specific instruction modes
+    # (e.g. FP16B for Float16_b). When dest_acc=Yes the dest register is 32-bit wide,
+    # so only 32-bit SFPU modes (FP32, INT32) can address it correctly.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            "32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+        )
+    min_value, max_value = input_bounds
+    torch_format = format_dict[formats.input_format]
+
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    if torch_format in (torch.int32, torch.int64):
+        src_A = torch.randint(
+            low=min_value,
+            high=max_value,
+            size=(tile_cnt * ELEMENTS_PER_TILE,),
+            dtype=torch_format,
+        )
+    else:
+        src_A = torch.empty(tile_cnt * ELEMENTS_PER_TILE, dtype=torch_format).uniform_(
+            min_value, max_value
+        )
+    src_B = torch.zeros_like(src_A)
+
+    dst_dim = input_dimensions
+    src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
+    src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        src_A_untilized,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        dst_dim,
+        reduce_pool=reduce_pool,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
+
+    golden = golden_tensor[:, 0]
+    result = res_tensor[:, 0]
+    assert passed_test(golden, result, formats.output_format)

@@ -93,6 +93,11 @@ def test_sfpu_binary_int(formats, dest_acc, mathop, workers_tensix_coordinates):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coordinates):
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+        )
+
     input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
