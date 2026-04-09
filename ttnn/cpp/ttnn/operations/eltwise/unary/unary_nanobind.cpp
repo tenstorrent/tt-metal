@@ -66,6 +66,16 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+Tensor rrelu_nanobind_wrapper(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    bool training,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ttnn::rrelu(input_tensor, lower, upper, training, memory_config, output_tensor, std::nullopt);
+}
+
 // BEGIN: Disabled binding functions - unused after batch nuke (clamp, clip)
 template <auto Func>
 Tensor unary_two_float_5param_to_6param_wrapper(
@@ -1974,6 +1984,55 @@ void py_module(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("lambd") = 0.5f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies the Randomized Leaky ReLU (RReLU) function element-wise.
+
+            In evaluation mode: f(x) = x if x >= 0, ((lower + upper) / 2) * x if x < 0.
+            In training mode: f(x) = x if x >= 0, a * x if x < 0, where a ~ Uniform(lower, upper).
+
+            .. math::
+                \text{{rrelu}}(x) = \begin{{cases}} x & \text{{if }} x \geq 0 \\ ax & \text{{otherwise}} \end{{cases}}
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                lower (float, optional): lower bound of uniform distribution. Defaults to `0.125`.
+                upper (float, optional): upper bound of uniform distribution. Defaults to `0.3333`.
+                training (bool, optional): if True, uses random slope per element. Defaults to `False`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32
+                     - TILE
+            )doc");
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc.c_str(),
+            &rrelu_nanobind_wrapper,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 1.0f / 3.0f,
+            nb::arg("training") = false,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
