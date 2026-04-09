@@ -692,13 +692,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
-
-        // Signal CB (c_12): compute signals writer when the last K-chunk starts (for multi-Q).
-        // Needed so the writer knows when to drain accumulators to DRAM.
-        constexpr uint32_t signal_page_size = 16;
-        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
-                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
-        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -1198,21 +1191,14 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     fabric_mux_connection_ct_args(args.num_workers_per_link, mux_kernel_config, writer_fabric_compile_time_args);
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
-    const uint32_t ag_kv_scratch_cb_id = tt::CBIndex::c_12;
-    const uint32_t ag_pkt_hdr_cb_id = tt::CBIndex::c_13;
     const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
     const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     constexpr uint32_t max_scatter_addresses = 4;
     const uint32_t ag_packet_size_in_pages =
         std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);
 
-    writer_fabric_compile_time_args.push_back(device_index);
     writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
     writer_fabric_compile_time_args.push_back(ag_page_size);
-    writer_fabric_compile_time_args.push_back(ag_pkt_hdr_cb_id);
-    writer_fabric_compile_time_args.push_back(ag_kv_scratch_cb_id);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
 

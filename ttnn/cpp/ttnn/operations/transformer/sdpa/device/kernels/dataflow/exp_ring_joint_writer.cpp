@@ -58,8 +58,6 @@ struct QChunkInfo {
     bool is_joint_q;
     Slice out_slice;
     uint32_t end_seq_tile;
-    uint32_t stats_seq_start_tile;
-    uint32_t stats_seq_end_tile;
 };
 
 // Compute output slice and stats tile range for one Q chunk.
@@ -91,18 +89,10 @@ inline QChunkInfo get_q_chunk_info(
         const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
         info.out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
         info.end_seq_tile = Lt;
-        info.stats_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-        info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-        info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt + Lt);
-        info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt + Lt);
     } else {
         const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
         info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
         info.end_seq_tile = local_padded_Nt * (ring_id + 1);
-        info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
-        info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-        info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt);
-        info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt);
     }
     return info;
 }
@@ -129,15 +119,17 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(18);
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
 
     constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
+    // stats_args follows joint_out_args but is unused by the writer (stats are only
+    // needed for multi-Q accumulator save/restore which this kernel doesn't support).
+    // The MUX CT args start after stats_args.
+    constexpr auto stats_args_skip = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
 #ifdef USE_MUX
-    constexpr uint32_t mux_ct_base = stats_args.next_compile_time_args_offset();
+    constexpr uint32_t mux_ct_base = stats_args_skip.next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
@@ -147,21 +139,16 @@ void kernel_main() {
 
     // All-gather CT args (following 5 MUX CT args)
     constexpr uint32_t ag_ct_base = mux_ct_base + 5;
-    constexpr uint32_t ag_device_index = get_compile_time_arg_val(ag_ct_base + 0);
-    constexpr uint32_t ag_packet_size_in_pages = get_compile_time_arg_val(ag_ct_base + 1);
-    constexpr uint32_t ag_page_size = get_compile_time_arg_val(ag_ct_base + 2);
-    constexpr uint32_t ag_pkt_hdr_cb_id = get_compile_time_arg_val(ag_ct_base + 3);
-    constexpr uint32_t ag_kv_scratch_cb_id = get_compile_time_arg_val(ag_ct_base + 4);
-    constexpr auto ag_input_k_args = TensorAccessorArgs<ag_ct_base + 5>();
-    constexpr auto ag_input_v_args = TensorAccessorArgs<ag_input_k_args.next_compile_time_args_offset()>();
-    constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_input_v_args.next_compile_time_args_offset()>();
+    constexpr uint32_t ag_packet_size_in_pages = get_compile_time_arg_val(ag_ct_base + 0);
+    constexpr uint32_t ag_page_size = get_compile_time_arg_val(ag_ct_base + 1);
+    constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_ct_base + 2>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
 #endif
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
+    argidx++;  // skip stats_addr (unused — stats only needed for multi-Q accumulator save)
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     // Only one Q chunk per core is allowed
@@ -328,41 +315,6 @@ void kernel_main() {
         if (!ring_iter_does_work) {
             continue;
         }
-
-        /**
-        We have 3 possible masks
-        - global N mask
-        - local N mask
-        - joint L mask
-
-        Global N mask:
-            - If the logical_n falls within this ring iter's KV range
-            - And logical_n length (within local_padded_N) does not divide by K chunk size
-
-        Local N mask
-            - If local_padded_N does not divide by K chunk size, the last chunk needs a mask
-
-        Joint L mask
-            - If joint length L does not divide by K chunk size, the last chunk needs a mask
-        */
-
-        // GLOBAL N MASK
-        // Find out if logical_n falls within this ring iter's KV range
-        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-        // Note the > and <=. This means there is real length of logical_n within this ring iter.
-        const bool global_n_is_within_ring_iter =
-            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-
-        // LOCAL N MASK
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        // If global N is in the ring iter, it supersedes the local N mask.
-        const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
-
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
         {
             // Accumulators persist in L1 (single Q-chunk per core).
