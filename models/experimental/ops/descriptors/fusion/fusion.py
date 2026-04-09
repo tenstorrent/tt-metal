@@ -578,38 +578,70 @@ class FusedOp:
         )
 
 
+def _register_named_descriptors(container, named_items: dict) -> None:
+    """Flatten named descriptors from *named_items* onto *container* as attributes.
+
+    For nested containers (e.g., ``Parallel(q=q, norms=Parallel(a=a, b=b))``),
+    child names are hoisted to the top level so ``container.a`` works regardless
+    of nesting depth.  Duplicate names raise ``ValueError``.
+    """
+    seen: Set[str] = set()
+    for name, item in named_items.items():
+        if name in seen:
+            raise ValueError(f"Duplicate descriptor name {name!r}")
+        seen.add(name)
+        setattr(container, name, item)
+        # Hoist child container's named descriptors
+        if isinstance(item, (Sequential, Parallel)):
+            for child_name in getattr(item, "_descriptor_names", ()):
+                if child_name in seen:
+                    raise ValueError(f"Duplicate descriptor name {child_name!r}")
+                seen.add(child_name)
+                setattr(container, child_name, getattr(item, child_name))
+    container._descriptor_names = tuple(seen)
+
+
 class Sequential:
     """A sequence of ops to fuse into a single dispatch.
 
     Items can be ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
     Nested ``Sequential`` items are automatically flattened.
 
-    Usage::
+    **Inline mode** (simple, creates descriptors each call)::
 
-        # Inline
-        fused = Sequential(op0, op1, op2).build()
+        out = Sequential(
+            rms_norm=descriptors.rms_norm(tt_x, weight=w, ...),
+            mm=descriptors.matmul(tt_x, weight=W, ...),
+        ).run()
 
-        # Incremental
-        s = Sequential(op0)
-        s.add(op1).add(op2)
-        fused = s.build()
+    **Persistent mode** (fast, reuses descriptors across calls)::
 
-        # Composition
-        stem = Sequential(op0, op1)
-        full = Sequential(stem, op2).build()  # flattened
+        # Setup (once, activation omitted):
+        self.fused = Sequential(
+            norm=descriptors.rms_norm(weight=w, ...),
+            mm=descriptors.matmul(weight=W, ...),
+        )
+
+        # Each forward:
+        self.fused.norm.update(new_x)
+        [out] = self.fused.run()
     """
 
-    def __init__(self, *items):
-        if not items:
+    def __init__(self, *items, **named_items):
+        all_items = list(items)
+        for item in named_items.values():
+            all_items.append(item)
+        if not all_items:
             raise ValueError("Sequential() requires at least 1 item")
-        self._items = list(items)
+        self._items = all_items
         self._run_fused: Optional[FusedOp] = None
-        self._run_signature: Optional[Tuple] = None
+        self._run_called = False
+        _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
         """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
         self._run_fused = None
-        self._run_signature = None
+        self._run_called = False
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
@@ -664,6 +696,11 @@ class Sequential:
     def run(self, *, results=None, device=None, kernel_dir: str = None):
         """``build()`` once per stable graph, then ``launch()`` each call.
 
+        On the first call, builds the fused program and caches it.
+        Subsequent calls reuse the cached ``FusedOp`` — just refreshing IO
+        from the branch descriptors' current ``input_tensors`` (set via
+        :meth:`~OpDescriptor.update`).
+
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
                 returned. Defaults to the last op's output (for a plain
@@ -673,7 +710,18 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
+        if self._run_fused is not None:
+            # Persistent fast path: refresh IO from branch ops + dispatch.
+            self._run_fused.launch()
+            if results is None:
+                results = _default_results(self._items)
+            return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
+
+        out = _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
+        if self._run_called:
+            self._run_fused = self.build(device=device, kernel_dir=kernel_dir)
+        self._run_called = True
+        return out
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -693,34 +741,42 @@ class Parallel:
     Each item runs independently on its own cores.  Items can be
     ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
 
-    Branch order is **the order you pass to** ``Parallel(...)`` (and ``.add``).
-    ``fused.output_tensors`` follow that same order after ``build()``.
+    **Inline mode** (simple, creates descriptors each call)::
 
-    Usage::
+        tt_q, tt_kv = Parallel(
+            q=descriptors.rms_norm(tt_q, weight=qw, ...),
+            kv=descriptors.rms_norm(tt_kv, weight=kw, ...),
+        ).run()
 
-        # Inline
-        fused = Parallel(op_a, op_b).build()
-        fused.launch()
+    **Persistent mode** (fast, reuses descriptors across calls)::
 
-        # Steady state (same op objects, in-place IO): one call per forward
-        parallel = Parallel(op_a, op_b)
-        parallel.run()
+        # Setup (once, activation omitted):
+        self.fused = Parallel(
+            q=descriptors.rms_norm(weight=qw, ...),
+            kv=descriptors.rms_norm(weight=kw, ...),
+        )
 
-        # As part of a Sequential
-        fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
+        # Each forward:
+        self.fused.q.update(tt_q)
+        self.fused.kv.update(tt_kv)
+        tt_q, tt_kv = self.fused.run()
     """
 
-    def __init__(self, *items):
-        if len(items) < 2:
+    def __init__(self, *items, **named_items):
+        all_items = list(items)
+        for item in named_items.values():
+            all_items.append(item)
+        if len(all_items) < 2:
             raise ValueError("Parallel() requires at least 2 items")
-        self._items = list(items)
+        self._items = all_items
         self._run_fused: Optional[FusedOp] = None
-        self._run_signature: Optional[Tuple] = None
+        self._run_called = False
+        _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
         """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
         self._run_fused = None
-        self._run_signature = None
+        self._run_called = False
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
@@ -775,6 +831,11 @@ class Parallel:
     def run(self, *, results=None, device=None, kernel_dir: str = None):
         """``build()`` once per stable graph, then ``launch()`` each call.
 
+        On the first call, builds the fused program and caches it.
+        Subsequent calls reuse the cached ``FusedOp`` — just refreshing IO
+        from the branch descriptors' current ``input_tensors`` (set via
+        :meth:`~OpDescriptor.update`).
+
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
                 returned. Defaults to each branch's leaf output in
@@ -783,7 +844,22 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
+        if self._run_fused is not None:
+            # Persistent fast path: refresh IO from branch ops + dispatch.
+            self._run_fused.launch()
+            if results is None:
+                results = _default_results_parallel_branches(self._items)
+            return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
+
+        # Inline or persistent cold start: full _container_run path.
+        out = _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
+        # Cache FusedOp for persistent fast path IF this container is reused.
+        # Use _BUILD_CACHE hit (cheap) — but only after the second run() call
+        # to avoid penalizing one-shot inline usage.
+        if self._run_called:
+            self._run_fused = self.build(device=device, kernel_dir=kernel_dir)
+        self._run_called = True
+        return out
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""

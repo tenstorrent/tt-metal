@@ -11,7 +11,7 @@ from models.experimental.ops.descriptors.normalization._utils import _create_lay
 
 
 def rms_norm(
-    input_tensor: "ttnn.Tensor",
+    input_tensor: "ttnn.Tensor" = None,
     core_range_set: Optional["ttnn.CoreRangeSet"] = None,
     epsilon: float = 1e-12,
     weight: Optional["ttnn.Tensor"] = None,
@@ -24,8 +24,11 @@ def rms_norm(
     """
     Create an OpDescriptor for an RMS norm operation.
 
+    ``input_tensor`` may be omitted for **persistent mode** — call
+    :meth:`~OpDescriptor.update` with the activation before the first ``run()``.
+
     Args:
-        input_tensor: The input tensor (must be on device).
+        input_tensor: The input tensor (must be on device).  Omit for persistent mode.
         core_range_set: The set of cores to run the operation on. Required for non-sharded inputs.
         epsilon: Small constant for numerical stability (default: 1e-12).
         weight: Optional weight (gamma) tensor for scaling.
@@ -38,33 +41,37 @@ def rms_norm(
     Returns:
         OpDescriptor containing the program descriptor, input tensors, and output tensors.
 
-    Example:
-        >>> rms_desc_1 = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
-        >>> rms_desc_2 = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
-        >>> rms_desc_1.launch()
-        >>> rms_desc_2.launch()
+    Example::
+
+        # Inline mode:
+        desc = rms_norm(input_tensor, weight=w, compute_kernel_config=cc, ...)
+        desc.launch()
+
+        # Persistent mode:
+        desc = rms_norm(weight=w, compute_kernel_config=cc, ...)  # no activation
+        desc.update(activation)  # bind activation before first run
     """
-    device = input_tensor.device()
-    arch = device.arch()
+    if input_tensor is not None:
+        device = input_tensor.device()
+        arch = device.arch()
 
-    if program_config is not None and program_config.use_welford:
-        raise ValueError("Welford's algorithm is not supported for RMS norm")
+        if program_config is not None and program_config.use_welford:
+            raise ValueError("Welford's algorithm is not supported for RMS norm")
 
-    # Initialize compute kernel config if not provided
-    if compute_kernel_config is None:
-        compute_kernel_config = ttnn.rmsnorm_default_compute_config(arch)
+        if compute_kernel_config is None:
+            compute_kernel_config = ttnn.rmsnorm_default_compute_config(arch)
 
     return _create_layernorm_op_descriptor(
-        input_tensor,
-        compute_kernel_config,
-        ttnn.LayerNormType.RMSNORM,
-        weight,
-        bias,
-        residual_input_tensor,
-        memory_config,
-        core_range_set,
-        epsilon,
-        program_config,
+        input_tensor=input_tensor,
+        compute_kernel_config=compute_kernel_config,
+        norm_type=ttnn.LayerNormType.RMSNORM,
+        weight=weight,
+        bias=bias,
+        residual_input_tensor=residual_input_tensor,
+        memory_config=memory_config,
+        core_range_set=core_range_set,
+        epsilon=epsilon,
+        program_config=program_config,
     )
 
 
