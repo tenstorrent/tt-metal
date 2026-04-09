@@ -80,11 +80,17 @@ jobs:
     # Issue 21637: Disable check-docs-links for now to unblock developers
     if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
-      - name: Checkout repo
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Checkout repo
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
           clean: false
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Link Checker
         uses: lycheeverse/lychee-action@v2
         with:
