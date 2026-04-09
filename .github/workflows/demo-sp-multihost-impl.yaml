@@ -138,7 +138,7 @@ jobs:
               exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
               - exabox.tenstorrent.com/quad
-            mgd: |-
+            mgd: |
               ${{ needs.load-test-matrix.outputs.mgd }}
 
       - name: Debug allocation if it failed
