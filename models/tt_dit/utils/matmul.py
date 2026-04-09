@@ -167,7 +167,8 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
 
-    # Unpack: 3-tuple (M, K, N) or 4-tuple (M, K, N, (sub_h, sub_w))
+    # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or
+    # 4-tuple (M_block_size, K_block_size, N_block_size, (sub_h, sub_w))
     if config_tuple is not None and len(config_tuple) == 4:
         subblock_h, subblock_w = config_tuple[3]
         config_tuple = config_tuple[:3]

@@ -698,7 +698,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             trace_ids = []
             for k_blk, n_blk in valid_combos:
                 trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                run_op(k_blk, n_blk, sync=False)
+                run_op(k_blk, n_blk)
                 ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
                 trace_ids.append(trace_id)
@@ -992,7 +992,7 @@ def test_mm_sweep(device_config, shape):
     """
     from tracy.process_model_log import run_device_profiler
 
-    cfg = resolve_config(device_config)
+    resolve_config(device_config)
     M, K, N, cgx, cgy, is_agmm, use_case = shape
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
     op_type = "agmm" if is_agmm else "mm"
@@ -1014,7 +1014,6 @@ def test_mm_sweep(device_config, shape):
         logger.info(f"EXPLICIT COMBOS MODE: {len(explicit_list)} combos across {len(m_blocks)} M_blocks for {shape_id}")
     else:
         explicit_list = None
-        by_m = None
         m_blocks = get_block_candidates(M_tiles)
 
         # Log total combo counts (K/N combos vary per m_block due to L1 filter)

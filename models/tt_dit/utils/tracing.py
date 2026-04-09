@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+_OMITTED = object()
+"""Sentinel for omitted positional args — distinct from ``None``, which is a valid scalar input."""
+
+
 class Tracer:
     """Wrapper for capturing and executing a trace of a given function.
 
@@ -64,10 +68,10 @@ class Tracer:
         On the first call, runs the wrapped function twice to compile and capture the trace, then
         executes the trace to compute outputs. On subsequent calls, executes the captured trace.
         On the first call, inputs initialize the trace inputs. On subsequent calls, they update the
-        trace inputs. Only ``ttnn.Tensor`` inputs can be changed. Aside from omitting positional
-        inputs to reuse previous values, a value of ``None`` can be passed to reuse the previous
-        value for tensor inputs as well. Host tensor inputs will automatically be moved to the
-        tracer device.
+        trace inputs. Only ``ttnn.Tensor`` inputs can be changed. Trailing positional args can be
+        omitted to reuse their previous values (works for any type). For keyword arguments, a value
+        of ``None`` can be passed to reuse the previous value for tensor inputs. Host tensor inputs
+        will automatically be moved to the tracer device.
 
         Args:
             tracer_cq_id: Command queue id.
@@ -124,8 +128,8 @@ class Tracer:
                 msg = f"expected at most {len(self._args)} positional args, got {len(args)}"
                 raise TypeError(msg)
 
-            # Pad with None to allow omitting trailing positional args.
-            args = args + (None,) * (len(self._args) - len(args))
+            # Pad with _OMITTED to allow omitting trailing positional args.
+            args = args + (_OMITTED,) * (len(self._args) - len(args))
             _tree_map(self._update_input, self._args, args, path_label="args")
 
             # kwargs can be omitted entirely to reuse all previous values, but individual
@@ -173,6 +177,11 @@ class Tracer:
         raise ValueError(msg)
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
+        # _OMITTED means the caller omitted this positional arg — reuse previous value.
+        if new is _OMITTED:
+            return
+
+        # None means reuse the previous tensor value (explicit opt-in via kwargs).
         if new is None and isinstance(prev, ttnn.Tensor):
             return
 
