@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor, is_op_descriptor
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor, _DeferredOutput, is_op_descriptor
 from models.experimental.ops.descriptors.fusion.common import (
     _get_risc_type,
 )
@@ -356,6 +356,64 @@ def _default_results_parallel_branches(items) -> List:
     return out
 
 
+def _detect_internal_edges(items) -> List[Tuple[int, int, int, int]]:
+    """Detect internal edges at construction time via ``_DeferredOutput`` identity.
+
+    Must be called while ``_DeferredOutput`` instances are still in ``output_tensors``
+    (before any ``update()`` triggers materialization).
+
+    Returns list of ``(consumer_op_idx, input_idx, producer_op_idx, output_idx)`` tuples.
+    """
+    ops = _flatten_ops(items)
+
+    # Map each _DeferredOutput id to its source (op_index, output_index)
+    output_sources: Dict[int, Tuple[int, int]] = {}
+    for i, op in enumerate(ops):
+        for j, out in enumerate(op.output_tensors):
+            if isinstance(out, _DeferredOutput):
+                output_sources[id(out)] = (i, j)
+
+    if not output_sources:
+        return []
+
+    edges: List[Tuple[int, int, int, int]] = []
+    for i, op in enumerate(ops):
+        for j, inp in enumerate(op.input_tensors):
+            if isinstance(inp, _DeferredOutput):
+                source = output_sources.get(id(inp))
+                if source is not None:
+                    edges.append((i, j, source[0], source[1]))
+    return edges
+
+
+def _materialize_chain(items, edges: List[Tuple[int, int, int, int]]) -> None:
+    """Materialize deferred descriptors in topological order, connecting internal edges.
+
+    Uses the pre-built ``edges`` list (from ``_detect_internal_edges``) to replace
+    ``_DeferredOutput`` inputs with real output tensors after each op materializes.
+    """
+    if not edges:
+        return
+
+    ops = _flatten_ops(items)
+
+    for i, op in enumerate(ops):
+        # Materialize if ready: _complete_fn set and all inputs are real tensors
+        if op._complete_fn is not None and op.program_cache_key is None:
+            if all(not isinstance(t, _DeferredOutput) and t is not None for t in op.input_tensors):
+                full = op._complete_fn(op.input_tensors)
+                op.program_cache_key = full.program_cache_key
+                op._factory_fn = full._factory_fn
+                op._descriptor = full._descriptor
+                op.output_tensors = full.output_tensors
+                op._complete_fn = None
+
+        # Connect this op's real outputs to downstream deferred inputs
+        for consumer_i, inp_j, producer_i, out_j in edges:
+            if producer_i == i:
+                ops[consumer_i].input_tensors[inp_j] = ops[i].output_tensors[out_j]
+
+
 def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
 
@@ -637,6 +695,7 @@ class Sequential:
         self._run_fused: Optional[FusedOp] = None
         self._run_called = False
         self._descriptor_names: tuple = ()
+        self._internal_edges = _detect_internal_edges(all_items)
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -718,6 +777,7 @@ class Sequential:
                 results = _default_results(self._items)
             return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
+        _materialize_chain(self._items, self._internal_edges)
         out = _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
         if self._run_called:
             self._run_fused = self.build(device=device, kernel_dir=kernel_dir)
@@ -773,6 +833,7 @@ class Parallel:
         self._run_fused: Optional[FusedOp] = None
         self._run_called = False
         self._descriptor_names: tuple = ()
+        self._internal_edges = _detect_internal_edges(all_items)
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -853,7 +914,8 @@ class Parallel:
                 results = _default_results_parallel_branches(self._items)
             return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
-        # Inline or persistent cold start: full _container_run path.
+        # Inline or persistent cold start: materialize deferred ops, then dispatch.
+        _materialize_chain(self._items, self._internal_edges)
         out = _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
         # Cache FusedOp for persistent fast path IF this container is reused.
         # Use _BUILD_CACHE hit (cheap) — but only after the second run() call
