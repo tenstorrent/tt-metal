@@ -66,6 +66,12 @@ inline void _llk_pack_dest_dvalid_section_done_()
         TT_ZEROACC(ZEROACC_CLR_MODE, EN_32BIT_DEST, 0, ADDR_MOD_0, ckernel::pack::clear_dest_bank_id);
     }
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::PACK, 0);
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
+        // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
+        TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::PACK, p_cleardvalid::PACK, 0);
+    }
 
     if constexpr (DST == DstSync::SyncHalf)
     {

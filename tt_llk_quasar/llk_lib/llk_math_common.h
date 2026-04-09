@@ -112,13 +112,19 @@ inline void _llk_math_upk_to_dest_hw_configure_()
  * @brief Sets the dest dvalid for a FPU/SFPU
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = <p_cleardvalid::FPU/SFPU>
  **/
-template <std::uint8_t SET_DEST_DVALID>
+template <std::uint8_t SET_DEST_DVALID, DstSync DST>
 inline void _llk_math_set_dvalid_()
 {
     static_assert(SET_DEST_DVALID == p_cleardvalid::FPU || SET_DEST_DVALID == p_cleardvalid::SFPU, "Can only set dest dvalid for FPU and SFPU");
 
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
     TTI_CLEARDVALID(0, 0, 0, 0, SET_DEST_DVALID, 0);
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
+        // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
+        TTI_CLEARDVALID(0, 0, 0, SET_DEST_DVALID, SET_DEST_DVALID, 0);
+    }
 }
 
 /**

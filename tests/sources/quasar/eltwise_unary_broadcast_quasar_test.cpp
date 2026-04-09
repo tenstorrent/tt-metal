@@ -141,7 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(tile, tile_shape);
             }
-            _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
     }
 }

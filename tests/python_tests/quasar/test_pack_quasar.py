@@ -14,6 +14,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     PackerReluType,
     format_dict,
@@ -89,12 +90,11 @@ def generate_qsr_pack_combinations(
         return True
 
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     all_relu_types = [
@@ -103,6 +103,8 @@ def generate_qsr_pack_combinations(
         PackerReluType.MinThresholdRelu,
         PackerReluType.MaxThresholdRelu,
     ]
+
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
 
     combinations = []
     for fmt in formats_list:
@@ -120,9 +122,12 @@ def generate_qsr_pack_combinations(
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                for dimensions in dimensions_cache[dest_acc]:
-                    for relu_type in relu_types:
-                        combinations.append((fmt, dest_acc, dimensions, relu_type))
+                for dest_sync in dest_sync_modes:
+                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        for relu_type in relu_types:
+                            combinations.append(
+                                (fmt, dest_acc, dest_sync, dimensions, relu_type)
+                            )
 
     return combinations
 
@@ -142,10 +147,12 @@ PACK_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_input_dims=generate_qsr_pack_combinations(PACK_FORMATS),
+    formats_dest_acc_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
 )
-def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
-    (formats, dest_acc, input_dimensions, relu_type) = formats_dest_acc_input_dims[0]
+def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT):
+    (formats, dest_acc, dest_sync_mode, input_dimensions, relu_type) = (
+        formats_dest_acc_sync_dims_relu[0]
+    )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -197,7 +204,7 @@ def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
         formats,
         templates=[
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TEST_FACE_DIMS(),

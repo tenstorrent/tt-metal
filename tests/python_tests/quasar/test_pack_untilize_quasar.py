@@ -7,7 +7,12 @@ import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, ImpliedMathFormat, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    ImpliedMathFormat,
+    format_dict,
+)
 from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
@@ -34,17 +39,18 @@ def generate_pack_untilize_combinations(
     """
     Generate pack_untilize combinations.
 
-    Args: List of input-output format pairs
+    Args:
+        formats_list: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, input_dimensions) tuples
+    Returns: List of (format, dest_acc, dest_sync, input_dimensions) tuples
     """
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in dest_sync_modes
     }
 
     combinations = []
@@ -63,8 +69,9 @@ def generate_pack_untilize_combinations(
         )
 
         for dest_acc in dest_acc_modes:
-            for dimensions in dimensions_cache[dest_acc]:
-                combinations.append((fmt, dest_acc, dimensions))
+            for sync in dest_sync_modes:
+                for dimensions in dimensions_cache[(dest_acc, sync)]:
+                    combinations.append((fmt, dest_acc, sync, dimensions))
 
     return combinations
 
@@ -85,13 +92,12 @@ ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
+    formats_dest_acc_sync_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
 )
-def test_pack_untilize_quasar(formats_dest_acc_dimensions):
-    formats_dest_acc_dimensions = formats_dest_acc_dimensions[0]
-    formats = formats_dest_acc_dimensions[0]
-    dest_acc = formats_dest_acc_dimensions[1]
-    input_dimensions = formats_dest_acc_dimensions[2]
+def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
+    (formats, dest_acc, dest_sync_mode, input_dimensions) = (
+        formats_dest_acc_sync_dimensions[0]
+    )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -110,7 +116,7 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
             UNPACKER_ENGINE_SEL(),
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),

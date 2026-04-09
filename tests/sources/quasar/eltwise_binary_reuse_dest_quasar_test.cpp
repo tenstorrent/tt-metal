@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_binary_<REUSE_DEST_TYPE>(global_tile_idx, params.num_faces);
             }
         }
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 }
 

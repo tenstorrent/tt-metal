@@ -13,6 +13,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -78,6 +79,7 @@ def generate_pool_type_and_math_fidelity_combinations():
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_reduce_quasar(
@@ -85,6 +87,7 @@ def test_reduce_quasar(
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
+    dest_sync_mode,
     implied_math_format,
 ):
 
@@ -130,7 +133,7 @@ def test_reduce_quasar(
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),

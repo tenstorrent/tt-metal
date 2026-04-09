@@ -78,6 +78,7 @@ TILE_DIMENSIONS = [32, 32]
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     math_fidelity=[MathFidelity.LoFi],
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
     output_dimensions=OUTPUT_DIMENSIONS,
 )
@@ -86,6 +87,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     mathop,
     reuse_dest_type,
     math_fidelity,
+    dest_sync_mode,
     input_dimensions,
     output_dimensions,
     boot_mode=BootMode.DEFAULT,
@@ -127,7 +129,7 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     tile_dimensions_tuple = (tile_rows, tile_cols)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync_mode,
         DestAccumulation.No,
         formats,
         output_dimensions,
@@ -249,7 +251,7 @@ def test_eltwise_binary_reuse_dest_quasar(
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             INPUT_TILE_CNT(tile_cnt_input),

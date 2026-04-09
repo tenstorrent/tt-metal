@@ -5,19 +5,19 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
-    MAX_TILES_16_BIT_DEST,
-    TILE_DIM,
     EltwiseBinaryGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     format_dict,
 )
 from helpers.param_config import (
+    generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -36,9 +36,9 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 ELTWISE_DIMENSIONS = [
-    ([mt_dim * TILE_DIM, nt_dim * TILE_DIM], DestAccumulation.No)
-    for mt_dim in range(1, MAX_TILES_16_BIT_DEST + 1)
-    for nt_dim in range(1, MAX_TILES_16_BIT_DEST // mt_dim + 1)
+    (dest_sync, dims, DestAccumulation.No)
+    for dest_sync in (DestSync.Half, DestSync.Full)
+    for dims in generate_unary_input_dimensions(DestAccumulation.No, dest_sync)
 ]
 
 
@@ -67,7 +67,7 @@ ELTWISE_DIMENSIONS = [
         ImpliedMathFormat.No,
         ImpliedMathFormat.Yes,
     ],
-    dimensions_dest_acc=ELTWISE_DIMENSIONS,
+    dest_sync_dims_dest_acc=ELTWISE_DIMENSIONS,
     num_faces=[4],
 )
 def test_eltwise_binary(
@@ -75,13 +75,12 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dimensions_dest_acc,
+    dest_sync_dims_dest_acc,
     num_faces,
     boot_mode=BootMode.DEFAULT,
 ):
 
-    # Unpack dimensions and dest_acc from the tuple
-    input_dimensions, dest_acc = dimensions_dest_acc
+    dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
 
     # Math fidelity only affects multiplication operations
     if (
@@ -122,7 +121,7 @@ def test_eltwise_binary(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

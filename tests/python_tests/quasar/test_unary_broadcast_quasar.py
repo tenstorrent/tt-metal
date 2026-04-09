@@ -70,6 +70,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
         BroadcastType.Row,
     ],
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
 def test_unary_broadcast_quasar(
@@ -77,6 +78,7 @@ def test_unary_broadcast_quasar(
     dest_acc,
     broadcast_type,
     implied_math_format,
+    dest_sync_mode,
     input_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
@@ -96,7 +98,7 @@ def test_unary_broadcast_quasar(
         else DestAccumulation.No
     )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync_mode,
         effective_dest_acc,
         formats,
         input_dimensions,
@@ -130,7 +132,7 @@ def test_unary_broadcast_quasar(
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(DestSync.Half),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
