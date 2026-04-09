@@ -20,7 +20,8 @@ Tensor scatter(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
     const std::optional<std::string>& opt_reduction_string = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 Tensor scatter_add(
     const Tensor& input_tensor,
@@ -28,6 +29,7 @@ Tensor scatter_add(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn

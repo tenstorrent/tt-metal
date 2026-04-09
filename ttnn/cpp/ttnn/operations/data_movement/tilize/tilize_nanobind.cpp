@@ -31,6 +31,7 @@ void bind_tilize(nb::module_& mod) {
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
             use_low_perf (bool, optional): Use a low performance version that uses less memory. USE ONLY IF ABSOLUTELY NEEDED IN MODELS. Defaults to `False`.
             sub_core_grids (CoreRangeSet, optional): Used to restrict tilize to a set of cores, Defaults to using the entire device
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -46,6 +47,7 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("use_multicore") = true,
         nb::arg("use_low_perf") = false,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail

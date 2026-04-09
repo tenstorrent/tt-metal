@@ -21,7 +21,7 @@ struct TilizeParams {
 
 struct TilizeInputs {
     Tensor input_tensor;
-    std::optional<Tensor> optional_input_tensor;
+    std::optional<Tensor> optional_output_tensor;
 };
 
 struct MultiCoreSharedVariables {

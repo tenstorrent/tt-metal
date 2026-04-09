@@ -119,15 +119,35 @@ class SamplingGenerator:
                 continue
         self._trace_states.clear()
 
-    def reset_prompt_tokens(self, prompt_tokens):
+    def reset_prompt_tokens(
+        self,
+        prompt_tokens,
+        *,
+        prompt_tokens_tt: ttnn.Tensor | None = None,
+        prompt_src_tt: ttnn.Tensor | None = None,
+    ):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_prompt_tokens(prompt_tokens)
+        self.tt_penalties.reset_prompt_tokens(
+            prompt_tokens,
+            prompt_tokens_tt=prompt_tokens_tt,
+            src_tt=prompt_src_tt,
+        )
 
-    def reset_output_state(self, tokens=None):
+    def reset_output_state(
+        self,
+        tokens=None,
+        *,
+        output_tokens_tt: ttnn.Tensor | None = None,
+        output_src_tt: ttnn.Tensor | None = None,
+    ):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_output_tokens(tokens)
+        self.tt_penalties.reset_output_tokens(
+            tokens,
+            output_tokens_tt=output_tokens_tt,
+            src_tt=output_src_tt,
+        )
 
     # ---------------------------------------------------------------------
     # Prefill / decode state helpers
@@ -160,6 +180,10 @@ class SamplingGenerator:
         reset_batch: bool = False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        prompt_tokens_tt: ttnn.Tensor | None = None,
+        prompt_src_tt: ttnn.Tensor | None = None,
+        output_tokens_tt: ttnn.Tensor | None = None,
+        output_src_tt: ttnn.Tensor | None = None,
     ):
         """Format, merge (if row-sharded), and apply sampling params for one model instance.
 
@@ -195,9 +219,22 @@ class SamplingGenerator:
             formatted_params = SamplingParams(**concat_fields)
             self.reset_sampling_params(formatted_params)
 
+        logger.info(f"reset_batch: {reset_batch}")
         if reset_batch:
-            self.reset_prompt_tokens(prompt_tokens)
-            self.reset_output_state(output_tokens)
+            logger.info(f"reset_prompt_tokens")
+            self.reset_prompt_tokens(
+                prompt_tokens,
+                prompt_tokens_tt=prompt_tokens_tt,
+                prompt_src_tt=prompt_src_tt,
+            )
+            logger.info(f"reset_prompt_tokens completed")
+            logger.info(f"reset_output_state")
+            self.reset_output_state(
+                output_tokens,
+                output_tokens_tt=output_tokens_tt,
+                output_src_tt=output_src_tt,
+            )
+            logger.info(f"reset_output_state completed")
 
     # ---------------------------------------------------------------------
     # Sampling helpers
@@ -213,8 +250,11 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
+        logger.info(f"reset_sampling_params completed")
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
+            logger.info(f"reset_trace")
             self.reset_trace()
+            logger.info(f"reset_trace completed")
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
@@ -227,10 +267,13 @@ class SamplingGenerator:
             or self._penalties_active
             or self._penalties_active != old_penalties_active
         ):
+            logger.info(f"reset_penalties")
             self.tt_penalties.reset_params(
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
+            logger.info(f"reset_penalties completed")
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
+        logger.info(f"log_probs_active set to {self._log_probs_active}")
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
@@ -271,6 +314,7 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        warmup_mode: bool = True,
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
@@ -281,14 +325,19 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
-        logger.debug(
-            f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
-        )
-        self._run_sampling(
-            logits,
-            penalties_on=penalties_on,
-            tt_out_tok=tt_out_tok,
-        )
+        if warmup_mode:
+            logger.debug(
+                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+            )
+            self._run_sampling(
+                logits,
+                penalties_on=penalties_on,
+                tt_out_tok=tt_out_tok,
+            )
+        else:
+            logger.debug(
+                f"Sampling pre-compilation skipped before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+            )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -330,6 +379,7 @@ class SamplingGenerator:
         *,
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        warmup_mode: bool = True,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -340,6 +390,10 @@ class SamplingGenerator:
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
+
+        logger.info(
+            f"Sampling generator internal trace: {use_internal_trace}, enable_trace: {enable_trace}, self.enable_internal_trace: {self.enable_internal_trace}, warmup_mode: {warmup_mode}"
+        )
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
@@ -353,6 +407,7 @@ class SamplingGenerator:
                 return self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
+                    warmup_mode=warmup_mode,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
