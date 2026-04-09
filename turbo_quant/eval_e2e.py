@@ -114,10 +114,11 @@ def main():
     # allocated but bypassed when tq_cache is active.
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
-    # TQ uses BF16 paged cache (2× BFP8). Use fewer blocks to fit in DRAM.
-    # 1024 blocks × 32 = 32K tokens for baseline BFP8.
-    # 512 blocks × 32 = 16K tokens for TQ BF16 (same total DRAM).
-    tq_max_blocks = 512 if not args.no_turbo_quant else 1024
+    # TQ uses BF16 paged cache (2× BFP8 per element).
+    # Baseline: 1024 BFP8 blocks = 32K tokens, ~2GB KV.
+    # TQ BF16: same DRAM budget → 512 blocks = 16K tokens.
+    # With more DRAM headroom, can push to ~1700 blocks ≈ 55K tokens.
+    tq_max_blocks = 768 if not args.no_turbo_quant else 1024
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=tq_max_blocks)
     print("Loading TT model (paged attention, block_size=32)...")
     tt_model = Transformer(
