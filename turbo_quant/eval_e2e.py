@@ -109,17 +109,20 @@ def main():
 
         wcache = Path(str(wcache) + "_tq_rotated")
 
-    # Non-paged: TQ stores pre-rescaled centroid×norm as BF16 in its own cache.
-    # Paged attention uses BFP8 which destroys the quantized value precision.
-    # TODO: support paged attention with BF16 paged cache or custom scatter.
-    print("Loading TT model...")
+    # Paged attention: same model config as baseline.  TQ uses its own BF16
+    # contiguous cache + non-paged SDPA; the model's paged layer_past is
+    # allocated but bypassed when tq_cache is active.
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
+    print("Loading TT model (paged attention, block_size=32)...")
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=wcache,
-        paged_attention_config=None,
+        paged_attention_config=paged_attention_config,
     )
     del state_dict  # free CPU memory
 
@@ -155,9 +158,12 @@ def main():
     batch = 1
     total_steps = min(len(encoded) + args.max_new_tokens, model_args.max_seq_len - 1)
 
+    # Page table: identity mapping (block i → physical page i).
+    page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
+
     tokens_torch = torch.tensor([encoded[0]], dtype=torch.int64)  # [B=1]
     pos_torch = torch.tensor([0], dtype=torch.int64)  # [B=1]
-    host_inputs_0 = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch)
+    host_inputs_0 = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch, page_table=page_table_cpu)
 
     use_trace = not args.no_trace
 
@@ -204,7 +210,7 @@ def main():
         # Update pre-allocated device tensors in-place with current step's inputs.
         tokens_torch = torch.tensor([current_token], dtype=torch.int64)
         pos_torch = torch.tensor([step], dtype=torch.int64)
-        host_inputs_step = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch)
+        host_inputs_step = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch, page_table=page_table_cpu)
         copy_host_to_device(host_inputs_step, device_tensors=trace_inputs)
 
         t0 = time.perf_counter()

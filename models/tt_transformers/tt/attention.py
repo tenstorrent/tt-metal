@@ -725,7 +725,7 @@ class Attention(LightweightModule):
         ###
         # KV update
         ###
-        if turbo_quant_cache is not None and not kv_cache and not page_table:
+        if turbo_quant_cache is not None and not kv_cache:
             # TurboQuant path: quantize new K/V on device, scatter indices + norms into
             # on-device cache (no host transfer), dequantize full cache back to BF16.
             # k_heads_1BKD is [1, batch, kv_heads, head_dim]; permute to
