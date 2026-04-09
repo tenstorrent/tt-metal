@@ -139,7 +139,7 @@ jobs:
             topologyKeys:
               - exabox.tenstorrent.com/quad
             mgd: |
-              ${{ needs.load-test-matrix.outputs.mgd }}
+            ${{ needs.load-test-matrix.outputs.mgd }}
 
       - name: Debug allocation if it failed
         if: failure() && steps.allocation.conclusion == 'failure'
