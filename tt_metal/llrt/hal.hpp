@@ -330,10 +330,19 @@ private:
     bool has_tile_counter_registers_{};
     bool supports_implicit_dfb_sync_{};
     uint32_t num_tile_counters_{};
-    uint32_t overlay_tile_counters_base_addr_{};
-    uint32_t overlay_tile_counters_base_size_{};
-    uint32_t overlay_tile_counters_read_posted_offset_{};
-    uint32_t overlay_tile_counters_read_acked_offset_{};
+
+    uint32_t neo_tile_counters_base_addr_{};
+    uint32_t neo_tile_counters_stride_{};
+    uint32_t neo_tile_counters_size_{};
+    uint32_t neo_tile_counters_tiles_available_offset_{};
+    uint32_t neo_tile_counters_buffer_capacity_offset_{};
+
+    bool has_remapper_{};
+    uint32_t remapper_global_control_addr_{};
+    uint32_t remapper_client_l_config_base_addr_{};
+    uint32_t remapper_client_r_config_base_addr_{};
+    uint32_t remapper_pair_stride_{};
+    uint32_t remapper_num_pairs_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -407,10 +416,19 @@ public:
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
     uint32_t get_num_tile_counters() const { return num_tile_counters_; }
-    uint32_t get_overlay_tile_counters_base_addr() const { return overlay_tile_counters_base_addr_; }
-    uint32_t get_overlay_tile_counters_base_size() const { return overlay_tile_counters_base_size_; }
-    uint32_t get_overlay_tile_counters_read_posted_offset() const { return overlay_tile_counters_read_posted_offset_; }
-    uint32_t get_overlay_tile_counters_read_acked_offset() const { return overlay_tile_counters_read_acked_offset_; }
+
+    uint32_t get_neo_tile_counters_base_addr() const { return neo_tile_counters_base_addr_; }
+    uint32_t get_neo_tile_counters_stride() const { return neo_tile_counters_stride_; }
+    uint32_t get_neo_tile_counters_size() const { return neo_tile_counters_size_; }
+    uint32_t get_neo_tile_counters_tiles_available_offset() const { return neo_tile_counters_tiles_available_offset_; }
+    uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
+
+    bool has_remapper() const { return has_remapper_; }
+    uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
+    uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
+    uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
+    uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
+    uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

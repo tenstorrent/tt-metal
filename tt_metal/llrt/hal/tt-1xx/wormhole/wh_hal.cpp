@@ -360,10 +360,19 @@ void Hal::initialize_wh(
     this->supports_implicit_dfb_sync_ = false;
     // These don't exist on WH
     this->num_tile_counters_ = 0;
-    this->overlay_tile_counters_base_addr_ = 0;
-    this->overlay_tile_counters_base_size_ = 0;
-    this->overlay_tile_counters_read_posted_offset_ = 0;
-    this->overlay_tile_counters_read_acked_offset_ = 0;
+    this->neo_tile_counters_base_addr_ = 0;
+    this->neo_tile_counters_stride_ = 0;
+    this->neo_tile_counters_size_ = 0;
+    this->neo_tile_counters_tiles_available_offset_ = 0;
+    this->neo_tile_counters_buffer_capacity_offset_ = 0;
+
+    // Remapper doesn't exist on WH
+    this->has_remapper_ = false;
+    this->remapper_global_control_addr_ = 0;
+    this->remapper_client_l_config_base_addr_ = 0;
+    this->remapper_client_r_config_base_addr_ = 0;
+    this->remapper_pair_stride_ = 0;
+    this->remapper_num_pairs_ = 0;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
