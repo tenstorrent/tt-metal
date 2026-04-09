@@ -29,7 +29,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled
 import math
 
 
@@ -671,6 +671,7 @@ class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
         return tt_output
 
 
+@trace_enabled
 class TTNNGlm4MoeMLP(TTNNModule):
     @classmethod
     def from_torch(cls, torch_layer: Glm4MoeMLP):
@@ -1789,6 +1790,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
                 return self._fallback_torch_layer(inp)
 
 
+@trace_enabled
 class TTNNDeepseekOCRMoEGate(TTNNModule):
     """MoEGate module for DeepSeek OCR."""
 
