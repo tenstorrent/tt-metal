@@ -6,7 +6,9 @@
 
 #include <stdint.h>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <utility>
 #include <variant>
 
@@ -16,6 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -129,6 +132,26 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Pending Event Tracking for Multi-CQ Safety
+    //
+    // In multi-CQ scenarios, operations on one CQ may reference a buffer while another CQ
+    // deallocates and reallocates the same address. To prevent this race, we track "pending
+    // events" - events representing in-flight operations that reference this buffer.
+    // The buffer's address cannot be safely reused until all pending events complete.
+
+    // Registers an event as pending on this buffer. The event represents an in-flight
+    // operation that references this buffer. The buffer will wait for this event
+    // during deallocation before releasing its address back to the allocator.
+    void add_pending_event(const MeshEvent& event);
+
+    // Waits for all pending events to complete. Called during deallocation to ensure
+    // no operations are still in-flight before releasing the buffer address.
+    void wait_for_pending_events();
+
+    // Returns true if there are pending events that must complete before deallocation.
+    bool has_pending_events() const;
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
@@ -180,6 +203,12 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    // Pending events tracking for multi-CQ safety. These events represent in-flight
+    // operations that reference this buffer. The buffer address cannot be reused
+    // until all pending events complete.
+    mutable std::mutex pending_events_mutex_;
+    std::set<std::pair<uint32_t, uint32_t>> pending_events_;  // (event_id, mesh_cq_id) pairs
 };
 
 class AnyBuffer {

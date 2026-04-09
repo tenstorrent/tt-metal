@@ -6,12 +6,14 @@
 #include <host_api.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
+#include <mesh_event.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include "device.hpp"
 #include "mesh_device_impl.hpp"
 
@@ -200,9 +202,49 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     return *this;
 }
 
+void MeshBuffer::add_pending_event(const MeshEvent& event) {
+    std::lock_guard<std::mutex> lock(pending_events_mutex_);
+    pending_events_.insert({event.id(), event.mesh_cq_id()});
+}
+
+void MeshBuffer::wait_for_pending_events() {
+    auto mesh_device = mesh_device_.lock();
+    if (!mesh_device) {
+        return;  // MeshDevice destroyed, nothing to wait for
+    }
+
+    std::set<std::pair<uint32_t, uint32_t>> events_to_wait;
+    {
+        std::lock_guard<std::mutex> lock(pending_events_mutex_);
+        events_to_wait = std::move(pending_events_);
+        pending_events_.clear();
+    }
+
+    // Wait for all pending events to complete
+    for (const auto& [event_id, cq_id] : events_to_wait) {
+        auto& cq = mesh_device->mesh_command_queue(cq_id);
+        cq.finish();
+    }
+}
+
+bool MeshBuffer::has_pending_events() const {
+    std::lock_guard<std::mutex> lock(pending_events_mutex_);
+    return !pending_events_.empty();
+}
+
 void MeshBuffer::deallocate() {
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
+        // Wait for all pending operations to complete before deallocating
+        // This prevents address reuse while operations are still in-flight on other CQs
+        wait_for_pending_events();
+
+        // Now safe to deallocate the backing buffer
+        if (std::holds_alternative<OwnedBufferState>(state_)) {
+            auto& owned_state = std::get<OwnedBufferState>(state_);
+            // Release the backing buffer which will return the address to the allocator
+            owned_state.backing_buffer.reset();
+        }
         state_ = DeallocatedState{};
         return;
     }

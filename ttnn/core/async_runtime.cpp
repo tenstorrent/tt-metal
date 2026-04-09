@@ -56,4 +56,18 @@ tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distribu
     return cq.enqueue_record_event_to_host();
 }
 
+void track_event_on_tensor(const Tensor& tensor, const tt::tt_metal::distributed::MeshEvent& event) {
+    // Get the device tensors and register the event with their underlying buffers
+    auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
+    for (auto& device_tensor : device_tensors) {
+        if (device_tensor.storage_type() == StorageType::DEVICE) {
+            // Use get_mesh_buffer_leak_ownership to get shared_ptr for event tracking
+            auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+            if (mesh_buffer) {
+                mesh_buffer->add_pending_event(event);
+            }
+        }
+    }
+}
+
 }  // namespace ttnn
