@@ -23,7 +23,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/mask.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
@@ -90,20 +90,22 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
+    ckernel::MatmulOpConfig qk_cfg{};
+    qk_cfg.in0_cb_id = cb_query;
+    qk_cfg.in1_cb_id = cb_key;
+    qk_cfg.out_cb_id = 0;
+    qk_cfg.transpose = true;
+    ckernel::TileMatmulOp mm_qk(qk_cfg);
+
     const uint32_t matmul_accum_reg = 0;
     for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
         cb_wait_front(cb_key, qWt);
 
         reconfig_data_format(cb_query, cb_key);
-        mm_init_short(cb_query, cb_key, /* transpose */ 1);
+        mm_qk.init_short();
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < qWt; tile_idx++) {
-            matmul_tiles(
-                cb_query,
-                cb_key,
-                /* tile_idx */ tile_idx,
-                /* tile_idx */ tile_idx,
-                /* dst_reg_idx*/ matmul_accum_reg);
+            mm_qk.matmul(tile_idx, tile_idx, matmul_accum_reg);
         }
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
@@ -234,7 +236,12 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_qk_result);
+    ckernel::MatmulOpConfig init_cfg{};
+    init_cfg.in0_cb_id = cb_query;
+    init_cfg.in1_cb_id = cb_key;
+    init_cfg.out_cb_id = cb_qk_result;
+    ckernel::TileMatmulOp mm_init_op(init_cfg);
+    mm_init_op.init();
 
     cb_wait_front(cb_reduction_scaler, onetile);
 

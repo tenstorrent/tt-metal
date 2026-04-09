@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/mask.h"
 #include "api/compute/reduce.h"
@@ -52,8 +52,13 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    mm_init_short(cb_input, cb_scaler, false);
-                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    ckernel::MatmulOpConfig mm_cfg{};
+                    mm_cfg.in0_cb_id = cb_input;
+                    mm_cfg.in1_cb_id = cb_scaler;
+                    mm_cfg.out_cb_id = cb_out;
+                    ckernel::TileMatmulOp mm(mm_cfg);
+                    mm.init_short();
+                    mm.matmul(0, 0, reduce_dst_idx);
                     cb_pop_front(cb_input, onetile);
                 }
                 tile_regs_commit();
@@ -101,8 +106,13 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            mm_init_short(cb_input, cb_scaler, false);
-            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            ckernel::MatmulOpConfig mm_cfg2{};
+            mm_cfg2.in0_cb_id = cb_input;
+            mm_cfg2.in1_cb_id = cb_scaler;
+            mm_cfg2.out_cb_id = cb_out;
+            ckernel::TileMatmulOp mm2(mm_cfg2);
+            mm2.init_short();
+            mm2.matmul(0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

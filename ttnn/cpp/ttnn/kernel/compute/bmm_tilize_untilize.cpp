@@ -6,7 +6,7 @@
 
 #include "internal/mod_div_lib.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -137,7 +137,12 @@ void kernel_main() {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    ckernel::MatmulOpConfig mm_cfg{};
+    mm_cfg.in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
+    mm_cfg.in1_cb_id = in1_cb_id;
+    mm_cfg.out_cb_id = out_cb_id;
+    ckernel::TileMatmulOp mm(mm_cfg);
+    mm.init();
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef FUSE_BIAS
         uint32_t bias_block_offset = 0;
@@ -148,7 +153,7 @@ void kernel_main() {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_subblock_h * in0_num_subblocks);
-                    mm_init_short_with_dt(tilized_in0_cb_id, in1_cb_id, in0_cb_id);
+                    mm.init_short_with_dt(in0_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -170,8 +175,7 @@ void kernel_main() {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(
-                                tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
+                            mm.init_short_with_dt(matmul_partials_cb);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
@@ -180,13 +184,10 @@ void kernel_main() {
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
                                 int in1_index_inner_dim_offset = 0;
                                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                                    matmul_tiles(
-                                        tilize_in0 ? tilized_in0_cb_id : in0_cb_id,                  // in0_cb
-                                        in1_cb_id,                                                   // in1_cb
-                                        in0_index_subblock_offset + in0_index_h_offset + inner_dim,  // in0 tile
-                                        in1_index_subblock_offset + in1_index_inner_dim_offset + w,  // in1 tile
-                                        dst_index,                                                   // dst
-                                    );
+                                    mm.matmul(
+                                        in0_index_subblock_offset + in0_index_h_offset + inner_dim,
+                                        in1_index_subblock_offset + in1_index_inner_dim_offset + w,
+                                        dst_index);
                                     in1_index_inner_dim_offset += in1_block_w;
                                 }  // for in0_block_w
                                 ++dst_index;
@@ -220,7 +221,7 @@ void kernel_main() {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                            mm.init_short();
                             // reconfig unpacker df for srcB
                             // reconfig_data_format(in1_cb_id, in0_cb_id);
                         }
@@ -254,7 +255,7 @@ void kernel_main() {
                             out_subblock_h,
                             out_subblock_w,
                             untilize_mode_final_matmul_partials_cb);
-                        mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                        mm.init_short();
                         reconfig_data_format(in1_cb_id, in0_cb_id);
                     }  // last_out
 #endif

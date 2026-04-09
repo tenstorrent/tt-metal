@@ -7,7 +7,7 @@
 #include "internal/mod_div_lib.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -257,7 +257,17 @@ void kernel_main() {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    ckernel::MatmulOpConfig cfg{};
+    cfg.in0_cb_id = mm_in0_cb_id;
+    cfg.in1_cb_id = in1_cb_id;
+    cfg.out_cb_id = out_cb_id;
+    cfg.ct_dim = out_subblock_w;
+    cfg.rt_dim = out_subblock_h;
+    cfg.kt_dim = in0_block_w;
+    cfg.transpose = false;
+    cfg.partials_cb_id = spill ? matmul_partials_cb : 0u;
+    ckernel::BlockMatmulOp mm(cfg);
+    mm.init();
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -302,15 +312,7 @@ void kernel_main() {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
                                 in0_num_subblocks_read_last);
                         }
-                        mm_block_init_short_with_both_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_pretilize_cb_id,
-                            in0_pretilize_cb_id,
-                            false,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        mm.init_short_with_both_dt(in0_pretilize_cb_id, in0_pretilize_cb_id);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -350,15 +352,7 @@ void kernel_main() {
                         }
                     }
 
-                    mm_block_init_short_with_both_dt(
-                        mm_in0_cb_id,
-                        in1_cb_id,
-                        in0_cb_id,
-                        in0_cb_id,
-                        false,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+                    mm.init_short_with_both_dt(in0_cb_id, in0_cb_id);
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
@@ -389,56 +383,14 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
+                        mm.begin_subblock();
                         if (enable_reload) {
-                            // Reconfigure input
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
-                            cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
-                            tile_regs_acquire();
-
-                            uint32_t start_dst_index = 0;
-                            uint32_t start_tile_index = 0;
-                            copy_block_matmul_partials(
-                                matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
-
-                            cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                            // Reconfigure srcA back
-                            mm_block_init_short_with_dt(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                matmul_partials_cb,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
-                        } else {
-                            // just acquire
-                            tile_regs_acquire();
+                            mm.reload_partials(out_subblock_num_tiles);
                         }
 
                         // Compute output sub-block
-                        uint32_t dst_index =
-                            0;  // start at 0, each call to matmul_block internally increments dst_index
-                        uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                        uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                        // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                        for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
-                            // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                            // accumulation is done by iterating matmul_block across inner dim
-                            // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                            matmul_block(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                in0_index,
-                                in1_index,
-                                dst_index,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
-                            in0_index++;               // stride right by 1
-                            in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
-                                                       // called in1_block_w)
-                        }
+                        mm.accumulate(
+                            in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, in1_block_w);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
