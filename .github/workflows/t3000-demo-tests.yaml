@@ -18,6 +18,7 @@ on:
           - qwenimage
           - wan22
           - mochi
+          - qwen3_vl
       platform:
         required: false
         type: choice

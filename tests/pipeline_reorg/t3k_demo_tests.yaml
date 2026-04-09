@@ -80,3 +80,12 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: mochi
+
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 10
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  model-name: qwen3_vl

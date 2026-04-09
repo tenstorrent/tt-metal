@@ -15,6 +15,7 @@ on:
           - deepseek
           - tttv2 modules
           - mistral-small-3.1-24b-vision
+          - qwen3_vl
       platform:
         required: false
         type: choice

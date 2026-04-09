@@ -296,6 +296,15 @@
   team: models
   model-name: qwenimage
 
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 12
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  model-name: qwen3_vl
+
 # ============================================================================
 # Galaxy Wormhole tests
 # ============================================================================

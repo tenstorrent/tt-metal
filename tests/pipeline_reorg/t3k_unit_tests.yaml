@@ -77,6 +77,15 @@
   team: models
   model-name: tttv2 modules
 
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_unit_tests
+  skus:
+    wh_llmbox:
+      timeout: 15
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  model-name: qwen3_vl
+
 - name: t3k_mistral-small-3.1-24b-vision_tests
   cmd: run_t3000_mistral-small-3.1-24b-vision_unit_tests
   skus:
