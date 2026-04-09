@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     }
 }
