@@ -66,3 +66,50 @@ Analyzed the SFPU kernel implementation for the `THRESHOLD` unary operation. Whi
 
 ## Output (threshold)
 - **Analysis file**: `.claude-analysis/rrelu-1/threshold_analysis.md`
+
+---
+
+## Session Info (leaky_relu)
+- **Operation**: leaky_relu
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-09
+- **Status**: SUCCESS
+
+## Summary (leaky_relu)
+Analyzed the SFPU kernel implementation for the `LEAKY_RELU` unary operation. Like prelu_sfpu, the operation was deep-nuked from this branch (Phase 2 nuke), so the analysis was reconstructed from the nuke manifest, surviving structurally-identical kernels (threshold, sign), and the shared LLK dispatch infrastructure.
+
+## Key Findings (leaky_relu)
+- **Formula**: `max(0, x) + negative_slope * min(0, x)` = `x if x >= 0, slope * x if x < 0`
+- **Macro group**: `SFPU_OP_RELU_FAMILY_INCLUDE` or `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` (original uncertain)
+- **API signature**: `leaky_relu_tile(uint32_t idst, uint32_t param0)` + `leaky_relu_tile_init()`
+- **Kernel style**: SFPI-based (Style A) using `v_if`/`v_endif` for sign-conditional branching
+- **Parameter**: Single `uint32_t param0` (bit-cast negative_slope float, default=0.01)
+- **Approximation mode**: `false` (no approximation-dependent branches)
+- **Core function**: `_calculate_lrelu_<APPROXIMATION_MODE, ITERATIONS>` in `ckernel_sfpu_relu.h` (DELETED)
+- **SFPU instructions**: SFPLOAD, SFPSTORE, SFPMAD (multiply), SFPSETCC/SFPENCC (CC management), SFPLOADI (constants)
+- **Address mode**: ADDR_MOD_7 with dest.incr=0 (standard for most unary SFPU ops)
+
+## Deep-Nuke Impact (leaky_relu)
+The following files were confirmed removed:
+- `unary_op_types.hpp`: LEAKY_RELU enum entry removed (Phase 2)
+- `unary_op_utils.cpp`: get_op_init_and_func_parameterized case removed
+- `ckernel_sfpu_relu.h` (WH+BH): gutted to `#pragma once` only
+- `ckernel_sfpu_lrelu.h` (Quasar): deleted entirely
+- LLK dispatch files: removed from both tt_llk and hw/ckernels
+- Compute API header: removed from activations.h include chain
+
+## Reconstruction Confidence: HIGH
+Leaky ReLU is a trivially simple operation (conditional multiply) with well-documented formula. The reconstruction is based on the exact same SFPI patterns demonstrated by surviving threshold and sign kernels. The nuke manifest confirms the function name (`_calculate_lrelu_`) and file location.
+
+## Verification Results (leaky_relu)
+- `_calculate_lrelu_`: NOT FOUND (confirmed nuked)
+- `_calculate_threshold_`: FOUND in wh+bh (pattern reference)
+- `_calculate_sign_`: FOUND in wh+bh (pattern reference)
+- `Converter::as_float`: FOUND in wh+bh
+- `_llk_math_eltwise_unary_sfpu_params_`: FOUND in wh+bh+quasar
+- `_llk_math_eltwise_unary_sfpu_init_`: FOUND in wh+bh+quasar
+- `eltwise_unary_sfpu_configure_addrmod`: FOUND in wh+bh
+- `SFPU_UNARY_ONE_PARAM_KERNEL_FN`: FOUND in macros.h
+
+## Output (leaky_relu)
+- **Analysis file**: `.claude-analysis/rrelu-1/leaky_relu_analysis.md`
