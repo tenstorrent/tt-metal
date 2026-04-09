@@ -77,6 +77,15 @@
   team: models
   model-name: tttv2 modules
 
+- name: t3k_mistral-small-3.1-24b-vision_tests
+  cmd: run_t3000_mistral-small-3.1-24b-vision_unit_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U08GEGWHQJF # Adam Roberge
+  team: models
+  model-name: mistral-small-3.1-24b-vision
+
 - name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
   skus:

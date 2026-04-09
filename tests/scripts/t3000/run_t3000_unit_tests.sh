@@ -321,6 +321,32 @@ run_t3000_tt_dit_tests() {
 
 }
 
+run_t3000_mistral-small-3.1-24b-vision_unit_tests() {
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mistral-small-3.1-24b-vision_unit_tests"
+
+  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
+
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py ; fail+=$?
+  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mistral-small-3.1-24b-vision_unit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tttv2_fast_unit_tests() {
   fail=0
 

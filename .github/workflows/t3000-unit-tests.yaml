@@ -14,6 +14,7 @@ on:
           - dits
           - deepseek
           - tttv2 modules
+          - mistral-small-3.1-24b-vision
       platform:
         required: false
         type: choice
