@@ -63,6 +63,7 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 

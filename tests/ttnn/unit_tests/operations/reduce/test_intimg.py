@@ -32,7 +32,7 @@ def ttnn_integral_image_channel_last(features_nhwc):
         ([1, 12, 40, 256]),
         ([1, 24, 80, 256]),
         ([1, 48, 160, 256]),
-        ([1, 96, 160, 256]),
+        ([1, 96, 160, 256])
     ],
     ids=["OFT32", "OFT16", "OFT8", "big_one"],
 )

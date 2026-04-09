@@ -128,6 +128,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
     if not is_supported(size, dim, expected_output_dtype):

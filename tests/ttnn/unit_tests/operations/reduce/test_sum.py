@@ -57,6 +57,7 @@ def test_sum_global(device, batch_size, h, w, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -102,6 +103,7 @@ def test_sum_4d(device, n, c, h, w, dim):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.sum(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
     # test for equivalance

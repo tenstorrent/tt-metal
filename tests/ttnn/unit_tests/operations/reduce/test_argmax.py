@@ -88,6 +88,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=tensor_layout)
         if tensor_layout == ttnn.TILE_LAYOUT:
             ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
+
     torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
 
     # Run on both and flag exceptions

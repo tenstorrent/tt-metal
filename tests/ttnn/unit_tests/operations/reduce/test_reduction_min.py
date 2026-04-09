@@ -58,6 +58,7 @@ def test_min_global(device, batch_size, h, w):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
     output_tensor = ttnn.min(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
