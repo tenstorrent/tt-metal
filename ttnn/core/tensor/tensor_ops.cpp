@@ -134,16 +134,35 @@ void copy_to_host(
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+HostTensor allocate_host_tensor_at_coords(
+    const MeshTensor& mesh_tensor, const std::vector<distributed::MeshCoordinate>& coords) {
+    auto* device = mesh_tensor.mesh_buffer_invariant_breaking()->device();
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+    distributed_host_buffer.emplace_shards(
+        coords,
+        [&](const distributed::MeshCoordinate&) {
+            return tensor_impl::allocate_host_buffer(mesh_tensor.tensor_spec());
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return HostTensor(std::move(distributed_host_buffer), mesh_tensor.tensor_spec(), mesh_tensor.tensor_topology());
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& queue = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    tensor_impl::copy_to_host(
-        queue,
-        device_tensor.mesh_tensor(),
-        device_tensor.device_storage().get_coords(),
-        host_tensor.host_tensor(),
-        blocking);
+    if (device_tensor.device_storage().is_uniform_storage()) {
+        tensor_impl::copy_to_host(queue, device_tensor.mesh_tensor(), host_tensor.host_tensor(), blocking);
+    } else {
+        auto trimmed = CMAKE_UNIQUE_NAMESPACE::allocate_host_tensor_at_coords(
+            device_tensor.mesh_tensor(), device_tensor.device_storage().get_coords());
+        tensor_impl::copy_to_host(queue, device_tensor.mesh_tensor(), trimmed, blocking);
+        host_tensor.host_tensor() = std::move(trimmed);
+    }
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
@@ -153,10 +172,18 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     }
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
-
     auto& queue = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    auto output = Tensor(
-        tensor_impl::to_host(queue, input_tensor.mesh_tensor(), input_tensor.device_storage().get_coords(), blocking));
+
+    HostTensor host_tensor;
+    if (input_tensor.device_storage().is_uniform_storage()) {
+        host_tensor = tensor_impl::to_host(queue, input_tensor.mesh_tensor(), blocking);
+    } else {
+        host_tensor = CMAKE_UNIQUE_NAMESPACE::allocate_host_tensor_at_coords(
+            input_tensor.mesh_tensor(), input_tensor.device_storage().get_coords());
+        tensor_impl::copy_to_host(queue, input_tensor.mesh_tensor(), host_tensor, blocking);
+    }
+
+    auto output = Tensor(std::move(host_tensor));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

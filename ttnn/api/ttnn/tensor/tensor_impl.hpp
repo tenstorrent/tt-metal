@@ -94,17 +94,11 @@ MeshTensor allocate_mesh_tensor(
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-// TODO: we should re-examine what we want to do with the coords parameter
-HostTensor to_host(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& tensor,
-    const std::vector<distributed::MeshCoordinate>& coords,
-    bool blocking = true);
+HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
-    const std::vector<distributed::MeshCoordinate>& coords,
     HostTensor& host_tensor,
     bool blocking = true);
 
