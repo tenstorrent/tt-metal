@@ -9,17 +9,30 @@ jobs:
     name: Parse Comment
     if: >-
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/bug-check') &&
+      startsWith(github.event.comment.body, '/bug-check') &&
       (
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'OWNER'
       )
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     outputs:
       pr-number: ${{ steps.parse.outputs.pr-number }}
       subcommand: ${{ steps.parse.outputs.subcommand }}
       rule-id: ${{ steps.parse.outputs.rule-id }}
     steps:
+      - name: Acknowledge command
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
+            --method POST \
+            -f content='eyes'
+
       - name: Parse subcommand from comment
         id: parse
         env:
@@ -30,7 +43,10 @@ jobs:
 
           CMD_LINE=$(printf '%s\n' "$COMMENT_BODY" | grep -E '^/bug-check' | head -1)
 
-          if echo "$CMD_LINE" | grep -qE '^/bug-check\s+list-rules(\s|$)'; then
+          if echo "$CMD_LINE" | grep -qE '^/bug-check\s+run(\s|$)'; then
+            echo "subcommand=run" >> "$GITHUB_OUTPUT"
+            echo "rule-id=" >> "$GITHUB_OUTPUT"
+          elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+list-rules(\s|$)'; then
             echo "subcommand=list-rules" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+check-rule\s+'; then
@@ -41,13 +57,41 @@ jobs:
             echo "subcommand=dry-run" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           else
-            echo "subcommand=run" >> "$GITHUB_OUTPUT"
+            echo "subcommand=help" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Post help comment
+        if: steps.parse.outputs.subcommand == 'help'
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(cat <<'HELPEOF'
+          ## Bug Checker
+
+          LLM-powered bug pattern detection for tt-metal PRs. Scans your diff against a library of known bug patterns using Claude, then reports findings as inline PR comments and SARIF for Code Scanning.
+
+          ### Commands
+
+          | Command | Description |
+          |---------|-------------|
+          | `/bug-check run` | Scan the PR diff against all matching rules |
+          | `/bug-check list-rules` | Show all available rules with their severity, path globs, and labels |
+          | `/bug-check check-rule <id>` | Run a single named rule against this PR |
+          | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
+
+          Rules are matched by **file path globs** and **PR labels** — only rules relevant to your changes will run. Each rule is an independent LLM analysis; no state is shared between rules.
+
+          **Rules are defined in** [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules) and registered in [`.github/bug_checker/manifest.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/bug_checker/manifest.yaml).
+          HELPEOF
+          | sed 's/^          //')"
 
   bug-check:
     name: Run Bug Checker
     needs: parse-comment
+    if: needs.parse-comment.outputs.subcommand != 'help'
     concurrency:
       group: bug-check-${{ github.event.issue.number }}
       cancel-in-progress: true
@@ -60,6 +104,26 @@ jobs:
       security-events: write
 
     steps:
+      - name: Post running notice
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+          SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
+          RULE_ID: ${{ needs.parse-comment.outputs.rule-id }}
+        run: |
+          if [ "$SUBCOMMAND" = "list-rules" ]; then
+            NOTICE="**Bug Checker** — listing available rules…"
+          elif [ "$SUBCOMMAND" = "dry-run" ]; then
+            NOTICE="**Bug Checker** — running dry-run (no LLM calls)…"
+          elif [ "$SUBCOMMAND" = "check-rule" ]; then
+            NOTICE="**Bug Checker** — running rule \`$RULE_ID\`…"
+          else
+            NOTICE="**Bug Checker** — scanning PR for known bug patterns…"
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$NOTICE"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
