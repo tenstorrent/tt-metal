@@ -8,7 +8,10 @@ import os
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: extract_mgd_from_sku.py <sku_name> <sku_config_path>", file=sys.stderr)
+        print(
+            "Usage: extract_mgd_from_sku.py <sku_name> <sku_config_path>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     sku_name = sys.argv[1]
