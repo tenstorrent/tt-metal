@@ -89,27 +89,11 @@ std::vector<float> make_random_qkv_input(
     return data;
 }
 
-// QKV input layout. Two layouts exist in the framework:
-//
-// CONCATENATED — what nn.Linear(d, 3d) produces by default. Per (batch, seq) row:
-//   [Q_h0, Q_h1, ..., Q_h(n_q-1), K_h0, ..., K_h(n_kv-1), V_h0, ..., V_h(n_kv-1)]
-//
-// GROUPED — what the existing sharded `create_qkv_heads` reader expects. Per
-// (batch, seq) row, with n = n_q / n_kv Q heads per group:
-//   [Q_g0_h0, ..., Q_g0_h(n-1), K_g0, V_g0, Q_g1_h0, ..., Q_g1_h(n-1), K_g1, V_g1, ...]
-//
-// Both SD U-Net cross-attention (`concatenate_qkv()` in
-// stable_diffusion/wormhole/tt/ttnn_functional_cross_attention.py) and ViT WH
-// (`custom_preprocessor()` in vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py)
-// manually repack the QKV weights into GROUPED layout so the sharded kernel works
-// correctly. This is an implicit, undocumented framework convention — see the deep
-// root-cause analysis in ~/tt/ISSUE_41718_ROOT_CAUSE_ANALYSIS.md and the comment
-// in reader_create_qkv_heads_sharded.cpp:42-45 ("Q's heads are shuffled and n Q
-// heads are paired with a KV").
-enum class QkvLayout {
-    CONCATENATED,
-    GROUPED,
-};
+// Use the QkvLayout enum exposed by the op (added by the same change set as this
+// matrix test). See the doc comment on `ttnn::transformer::QkvLayout` in
+// ttnn/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/
+// split_query_key_value_and_split_heads.hpp.
+using ttnn::transformer::QkvLayout;
 
 // CPU reference. Splits a flat [B, S, (n_q+2*n_kv)*D] input into Q [B, n_q, S, D],
 // K [B, n_kv, S, D] (or [B, n_kv, D, S] if transpose_k), V [B, n_kv, S, D]. The
@@ -302,7 +286,8 @@ PccTriple run_interleaved_baseline_cell(
         /*num_kv_heads=*/num_kv_arg,
         /*transpose_key=*/transpose_k,
         /*memory_config=*/output_mem_config,
-        /*use_falcon7b_backend=*/false);
+        /*use_falcon7b_backend=*/false,
+        /*qkv_layout=*/QkvLayout::CONCATENATED);
 
     // to_vector<float>() handles both BFLOAT16 and BFLOAT8_B unpacking.
     auto q_vec = ttnn::from_device(q_tt).to_vector<float>();
@@ -349,7 +334,8 @@ PccTriple run_block_sharded_to_height_sharded_cell(
         /*num_kv_heads=*/num_kv_arg,
         /*transpose_key=*/transpose_k,
         /*memory_config=*/ttnn::L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        /*use_falcon7b_backend=*/false);
+        /*use_falcon7b_backend=*/false,
+        /*qkv_layout=*/layout);
 
     // Convert sharded outputs back to interleaved DRAM so to_vector can read them.
     auto q_interleaved = ttnn::to_memory_config(q_tt, ttnn::DRAM_MEMORY_CONFIG);
@@ -625,48 +611,42 @@ TEST_F(SplitQkvMatrixTest, GQA_32_8_128D__InBlockShardedGrouped__OutHeightSharde
 // Commit 2 — specialized tests revealing the layout-mismatch ground truth
 // =========================================================================
 
-// Cell 13: SAME shape as Cell 6, but feed CONCATENATED input. The kernel reads it
-// as if it were grouped, producing garbage. Asserts that the expected outcome is
-// CORRUPT (PCC < threshold for at least one of Q/K/V) — this is the test the
-// framework was missing for 19 months.
-TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedConcatenated__OutHeightSharded__seq64_aligned__bf16__CORRUPTING) {
-    auto pcc = run_block_sharded_to_height_sharded_cell(
-        device_,
-        /*batch=*/2,
-        /*seq=*/64,
-        /*n_q=*/8,
-        /*n_kv=*/8,
-        /*head_dim=*/64,
-        /*transpose_k=*/false,
-        DataType::BFLOAT16,
-        QkvLayout::CONCATENATED,
-        /*num_w_cores=*/8,
-        /*num_h_cores=*/2);
-    log_debug(
-        tt::LogTest,
-        "MHA_8H_64D BlockSharded(CONCATENATED)->HeightSharded seq=64: q={:.6f} k={:.6f} v={:.6f}",
-        pcc.q,
-        pcc.k,
-        pcc.v);
-    // Expected outcome: at least one of Q/K/V has PCC well below 0.99 — the kernel
-    // misinterprets concatenated input as grouped and produces garbage.
-    const float min_pcc = std::min({pcc.q, pcc.k, pcc.v});
-    EXPECT_LT(min_pcc, 0.5f) << "Expected concatenated input to be silently corrupted by the sharded kernel "
-                                "(min PCC = "
-                             << min_pcc
-                             << "). If this assertion fails, the kernel may have started handling concatenated "
-                                "layout — update the layout dispatch in this test.";
+// Cell 13: SAME shape as Cell 6, but feed CONCATENATED input. Before the explicit
+// `qkv_layout` API change on this branch, the kernel silently produced PCC ~ 0.1
+// (Q=0.1188, K=0.0009, V=0.1244 — measured on Blackhole p150a) — the test
+// originally documented that corruption directly. After the API change the op
+// rejects this combination at validation time with a clear TT_FATAL, so the test
+// now asserts the REJECTED outcome instead. This is the proper fix for the bug
+// the framework was silently allowing for ~19 months.
+TEST_F(SplitQkvMatrixTest, MHA_8H_64D__InBlockShardedConcatenated__OutHeightSharded__seq64_aligned__bf16__REJECTED) {
+    EXPECT_THROW(
+        {
+            (void)run_block_sharded_to_height_sharded_cell(
+                device_,
+                /*batch=*/2,
+                /*seq=*/64,
+                /*n_q=*/8,
+                /*n_kv=*/8,
+                /*head_dim=*/64,
+                /*transpose_k=*/false,
+                DataType::BFLOAT16,
+                QkvLayout::CONCATENATED,
+                /*num_w_cores=*/8,
+                /*num_h_cores=*/2);
+        },
+        std::exception);
 }
 
 // Cell 14: ViT-base shape with CONCATENATED input — the canonical bug pattern from
 // tt-mlir greedy optimizer. seq is tile-aligned, so the trigger is purely the
-// layout mismatch (not the non-tile-alignment from #41526). Same dispatch-core
-// constraint as Cell 8 — skipped at runtime if 12-wide grid is unsupported.
-TEST_F(
-    SplitQkvMatrixTest, MHA_12H_64D__InBlockShardedConcatenated__OutHeightSharded__seq224_aligned__bf16__CORRUPTING) {
-    PccTriple pcc{};
+// layout mismatch (not the non-tile-alignment from #41526). After the explicit
+// qkv_layout API change, the op rejects this combination at validation time.
+// On hardware where the 12-wide grid setup fails first (dispatch-core constraint
+// — same as Cell 8) we skip; on hardware where the grid is supported, we expect
+// the qkv_layout validation to fire.
+TEST_F(SplitQkvMatrixTest, MHA_12H_64D__InBlockShardedConcatenated__OutHeightSharded__seq224_aligned__bf16__REJECTED) {
     try {
-        pcc = run_block_sharded_to_height_sharded_cell(
+        (void)run_block_sharded_to_height_sharded_cell(
             device_,
             /*batch=*/2,
             /*seq=*/224,
@@ -678,21 +658,23 @@ TEST_F(
             QkvLayout::CONCATENATED,
             /*num_w_cores=*/12,
             /*num_h_cores=*/2);
+        FAIL() << "Expected the op to reject CONCATENATED + sharded with a TT_FATAL, but the call "
+                  "returned without throwing. Either the qkv_layout validation was bypassed or the "
+                  "kernel started accepting concatenated layout.";
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "12-wide BLOCK_SHARDED grid not supported on this hardware "
-                        "(likely dispatch-core placement constraint): "
-                     << e.what();
+        const std::string msg(e.what());
+        if (msg.find("Illegal kernel placement") != std::string::npos ||
+            msg.find("dispatch core") != std::string::npos ||
+            msg.find("Kernels cannot be placed on dispatch cores") != std::string::npos) {
+            GTEST_SKIP() << "12-wide BLOCK_SHARDED grid not supported on this hardware "
+                            "(dispatch-core placement constraint): "
+                         << e.what();
+        }
+        // Otherwise we expect this to be the qkv_layout FATAL — log it and pass.
+        log_debug(tt::LogTest, "Cell 14 REJECTED as expected: {}", e.what());
+        EXPECT_TRUE(msg.find("CONCATENATED") != std::string::npos || msg.find("GROUPED") != std::string::npos)
+            << "Expected the FATAL to mention the qkv_layout but got: " << e.what();
     }
-    log_debug(
-        tt::LogTest,
-        "MHA_12H_64D BlockSharded(CONCATENATED)->HeightSharded seq=224: q={:.6f} k={:.6f} v={:.6f}",
-        pcc.q,
-        pcc.k,
-        pcc.v);
-    const float min_pcc = std::min({pcc.q, pcc.k, pcc.v});
-    EXPECT_LT(min_pcc, 0.5f) << "Expected concatenated input to be silently corrupted by the sharded kernel "
-                                "(min PCC = "
-                             << min_pcc << ")";
 }
 
 // =========================================================================

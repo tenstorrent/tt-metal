@@ -109,7 +109,8 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
     const std::optional<MemoryConfig>& memory_config,
-    const bool use_falcon7b_backend) {
+    const bool use_falcon7b_backend,
+    const std::optional<QkvLayout> qkv_layout) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
@@ -227,15 +228,30 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         head_size,
         padded_head_size);
 
+    // Resolve effective qkv_layout. The default preserves pre-#41718 behavior:
+    // sharded inputs default to GROUPED, interleaved inputs default to CONCATENATED.
+    const QkvLayout effective_layout =
+        qkv_layout.value_or(input_tensor.is_sharded() ? QkvLayout::GROUPED : QkvLayout::CONCATENATED);
+
     if (input_tensor.is_sharded()) {
         // Issue #41526 / #41718: the sharded `create_qkv_heads` reader walks address
-        // arithmetic that assumes a tile-aligned sequence dimension. For non-tile-aligned
-        // seq lengths (e.g. ViT seq=197) this produces silent corruption (PCC ~0.08).
-        // For tile-aligned seq lengths the reader works correctly and the SD U-Net
-        // cross-attention path has been relying on it since 2024-08. PR #41550 added a
-        // blanket FATAL on any sharded input which broke the working SD U-Net path
-        // (#41718). Re-allow tile-aligned sharded inputs and only FATAL when the seq
-        // length would actually trigger the corruption.
+        // arithmetic that expects a GROUPED [Q_g0_h0,..,K_g0,V_g0, Q_g1_h0,...] layout.
+        // Feeding it a CONCATENATED [Q...,K...,V...] layout produces silent corruption
+        // (PCC ~0.08, reliably reproduced by Cell 13 of test_split_qkv_heads_matrix.cpp).
+        // tt-mlir greedy optimizer at opt_level=2 was the original caller hitting this.
+        TT_FATAL(
+            effective_layout == QkvLayout::GROUPED,
+            "split_query_key_value_and_split_heads: sharded input requires GROUPED qkv_layout. "
+            "The sharded reader expects [Q_g0_h0,..,K_g0,V_g0, Q_g1_h0,...] per (batch, seq) row "
+            "and silently corrupts the output (PCC ~0.08) for CONCATENATED layout. If you have a "
+            "CONCATENATED layout (the default for nn.Linear(d, 3d) output), either: "
+            "(a) repack the upstream linear weights into grouped layout — see "
+            "models/demos/vision/generative/stable_diffusion/wormhole/tt/"
+            "ttnn_functional_cross_attention.py::concatenate_qkv() for an example, or "
+            "(b) unshard the input to interleaved memory before calling this op.");
+        // The sharded reader's address arithmetic at stride `block_wt_size_bytes` per
+        // seq tile assumes a tile-aligned sequence dimension. For non-tile-aligned seq
+        // lengths (e.g. ViT seq=197) it produces silent corruption regardless of layout.
         TT_FATAL(
             sequence_size_padded == sequence_size,
             "Sharded input is not supported for split_query_key_value_and_split_heads when the "
@@ -263,6 +279,16 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             sequence_size_padded,
             transpose_key);
     }
+    // Interleaved path: nlp_create_qkv_heads reads Q tiles, then K tiles, then V tiles
+    // — i.e., it expects CONCATENATED layout. GROUPED on the interleaved path is not
+    // currently supported by any reader kernel; reject it here so callers see a clear
+    // error instead of garbage.
+    TT_FATAL(
+        effective_layout == QkvLayout::CONCATENATED,
+        "split_query_key_value_and_split_heads: interleaved input requires CONCATENATED qkv_layout. "
+        "The interleaved reader (nlp_create_qkv_heads) reads Q tiles, then K tiles, then V tiles "
+        "in order — it does not support GROUPED layout. If you have a GROUPED layout tensor in "
+        "interleaved memory, please file an issue.");
     const auto input_tensor_4d = ttnn::experimental::view(
         input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
     std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
