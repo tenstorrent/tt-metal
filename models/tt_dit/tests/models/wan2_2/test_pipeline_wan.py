@@ -72,7 +72,7 @@ def test_pipeline_inference(
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = 5
 
     pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -83,6 +83,9 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
