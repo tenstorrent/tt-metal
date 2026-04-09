@@ -64,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_();
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
 
@@ -256,10 +256,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Datacopy all tiles from SRC to DEST
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, i);
+            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
     _llk_math_eltwise_unary_sfpu_init_();
@@ -267,10 +267,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU operation to all tiles using compile-time dispatch
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        call_sfpu_operation_quasar(static_cast<int>(i), static_cast<int>(num_sfpu_iterations));
+        call_sfpu_operation_quasar(static_cast<int>(params.DST_INDEX + i), static_cast<int>(num_sfpu_iterations));
     }
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
     // Wait for all operations to complete
     wait_sfpu_idle();
