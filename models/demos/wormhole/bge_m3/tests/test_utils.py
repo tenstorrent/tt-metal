@@ -13,6 +13,10 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 
 SEQUENCE_LENGTHS = [128, 1024, 2048, 4096, 8192]
 
+# It fails on sequence lengths of 32 and 64 (sequence lengths must be a multiple of 128).
+
+# SEQUENCE_LENGTHS = [32,64,256,512]
+
 
 def require_single_device(device) -> None:
     if hasattr(device, "get_num_devices") and device.get_num_devices() != 1:
