@@ -41,11 +41,6 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
-      collect-coverage:
-        required: false
-        type: boolean
-        default: false
-        description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
 
 jobs:
   load-test-matrix:
@@ -115,7 +110,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -123,15 +118,20 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -148,12 +148,6 @@ jobs:
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-
-      - name: Set up coverage profiling
-        if: ${{ inputs.collect-coverage }}
-        run: |
-          mkdir -p /work/coverage
-          echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
@@ -175,26 +169,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload profdata artifact
-        if: ${{ inputs.collect-coverage && always() }}
-        run: |
-          if ! ls /work/coverage/*.profraw 1>/dev/null 2>&1; then
-            echo "No profraw files found, skipping upload"
-            exit 0
-          fi
-          llvm-profdata-20 merge -sparse /work/coverage/*.profraw \
-            -o /work/coverage/job.profdata
-          echo "Merged $(ls /work/coverage/*.profraw | wc -l) profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
-        shell: bash
-      - name: Upload profdata
-        if: ${{ inputs.collect-coverage && always() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: profdata-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
-          if-no-files-found: ignore
-          retention-days: 1
-
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |
@@ -208,5 +182,5 @@ jobs:
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()
