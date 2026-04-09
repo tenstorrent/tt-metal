@@ -1804,7 +1804,7 @@ class TestPersistentMode:
         """Persistent Sequential LN→RMS: 10 iterations with different random data.
 
         Only the first op's activation is updated — the intermediate tensor
-        (LN output → RMS input) is managed by the fused kernel.
+        (LN output → RMS input) is auto-wired via _Placeholder identity.
         """
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
@@ -1822,7 +1822,7 @@ class TestPersistentMode:
         tt_w0 = tt(torch_w0, device)
         tt_w1 = tt(torch_w1, device)
 
-        # Persistent setup: no activation yet
+        # Persistent setup: wire topology via _Placeholder identity
         ln_desc = layer_norm.layer_norm(
             weight=tt_w0,
             epsilon=1e-5,
@@ -1830,6 +1830,7 @@ class TestPersistentMode:
             compute_kernel_config=cc,
         )
         rms_desc = rms_norm.rms_norm(
+            ln_desc.output_tensors[0],  # _Placeholder — auto-wired by Sequential
             weight=tt_w1,
             epsilon=1e-5,
             core_range_set=cr,
@@ -1842,14 +1843,8 @@ class TestPersistentMode:
             torch_in = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
             tt_in = tt(torch_in, device)
 
+            # Only update the external input — internal wire handled automatically
             fused.ln.update(tt_in)
-            # RMS input comes from LN output — handled internally by fusion.
-            # For a Sequential, the second op's input is the first op's output.
-            # On first call, update() materializes the LN descriptor. The RMS
-            # descriptor also needs materialization — its input is LN's output.
-            # We must wire rms's input to ln's output for the cold build.
-            if i == 0:
-                fused.rms.update(fused.ln.output_tensors[0])
             [out] = fused.run(results=[rms_desc])
 
             golden = torch_rms_norm(
@@ -1945,6 +1940,130 @@ class TestPersistentMode:
         _, pcc_deferred = comp_pcc(golden, deferred_out, pcc=0.98)
         assert pcc_inline > 0.98, f"Inline matmul PCC: {pcc_inline}"
         assert pcc_deferred > 0.98, f"Deferred matmul PCC: {pcc_deferred}"
+
+    @stress_test_program_cache
+    def test_persistent_sequential_3chain_update_weight(self, device):
+        """3-phase Sequential LN→RMS→LN with weight update on the middle op.
+
+        Tests updating a non-first input (weight at index 1) on an intermediate
+        op in a persistent Sequential chain.
+
+        Wiring:
+            ln1.input  = external (user updates)
+            rms.input  = ln1.output (auto-wired via _Placeholder)
+            rms.weight = external (user updates each iteration)
+            ln2.input  = rms.output (auto-wired via _Placeholder)
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        cr = cores(0, 0)
+        cc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=False,
+        )
+        hidden = 128
+        torch_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w2 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w0 = tt(torch_w0, device)
+        tt_w2 = tt(torch_w2, device)
+
+        # Persistent setup: wire internal connections via _Placeholder.
+        # Pass an initial weight to rms — it gets replaced each iteration.
+        torch_w1_init = torch.rand(1, 1, 1, hidden, dtype=torch.bfloat16) + 0.5
+        tt_w1_init = tt(torch_w1_init, device)
+
+        ln1 = layer_norm.layer_norm(
+            weight=tt_w0,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        rms_op = rms_norm.rms_norm(
+            ln1.output_tensors[0],  # auto-wired from ln1
+            weight=tt_w1_init,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms_op.output_tensors[0],  # auto-wired from rms
+            weight=tt_w2,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        fused = Sequential(ln1=ln1, rms=rms_op, ln2=ln2)
+
+        for i in range(5):
+            torch.manual_seed(i + 200)
+            torch_in = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+            # Different weight each iteration for the middle op
+            torch_w1 = torch.rand(1, 1, 1, hidden, dtype=torch.bfloat16) + 0.5
+            tt_in = tt(torch_in, device)
+            tt_w1 = tt(torch_w1, device)
+
+            fused.ln1.update(tt_in)
+            fused.rms.update(weight=tt_w1)  # update non-first input (index 1) by name
+            [out] = fused.run(results=[ln2])
+
+            g = torch_layer_norm(torch_in.float(), torch_w0.float())
+            g = torch_rms_norm(g, torch_w1.float())
+            g = torch_layer_norm(g, torch_w2.float())
+            check_pcc(g, out, pcc=0.97, label=f"3chain weight-update iter {i}")
+
+    @stress_test_program_cache
+    def test_persistent_stem_parallel_branches(self, device):
+        """Persistent Sequential(stem, Parallel(a, b)) with auto-wired branches.
+
+        Wiring:
+            stem.input = external (user updates)
+            a.input    = stem.output (auto-wired via _Placeholder)
+            b.input    = stem.output (auto-wired via _Placeholder)
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = make_multi_norm_tensors(device)
+        wt = t["tt_weights"]
+        ws = t["torch_weights"]
+
+        # Persistent: stem deferred, branches auto-wired
+        stem = rms_norm.rms_norm(
+            core_range_set=cores(0, 0, 7, 0),
+            weight=wt[0],
+            epsilon=1e-5,
+        )
+        branch_a = rms_norm.rms_norm(
+            stem.output_tensors[0],  # auto-wired from stem
+            core_range_set=cores(0, 0, 3, 0),
+            weight=wt[1],
+            epsilon=1e-5,
+        )
+        branch_b = rms_norm.rms_norm(
+            stem.output_tensors[0],  # auto-wired from stem (same _Placeholder)
+            core_range_set=cores(4, 0, 7, 0),
+            weight=wt[2],
+            epsilon=1e-5,
+        )
+        fused = Sequential(
+            stem=stem,
+            branches=Parallel(a=branch_a, b=branch_b),
+        )
+
+        for i in range(5):
+            torch.manual_seed(i + 300)
+            torch_in = torch.randn_like(t["torch_input"])
+            tt_in = ttnn.from_torch(torch_in, device=device, layout=ttnn.TILE_LAYOUT)
+
+            fused.stem.update(tt_in)
+            fused.run()
+
+            g_stem = torch_rms_norm(torch_in.float(), ws[0].float())
+            g_a = torch_rms_norm(g_stem, ws[1].float())
+            g_b = torch_rms_norm(g_stem, ws[2].float())
+            check_pcc(g_a, fused.a.output_tensors[0], pcc=0.98, label=f"branch_a iter {i}")
+            check_pcc(g_b, fused.b.output_tensors[0], pcc=0.98, label=f"branch_b iter {i}")
 
 
 # ===========================================================================
