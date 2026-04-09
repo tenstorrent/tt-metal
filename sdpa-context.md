@@ -515,6 +515,117 @@ for (q_iter = 0; q_iter < loop_q_count; ++q_iter) {
 
 ---
 
+## Ring Iter 0 Causal Waste Analysis
+
+### Why ring_iter 0 is much slower
+
+During ring_iter 0 (local KV, causal), the caller sets:
+```cpp
+causality = true;                    // ring_iter == 0
+balancing = (ring_index >= ring_id ? false : is_balanced);  // ring_index == ring_id → false
+iter_num_kv_chunks = num_kv_chunks;  // ring_index > ring_id is false → no halving
+```
+
+So **none of the balanced skip rules fire**: no Q skip (Rule 1), no KV halving (Rule 2). Every Q chunk iterates all 20 KV chunks. The only relief is the causal discard loop in compute:
+
+```cpp
+if (k_chunk >= q_high_idx && is_causal) {
+    cb_wait_front(cb_k_in, k_chunk_tiles);   // wait for reader
+    cb_wait_front(cb_v_in, v_chunk_tiles);
+    cb_pop_front(cb_k_in, k_chunk_tiles);    // discard
+    cb_pop_front(cb_v_in, v_chunk_tiles);
+    continue;
+}
+```
+
+Each discard still costs a full K DRAM read + mcast + V DRAM read + chain forward. The reader does identical work for discarded and computed KV chunks.
+
+### Loop structure (ring_iter 0, mla_100k)
+
+**Reader:**
+```
+for q_iter in 0..loop_q_count:           # 6 (padded to max_q_per_core for K mcast)
+    q_chunk = zigzag_remap(global_q_start + q_iter) % 20
+    nb, nq = extract_batch_head(...)
+
+    # Rule 1: q_chunk < 10 AND ring_index < ring_id
+    # ring_iter 0 → ring_index == ring_id → NEVER FIRES
+
+    for k_chunk in 0..20:                # all 20 KV chunks, no halving
+        K: mcast_receive or DRAM_read
+        K: mcast_forward (injector)
+        if is_padded: continue           # K sync only
+
+        if k_chunk == 0: Q: DRAM_read
+        V: chain_receive or DRAM_read
+        V: chain_forward
+```
+
+**Compute:**
+```
+for q_iter in q_start..q_end:            # 6 iterations
+    q_chunk = zigzag_remap(q_iter) % 20
+    q_high = q_chunk + 1                 # causal boundary (Sq == Sk → q_high = q_chunk + 1)
+
+    # Balanced skip: balancing == false → NEVER FIRES
+
+    for k_chunk in 0..20:
+        if k_chunk >= q_high:            # CAUSAL DISCARD
+            wait(K); pop(K)
+            wait(V); pop(V)
+            continue
+
+        QK = Q @ K^T                    # actual compute
+        apply_causal_mask(QK)
+        out += softmax(QK) @ V
+```
+
+### Per-core waste (example: core 0)
+
+Zigzag gives core 0 q_chunks `[0, 19, 1, 18, 2, 17]`:
+
+| q_iter | q_chunk | q_high | compute K chunks | discarded K chunks |
+|--------|---------|--------|------------------|--------------------|
+| 0 | 0 (light) | 1 | `[0]` | `[1..19]` → 19 |
+| 1 | 19 (heavy) | 20 | `[0..19]` | `[]` → 0 |
+| 2 | 1 (light) | 2 | `[0..1]` | `[2..19]` → 18 |
+| 3 | 18 (heavy) | 19 | `[0..18]` | `[19]` → 1 |
+| 4 | 2 (light) | 3 | `[0..2]` | `[3..19]` → 17 |
+| 5 | 17 (heavy) | 18 | `[0..17]` | `[18..19]` → 2 |
+| | | | **63 compute** | **57 discards** |
+
+120 total KV iterations, only 63 feed real compute. Each discard costs full DRAM + mcast + chain bandwidth.
+
+### K mcast synchronization amplifies the waste
+
+All cores are coupled by K mcast: injector waits for all receivers to signal "ready" before broadcasting each K chunk. The **heaviest Q chunk in any q_iter gates every core**. During q_iter 0, the injector broadcasts K chunks 0-19 at the rate the slowest consumer (a core with q_chunk 19, doing full matmul) can absorb them, while cores with light Q (q_chunk 0) idle-discard 19 of 20.
+
+### Contrast with ring_iter 1+
+
+| | ring_iter 0 | ring_iter 1+ |
+|---|---|---|
+| Q skip (Rule 1) | never fires (`balancing=false`) | light Q chunks skipped entirely |
+| KV halving (Rule 2) | never fires | halved when `ring_index > ring_id` |
+| Causal discard loop | ~47% of KV iterations wasted | no causal → no discards |
+| DRAM reads | all K+V for all Q | only heavy Q, half K+V |
+
+### Measured impact: ring_iter 0 is DRAM-bound, rest is compute-bound
+
+| ring iters   | K mcast | K unicast | no DRAM + no FWD |
+|--------------|---------|-----------|------------------|
+| 0,1,2,3      | 48.4    | 50.4      | 58.2             |
+| 1,2,3 only   | 58.0    | 58.1      | 59.7             |
+
+Ring iters 1-3 alone reach 58% math util regardless of K delivery method (mcast vs unicast), nearly matching the 59.7% ceiling with DRAM and forwarding disabled entirely. This confirms ring iters 1-3 are **compute-bound** — DRAM/chain overhead is fully hidden.
+
+Ring iter 0 drags the combined result down to 48-50% because the causal discard loop forces every core to read and forward KV data that is immediately thrown away, making it **DRAM-bound**. The 10% gap between combined (48.4) and ring 1-3 only (58.0) is entirely attributable to ring iter 0's wasted data movement.
+
+### Constraint on fixing this
+
+The K mcast and V chain require all cores to iterate the same number of KV chunks per q_iter. Truncating KV at the causal boundary per-Q-chunk would break chain synchronization — different Q chunks would need different KV counts within the same q_iter.
+
+---
+
 ## Glossary
 
 | Term | Definition |
