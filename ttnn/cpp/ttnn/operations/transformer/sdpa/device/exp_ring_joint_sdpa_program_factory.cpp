@@ -293,6 +293,27 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
+    // Exp ring joint SDPA constraints: single Q-chunk per core, one head per row.
+    TT_FATAL(
+        max_q_per_core == 1,
+        "Exp ring joint SDPA requires exactly 1 Q-chunk per core. Got max_q_per_core={} "
+        "(total_q_chunks={}, num_cores={}). Increase grid size or reduce sequence length.",
+        max_q_per_core,
+        all_heads_num_q_chunks,
+        num_cores);
+    TT_FATAL(
+        num_q_chunks <= grid_size.x,
+        "Exp ring joint SDPA requires one head per row (all Q-chunks of a head on the same row). "
+        "Got num_q_chunks={} but grid has only {} columns.",
+        num_q_chunks,
+        grid_size.x);
+    TT_FATAL(
+        B * NH <= grid_size.y,
+        "Exp ring joint SDPA requires one head per row. "
+        "Got B*NH={} but grid has only {} rows.",
+        B * NH,
+        grid_size.y);
+
     const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
@@ -1106,6 +1127,17 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                                core_chain_info.begin(), core_chain_info.end(), [](const CoreChainInfo& c) {
                                    return c.is_injector;
                                })));
+
+    // Validate that mcast is enabled on all chains
+    {
+        const uint32_t total_chains = std::count_if(
+            core_chain_info.begin(), core_chain_info.end(), [](const CoreChainInfo& c) { return c.is_injector; });
+        TT_FATAL(
+            mcast_chains == total_chains,
+            "Exp ring joint SDPA requires mcast on all chains. Got {}/{} chains using mcast.",
+            mcast_chains,
+            total_chains);
+    }
 
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
