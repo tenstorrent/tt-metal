@@ -213,10 +213,22 @@ def run_exp_ring_joint_sdpa_nightly(
         mesh_device.load_sub_device_manager(sub_device_manager)
         mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
+        TILE_SIZE = 32
+
+        def round_up_to_multiple(val, multiple):
+            return ((val + multiple - 1) // multiple) * multiple
+
+        chunk_size = TILE_SIZE * sp_size
+        padded_total_seq = round_up_to_multiple(total_seq, chunk_size)
+
         # Input tensors — bfloat16-rounded so reference matches hardware precision
         Q = fa_rand(b, nh, total_seq, d).bfloat16().float()
         K = fa_rand(b, nh, total_seq, d).bfloat16().float()
         V = fa_rand(b, nh, total_seq, d).bfloat16().float()
+
+        padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_total_seq - total_seq, d)], dim=2)
+        padded_K = torch.cat([K, torch.zeros(b, nh, padded_total_seq - total_seq, d)], dim=2)
+        padded_V = torch.cat([V, torch.zeros(b, nh, padded_total_seq - total_seq, d)], dim=2)
 
         # Sharding: SP axis → sequence dim (2), UP axis → heads dim (1)
         sdpa_input_shard_dims = [None, None]
@@ -225,7 +237,7 @@ def run_exp_ring_joint_sdpa_nightly(
             sdpa_input_shard_dims[tp_axis] = 1
 
         tt_Q = ttnn.from_torch(
-            Q,
+            padded_Q,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -234,7 +246,7 @@ def run_exp_ring_joint_sdpa_nightly(
             ),
         )
         tt_K = ttnn.from_torch(
-            K,
+            padded_K,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -243,7 +255,7 @@ def run_exp_ring_joint_sdpa_nightly(
             ),
         )
         tt_V = ttnn.from_torch(
-            V,
+            padded_V,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -294,7 +306,7 @@ def run_exp_ring_joint_sdpa_nightly(
 
         persistent_buffer_k = [
             ttnn.from_torch(
-                torch.zeros(b, nh, total_seq, d),
+                torch.zeros(b, nh, padded_total_seq, d),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -307,7 +319,7 @@ def run_exp_ring_joint_sdpa_nightly(
         ]
         persistent_buffer_v = [
             ttnn.from_torch(
-                torch.zeros(b, nh, total_seq, d),
+                torch.zeros(b, nh, padded_total_seq, d),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -506,18 +518,26 @@ def test_exp_ring_joint_attention_sdpa_sweep_perf_impl(
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
 @pytest.mark.parametrize("max_payload_size", [4096, 8192], ids=["4k", "8k"])
+@pytest.mark.parametrize("test_global_mask", [False, True], ids=["aligned", "global_mask"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
 def test_exp_ring_joint_attention_sdpa_accuracy(
-    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, max_payload_size, reset_seeds
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, test_global_mask, max_payload_size, reset_seeds
 ):
     """
     Accuracy verification: 1 iteration, compare against PyTorch SDPA reference.
+
+    When test_global_mask=True, reduces total_seq by 31 to force logical_n to fall
+    mid-tile within a K-chunk, exercising the global N lightweight mask path.
 
     Thresholds (matching exp ring joint unit tests):
     - PCC >= 0.9993
     - MSE <= 8e-5
     """
+    logger.info(f"test_global_mask: {test_global_mask}")
+    if test_global_mask:
+        total_seq = total_seq - 31
+    logger.info(f"total_seq: {total_seq}")
     run_exp_ring_joint_sdpa_nightly(
         b,
         nh,
