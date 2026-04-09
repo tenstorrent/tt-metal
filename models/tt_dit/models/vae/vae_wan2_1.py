@@ -17,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, compute_decoder_stage_dims, count_convs, get_conv3d_config
+from ...utils.conv3d import _ntuple, aligned_channels, compute_decoder_dims, count_convs, get_conv3d_config
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -253,8 +253,9 @@ class WanCausalConv3d(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        H_out: int = 0,
-        W_out: int = 0,
+        T: int = 0,
+        H: int = 0,
+        W: int = 0,
     ) -> None:
         super().__init__()
 
@@ -274,10 +275,8 @@ class WanCausalConv3d(Module):
         padding = _ntuple(padding, 3)
         external_padding = list(padding)
         internal_padding = list(padding)
-        # t padding is handled explicitly and depends on the cache.
         external_padding[0] = 2 * padding[0]
         internal_padding[0] = 0
-        # HW padding may be handled by the halo CCL if the model is parallelized
         if self.parallel_config.height_parallel.factor > 1:
             external_padding[1] = padding[1]
             internal_padding[1] = 0
@@ -287,16 +286,19 @@ class WanCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        h_factor = self.parallel_config.height_parallel.factor
+        w_factor = self.parallel_config.width_parallel.factor
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            h_factor=self.parallel_config.height_parallel.factor,
-            w_factor=self.parallel_config.width_parallel.factor,
-            H_out=H_out,
-            W_out=W_out,
+            h_factor=h_factor,
+            w_factor=w_factor,
+            T=T,
+            H=H,
+            W=W,
         )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -459,8 +461,9 @@ class WanResidualBlock(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        H_out: int = 0,
-        W_out: int = 0,
+        T: int = 0,
+        H: int = 0,
+        W: int = 0,
     ) -> None:
         super().__init__()
 
@@ -486,8 +489,9 @@ class WanResidualBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
-            H_out=H_out,
-            W_out=W_out,
+            T=T,
+            H=H,
+            W=W,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -507,8 +511,9 @@ class WanResidualBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
-            H_out=H_out,
-            W_out=W_out,
+            T=T,
+            H=H,
+            W=W,
         )
 
         if in_dim != out_dim:
@@ -625,8 +630,9 @@ class WanMidBlock(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
-        H_out: int = 0,
-        W_out: int = 0,
+        T: int = 0,
+        H: int = 0,
+        W: int = 0,
     ) -> None:
         super().__init__()
 
@@ -643,8 +649,9 @@ class WanMidBlock(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
-                H_out=H_out,
-                W_out=W_out,
+                T=T,
+                H=H,
+                W=W,
             )
         )
 
@@ -667,8 +674,9 @@ class WanMidBlock(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     dtype=dtype,
-                    H_out=H_out,
-                    W_out=W_out,
+                    T=T,
+                    H=H,
+                    W=W,
                 )
             )
 
@@ -708,8 +716,9 @@ class WanConv2d(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        H_out: int = 0,
-        W_out: int = 0,
+        T: int = 0,
+        H: int = 0,
+        W: int = 0,
     ) -> None:
         super().__init__()
 
@@ -739,18 +748,20 @@ class WanConv2d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        h_factor = self.parallel_config.height_parallel.factor
+        w_factor = self.parallel_config.width_parallel.factor
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            h_factor=self.parallel_config.height_parallel.factor,
-            w_factor=self.parallel_config.width_parallel.factor,
-            H_out=H_out,
-            W_out=W_out,
+            h_factor=h_factor,
+            w_factor=w_factor,
+            T=T,
+            H=H,
+            W=W,
         )
-        logger.info(f"Loaded conv_config: {self.conv_config}")
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -895,10 +906,12 @@ class WanResample(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        H_out: int = 0,
-        W_out: int = 0,
-        H_out_upsampled: int = 0,
-        W_out_upsampled: int = 0,
+        T_tconv: int = 0,
+        H: int = 0,
+        W: int = 0,
+        T_spatial: int = 0,
+        H_up: int = 0,
+        W_up: int = 0,
     ) -> None:
         super().__init__()
 
@@ -909,7 +922,6 @@ class WanResample(Module):
 
         assert mode in ["upsample2d", "upsample3d", "downsample2d", "downsample3d"]
 
-        # Spatial conv operates after upsample (at upsampled resolution)
         self.conv = WanConv2d(
             in_channels=dim,
             out_channels=resample_out_dim,
@@ -919,15 +931,15 @@ class WanResample(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
-            H_out=H_out_upsampled,
-            W_out=W_out_upsampled,
+            T=T_spatial,
+            H=H_up,
+            W=W_up,
         )
 
         self.is_upsample = "upsample" in mode
         self.is_3d = "3d" in mode
 
         if self.is_3d:
-            # Time conv operates before spatial upsample (at current resolution)
             self.time_conv = WanCausalConv3d(
                 in_channels=dim,
                 out_channels=dim * 2 if self.is_upsample else dim,
@@ -938,8 +950,9 @@ class WanResample(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
-                H_out=H_out,
-                W_out=W_out,
+                T=T_tconv,
+                H=H,
+                W=W,
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1073,10 +1086,13 @@ class WanUpBlock(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        H_out: int = 0,
-        W_out: int = 0,
-        H_out_upsampled: int = 0,
-        W_out_upsampled: int = 0,
+        T_res: int = 0,
+        H: int = 0,
+        W: int = 0,
+        T_tconv: int = 0,
+        T_spatial: int = 0,
+        H_up: int = 0,
+        W_up: int = 0,
     ) -> None:
         super().__init__()
 
@@ -1092,7 +1108,7 @@ class WanUpBlock(Module):
 
         resnets = ModuleList()
         current_dim = in_dim
-        for _ in range(num_res_blocks + 1):
+        for j in range(num_res_blocks + 1):
             resnets.append(
                 WanResidualBlock(
                     in_dim=current_dim,
@@ -1101,8 +1117,9 @@ class WanUpBlock(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     dtype=dtype,
-                    H_out=H_out,
-                    W_out=W_out,
+                    T=T_res,
+                    H=H,
+                    W=W,
                 )
             )
             current_dim = out_dim
@@ -1117,10 +1134,12 @@ class WanUpBlock(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
-                H_out=H_out,
-                W_out=W_out,
-                H_out_upsampled=H_out_upsampled,
-                W_out_upsampled=W_out_upsampled,
+                T_tconv=T_tconv,
+                H=H,
+                W=W,
+                T_spatial=T_spatial,
+                H_up=H_up,
+                W_up=W_up,
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1162,6 +1181,7 @@ class WanDecoder3d(Module):
         sdpa_t_fracture_w_only: bool = False,
         target_height: int = 0,
         target_width: int = 0,
+        t_chunk_size: int = 0,
     ) -> None:
         super().__init__()
 
@@ -1176,19 +1196,20 @@ class WanDecoder3d(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
 
-        # Compute per-stage spatial dims for blocking table lookup.
-        num_stages = len(dim_mult) - 1
-        if target_height > 0 and target_width > 0:
-            h_factor = parallel_config.height_parallel.factor
-            w_factor = parallel_config.width_parallel.factor
-            stage_hw = compute_decoder_stage_dims(target_height, target_width, h_factor, w_factor, num_stages)
-        else:
-            stage_hw = [(0, 0)] * len(dim_mult)
+        h_factor = parallel_config.height_parallel.factor
+        w_factor = parallel_config.width_parallel.factor
+        stage_hw, stage_t = compute_decoder_dims(
+            target_height,
+            target_width,
+            h_factor,
+            w_factor,
+            t_chunk_size,
+            temperal_upsample=temperal_upsample,
+            num_stages=len(dim_mult) - 1,
+        )
 
-        # init block — operates at latent resolution
         lat_h, lat_w = stage_hw[0]
         self.conv_in = WanCausalConv3d(
             z_dim,
@@ -1199,11 +1220,11 @@ class WanDecoder3d(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
-            H_out=lat_h,
-            W_out=lat_w,
+            T=stage_t[0].T_res,
+            H=lat_h,
+            W=lat_w,
         )
 
-        # middle blocks — operates at latent resolution
         self.mid_block = WanMidBlock(
             dim=dims[0],
             num_layers=1,
@@ -1212,32 +1233,27 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
-            H_out=lat_h,
-            W_out=lat_w,
+            T=stage_t[0].T_res,
+            H=lat_h,
+            W=lat_w,
         )
 
-        # upsample blocks
         self.up_blocks = ModuleList()
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
-            # residual (+attention) blocks
             if i > 0 and not is_residual:
-                # wan vae 2.1
                 in_dim = in_dim // 2
 
-            # determine if we need upsampling
             up_flag = i != len(dim_mult) - 1
-            # determine upsampling mode, if not upsampling, set to None
             upsample_mode = None
             if up_flag and temperal_upsample[i]:
                 upsample_mode = "upsample3d"
             elif up_flag:
                 upsample_mode = "upsample2d"
-            # Create and add the upsampling block
-            # NOTE: Different codepath if is_residual. Not implemented yet.
-            # Spatial dims: resnets + time_conv operate at stage_hw[i],
-            # spatial conv operates at stage_hw[i+1] (after upsample).
+
             stage_h, stage_w = stage_hw[i]
             next_h, next_w = stage_hw[i + 1] if i + 1 < len(stage_hw) else (0, 0)
+            T_res, T_tconv, T_spatial = stage_t[i]
+
             up_block = WanUpBlock(
                 in_dim=in_dim,
                 out_dim=out_dim,
@@ -1247,14 +1263,16 @@ class WanDecoder3d(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
-                H_out=stage_h,
-                W_out=stage_w,
-                H_out_upsampled=next_h,
-                W_out_upsampled=next_w,
+                T_res=T_res,
+                H=stage_h,
+                W=stage_w,
+                T_tconv=T_tconv,
+                T_spatial=T_spatial,
+                H_up=next_h,
+                W_up=next_w,
             )
             self.up_blocks.append(up_block)
 
-        # output blocks — operates at full resolution (last stage)
         full_h, full_w = stage_hw[-1]
         self.norm_out = RMSNorm(
             embedding_dim=out_dim,
@@ -1273,9 +1291,10 @@ class WanDecoder3d(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            H_out=full_h,
-            W_out=full_w,
             dtype=dtype,
+            T=stage_t[-1].T_res,
+            H=full_h,
+            W=full_w,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1390,6 +1409,7 @@ class WanDecoder(Module):
         sdpa_t_fracture_w_only: bool = False,
         target_height: int = 0,
         target_width: int = 0,
+        t_chunk_size: int = 0,
     ) -> None:
         super().__init__()
 
@@ -1404,7 +1424,6 @@ class WanDecoder(Module):
         self.parallel_config = parallel_config
         self.dtype = dtype
 
-        # Linear for post_quant_conv
         self.post_quant_conv = Linear(
             in_features=aligned_channels(z_dim),
             out_features=aligned_channels(z_dim),
@@ -1428,6 +1447,7 @@ class WanDecoder(Module):
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             target_height=target_height,
             target_width=target_width,
+            t_chunk_size=t_chunk_size,
         )
 
         self.cached_conv_count = count_convs(self.decoder)

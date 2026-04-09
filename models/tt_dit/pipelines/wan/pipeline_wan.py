@@ -142,6 +142,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sdpa_t_fracture_w_only: bool = False,
         target_height: int = 0,
         target_width: int = 0,
+        t_chunk_size: int = 0,
     ):
         super().__init__()
 
@@ -261,6 +262,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             target_height=target_height,
             target_width=target_width,
+            t_chunk_size=t_chunk_size,
         )
 
         if self.dynamic_load:
@@ -314,6 +316,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sdpa_t_fracture_w_only=None,
         target_height: int = 0,
         target_width: int = 0,
+        num_frames: int = 81,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -376,24 +379,32 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
         tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
+        resolved_vae_t_chunk_size = (
+            vae_t_chunk_size if vae_t_chunk_size is not _UNSET else config.get("vae_t_chunk_size", 1)
+        )
+        full_latent_T = (num_frames - 1) // 4 + 1
+        resolved_t_chunk_size = full_latent_T if resolved_vae_t_chunk_size is None else resolved_vae_t_chunk_size
+
+        h_factor = tuple(mesh_device.shape)[tp_axis]
+        w_factor = tuple(mesh_device.shape)[sp_axis]
 
         parallel_config = DiTParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
-            sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=h_factor),
+            sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=w_factor),
             cfg_parallel=None,
         )
         vae_parallel_config = VaeHWParallelConfig(
             height_parallel=ParallelFactor(
-                factor=tuple(mesh_device.shape)[tp_axis],
+                factor=h_factor,
                 mesh_axis=tp_axis,
             ),
             width_parallel=ParallelFactor(
-                factor=tuple(mesh_device.shape)[sp_axis],
+                factor=w_factor,
                 mesh_axis=sp_axis,
             ),
         )
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
+            tensor_parallel=ParallelFactor(factor=h_factor, mesh_axis=tp_axis)
         )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
@@ -408,12 +419,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
-            vae_t_chunk_size=vae_t_chunk_size if vae_t_chunk_size is not _UNSET else config.get("vae_t_chunk_size", 1),
+            vae_t_chunk_size=resolved_vae_t_chunk_size,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
             target_height=target_height,
             target_width=target_width,
+            t_chunk_size=resolved_t_chunk_size,
         )
 
     def _prepare_text_encoder(self):

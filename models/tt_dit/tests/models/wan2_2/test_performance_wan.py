@@ -211,6 +211,7 @@ def test_pipeline_performance(
         is_fsdp=is_fsdp,
         target_height=height,
         target_width=width,
+        num_frames=num_frames,
     )
 
     # Warmup run (not timed)
