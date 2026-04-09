@@ -109,7 +109,6 @@ jobs:
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
-          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -146,10 +146,15 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     }
 
     // Validate fused ternary tensors if present
+    bool has_ternary_tensors =
+        tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
     bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
+    TT_FATAL(
+        !(has_ternary_tensors && !has_fused_ternary),
+        "fused_ternary_scalar must be provided when addcmul input tensors are provided");
     if (has_fused_ternary) {
         TT_FATAL(
-            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value(),
+            has_ternary_tensors,
             "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_b must be "
             "provided");
 
@@ -188,8 +193,10 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
+            N,
+            M,
             N,
             ternary_b_logical[-2],
             ternary_b_logical[-1]);
@@ -199,6 +206,13 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     if (attributes.config.has_value()) {
         const auto& cfg = attributes.config.value();
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
+
+        const uint32_t K_tiles_per_device = a_padded[-1] / TILE_WIDTH;
+        TT_FATAL(
+            K_tiles_per_device % cfg.K_block_size == 0,
+            "K_block_size ({}) must evenly divide the number of K tiles per device ({})",
+            cfg.K_block_size,
+            K_tiles_per_device);
         TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");
         TT_FATAL(
             (cfg.M_block_size % cfg.subblock_h) == 0,
