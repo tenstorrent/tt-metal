@@ -41,7 +41,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
-        get_named_compile_time_arg_val("index_l1_addr")>;
+        get_named_compile_time_arg_val("index_l1_addr"),
+        get_named_compile_time_arg_val("sram_k_per_core"),
+        get_named_compile_time_arg_val("sram_k_offset")>;
 
     using DRAMArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
         get_named_compile_time_arg_val("cb_in0"),
@@ -91,7 +93,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
-        get_named_compile_time_arg_val("accum_experts")>;
+        get_named_compile_time_arg_val("accum_experts"),
+        get_named_compile_time_arg_val("sram_k_per_core"),
+        get_named_compile_time_arg_val("sram_k_offset"),
+        get_named_compile_time_arg_val("cb_out_sram")>;
 
     using DRAMArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
         get_named_compile_time_arg_val("cb_in0"),
@@ -113,7 +118,10 @@ void kernel_main() {
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;
     constexpr bool dram_active = get_named_compile_time_arg_val("dram_active") != 0;
-    deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<SRAMArgs, sram_active> sram_mm;
+    // When both paths are active on the same core, only the last one (DRAM) pops shared CBs.
+    constexpr bool sram_pop_in0 = sram_active && !dram_active;
+    constexpr bool sram_pop_index = sram_active && !dram_active;
+    deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<SRAMArgs, sram_active, sram_pop_in0, sram_pop_index> sram_mm;
     deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<DRAMArgs, dram_active> dram_mm;
     sram_mm();
     dram_mm();

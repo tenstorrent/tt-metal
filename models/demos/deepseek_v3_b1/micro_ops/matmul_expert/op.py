@@ -186,9 +186,9 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles: int)
 
 
 def _build_program_for_device(
-    a_device,
-    out_device,
-    index_device,
+    a_tensor,
+    out_tensor,
+    index_tensor,
     num_active_experts: int = 1,
     # SRAM ingredients (optional).
     sram_cts: list = None,
@@ -210,6 +210,9 @@ def _build_program_for_device(
     accum_experts: bool = False,
     sram_per_core_n: int = 0,
     dram_per_core_n: int = 0,
+    sram_k_per_core: int = 0,
+    sram_k_offset_core_values: list = None,
+    sram_out_tensor=None,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -221,30 +224,33 @@ def _build_program_for_device(
     When 0, derived from the output tensor shard spec.
     """
 
-    core_grid = a_device.memory_config().shard_spec.grid
-    K = a_device.memory_config().shard_spec.shape[1]
+    core_grid = a_tensor.memory_config().shard_spec.grid
+    K = a_tensor.memory_config().shard_spec.shape[1]
     Kt = K // 32
 
     # Derive fallback from output shard if not explicitly provided.
     if sram_per_core_n == 0 and dram_per_core_n == 0:
         if accum_experts:
-            out_w = out_device.memory_config().shard_spec.shape[1] // 32
+            out_w = out_tensor.memory_config().shard_spec.shape[1] // 32
         else:
-            out_w = out_device.memory_config().shard_spec.shape[1] // 32 // num_active_experts
+            out_w = out_tensor.memory_config().shard_spec.shape[1] // 32 // num_active_experts
         sram_per_core_n = out_w
         dram_per_core_n = out_w
 
-    # CB indices: always separate — SRAM B data = 1, DRAM streaming = 4, fmt metadata = 5.
+    # CB indices: always separate — SRAM B data = 1, DRAM streaming = 4, fmt metadata = 5, SRAM output = 6.
     cb_in0, cb_in1, cb_out, cb_index = 0, 1, 2, 3
     cb_in1_dram = 4
     cb_fmt = 5
+    cb_out_sram_idx = 6 if sram_out_tensor is not None else 0
 
     # CB descriptors.
-    cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_device)
+    cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
-    cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_device)
-    cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_device)
+    cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
+    cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
     cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
+    if sram_out_tensor is not None:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(cb_out_sram_idx, sram_out_tensor))
 
     if in1_backing_tensor is not None:
         cb4_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_dram, in1_backing_tensor)
@@ -273,7 +279,7 @@ def _build_program_for_device(
     cb_in1_dram_total_bytes = num_in1_buffers * max_subblock_bytes
 
     # NOC max page size.
-    device = a_device.device()
+    device = a_tensor.device()
     arch = device.arch()
     if arch == ttnn.device.Arch.BLACKHOLE:
         noc_max_page_size = 16384
@@ -304,12 +310,14 @@ def _build_program_for_device(
         ("noc_max_page_size", noc_max_page_size),
         ("pipeline_sem_id", pipeline_sem_id),
         ("cores_per_bank", cores_per_bank),
-        ("index_l1_addr", index_device.buffer_address()),
+        ("index_l1_addr", index_tensor.buffer_address()),
         ("cb_fmt", cb_fmt),
         ("fmt_dram_addr", dram_fmt_dram_info["fmt_dram_addr"] if dram_fmt_dram_info else 0),
         ("fmt_per_expert_bytes", dram_fmt_dram_info["fmt_per_expert_bytes"] if dram_fmt_dram_info else 0),
         ("fmt_per_core_bytes", dram_fmt_dram_info["fmt_per_core_bytes"] if dram_fmt_dram_info else 0),
         ("accum_experts", 1 if accum_experts else 0),
+        ("sram_k_per_core", sram_k_per_core),
+        ("cb_out_sram", cb_out_sram_idx),
     ]
 
     # Per-core descriptors.
@@ -347,6 +355,11 @@ def _build_program_for_device(
         PerCoreCompileTimeDescriptor(
             named_compile_time_arg="table_idx_l1_addr",
             core_values=table_idx_l1_addr_core_values or [],
+            other_value=0,
+        ),
+        PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="sram_k_offset",
+            core_values=sram_k_offset_core_values or [],
             other_value=0,
         ),
     ]
@@ -821,6 +834,8 @@ class ExpertKernel:
         accum_experts: bool = False,
         sram_per_core_n: int = 0,
         dram_per_core_n: int = 0,
+        sram_k_per_core: int = 0,
+        sram_output_tensor: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -849,6 +864,9 @@ class ExpertKernel:
         a_per_device = ttnn.get_device_tensors(a_tensor)
         out_per_device = ttnn.get_device_tensors(output_tensor)
         index_per_device = ttnn.get_device_tensors(index_tensor)
+        sram_out_per_device = (
+            ttnn.get_device_tensors(sram_output_tensor) if sram_output_tensor else [None] * len(a_per_device)
+        )
 
         if not sram_core_grid and not dram_core_grid:
             raise ValueError("At least one of sram_core_grid or dram_core_grid must be provided")
@@ -865,16 +883,25 @@ class ExpertKernel:
                 // (1 if accum_experts else num_active_experts)
             )
         )
-        num_tiles = Kt * sram_n
+        if sram_k_per_core == 0:
+            sram_k_per_core = Kt
+        num_tiles = sram_k_per_core * sram_n
 
         # --- SRAM setup (multi-device aware via create_expert_fmt_tensors) ---
         sram_fmt_per_device = {}
+        sram_k_offset_core_values = None
         if sram_core_grid:
             sram_cores = ttnn.corerange_to_cores(sram_core_grid)
             logger.info(
                 f"ExpertKernel: creating SRAM fmt tensors for {len(sram_cts)} experts on {len(sram_cores)} cores..."
             )
             sram_fmt_per_device = create_expert_fmt_tensors(sram_cts, mesh_device, sram_core_grid, num_tiles)
+            # Compute per-core k_offset when K-sliced (sram_k_per_core < Kt).
+            if sram_k_per_core < Kt:
+                n_parallel = len(sram_cores) * sram_k_per_core // Kt
+                sram_k_offset_core_values = [
+                    (sram_cores[i], (i // n_parallel) * sram_k_per_core) for i in range(len(sram_cores))
+                ]
 
         # --- Routing tensors per device ---
         all_routing = {}
@@ -900,6 +927,7 @@ class ExpertKernel:
                 dev_idx = row * mesh_cols + col
                 a_dev = a_per_device[dev_idx]
                 out_dev = out_per_device[dev_idx]
+                sram_out_dev = sram_out_per_device[dev_idx]
                 idx_dev = index_per_device[dev_idx]
                 _, is_dram_l1, _, table_idx_l1 = all_routing[coord]
 
@@ -963,6 +991,9 @@ class ExpertKernel:
                     accum_experts=accum_experts,
                     sram_per_core_n=sram_per_core_n,
                     dram_per_core_n=dram_per_core_n,
+                    sram_k_per_core=sram_k_per_core,
+                    sram_k_offset_core_values=sram_k_offset_core_values,  # computed above
+                    sram_out_tensor=sram_out_dev,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -978,6 +1009,7 @@ class ExpertKernel:
             a_tensor,
             *all_ct_data,
             output_tensor,
+            *([sram_output_tensor] if sram_output_tensor else []),
             index_tensor,
             *all_sram_fmt,
             *per_device_dram,

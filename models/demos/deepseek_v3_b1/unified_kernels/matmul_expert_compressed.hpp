@@ -55,7 +55,9 @@ struct MatmulExpertCompressedSRAM {
         uint32_t num_active_experts_,
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
-        uint32_t index_l1_addr_>
+        uint32_t index_l1_addr_,
+        uint32_t sram_k_per_core_ = 0,
+        uint32_t sram_k_offset_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -69,6 +71,8 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
+        static constexpr uint32_t sram_k_offset = sram_k_offset_;
     };
 
     template <
@@ -83,7 +87,10 @@ struct MatmulExpertCompressedSRAM {
         uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
-        uint32_t accum_experts_ = 0>
+        uint32_t accum_experts_ = 0,
+        uint32_t sram_k_per_core_ = 0,
+        uint32_t sram_k_offset_ = 0,
+        uint32_t cb_out_sram_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -97,11 +104,14 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr bool accum_experts = accum_experts_ != 0;
+        static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
+        static constexpr uint32_t sram_k_offset = sram_k_offset_;
+        static constexpr uint32_t cb_out_sram = cb_out_sram_;
     };
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore>
+    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true, bool pop_index = true>
     class Op {
     public:
         void operator()() {
@@ -118,12 +128,17 @@ struct MatmulExpertCompressedSRAM {
 #elif defined(COMPILE_FOR_TRISC)
             constexpr uint32_t cb_in0 = CTArgs::cb_in0;
             constexpr uint32_t cb_in1 = CTArgs::cb_in1;
-            constexpr uint32_t cb_out = CTArgs::cb_out;
+            // When cb_out_sram is set, SRAM writes to a separate output CB.
+            constexpr uint32_t cb_out = (CTArgs::cb_out_sram > 0) ? CTArgs::cb_out_sram : CTArgs::cb_out;
             constexpr uint32_t cb_index = CTArgs::cb_index;
             constexpr uint32_t num_tiles_k = CTArgs::num_tiles_k;
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr uint32_t fmt_l1_addr_base = CTArgs::fmt_l1_addr;
-            constexpr uint32_t total_tiles = num_tiles_k * out_w;
+            // k_for_mm: K tiles for the matmul loop (may be < num_tiles_k when K-sliced).
+            // Defaults to num_tiles_k when sram_k_per_core is not set by the caller.
+            constexpr uint32_t k_for_mm = CTArgs::sram_k_per_core;
+            constexpr uint32_t k_offset = CTArgs::sram_k_offset;
+            constexpr uint32_t total_tiles = k_for_mm * out_w;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
 
             cb_wait_front(cb_in1, 1);
@@ -161,6 +176,10 @@ struct MatmulExpertCompressedSRAM {
                     uint32_t in0_id = get_operand_id(cb_in0);
                     addr_in0 = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
                     in0_face_r_dim = get_operand_face_r_dim(in0_id);
+                    // Advance activation pointer by k_offset tiles for K-sliced matmul.
+                    if constexpr (k_offset > 0) {
+                        addr_in0 += k_offset * get_local_cb_interface(in0_id).fifo_page_size;
+                    }
                 }));
 
                 if constexpr (CTArgs::accum_experts) {
@@ -190,10 +209,10 @@ struct MatmulExpertCompressedSRAM {
                         }));
 
                         if (i < num_sram_experts - 1) {
-                            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w, false>(
+                            compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, false>(
                                 fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
                         } else {
-                            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w, true>(
+                            compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, true>(
                                 fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
                         }
                     }
@@ -230,7 +249,7 @@ struct MatmulExpertCompressedSRAM {
                         cb_reserve_back(cb_out, out_w);
                         tile_regs_acquire();
 
-                        compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
+                        compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w>(
                             fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 
                         tile_regs_commit();
@@ -247,8 +266,12 @@ struct MatmulExpertCompressedSRAM {
             }
 
             cb_pop_front(cb_in1, 1);
-            cb_pop_front(cb_in0, num_tiles_k);
-            cb_pop_front(cb_index, 1);
+            if constexpr (pop_in0) {
+                cb_pop_front(cb_in0, num_tiles_k);
+            }
+            if constexpr (pop_index) {
+                cb_pop_front(cb_index, 1);
+            }
 #endif
         }
     };
@@ -372,7 +395,7 @@ struct MatmulExpertCompressedDRAM {
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore>
+    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true>
     class Op {
     public:
         void operator()() {
@@ -721,7 +744,9 @@ struct MatmulExpertCompressedDRAM {
                 custom_mm_block_uninit<false>();
             }
 
-            cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+            if constexpr (pop_in0) {
+                cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+            }
             cb_pop_front(CTArgs::cb_index, 1);
 #endif
         }
