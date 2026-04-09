@@ -170,7 +170,6 @@ def run_exp_ring_joint_sdpa_nightly(
 
     is_galaxy = arch_type.startswith("galaxy")
 
-    use_ring = sp_size > 2
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
     topology = Topology.Ring
 
