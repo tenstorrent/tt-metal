@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
+from models.demos.wormhole.bge_m3.tt.device_kernels import bge_m3_layernorm_compute_kernel_config
 
 SHARD_HEIGHT = TILE_SIZE
 
@@ -163,12 +164,7 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
 
     # --- Phase 3: compute kernel config default ---
     if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        to_set["compute_kernel_config"] = bge_m3_layernorm_compute_kernel_config(mesh_device)
 
     # --- Phase 4: resolve local LazyWeights for replicated execution ---
     expected_shape = (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
