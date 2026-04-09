@@ -825,6 +825,7 @@ def _run_hybrid_expert_multi_device(
     sram_cores_list_override=None,
     sram_k_parallel=0,
     sram_n_parallel=0,
+    dram_fuse_silu=False,
 ):
     """
     Hybrid expert test for single-device (1×1 mesh) and multi-device meshes.
@@ -1200,6 +1201,7 @@ def _run_hybrid_expert_multi_device(
         dram_per_core_n=dram_per_core_N,
         sram_k_per_core=sram_k_per_core,
         sram_output_tensor=sram_out_tensor,
+        dram_fuse_silu=dram_fuse_silu,
     )
 
     # Verify per device.
@@ -1235,14 +1237,17 @@ def _run_hybrid_expert_multi_device(
         for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
             output_dev = ttnn.to_torch(out_dev)
 
-            def _verify(expert_ids, label, core_offset, num_path_cores, path_width, _dev_idx=dev_idx):
+            def _verify(expert_ids, label, core_offset, num_path_cores, path_width, apply_silu=False, _dev_idx=dev_idx):
                 for exp_offset, eidx in enumerate(expert_ids):
                     slices = []
                     for ci in range(num_path_cores):
                         start = (core_offset + ci) * out_shard_width + exp_offset * path_width
                         slices.append(output_dev[..., start : start + path_width])
                     expert_output = torch.cat(slices, dim=-1)
-                    torch_expected = (torch_a.float() @ torch_b_all[eidx][_dev_idx].float()).bfloat16()
+                    mm_result = torch_a.float() @ torch_b_all[eidx][_dev_idx].float()
+                    if apply_silu:
+                        mm_result = torch.nn.functional.silu(mm_result)
+                    torch_expected = mm_result.bfloat16()
                     passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
                     logger.info(f"Device {_dev_idx} expert {eidx} ({label}) PCC: {msg}")
                     assert passing, f"Device {_dev_idx} expert {eidx} ({label}) failed: {msg}"
@@ -1280,12 +1285,22 @@ def _run_hybrid_expert_multi_device(
                         start = ci * dram_core_width * num_active_dram + exp_offset * dram_core_width
                         slices.append(output_dev[..., start : start + dram_core_width])
                     expert_output = torch.cat(slices, dim=-1)
-                    torch_expected = (torch_a.float() @ torch_b_all[eidx][dev_idx].float()).bfloat16()
+                    mm_result = torch_a.float() @ torch_b_all[eidx][dev_idx].float()
+                    if dram_fuse_silu:
+                        mm_result = torch.nn.functional.silu(mm_result)
+                    torch_expected = mm_result.bfloat16()
                     passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
                     logger.info(f"Device {dev_idx} expert {eidx} (DRAM) PCC: {msg}")
                     assert passing, f"Device {dev_idx} expert {eidx} (DRAM) failed: {msg}"
             elif active_dram:
-                _verify(active_dram, "DRAM", num_sram_cores_active, num_dram_cores_active, dram_core_width)
+                _verify(
+                    active_dram,
+                    "DRAM",
+                    num_sram_cores_active,
+                    num_dram_cores_active,
+                    dram_core_width,
+                    apply_silu=dram_fuse_silu,
+                )
 
 
 def test_hybrid_expert_1sram_0dram(device):
@@ -1541,6 +1556,7 @@ def test_hybrid_expert_irregular_sram_gate_grid(device):
         sram_cores_list_override=a_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
+        dram_fuse_silu=True,
     )
 
 

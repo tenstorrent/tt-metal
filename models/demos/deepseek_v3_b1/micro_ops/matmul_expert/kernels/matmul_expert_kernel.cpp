@@ -113,7 +113,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt"),
-        get_named_compile_time_arg_val("accum_experts")>;
+        get_named_compile_time_arg_val("accum_experts"),
+        get_named_compile_time_arg_val("dram_fuse_silu")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

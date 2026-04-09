@@ -35,6 +35,9 @@
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
+#ifdef TRISC_PACK
+#include "llk_math_eltwise_unary_sfpu_silu.h"
+#endif
 #endif
 
 namespace deepseek_b1_ops {
@@ -374,7 +377,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
-        uint32_t accum_experts_ = 0>
+        uint32_t accum_experts_ = 0,
+        uint32_t fuse_silu_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -391,6 +395,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
         static constexpr bool accum_experts = accum_experts_ != 0;
+        static constexpr bool fuse_silu = fuse_silu_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -598,6 +603,10 @@ struct MatmulExpertCompressedDRAM {
                 compressed::custom_mm_compressed_block_init_short<true, 1, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
+                if constexpr (CTArgs::fuse_silu) {
+                    PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
+                }
+
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
                 uint32_t addr_in0 = 0;
@@ -731,7 +740,18 @@ struct MatmulExpertCompressedDRAM {
                             }
 
                             tile_regs_commit();
-                            tile_regs_wait();
+                            if constexpr (CTArgs::fuse_silu) {
+                                TTI_SEMWAIT(
+                                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                                    semaphore::t6_sem(semaphore::MATH_PACK),
+                                    p_stall::STALL_ON_ZERO);
+                                PACK(TT_SETC16(
+                                    DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                                PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(0, (int)VectorMode::R)));
+                                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            } else {
+                                tile_regs_wait();
+                            }
                             pack_tile(0, CTArgs::cb_out, 0);
                             tile_regs_release();
                             cb_push_back(CTArgs::cb_out, 1);

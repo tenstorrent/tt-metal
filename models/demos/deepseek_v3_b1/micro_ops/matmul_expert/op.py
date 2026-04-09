@@ -213,6 +213,7 @@ def _build_program_for_device(
     sram_k_per_core: int = 0,
     sram_k_offset_core_values: list = None,
     sram_out_tensor=None,
+    dram_fuse_silu: bool = False,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -318,6 +319,7 @@ def _build_program_for_device(
         ("accum_experts", 1 if accum_experts else 0),
         ("sram_k_per_core", sram_k_per_core),
         ("cb_out_sram", cb_out_sram_idx),
+        ("dram_fuse_silu", 1 if dram_fuse_silu else 0),
     ]
 
     # Per-core descriptors.
@@ -836,6 +838,7 @@ class ExpertKernel:
         dram_per_core_n: int = 0,
         sram_k_per_core: int = 0,
         sram_output_tensor: ttnn.Tensor = None,
+        dram_fuse_silu: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -994,6 +997,7 @@ class ExpertKernel:
                     sram_k_per_core=sram_k_per_core,
                     sram_k_offset_core_values=sram_k_offset_core_values,  # computed above
                     sram_out_tensor=sram_out_dev,
+                    dram_fuse_silu=dram_fuse_silu,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
