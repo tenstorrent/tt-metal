@@ -25,10 +25,10 @@ static Tensor manual_insertion(
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        logical_shape.volume() == input_tensor.logical_volume(),
+        logical_shape.volume() == input_tensor.padded_shape().volume(),
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
-        input_tensor.logical_volume());
+        input_tensor.padded_shape().volume());
     auto cpu_tensor = input_tensor.cpu();
     auto output =
         Tensor(
