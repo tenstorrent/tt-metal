@@ -147,3 +147,14 @@ def _atanh_golden_function(input_tensor, *args, **kwargs):
 
 if hasattr(ttnn, "atanh"):
     ttnn.attach_golden_function(ttnn.atanh, _atanh_golden_function)
+
+
+def _softcap_golden_function(input_tensor, *args, **kwargs):
+    import torch
+
+    cap = kwargs.get("cap", 50.0)
+    return cap * torch.tanh(input_tensor / cap)
+
+
+if hasattr(ttnn, "softcap"):
+    ttnn.attach_golden_function(ttnn.softcap, _softcap_golden_function)
