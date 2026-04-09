@@ -301,3 +301,57 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
         )
     config = config.get((M, K, N), default_fused_mmrs_config)
     return config.get_params(device_core_grid, num_links)
+
+
+def register_matmul_configs(configs: dict) -> None:
+    """Register additional matmul block-size configs from external models.
+
+    Args:
+        configs: Mapping from grid key string to dict of (M,K,N) -> config tuples.
+            Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
+            Config tuple format: ``(M_block, K_block, N_block, (sub_h, sub_w))``.
+
+    Example::
+
+        register_matmul_configs({
+            "11x10": {
+                (14400, 384, 384): (9, 12, 3, (3, 1)),
+                (14400, 5120, 3456): (15, 20, 1, (3, 1)),
+            },
+        })
+    """
+    grid_map = {
+        "8x8": grid_88_configs,
+        "8x9": grid_89_configs,
+        "11x10": grid_11_10_configs,
+        "12x10": grid_12_10_configs,
+        "12x9": grid_12_9_configs,
+        "13x9": grid_13_9_configs,
+    }
+    for grid_key, entries in configs.items():
+        target = grid_map.get(grid_key)
+        if target is None:
+            msg = f"Unknown grid key {grid_key!r}, expected one of {list(grid_map)}"
+            raise ValueError(msg)
+        target.update(entries)
+
+
+def register_fused_mmrs_configs(configs: dict) -> None:
+    """Register additional fused matmul+reduce-scatter configs.
+
+    Args:
+        configs: Mapping from ``ttnn.CoreCoord`` to dict of
+            ``(M,K,N)`` -> :class:`FusedMMRSConfig`.
+
+    Example::
+
+        register_fused_mmrs_configs({
+            ttnn.CoreCoord(12, 10): {
+                (14400, 3456, 5120): FusedMMRSConfig(
+                    ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1
+                ),
+            },
+        })
+    """
+    for core_grid, entries in configs.items():
+        fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
