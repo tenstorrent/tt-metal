@@ -8,8 +8,6 @@
 #include "api/debug/dprint.h"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
 #include "experimental/tensor.h"
 
 void kernel_main() {

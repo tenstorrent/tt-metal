@@ -11,7 +11,6 @@ Function reads from RM and writes to RM repeating the last dimension
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
 #include "experimental/tensor.h"
 
 using namespace tt::data_movement::common;
@@ -87,13 +86,9 @@ void kernel_main() {
         uint32_t data_location =
             input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed to be aligned for our read
 
-        experimental::UnicastEndpoint src;
         experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
-        uint32_t src_addr = src_noc_addr & 0xFFFFFFFFF;  // Extract address (bits 0-35)
-        uint32_t src_x = (src_noc_addr >> 36) & 0x3F;    // Extract x (bits 36-41)
-        uint32_t src_y = (src_noc_addr >> 42) & 0x3F;    // Extract y (bits 42-47)
-
-        noc.async_read(src, dst_mem, original_page_size_bytes, {.noc_x = src_x, .noc_y = src_y, .addr = src_addr}, {});
+        // Use TensorAccessor directly to avoid address truncation
+        noc.async_read(s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
         noc.async_read_barrier();
         if constexpr (num_doublings != 0) {
@@ -118,10 +113,6 @@ void kernel_main() {
         }
 
         uint64_t num_written = 0;
-        uint32_t dst_addr_base = dst_noc_addr & 0xFFFFFFFFF;  // Extract address (bits 0-35)
-        uint32_t dst_x = (dst_noc_addr >> 36) & 0x3F;         // Extract x (bits 36-41)
-        uint32_t dst_y = (dst_noc_addr >> 42) & 0x3F;         // Extract y (bits 42-47)
-
         while (num_written < dest_page_size_bytes) {
             // Either write out the whole input buffer or however much is left
             uint32_t to_write = (dest_page_size_bytes - num_written) > cur_page_size
@@ -129,13 +120,13 @@ void kernel_main() {
                                     : (dest_page_size_bytes - num_written);
 
             experimental::CoreLocalMem<uint32_t> src_mem(data_location);
-            experimental::UnicastEndpoint dst;
+            // Use TensorAccessor directly to avoid address truncation
             noc.async_write(
                 src_mem,
-                dst,
+                d,
                 to_write,
-                {},
-                {.noc_x = dst_x, .noc_y = dst_y, .addr = dst_addr_base + static_cast<uint32_t>(num_written)});
+                {.offset_bytes = 0},
+                {.page_id = i, .offset_bytes = static_cast<uint32_t>(num_written)});
             num_written += to_write;
         }
         noc.async_write_barrier();

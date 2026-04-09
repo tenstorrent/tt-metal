@@ -8,7 +8,6 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
 #include "experimental/tensor.h"
 
 using namespace tt::data_movement::common;
@@ -86,14 +85,14 @@ void kernel_main() {
                 src_noc_addr = s.get_noc_addr(read_offset, 0);
                 data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
 
-                experimental::UnicastEndpoint src;
                 experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
-                uint32_t src_addr = src_noc_addr & 0xFFFFFFFFF;  // Extract address (bits 0-35)
-                uint32_t src_x = (src_noc_addr >> 36) & 0x3F;    // Extract x (bits 36-41)
-                uint32_t src_y = (src_noc_addr >> 42) & 0x3F;    // Extract y (bits 42-47)
-
+                // Use TensorAccessor directly to avoid address truncation
                 noc.async_read(
-                    src, dst_mem, original_page_size_bytes, {.noc_x = src_x, .noc_y = src_y, .addr = src_addr}, {});
+                    s,
+                    dst_mem,
+                    original_page_size_bytes,
+                    {.page_id = read_offset, .offset_bytes = 0},
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
 
                 for (uint32_t n = 0; n < repetitions; n++) {
@@ -115,13 +114,13 @@ void kernel_main() {
                     // Now we are ensured the data is at write_buffer and it is aligned for the write
                     // Orchestrate the write
                     experimental::CoreLocalMem<uint32_t> src_mem(data_location);
-                    experimental::UnicastEndpoint dst;
-                    uint32_t dst_addr = dst_noc_addr & 0xFFFFFFFFF;  // Extract address (bits 0-35)
-                    uint32_t dst_x = (dst_noc_addr >> 36) & 0x3F;    // Extract x (bits 36-41)
-                    uint32_t dst_y = (dst_noc_addr >> 42) & 0x3F;    // Extract y (bits 42-47)
-
+                    // Use TensorAccessor directly to avoid address truncation
                     noc.async_write(
-                        src_mem, dst, original_page_size_bytes, {}, {.noc_x = dst_x, .noc_y = dst_y, .addr = dst_addr});
+                        src_mem,
+                        d,
+                        original_page_size_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = write_offset, .offset_bytes = 0});
                 }
                 noc.async_write_barrier();
             }
