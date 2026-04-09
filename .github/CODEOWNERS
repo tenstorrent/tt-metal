@@ -443,6 +443,7 @@ docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @r
 
 # misc
 dockerfile/** @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+dockerfile/teams/Dockerfile.ai-kernel @stevendae @cmaryan @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tt-train
 # primary owners
