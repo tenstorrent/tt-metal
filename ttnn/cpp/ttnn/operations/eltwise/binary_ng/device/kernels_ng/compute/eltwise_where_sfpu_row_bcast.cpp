@@ -10,6 +10,7 @@
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -21,6 +22,7 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
+    experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_in0;
@@ -61,7 +63,7 @@ void kernel_main() {
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
 
         tile_regs_acquire();
@@ -109,7 +111,7 @@ void kernel_main() {
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
         cb_pop_front(cb_left, num_tiles_per_cycle);
         cb_pop_front(cb_right, num_tiles_per_cycle);
     }

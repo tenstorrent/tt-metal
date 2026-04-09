@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "experimental/circular_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
@@ -21,6 +22,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
 #define CB_PRE_BCAST cb_pre_rhs
@@ -68,7 +70,7 @@ ALWI void process_tile(
         cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
         BINARY_OP(cb_left, cb_right, 0, 0, 0);
@@ -79,7 +81,7 @@ ALWI void process_tile(
         pack_tile(0, cb_out);
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
         cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
     }
     cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);

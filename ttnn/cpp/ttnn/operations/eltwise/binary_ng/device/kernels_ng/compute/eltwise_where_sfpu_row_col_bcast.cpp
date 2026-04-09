@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
+#include "experimental/circular_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
@@ -22,6 +23,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
@@ -65,7 +67,7 @@ ALWI void process_tile(
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
 
         tile_regs_acquire();
@@ -113,7 +115,7 @@ ALWI void process_tile(
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
         cb_pop_front(cb_llk_post, num_tiles_per_cycle);
     }
     cb_pop_front(CB_BCAST, num_tiles_per_cycle);

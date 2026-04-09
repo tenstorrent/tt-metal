@@ -27,6 +27,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
+#include "experimental/circular_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
@@ -38,6 +39,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
 #define CB_PRE_BCAST cb_pre_rhs
@@ -84,7 +86,7 @@ ALWI void process_tile(
         PREPROCESS(OTHER_OP, cb_llk_post, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
         cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
@@ -110,7 +112,7 @@ ALWI void process_tile(
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
-        cb_push_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
         cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
     }
     cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
