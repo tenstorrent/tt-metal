@@ -51,9 +51,7 @@ def test_manual_seed_base_functionality(device):
     """
     # Prepare test data
     shape = (1, 1, 32, 64)
-    # shape = (1, 1, 31, 63) #implicit padding issue.
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(input_values, 0)  # garbage padding to test that the operation removes it
     input_indices = ttnn.from_torch(
         torch.arange(0, shape[-1], dtype=torch.int32).expand(shape),
         dtype=ttnn.int32,
@@ -96,9 +94,7 @@ def test_manual_seed_mapping_functionality(device):
     """
     # Prepare test data
     shape = (1, 1, 32, 64)
-    # shape = (1, 1, 31, 63) #implicit padding issue.
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(input_values, 0)  # garbage padding to test that the operation removes it
     input_indices = ttnn.from_torch(
         torch.arange(0, shape[-1], dtype=torch.int32).expand(shape),
         dtype=ttnn.int32,
@@ -149,9 +145,7 @@ def test_manual_seed_skip_with_uint32_max(device):
     """
     # Prepare test data
     shape = (1, 1, 32, 64)
-    # shape = (1, 1, 31, 63) #implicit padding issue.
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(input_values, 0)  # garbage padding to test that the operation removes it
     input_indices = ttnn.from_torch(
         torch.arange(0, shape[-1], dtype=torch.int32).expand(shape),
         dtype=ttnn.int32,
@@ -213,9 +207,7 @@ def test_manual_seed_mapping_functionality_sub_core_grids(device):
     """
     # Prepare test data
     shape = (1, 1, 32, 64)
-    # shape = (1, 1, 31, 63) #implicit padding issue.
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    # ttnn.fill_implicit_tile_padding(input_values, 0)  # garbage padding to test that the operation removes it
     input_indices = ttnn.from_torch(
         torch.arange(0, shape[-1], dtype=torch.int32).expand(shape),
         dtype=ttnn.int32,

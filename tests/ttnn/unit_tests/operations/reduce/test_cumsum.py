@@ -17,6 +17,8 @@ def assert_cumsum_quality(expected_output, torch_output):
     else:
         assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-4)
 
+TEST_PADDING_VALUE = -42
+
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     torch.manual_seed(2023)
@@ -65,7 +67,7 @@ def test_cumsum(size, dim, dtypes, device):
     for _ in range(2):
         torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
         input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-        ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
         expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
@@ -111,8 +113,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     torch_input_tensor = torch.randint(-2, 3, size, dtype=torch_dtype)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
-
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
@@ -168,7 +169,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-    ttnn.fill_implicit_tile_padding(input_tensor, -42)  # garbage padding to test that the operation removes it
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
 
@@ -254,7 +255,8 @@ def test_cumsum_failing_cases(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
-
+    if layout == ttnn.TILE_LAYOUT:
+        ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
