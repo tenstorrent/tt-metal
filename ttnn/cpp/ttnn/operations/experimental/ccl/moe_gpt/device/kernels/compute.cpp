@@ -5,7 +5,7 @@
 #include "moe_gpt_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -139,8 +139,26 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
-    // Initialize matmul for W0
-    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+    // Initialize matmul for W0/W1 data path
+    ckernel::MatmulOpConfig w0_w1_data_cfg{};
+    w0_w1_data_cfg.in0_cb_id = cb_s2c_in;
+    w0_w1_data_cfg.in1_cb_id = cb_r2c_w0_w1;
+    w0_w1_data_cfg.out_cb_id = cb_s2c_in2;
+    w0_w1_data_cfg.ct_dim = 4;
+    w0_w1_data_cfg.rt_dim = 1;
+    w0_w1_data_cfg.kt_dim = 1;
+    ckernel::BlockMatmulOp mm_data(w0_w1_data_cfg);
+    mm_data.init();
+
+    // Bias matmul: ones_tile @ bias_row (same ct/rt/kt, different in0 CB)
+    ckernel::MatmulOpConfig w0_w1_bias_cfg{};
+    w0_w1_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
+    w0_w1_bias_cfg.in1_cb_id = cb_r2c_w0_w1;
+    w0_w1_bias_cfg.out_cb_id = cb_s2c_in2;
+    w0_w1_bias_cfg.ct_dim = 4;
+    w0_w1_bias_cfg.rt_dim = 1;
+    w0_w1_bias_cfg.kt_dim = 1;
+    ckernel::BlockMatmulOp mm_bias(w0_w1_bias_cfg);
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
@@ -207,30 +225,12 @@ void kernel_main() {
                             last_k_index = k;
                             break;
                         }
-                        matmul_block(
-                            cb_s2c_in,
-                            cb_r2c_w0_w1,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm_data.matmul(in0_index++, /*in1_index=*/k, /*dst_index=*/0);
                         k_tracker++;
                     }
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
-                        matmul_block(
-                            cb_c2c_ones_tile,
-                            cb_r2c_w0_w1,
-                            0,
-                            /*in1_index=*/last_k_index,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
                     }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -259,6 +259,24 @@ void kernel_main() {
             cb_push_back(cb_c2w_rdy, 1);
 
             // W2 matmul + untilize (dm1 does A2A ring, compute does W2) (with bias)
+            ckernel::MatmulOpConfig w2_data_cfg{};
+            w2_data_cfg.in0_cb_id = cb_s2c_in2;
+            w2_data_cfg.in1_cb_id = cb_r2c_w2;
+            w2_data_cfg.out_cb_id = cb_c2s_out;
+            w2_data_cfg.ct_dim = 4;
+            w2_data_cfg.rt_dim = 1;
+            w2_data_cfg.kt_dim = 1;
+            ckernel::BlockMatmulOp mm_w2_data(w2_data_cfg);
+
+            ckernel::MatmulOpConfig w2_bias_cfg{};
+            w2_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
+            w2_bias_cfg.in1_cb_id = cb_r2c_w2;
+            w2_bias_cfg.out_cb_id = cb_c2s_out;
+            w2_bias_cfg.ct_dim = 4;
+            w2_bias_cfg.rt_dim = 1;
+            w2_bias_cfg.kt_dim = 1;
+            ckernel::BlockMatmulOp mm_w2_bias(w2_bias_cfg);
+
             cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
             constexpr uint32_t w2_bias_blocks_per_iter_fused = w2_blocks_per_expert / num_a2a_iters;
 
@@ -295,30 +313,12 @@ void kernel_main() {
                         }
                         dm1_tiles_remaining--;
 
-                        matmul_block(
-                            cb_s2c_in2,
-                            cb_r2c_w2,
-                            in2_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm_w2_data.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
                         k_tracker++;
                     }
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
-                        matmul_block(
-                            cb_c2c_ones_tile,
-                            cb_r2c_w2,
-                            0,
-                            /*in1_index=*/last_k_index,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
+                        mm_w2_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
@@ -372,30 +372,12 @@ void kernel_main() {
                         last_k_index = k;
                         break;
                     }
-                    matmul_block(
-                        cb_s2c_in,
-                        cb_r2c_w0_w1,
-                        in0_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    mm_data.matmul(in0_index++, /*in1_index=*/k, /*dst_index=*/0);
                     k_tracker++;
                 }
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
-                    matmul_block(
-                        cb_c2c_ones_tile,
-                        cb_r2c_w0_w1,
-                        0,
-                        /*in1_index=*/last_k_index,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    mm_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
                 }
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
@@ -421,6 +403,24 @@ void kernel_main() {
         cb_push_back(cb_c2w_rdy, 1);
 
         // Compute in2 @ W2 with bias
+        ckernel::MatmulOpConfig w2_data_cfg{};
+        w2_data_cfg.in0_cb_id = cb_s2c_in2;
+        w2_data_cfg.in1_cb_id = cb_r2c_w2;
+        w2_data_cfg.out_cb_id = cb_c2s_out;
+        w2_data_cfg.ct_dim = 4;
+        w2_data_cfg.rt_dim = 1;
+        w2_data_cfg.kt_dim = 1;
+        ckernel::BlockMatmulOp mm_w2_data(w2_data_cfg);
+
+        ckernel::MatmulOpConfig w2_bias_cfg{};
+        w2_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
+        w2_bias_cfg.in1_cb_id = cb_r2c_w2;
+        w2_bias_cfg.out_cb_id = cb_c2s_out;
+        w2_bias_cfg.ct_dim = 4;
+        w2_bias_cfg.rt_dim = 1;
+        w2_bias_cfg.kt_dim = 1;
+        ckernel::BlockMatmulOp mm_w2_bias(w2_bias_cfg);
+
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
@@ -449,30 +449,12 @@ void kernel_main() {
                         in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;
-                    matmul_block(
-                        cb_s2c_in2,
-                        cb_r2c_w2,
-                        in2_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    mm_w2_data.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
                     k_tracker++;
                 }
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
-                    matmul_block(
-                        cb_c2c_ones_tile,
-                        cb_r2c_w2,
-                        0,
-                        /*in1_index=*/last_k_index,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    mm_w2_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }

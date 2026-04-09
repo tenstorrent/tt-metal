@@ -7,7 +7,7 @@
 #ifndef REDUCE_ROW_SUM_VIA_MM
 #include "api/compute/reduce.h"
 #else
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #endif
 #include "experimental/circular_buffer.h"
 
@@ -24,7 +24,12 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 #else
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+    ckernel::MatmulOpConfig mm_cfg{};
+    mm_cfg.in0_cb_id = tt::CBIndex::c_0;
+    mm_cfg.in1_cb_id = tt::CBIndex::c_2;
+    mm_cfg.out_cb_id = tt::CBIndex::c_3;
+    ckernel::TileMatmulOp mm(mm_cfg);
+    mm.init();
 #endif
 
     cb2.wait_front(1);  // scaler tile from the reader
@@ -42,7 +47,7 @@ void kernel_main() {
 #ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #else
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0);
+                mm.matmul(0, 0, 0);
 #endif
                 cb0.pop_front(onetile);
             }

@@ -7,7 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 
@@ -95,7 +95,15 @@ void kernel_main() {
 
     if (is_send_core) {
         // Initialize matmul: input @ weight -> output
-        mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
+        ckernel::MatmulOpConfig send_cfg{};
+        send_cfg.in0_cb_id = cb_s2c_in;
+        send_cfg.in1_cb_id = cb_r2c_w;
+        send_cfg.out_cb_id = cb_s2c_out;
+        send_cfg.ct_dim = 2;
+        send_cfg.rt_dim = 1;
+        send_cfg.kt_dim = 1;
+        ckernel::BlockMatmulOp mm(send_cfg);
+        mm.init();
 
         //-------------------------------------------------------------------------
         // Compute: input @ 2 weights -> 2 outputs
@@ -108,16 +116,7 @@ void kernel_main() {
 
             for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; tile_id += 2) {
                 // Perform matmul: 1 input tile @ 2 weight tiles
-                matmul_block(
-                    cb_s2c_in,
-                    cb_r2c_w,
-                    /*in0_index=*/tile_index++,
-                    /*in1_index=*/tile_id,
-                    /*idst=*/0,
-                    /*transpose=*/false,
-                    /*ct_dim=*/2,
-                    /*rt_dim=*/1,
-                    /*kt_dim=*/1);
+                mm.matmul(/*in0_index=*/tile_index++, /*in1_index=*/tile_id, /*dst_index=*/0);
             }
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }
@@ -125,16 +124,7 @@ void kernel_main() {
         // Last block
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
         for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; tile_id += 2) {
-            matmul_block(
-                cb_s2c_in,
-                cb_r2c_w,
-                /*in0_index=*/tile_index++,
-                /*in1_index=*/tile_id,
-                /*idst=*/0,
-                /*transpose=*/false,
-                /*ct_dim=*/2,
-                /*rt_dim=*/1,
-                /*kt_dim=*/1);
+            mm.matmul(/*in0_index=*/tile_index++, /*in1_index=*/tile_id, /*dst_index=*/0);
         }
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
 
@@ -161,7 +151,15 @@ void kernel_main() {
     // -------------------------------------------------------------------------
 
     // Initialize matmul: input @ weight -> output
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
+    ckernel::MatmulOpConfig compute_cfg{};
+    compute_cfg.in0_cb_id = cb_s2c_in;
+    compute_cfg.in1_cb_id = cb_r2c_w;
+    compute_cfg.out_cb_id = cb_s2c_out;
+    compute_cfg.ct_dim = 1;
+    compute_cfg.rt_dim = 1;
+    compute_cfg.kt_dim = 1;
+    ckernel::BlockMatmulOp mm(compute_cfg);
+    mm.init();
 
     //-------------------------------------------------------------------------
     // Compute: input @ weight -> output
@@ -174,16 +172,7 @@ void kernel_main() {
 
         for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
             // Perform matmul: 1 input tile @ 1 weight tile
-            matmul_block(
-                cb_s2c_in,
-                cb_r2c_w,
-                /*in0_index=*/tile_index++,
-                /*in1_index=*/tile_id,
-                /*idst=*/0,
-                /*transpose=*/false,
-                /*ct_dim=*/1,
-                /*rt_dim=*/1,
-                /*kt_dim=*/1);
+            mm.matmul(/*in0_index=*/tile_index++, /*in1_index=*/tile_id, /*dst_index=*/0);
         }
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
@@ -191,16 +180,7 @@ void kernel_main() {
     // Last block
     cb_wait_front(cb_r2c_w, w_tiles_per_block);
     for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
-        matmul_block(
-            cb_s2c_in,
-            cb_r2c_w,
-            /*in0_index=*/tile_index++,
-            /*in1_index=*/tile_id,
-            /*idst=*/0,
-            /*transpose=*/false,
-            /*ct_dim=*/1,
-            /*rt_dim=*/1,
-            /*kt_dim=*/1);
+        mm.matmul(/*in0_index=*/tile_index++, /*in1_index=*/tile_id, /*dst_index=*/0);
     }
 
     binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);

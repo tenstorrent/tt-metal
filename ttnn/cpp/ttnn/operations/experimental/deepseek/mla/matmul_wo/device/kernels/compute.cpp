@@ -6,7 +6,7 @@
 #include "tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -56,7 +56,15 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
+    ckernel::MatmulOpConfig cfg{};
+    cfg.in0_cb_id = cb_s2c_in;
+    cfg.in1_cb_id = cb_r2c_w;
+    cfg.out_cb_id = cb_c2w_out;
+    cfg.ct_dim = 7;
+    cfg.rt_dim = 1;
+    cfg.kt_dim = 1;
+    ckernel::BlockMatmulOp mm(cfg);
+    mm.init();
 
     //---------------------------------------------------------------------
     // Compute in @ W
@@ -76,16 +84,7 @@ void kernel_main() {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
             for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
-                matmul_block(
-                    cb_s2c_in,
-                    cb_r2c_w,
-                    in0_index++,
-                    /*in1_tile_index=*/k,
-                    /*idst=*/0,
-                    /*transpose=*/false,
-                    /*ct_dim=*/7,
-                    /*rt_dim=*/1,
-                    /*kt_dim=*/1);
+                mm.matmul(in0_index++, /*in1_tile_index=*/k, /*dst_tile_index=*/0);
             }
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }

@@ -1,0 +1,315 @@
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "api/compute/matmul.h"
+#include "api/compute/experimental/matmul_custom.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/pack.h"
+
+namespace ckernel {
+
+// -------------------------------------------------------------------------
+// Configuration struct
+// -------------------------------------------------------------------------
+
+struct MatmulOpConfig {
+    // --- Required CB IDs ---
+    uint32_t in0_cb_id;  // CB for the A matrix (left operand)
+    uint32_t in1_cb_id;  // CB for the B matrix (right operand)
+    uint32_t out_cb_id;  // CB for the output (or intermediate partials for spill mode)
+
+    // --- Block dimensions (required for block mode, ignored for tile mode) ---
+    uint32_t ct_dim = 1;  // Output subblock column dimension in tiles (subblock_w)
+    uint32_t rt_dim = 1;  // Output subblock row dimension in tiles (subblock_h)
+    uint32_t kt_dim = 1;  // Inner dimension block size in tiles (in0_block_w)
+
+    // --- Transpose ---
+    bool transpose = false;  // Transpose B tiles (width-height swap)
+
+    // --- Partials / Spill buffer ---
+    // CB for storing partial accumulations when inner dim is blocked (num_blocks_inner > 1).
+    // Set to 0 to disable spill/reload.
+    uint32_t partials_cb_id = 0;
+
+    // --- Architecture-specific options ---
+    // When true, use matmul_block_no_mop (direct replay buffer) instead of matmul_block
+    // with MOP. Only effective on Blackhole. Used by SDPA streaming kernels.
+    bool use_no_mop = false;
+};
+
+// -------------------------------------------------------------------------
+// MatmulOp class template
+// -------------------------------------------------------------------------
+
+template <bool IsBlockMode>
+class MatmulOp {
+public:
+    // -------------------------------------------------------------------------
+    // Construction
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE explicit MatmulOp(const MatmulOpConfig& cfg) : cfg_(cfg) {}
+
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void init() const {
+        if constexpr (IsBlockMode) {
+            mm_block_init(
+                cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.out_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
+        } else {
+            mm_init(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.out_cb_id, cfg_.transpose);
+        }
+    }
+
+    FORCE_INLINE void init_short() const {
+        if constexpr (IsBlockMode) {
+#ifdef ARCH_BLACKHOLE
+            if (cfg_.use_no_mop) {
+                mm_no_mop_init_short(
+                    cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
+                return;
+            }
+#endif
+            mm_block_init_short(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
+        } else {
+            mm_init_short(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.transpose);
+        }
+    }
+
+    FORCE_INLINE void init_short_with_dt(uint32_t old_in1_cb_id) const {
+        if constexpr (IsBlockMode) {
+            mm_block_init_short_with_dt(
+                cfg_.in0_cb_id, cfg_.in1_cb_id, old_in1_cb_id, cfg_.transpose, cfg_.ct_dim, cfg_.rt_dim, cfg_.kt_dim);
+        } else {
+            mm_init_short_with_dt(cfg_.in0_cb_id, cfg_.in1_cb_id, old_in1_cb_id, cfg_.transpose);
+        }
+    }
+
+    FORCE_INLINE void init_short_with_both_dt(uint32_t old_in0_cb_id, uint32_t old_in1_cb_id) const {
+        static_assert(IsBlockMode, "init_short_with_both_dt is only supported in block mode");
+        mm_block_init_short_with_both_dt(
+            cfg_.in0_cb_id,
+            cfg_.in1_cb_id,
+            old_in0_cb_id,
+            old_in1_cb_id,
+            cfg_.transpose,
+            cfg_.ct_dim,
+            cfg_.rt_dim,
+            cfg_.kt_dim);
+    }
+
+    // -------------------------------------------------------------------------
+    // Mode 1: Low-level -- single matmul call
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void matmul(uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t dst_tile_index) const {
+        if constexpr (IsBlockMode) {
+#ifdef ARCH_BLACKHOLE
+            if (cfg_.use_no_mop) {
+                matmul_block_no_mop(
+                    cfg_.in0_cb_id,
+                    cfg_.in1_cb_id,
+                    in0_tile_index,
+                    in1_tile_index,
+                    dst_tile_index,
+                    cfg_.transpose,
+                    cfg_.ct_dim,
+                    cfg_.rt_dim,
+                    cfg_.kt_dim);
+                return;
+            }
+#endif
+            matmul_block(
+                cfg_.in0_cb_id,
+                cfg_.in1_cb_id,
+                in0_tile_index,
+                in1_tile_index,
+                dst_tile_index,
+                cfg_.transpose,
+                cfg_.ct_dim,
+                cfg_.rt_dim,
+                cfg_.kt_dim);
+        } else {
+            matmul_tiles(cfg_.in0_cb_id, cfg_.in1_cb_id, in0_tile_index, in1_tile_index, dst_tile_index);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Mode 2: Semi-automatic -- accumulate + end subblock
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void begin_subblock() const { tile_regs_acquire(); }
+
+    FORCE_INLINE void accumulate(
+        uint32_t in0_index_start,
+        uint32_t in1_index_start,
+        uint32_t dst_index_start,
+        uint32_t inner_dim,
+        uint32_t in1_stride) const {
+        for (uint32_t k = 0; k < inner_dim; ++k) {
+            matmul(in0_index_start + k, in1_index_start + k * in1_stride, dst_index_start);
+        }
+    }
+
+    FORCE_INLINE void end_to_output(uint32_t dest_cb_id, uint32_t num_tiles) const {
+        tile_regs_commit();
+        cb_reserve_back(dest_cb_id, num_tiles);
+        tile_regs_wait();
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            pack_tile(i, dest_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(dest_cb_id, num_tiles);
+    }
+
+    FORCE_INLINE void end_to_partials(uint32_t num_tiles) const {
+        tile_regs_commit();
+        cb_reserve_back(cfg_.partials_cb_id, num_tiles);
+        tile_regs_wait();
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            pack_tile(i, cfg_.partials_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(cfg_.partials_cb_id, num_tiles);
+    }
+
+    FORCE_INLINE void reload_partials(uint32_t num_tiles) const {
+        copy_tile_to_dst_init_short_with_dt(cfg_.in1_cb_id, cfg_.partials_cb_id);
+        cb_wait_front(cfg_.partials_cb_id, num_tiles);
+        copy_block_matmul_partials(cfg_.partials_cb_id, 0, 0, num_tiles);
+        cb_pop_front(cfg_.partials_cb_id, num_tiles);
+        // Reconfigure back to matmul mode
+        if constexpr (IsBlockMode) {
+            mm_block_init_short_with_dt(
+                cfg_.in0_cb_id,
+                cfg_.in1_cb_id,
+                cfg_.partials_cb_id,
+                cfg_.transpose,
+                cfg_.ct_dim,
+                cfg_.rt_dim,
+                cfg_.kt_dim);
+        } else {
+            mm_init_short_with_dt(cfg_.in0_cb_id, cfg_.in1_cb_id, cfg_.partials_cb_id, cfg_.transpose);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Mode 3: Automatic -- full blocked matmul
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void run(
+        uint32_t batch,
+        uint32_t num_blocks_h,
+        uint32_t num_blocks_w,
+        uint32_t num_blocks_inner,
+        uint32_t in0_num_subblocks,
+        uint32_t in1_num_subblocks,
+        uint32_t in0_block_num_tiles,
+        uint32_t in1_block_num_tiles,
+        uint32_t in1_block_w) const {
+        if constexpr (!IsBlockMode) {
+            // Tile mode: simple nested loop
+            // num_blocks_h = Mt, num_blocks_w = Nt, num_blocks_inner = Kt
+            for (uint32_t b = 0; b < batch; b++) {
+                for (uint32_t m = 0; m < num_blocks_h; m++) {
+                    for (uint32_t n = 0; n < num_blocks_w; n++) {
+                        tile_regs_acquire();
+                        for (uint32_t k = 0; k < num_blocks_inner; k++) {
+                            cb_wait_front(cfg_.in0_cb_id, 1);
+                            cb_wait_front(cfg_.in1_cb_id, 1);
+                            matmul_tiles(cfg_.in0_cb_id, cfg_.in1_cb_id, 0, 0, 0);
+                            cb_pop_front(cfg_.in0_cb_id, 1);
+                            cb_pop_front(cfg_.in1_cb_id, 1);
+                        }
+                        tile_regs_commit();
+                        cb_reserve_back(cfg_.out_cb_id, 1);
+                        tile_regs_wait();
+                        pack_tile(0, cfg_.out_cb_id);
+                        tile_regs_release();
+                        cb_push_back(cfg_.out_cb_id, 1);
+                    }
+                }
+            }
+        } else {
+            // Block mode: full subblock loop with spill/reload
+            uint32_t out_subblock_num_tiles = cfg_.ct_dim * cfg_.rt_dim;
+            uint32_t in0_subblock_num_tiles = cfg_.rt_dim * cfg_.kt_dim;
+
+            for (uint32_t b = 0; b < batch; b++) {
+                for (uint32_t bh = 0; bh < num_blocks_h; bh++) {
+                    for (uint32_t bw = 0; bw < num_blocks_w; bw++) {
+                        bool enable_reload = false;
+                        for (uint32_t block_inner = 0; block_inner < num_blocks_inner; block_inner++) {
+                            bool last_out = (block_inner == num_blocks_inner - 1);
+
+                            cb_wait_front(cfg_.in0_cb_id, in0_block_num_tiles);
+                            cb_wait_front(cfg_.in1_cb_id, in1_block_num_tiles);
+
+                            uint32_t in0_index_subblock_offset = 0;
+                            for (uint32_t in0_sub = 0; in0_sub < in0_num_subblocks; in0_sub++) {
+                                uint32_t in1_index_subblock_offset = 0;
+                                for (uint32_t in1_sub = 0; in1_sub < in1_num_subblocks; in1_sub++) {
+                                    begin_subblock();
+
+                                    if (enable_reload) {
+                                        reload_partials(out_subblock_num_tiles);
+                                    }
+
+                                    accumulate(
+                                        in0_index_subblock_offset,
+                                        in1_index_subblock_offset,
+                                        0,
+                                        cfg_.kt_dim,
+                                        in1_block_w);
+
+                                    if (last_out) {
+                                        end_to_output(cfg_.out_cb_id, out_subblock_num_tiles);
+                                    } else {
+                                        end_to_partials(out_subblock_num_tiles);
+                                    }
+
+                                    in1_index_subblock_offset += cfg_.ct_dim;
+                                }
+                                in0_index_subblock_offset += in0_subblock_num_tiles;
+                            }
+
+                            if (num_blocks_inner > 1) {
+                                enable_reload = true;
+                            }
+
+                            cb_pop_front(cfg_.in0_cb_id, in0_block_num_tiles);
+                            cb_pop_front(cfg_.in1_cb_id, in1_block_num_tiles);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE const MatmulOpConfig& config() const { return cfg_; }
+    FORCE_INLINE uint32_t in0_cb() const { return cfg_.in0_cb_id; }
+    FORCE_INLINE uint32_t in1_cb() const { return cfg_.in1_cb_id; }
+    FORCE_INLINE uint32_t out_cb() const { return cfg_.out_cb_id; }
+
+private:
+    MatmulOpConfig cfg_;
+};
+
+// -------------------------------------------------------------------------
+// Type aliases
+// -------------------------------------------------------------------------
+using TileMatmulOp = MatmulOp<false>;  // matmul_tiles wrapper
+using BlockMatmulOp = MatmulOp<true>;  // matmul_block wrapper
+
+}  // namespace ckernel

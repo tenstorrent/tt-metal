@@ -6,15 +6,15 @@
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -140,18 +140,18 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
+    ckernel::MatmulOpConfig qkv_cfg{};
+    qkv_cfg.in0_cb_id = cb_qk_result;
+    qkv_cfg.in1_cb_id = cb_value;
+    qkv_cfg.out_cb_id = cb_cur_mm_out;
+    ckernel::TileMatmulOp mm(qkv_cfg);
+    mm.init_short();
     pack_reconfig_data_format(cb_cur_mm_out);
     reconfig_data_format(cb_qk_result, cb_value);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
-                cb_qk_result,
-                cb_value,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                block_idx);
+            mm.matmul(0, tile_idx + block_idx, block_idx);
         }
         tile_regs_commit();
         tile_regs_wait();

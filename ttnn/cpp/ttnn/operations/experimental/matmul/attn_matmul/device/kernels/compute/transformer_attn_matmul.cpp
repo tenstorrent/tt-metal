@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
+#include "api/compute/matmul_op.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "experimental/circular_buffer.h"
@@ -40,7 +40,13 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    ckernel::MatmulOpConfig mm_cfg{};
+    mm_cfg.in0_cb_id = cb_in0;
+    mm_cfg.in1_cb_id = cb_in1;
+    mm_cfg.out_cb_id = cb_intermed0;
+    mm_cfg.transpose = static_cast<bool>(transpose_hw);
+    ckernel::TileMatmulOp mm(mm_cfg);
+    mm.init();
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -54,7 +60,7 @@ void kernel_main() {
                         }
                         cb_in1_obj.wait_front(onetile);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
+                        mm.matmul(kt, 0, 0);
 
                         cb_in1_obj.pop_front(onetile);
                     }
@@ -75,7 +81,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                    mm.init_short_with_dt(cb_intermed0);
                 }
                 cb_in0_obj.pop_front(Kt);
 
