@@ -75,6 +75,7 @@ class QwenImageTransformer(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -85,6 +86,7 @@ class QwenImageTransformer(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
 
         self.transformer_blocks = ModuleList(
@@ -109,7 +111,7 @@ class QwenImageTransformer(Module):
             for i in range(num_layers)
         )
 
-        self.time_embed_out = Linear(inner_dim, 2 * inner_dim, mesh_device=device)
+        self.time_embed_out = Linear(inner_dim, 2 * inner_dim, mesh_device=device, math_fidelity=ttnn.MathFidelity.LoFi)
 
         self.norm_out = DistributedLayerNorm(
             inner_dim,
@@ -124,6 +126,7 @@ class QwenImageTransformer(Module):
         self.proj_out = Linear(
             inner_dim,
             patch_size * patch_size * out_channels,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             mesh_device=device,
         )
 
