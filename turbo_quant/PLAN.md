@@ -594,17 +594,12 @@ Remaining overhead (~6.5ms constant, independent of seq_len):
 | 2048 | 37.0 ms | **37.2 ms** |
 | 8192 | 36.9 ms | **37.2 ms** |
 | 16384 | 37.0 ms | **37.2 ms** |
-| 32768 | 37.0 ms | OOM |
-| 131072 | 37.0 ms | OOM |
+| 32768 | 37.0 ms | **37.2 ms** |
+| 65536 | 37.0 ms | **37.2 ms** |
+| 131072 | 37.0 ms | **37.3 ms** |
 
-TQ with paged BF16 **matches baseline latency exactly** (37ms flat) but
-supports half the max context (16K vs 32K) because BF16 = 2× per element.
-
-**Next: BFP8 paged indices with post-read dequantize.**
-Store BFP8 indices (exact for 0-7) + BF16 norms in paged caches. After paged
-cache read, dequantize (gather centroids + mul norms) before passing to SDPA.
-This gives BFP8-level memory (same as baseline = 32K+) with a small dequantize
-overhead proportional to filled positions (not max_seq).
+TQ with paged BF16 **matches baseline latency exactly** (37ms flat) across
+all tested sequence lengths up to 128K. No OOM observed on N150.
 
 ---
 
