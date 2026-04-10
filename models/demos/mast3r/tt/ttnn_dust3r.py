@@ -412,6 +412,93 @@ def decoder_block(
     return x + m
 
 
+def _preload_dec_block_weights(state: dict, idx: int, branch: int, device) -> dict:
+    prefix = "dec_blocks." if branch == 1 else "dec_blocks2."
+    def w(k):
+        return state[f"{prefix}{idx}.{k}"]
+    def vec(t):
+        return _t2d(t.reshape(1, 1, -1), device)
+    def mat(t):
+        return _t2d(t.t().contiguous(), device)
+    return {
+        "g1": vec(w("norm1.weight")), "b1v": vec(w("norm1.bias")),
+        "g2": vec(w("norm2.weight")), "b2v": vec(w("norm2.bias")),
+        "g3": vec(w("norm3.weight")), "b3v": vec(w("norm3.bias")),
+        "gy": vec(w("norm_y.weight")), "byv": vec(w("norm_y.bias")),
+        "qkv_w": mat(w("attn.qkv.weight")), "qkv_b": vec(w("attn.qkv.bias")),
+        "proj_w": mat(w("attn.proj.weight")), "proj_b": vec(w("attn.proj.bias")),
+        "cq_w": mat(w("cross_attn.projq.weight")), "cq_b": vec(w("cross_attn.projq.bias")),
+        "ck_w": mat(w("cross_attn.projk.weight")), "ck_b": vec(w("cross_attn.projk.bias")),
+        "cv_w": mat(w("cross_attn.projv.weight")), "cv_b": vec(w("cross_attn.projv.bias")),
+        "cp_w": mat(w("cross_attn.proj.weight")), "cp_b": vec(w("cross_attn.proj.bias")),
+        "fc1_w": mat(w("mlp.fc1.weight")), "fc1_b": vec(w("mlp.fc1.bias")),
+        "fc2_w": mat(w("mlp.fc2.weight")), "fc2_b": vec(w("mlp.fc2.bias")),
+    }
+
+
+def decoder_block_device_pre(
+    tt_x,  # device (B, N, 768)
+    tt_y,  # device (B, N, 768)
+    pos_x: torch.Tensor,
+    pos_y: torch.Tensor,
+    tt_w: dict,
+    device,
+    heads: int = 12,
+):
+    shape = tt_x.shape
+    B, N, D = int(shape[0]), int(shape[1]), int(shape[2])
+    dh = D // heads
+
+    # --- self-attention ---
+    tt_n1 = ttnn.layer_norm(tt_x, weight=tt_w["g1"], bias=tt_w["b1v"], epsilon=1e-6)
+    tt_qkv = ttnn.linear(tt_n1, tt_w["qkv_w"], bias=tt_w["qkv_b"])
+    qkv_host = ttnn.to_torch(tt_qkv).reshape(B, N, 3, heads, dh).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv_host[0], qkv_host[1], qkv_host[2]
+    q = _rope_apply(q, pos_x)
+    k = _rope_apply(k, pos_x)
+    tt_q = _t2d(q.reshape(B * heads, N, dh), device)
+    tt_k = _t2d(k.transpose(-2, -1).reshape(B * heads, dh, N).contiguous(), device)
+    tt_v = _t2d(v.reshape(B * heads, N, dh), device)
+    scores = ttnn.matmul(tt_q, tt_k)
+    scores = ttnn.multiply(scores, 1.0 / math.sqrt(dh))
+    attn = ttnn.softmax(scores, dim=-1)
+    ctx = ttnn.to_torch(ttnn.matmul(attn, tt_v)).reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    tt_ctx = _t2d(ctx, device)
+    tt_proj = ttnn.linear(tt_ctx, tt_w["proj_w"], bias=tt_w["proj_b"])
+    tt_x = ttnn.add(tt_x, tt_proj)
+
+    # --- cross-attention ---
+    tt_n2 = ttnn.layer_norm(tt_x, weight=tt_w["g2"], bias=tt_w["b2v"], epsilon=1e-6)
+    tt_yn = ttnn.layer_norm(tt_y, weight=tt_w["gy"], bias=tt_w["byv"], epsilon=1e-6)
+    tt_qc = ttnn.linear(tt_n2, tt_w["cq_w"], bias=tt_w["cq_b"])
+    tt_kc = ttnn.linear(tt_yn, tt_w["ck_w"], bias=tt_w["ck_b"])
+    tt_vc = ttnn.linear(tt_yn, tt_w["cv_w"], bias=tt_w["cv_b"])
+    M = int(tt_y.shape[1])
+    q = ttnn.to_torch(tt_qc).reshape(B, N, heads, dh).transpose(1, 2)
+    k = ttnn.to_torch(tt_kc).reshape(B, M, heads, dh).transpose(1, 2)
+    v_h = ttnn.to_torch(tt_vc).reshape(B, M, heads, dh).transpose(1, 2)
+    q = _rope_apply(q, pos_x)
+    k = _rope_apply(k, pos_y)
+    tt_q = _t2d(q.reshape(B * heads, N, dh), device)
+    tt_k = _t2d(k.transpose(-2, -1).reshape(B * heads, dh, M).contiguous(), device)
+    tt_v = _t2d(v_h.reshape(B * heads, M, dh), device)
+    scores = ttnn.matmul(tt_q, tt_k)
+    scores = ttnn.multiply(scores, 1.0 / math.sqrt(dh))
+    attn = ttnn.softmax(scores, dim=-1)
+    ctx = ttnn.to_torch(ttnn.matmul(attn, tt_v)).reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    tt_ctx = _t2d(ctx, device)
+    tt_cproj = ttnn.linear(tt_ctx, tt_w["cp_w"], bias=tt_w["cp_b"])
+    tt_x = ttnn.add(tt_x, tt_cproj)
+
+    # --- MLP ---
+    tt_n3 = ttnn.layer_norm(tt_x, weight=tt_w["g3"], bias=tt_w["b3v"], epsilon=1e-6)
+    tt_h = ttnn.linear(tt_n3, tt_w["fc1_w"], bias=tt_w["fc1_b"])
+    tt_h = ttnn.gelu(tt_h)
+    tt_m = ttnn.linear(tt_h, tt_w["fc2_w"], bias=tt_w["fc2_b"])
+    tt_x = ttnn.add(tt_x, tt_m)
+    return tt_x
+
+
 def _dec_block_weights(state: dict, idx: int, branch: int) -> dict:
     prefix = "dec_blocks." if branch == 1 else "dec_blocks2."
     keys = [
@@ -442,29 +529,33 @@ def full_decoder(
     feat1, feat2: (B, N, 1024) encoder outputs.  pos: (B, N, 2).
     Returns (out1, out2) each (B, N, 768).
     """
-    # Project to decoder dim via ttnn linear.
-    emb_w = state["decoder_embed.weight"]
-    emb_b = state["decoder_embed.bias"]
-    f1 = _ttnn_linear(feat1, emb_w, emb_b, device)
-    f2 = _ttnn_linear(feat2, emb_w, emb_b, device)
+    # Pre-upload decoder weights once (memoized on module).
+    cache_key = ("dec", id(state))
+    if getattr(full_decoder, "_cache_key", None) != cache_key:
+        full_decoder._w1 = [_preload_dec_block_weights(state, i, 1, device) for i in range(depth)]
+        full_decoder._w2 = [_preload_dec_block_weights(state, i, 2, device) for i in range(depth)]
+        full_decoder._emb_w = _t2d(state["decoder_embed.weight"].t().contiguous(), device)
+        full_decoder._emb_b = _t2d(state["decoder_embed.bias"].reshape(1, 1, -1), device)
+        full_decoder._dnorm_g = _t2d(state["dec_norm.weight"].reshape(1, 1, -1), device)
+        full_decoder._dnorm_b = _t2d(state["dec_norm.bias"].reshape(1, 1, -1), device)
+        full_decoder._cache_key = cache_key
+
+    tt_f1 = ttnn.linear(_t2d(feat1, device), full_decoder._emb_w, bias=full_decoder._emb_b)
+    tt_f2 = ttnn.linear(_t2d(feat2, device), full_decoder._emb_w, bias=full_decoder._emb_b)
 
     taps1: list[torch.Tensor] = []
     taps2: list[torch.Tensor] = []
     tap_layers = (0, 6, 11)
     for i in range(depth):
-        w1 = _dec_block_weights(state, i, 1)
-        w2 = _dec_block_weights(state, i, 2)
-        nf1 = decoder_block(f1, f2, pos, pos, w1, device)
-        nf2 = decoder_block(f2, f1, pos, pos, w2, device)
-        f1, f2 = nf1, nf2
+        nf1 = decoder_block_device_pre(tt_f1, tt_f2, pos, pos, full_decoder._w1[i], device)
+        nf2 = decoder_block_device_pre(tt_f2, tt_f1, pos, pos, full_decoder._w2[i], device)
+        tt_f1, tt_f2 = nf1, nf2
         if i in tap_layers:
-            taps1.append(f1)
-            taps2.append(f2)
+            taps1.append(ttnn.to_torch(tt_f1))
+            taps2.append(ttnn.to_torch(tt_f2))
 
-    g = state["dec_norm.weight"]
-    b = state["dec_norm.bias"]
-    out1 = _ttnn_layer_norm(f1, g, b, device)
-    out2 = _ttnn_layer_norm(f2, g, b, device)
+    out1 = ttnn.to_torch(ttnn.layer_norm(tt_f1, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6))
+    out2 = ttnn.to_torch(ttnn.layer_norm(tt_f2, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6))
     return out1, out2, taps1, taps2
 
 
