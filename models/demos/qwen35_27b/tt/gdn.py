@@ -793,44 +793,30 @@ class TtGatedDeltaNet(LightweightModule):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
             )
 
-        q_f32 = _to_mesh_f32(q_parts)
-        k_f32 = _to_mesh_f32(k_parts)
-        v_f32 = _to_mesh_f32(v_parts)
-        beta_f32 = _to_mesh_f32(beta_parts)
-        g_f32 = _to_mesh_f32(g_parts)
+        # Run recurrence on CPU (PyTorch sequential — guaranteed precision)
+        # The q/k/v/beta/g_parts are already computed on CPU. Use them directly.
+        q_cpu = torch.cat(q_parts, dim=0).float()
+        k_cpu = torch.cat(k_parts, dim=0).float()
+        v_cpu = torch.cat(v_parts, dim=0).float()
+        beta_cpu_all = torch.cat(beta_parts, dim=0).float()
+        g_cpu_all = torch.cat(g_parts, dim=0).float()
         del q_parts, k_parts, v_parts, beta_parts, g_parts
 
-        # ---- CPU sequential reference (bypass chunk algorithm to test data flow) ----
-        # Pull Q/K/V/beta/g to CPU, run sequential recurrence, send results back
-        q_cpu = ttnn.to_torch(q_f32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
-        k_cpu = ttnn.to_torch(k_f32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
-        v_cpu = ttnn.to_torch(v_f32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
-        beta_cpu = ttnn.to_torch(beta_f32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
-        g_cpu = ttnn.to_torch(g_f32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
-        ttnn.deallocate(q_f32)
-        ttnn.deallocate(k_f32)
-        ttnn.deallocate(v_f32)
-        ttnn.deallocate(beta_f32)
-        ttnn.deallocate(g_f32)
-
-        # q_cpu: [num_devices*Nv_TP, seq_len, K], etc.
-        BH_total = q_cpu.shape[0]  # num_devices * Nv_TP
+        # L2 normalize Q, K on CPU and apply scale
         scale_val = self.scale
-
-        # L2 normalize Q and K on CPU
         q_cpu = q_cpu / (q_cpu.norm(dim=-1, keepdim=True) + 1e-6) * scale_val
         k_cpu = k_cpu / (k_cpu.norm(dim=-1, keepdim=True) + 1e-6)
 
         # Sequential recurrence on CPU
+        BH_total = q_cpu.shape[0]
         S_cpu = torch.zeros(BH_total, Dk, Dv, dtype=torch.float32)
         outputs_cpu = []
         for t in range(seq_len):
-            q_t = q_cpu[:, t : t + 1, :]  # [BH_total, 1, K]
-            k_t = k_cpu[:, t : t + 1, :]  # [BH_total, 1, K]
-            v_t = v_cpu[:, t : t + 1, :]  # [BH_total, 1, V]
-            beta_t = beta_cpu[:, t : t + 1, :]  # [BH_total, 1, 1]
-            g_t = g_cpu[:, t]  # [BH_total]
-
+            q_t = q_cpu[:, t : t + 1, :]
+            k_t = k_cpu[:, t : t + 1, :]
+            v_t = v_cpu[:, t : t + 1, :]
+            beta_t = beta_cpu_all[:, t : t + 1, :]
+            g_t = g_cpu_all[:, t]
             decay = torch.exp(g_t).unsqueeze(-1).unsqueeze(-1)
             S_cpu = S_cpu * decay
             kv_mem = torch.bmm(k_t, S_cpu)
@@ -839,8 +825,8 @@ class TtGatedDeltaNet(LightweightModule):
             o_t = torch.bmm(q_t, S_cpu)
             outputs_cpu.append(o_t)
 
-        chunk_out_cpu_all = torch.cat(outputs_cpu, dim=1)  # [BH_total, seq_len, V]
-        del q_cpu, k_cpu, v_cpu, beta_cpu, g_cpu, outputs_cpu
+        chunk_out_cpu_all = torch.cat(outputs_cpu, dim=1)
+        del q_cpu, k_cpu, v_cpu, beta_cpu_all, g_cpu_all, outputs_cpu
 
         # Send results back to device
         chunk_out_f32 = ttnn.from_torch(

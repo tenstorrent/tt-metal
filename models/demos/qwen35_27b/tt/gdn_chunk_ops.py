@@ -260,7 +260,7 @@ def chunk_gated_delta_rule(
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
     decay = ttnn.reshape(
-        ttnn.matmul(g_c_3d, triu_ones, memory_config=None),
+        ttnn.matmul(g_c_3d, triu_ones, memory_config=None, compute_kernel_config=_hifi_cfg),
         [batch, chunk_size],
         memory_config=None,
     )
