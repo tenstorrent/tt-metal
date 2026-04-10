@@ -169,3 +169,38 @@ def parametrize_batch_seq(configs=None, ids=None):
     configs = configs or [(1, 1), (1, 128)]
     ids = ids or ["decode" if seq_len == 1 else f"prefill_{seq_len}" for _, seq_len in configs]
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
+
+
+def parametrize_mesh_with_fabric(mesh_shapes=None):
+    """Universal mesh parametrization with FABRIC_1D.
+
+    Generates mesh_device + device_params parametrization for multi-device tests.
+    Only includes mesh shapes that fit on the current system.
+
+    Usage:
+        @parametrize_mesh_with_fabric()           # default: (1,2) and (1,8)
+        @parametrize_mesh_with_fabric([(1,2)])     # explicit shapes
+
+        pytest -k "1x2"   # run only N300 configs
+        pytest -k "1x8"   # run only T3K configs
+    """
+    num_devices = ttnn.get_num_devices()
+
+    if mesh_shapes is None:
+        # Default: offer every standard config that fits the current system
+        all_shapes = [(1, 2), (1, 8)]
+        mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
+
+    if not mesh_shapes:
+        # No multi-device configs fit — skip
+        mesh_shapes = [pytest.param((1, 1), marks=pytest.mark.skip(reason="Not enough devices"))]
+
+    mesh_params = [pytest.param(s, id=f"{s[0]}x{s[1]}") for s in mesh_shapes]
+    fabric_params = [pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D})]
+
+    def decorator(func):
+        func = pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)(func)
+        func = pytest.mark.parametrize("device_params", fabric_params, indirect=True)(func)
+        return func
+
+    return decorator

@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -514,39 +515,14 @@ def test_demo_single_layer(device, model_path):
     assert len(results[0]) > len(prompts[0])
 
 
-def test_demo_full_model(device, model_path):
-    """Full model demo on single device (no PLI on-device — uses CPU fallback)."""
-    prompts = ["Explain quantum computing in simple terms"]
-    results = run_generation(
-        mesh_device=device,
-        model_path=model_path,
-        prompts=prompts,
-        max_new_tokens=64,
-    )
-    assert len(results) == 1
-    logger.info(f"Full model output: {results[0]}")
+@parametrize_mesh_with_fabric()
+def test_demo(mesh_device, model_path):
+    """Full model demo — runs on any multi-device mesh.
 
-
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_demo_full_model_n300(mesh_device, model_path):
-    """Full model demo on N300 (TP=2) — PLI on-device, decode tracing."""
-    prompts = ["Explain quantum computing in simple terms"]
-    results = run_generation(
-        mesh_device=mesh_device,
-        model_path=model_path,
-        prompts=prompts,
-        max_new_tokens=64,
-        max_seq_len=512,
-    )
-    assert len(results) == 1
-    logger.info(f"Full model output: {results[0]}")
-
-
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-def test_demo_full_model_t3k(mesh_device, model_path):
-    """Full model demo on T3K (TP=8) — MoE expert weights TP-sharded across 8 devices."""
+    Filter by mesh shape:
+        pytest -k "1x2"   # N300 / TP=2
+        pytest -k "1x8"   # T3K  / TP=8
+    """
     prompts = ["Explain quantum computing in simple terms"]
     results = run_generation(
         mesh_device=mesh_device,
