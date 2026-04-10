@@ -18,6 +18,23 @@ using namespace tt::tt_metal;
 namespace {
 auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_dataformat_converter(dtype)); }
 
+TensorLayout compute_input_tensor_layout(
+    DataType src_dtype,
+    const ttnn::Shape& tensor_shape,
+    const MemoryConfig& memory_config,
+    const Layout& layout,
+    const std::optional<Tile>& optional_tile) {
+    TensorLayout src_tensor_layout =
+        get_shard_align_error(memory_config, layout, optional_tile.value_or(Tile{})).has_value()
+            ? TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{})
+            : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
+    if (get_shape_fits_shard_grid_error(src_tensor_layout, tensor_shape).has_value()) {
+        src_tensor_layout = src_tensor_layout.with_memory_config(MemoryConfig{});
+    }
+    return src_tensor_layout;
+}
+
 // Check if typecast and layout operations can be safely executed on the device
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
@@ -214,24 +231,21 @@ Tensor create_tt_tensor_from_host_data(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
 
         if (mesh_mapper != nullptr) {
-            const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
+            const auto device_shard_shape =
+                estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
 
-            auto shard_align_error = check_shard_tile_alignment(memory_config, layout, optional_tile.value_or(Tile{}));
-            TensorLayout src_tensor_layout =
-                shard_align_error.has_value()
-                    ? TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{})
-                    : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+            auto src_tensor_layout =
+                compute_input_tensor_layout(src_dtype, device_shard_shape, memory_config, layout, optional_tile);
 
-            const bool src_layout_fits_shard_spec =
-                !check_memory_config_with_tensor_shape(src_tensor_layout, shard_shape).has_value();
-            if (!src_layout_fits_shard_spec) {
-                src_tensor_layout = src_tensor_layout.with_memory_config(MemoryConfig{});
-            }
-
-            const bool construct_on_mesh_device =
-                construct_on_device &&
-                has_sufficient_device_memory(
-                    device, src_tensor_layout, shard_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
+            const bool construct_on_mesh_device = construct_on_device && has_sufficient_device_memory(
+                                                                             device,
+                                                                             src_tensor_layout,
+                                                                             device_shard_shape,
+                                                                             src_dtype,
+                                                                             dst_dtype,
+                                                                             layout,
+                                                                             memory_config,
+                                                                             optional_tile);
 
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
@@ -244,14 +258,8 @@ Tensor create_tt_tensor_from_host_data(
                 static_cast<T>(pad_value));
         }
 
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
-
-        const bool src_layout_fits_shard_spec =
-            !check_memory_config_with_tensor_shape(src_tensor_layout, tensor_shape).has_value();
-
-        if (!src_layout_fits_shard_spec) {
-            src_tensor_layout = src_tensor_layout.with_memory_config(MemoryConfig{});
-        }
+        auto src_tensor_layout =
+            compute_input_tensor_layout(src_dtype, tensor_shape, memory_config, layout, optional_tile);
 
         // TODO: #https://github.com/tenstorrent/tt-metal/issues/40850
         // For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures

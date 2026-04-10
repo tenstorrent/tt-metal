@@ -10,7 +10,7 @@
 namespace tt::tt_metal {
 
 class TensorSpec;
-std::optional<std::string> check_memory_config_with_tensor_shape(
+std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape);
 
 class TensorSpec final {
