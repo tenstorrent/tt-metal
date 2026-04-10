@@ -71,11 +71,11 @@ def test_vae(
     else:
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
         B, C, H, W = list(ttnn_input_tensor.shape)
 
         ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
