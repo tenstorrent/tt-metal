@@ -81,6 +81,16 @@ void kernel_main() {
             get_arg_val<uint32_t>(16),                 // r3_slot_offset
             get_arg_val<uint32_t>(17),                 // r3_slot_bit
             get_semaphore(get_arg_val<uint32_t>(18)),  // r3_sem_addr (from sem ID)
+            0,                                         // socket_config_addr (unused in standalone)
+            0,                                         // agg_sem_l1_addr
+            0,                                         // agg_core_noc_x
+            0,                                         // agg_core_noc_y
+            0,                                         // persistent_enable
+            0,                                         // persistent_dst_noc_x
+            0,                                         // persistent_dst_noc_y
+            0,                                         // persistent_dst_mesh_id
+            0,                                         // persistent_dst_chip_id
+            0,                                         // persistent_dst_sem_addr
         };
     }
 

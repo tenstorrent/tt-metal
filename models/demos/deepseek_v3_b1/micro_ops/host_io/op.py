@@ -132,6 +132,12 @@ class HostInterface:
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
 
             if self.h2d_socket and self.h2d_downstream_core is not None:
+                print(
+                    f"[HIO] creating downstream LOCAL pair: "
+                    f"({self.h2d_mesh_core_coord.device_coord},{self.h2d_mesh_core_coord.core_coord})"
+                    f" -> ({self.h2d_downstream_core.device_coord},{self.h2d_downstream_core.core_coord})",
+                    flush=True,
+                )
                 downstream_socket_connection = ttnn.SocketConnection(
                     self.h2d_mesh_core_coord,
                     self.h2d_downstream_core,
@@ -152,8 +158,15 @@ class HostInterface:
                     self.downstream_socket_pair = ttnn.create_socket_pair(
                         self.mesh_device, self.mesh_device, downstream_socket_config
                     )
+                    print(f"[HIO] downstream LOCAL pair done", flush=True)
 
             if self.d2h_socket and self.d2h_upstream_core is not None:
+                print(
+                    f"[HIO] creating upstream LOCAL pair: "
+                    f"({self.d2h_upstream_core.device_coord},{self.d2h_upstream_core.core_coord})"
+                    f" -> ({self.d2h_mesh_core_coord.device_coord},{self.d2h_mesh_core_coord.core_coord})",
+                    flush=True,
+                )
                 upstream_socket_connection = ttnn.SocketConnection(
                     self.d2h_upstream_core,
                     self.d2h_mesh_core_coord,
@@ -165,6 +178,7 @@ class HostInterface:
                 self.upstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, upstream_socket_config
                 )
+                print(f"[HIO] upstream LOCAL pair done", flush=True)
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:

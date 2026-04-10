@@ -193,13 +193,14 @@ class ReduceToAllB1:
 
                 # Gather per-link info
                 links = []
-                for link_idx, x in enumerate(sorted_columns):
+                num_cols = len(sorted_columns)
+                for col_idx, x in enumerate(sorted_columns):
                     cores_for_link = column_to_cores[x]
                     fc = column_to_fabric_core[x]
                     fc_phys = device.worker_core_from_logical_core(fc)
                     links.append(
                         {
-                            "link_idx": link_idx,
+                            "link_idx": 0 if col_idx < num_cols // 2 else 1,
                             "cores": cores_for_link,
                             "fc": fc,
                             "fc_phys": fc_phys,
