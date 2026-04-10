@@ -60,7 +60,7 @@ void kernel_main() {
                         }
                         cb_in1_obj.wait_front(onetile);
 
-                        mm.matmul(kt, 0, 0);
+                        mm.accumulate(kt, 0, 0, 1, 0, 0, 0);
 
                         cb_in1_obj.pop_front(onetile);
                     }

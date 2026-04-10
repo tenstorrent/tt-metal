@@ -93,40 +93,27 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // Mode 1: Low-level -- single matmul call
-    // -------------------------------------------------------------------------
-
-    FORCE_INLINE void matmul(uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t dst_tile_index) const {
-        if constexpr (IsBlockMode) {
-            matmul_block(
-                cfg_.in0_cb_id,
-                cfg_.in1_cb_id,
-                in0_tile_index,
-                in1_tile_index,
-                dst_tile_index,
-                cfg_.transpose,
-                cfg_.ct_dim,
-                cfg_.rt_dim,
-                cfg_.kt_dim);
-        } else {
-            matmul_tiles(cfg_.in0_cb_id, cfg_.in1_cb_id, in0_tile_index, in1_tile_index, dst_tile_index);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Mode 2: Semi-automatic -- accumulate + end subblock
+    // Accumulate: the core matmul loop primitive
     // -------------------------------------------------------------------------
 
     FORCE_INLINE void begin_subblock() const { tile_regs_acquire(); }
 
+    // Generalized accumulate: iterates count times, advancing each index by its stride.
+    //   for k in [0, count): matmul(in0_start + k*in0_stride, in1_start + k*in1_stride, dst_start + k*dst_stride)
+    // Common patterns:
+    //   Inner-dim reduction:  accumulate(a, b, dst, K, 1, stride, 0)  -- dst fixed, in0 walks, in1 strides
+    //   Broadcast-in0:        accumulate(0, b, 0, N, 0, 1, 1)        -- in0 fixed, in1/dst walk
+    //   Broadcast-in1:        accumulate(0, 0, 0, N, 1, 0, 1)        -- in1 fixed, in0/dst walk
     FORCE_INLINE void accumulate(
-        uint32_t in0_index_start,
-        uint32_t in1_index_start,
-        uint32_t dst_index_start,
-        uint32_t inner_dim,
-        uint32_t in1_stride) const {
-        for (uint32_t k = 0; k < inner_dim; ++k) {
-            matmul(in0_index_start + k, in1_index_start + k * in1_stride, dst_index_start);
+        uint32_t in0_start,
+        uint32_t in1_start,
+        uint32_t dst_start,
+        uint32_t count,
+        uint32_t in0_stride,
+        uint32_t in1_stride,
+        uint32_t dst_stride) const {
+        for (uint32_t k = 0; k < count; ++k) {
+            matmul_single(in0_start + k * in0_stride, in1_start + k * in1_stride, dst_start + k * dst_stride);
         }
     }
 
@@ -135,7 +122,6 @@ public:
     //   in0 = in0_offset + h * inner_dim + k
     //   in1 = in1_offset + k * in1_stride + w
     //   dst = sequential (0, 1, 2, ...)
-    // Replaces the triple-nested h x w x inner_dim loop found in tile-mode matmul kernels.
     FORCE_INLINE void accumulate_tile_subblock(
         uint32_t in0_subblock_offset,
         uint32_t in1_subblock_offset,
@@ -147,7 +133,13 @@ public:
         for (uint32_t h = 0; h < out_h; ++h) {
             for (uint32_t w = 0; w < out_w; ++w) {
                 accumulate(
-                    in0_subblock_offset + h * inner_dim, in1_subblock_offset + w, dst_index, inner_dim, in1_stride);
+                    in0_subblock_offset + h * inner_dim,
+                    in1_subblock_offset + w,
+                    dst_index,
+                    inner_dim,
+                    1,
+                    in1_stride,
+                    0);
                 ++dst_index;
             }
         }
@@ -209,7 +201,7 @@ public:
         if (reload) {
             reload_partials(num_tiles);
         }
-        accumulate(in0_index_start, in1_index_start, 0, inner_dim, in1_stride);
+        accumulate(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
         end_to_output(dest_cb_id, num_tiles);
     }
 
@@ -221,7 +213,7 @@ public:
         for (uint32_t k = 0; k < inner_dim; ++k) {
             cb_wait_front(cfg_.in0_cb_id, 1);
             cb_wait_front(cfg_.in1_cb_id, 1);
-            matmul(0, 0, 0);
+            matmul_single(0, 0, 0);
             cb_pop_front(cfg_.in0_cb_id, 1);
             cb_pop_front(cfg_.in1_cb_id, 1);
         }
@@ -260,7 +252,7 @@ public:
                 if (enable_reload) {
                     reload_partials(out_subblock_num_tiles);
                 }
-                accumulate(in0_index_subblock_offset, in1_index_subblock_offset, 0, cfg_.kt_dim, in1_block_w);
+                accumulate(in0_index_subblock_offset, in1_index_subblock_offset, 0, cfg_.kt_dim, 1, in1_block_w, 0);
                 if (last_out) {
                     end_to_output(cfg_.out_cb_id, out_subblock_num_tiles);
                 } else {
@@ -332,6 +324,23 @@ public:
     FORCE_INLINE uint32_t out_cb() const { return cfg_.out_cb_id; }
 
 private:
+    FORCE_INLINE void matmul_single(uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t dst_tile_index) const {
+        if constexpr (IsBlockMode) {
+            matmul_block(
+                cfg_.in0_cb_id,
+                cfg_.in1_cb_id,
+                in0_tile_index,
+                in1_tile_index,
+                dst_tile_index,
+                cfg_.transpose,
+                cfg_.ct_dim,
+                cfg_.rt_dim,
+                cfg_.kt_dim);
+        } else {
+            matmul_tiles(cfg_.in0_cb_id, cfg_.in1_cb_id, in0_tile_index, in1_tile_index, dst_tile_index);
+        }
+    }
+
     MatmulOpConfig cfg_;
 };
 
