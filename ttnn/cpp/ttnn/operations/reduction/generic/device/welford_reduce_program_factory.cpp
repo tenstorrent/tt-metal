@@ -175,12 +175,12 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_config);
     }
 
-    // cb_scaled (c_20): all three reduce modes (W, H, HW) need this when
-    // do_scale is true.  mul_tiles_bcast_scalar_init_short reconfigures the
-    // FPU math pipeline, so the scaled result must be packed to this
-    // intermediate CB and read back before the SFPU Welford operation.
+    // cb_scaled (c_20): only W-reduce needs this when do_scale is true.
+    // transpose_wh_tile is an unpack operation that reads from a CB, not
+    // DST, so the FPU mul result must be packed to this intermediate CB.
+    // H and HW reduce don't need the transpose.
     bool do_scale = (operation_attributes.scalar != 1.0f);
-    if (do_scale) {
+    if (do_scale && reduce_w) {
         CBIndex scaled_cb_index = CBIndex::c_20;
         tt_metal::CircularBufferConfig scaled_cb_config =
             tt_metal::CircularBufferConfig(input_single_tile_size, {{scaled_cb_index, input_cb_data_format}})

@@ -42,17 +42,10 @@ void kernel_main() {
     constexpr auto cb_scalar = tt::CBIndex::c_2;
     // Circular buffer where the final variance/std output tile is written.
     constexpr auto cb_out = tt::CBIndex::c_16;
-    // 1-tile intermediate: holds the scaled input tile between the
-    // mul_tiles_bcast_scalar (scale step) and copy_tile (Welford step).
-    // Needed because mul_tiles_bcast_scalar_init_short reconfigures the
-    // FPU math pipeline in a way that's incompatible with the subsequent
-    // SFPU Welford operation within the same DST acquire/commit window.
-    constexpr auto cb_scaled = tt::CBIndex::c_20;
 
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_scalar_obj(cb_scalar);
     experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_scaled_obj(cb_scaled);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -87,93 +80,61 @@ void kernel_main() {
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        if constexpr (do_scale) {
-            // The do_scale path needs per-tile DST windows because the FPU
-            // multiply (mul_tiles_bcast_scalar) is incompatible with SFPU
-            // Welford within the same DST window.  The scaled result is
-            // packed to cb_scaled and read back to reset the pipeline.
-            // The Welford SFPU state (running mean in LREG4, M2 in LREG5)
-            // persists across tile_regs_release/acquire cycles because LREGs
-            // are SFPU registers, separate from the DST register file
-            // controlled by the semaphore.
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
-                // Scale step in its own DST cycle.
-                cb_in_obj.wait_front(onetile);
+        // When scaling, DST must be acquired/released per tile because
+        // the FPU mul and SFPU welford use incompatible pipeline configs
+        // and the reverse transition (SFPU->FPU) requires a full DST
+        // cycle to reset pipeline state.
+        // Without scaling, copy_tile and welford (both SFPU-compatible)
+        // can share a single DST window for the entire loop.
+        if constexpr (!do_scale) {
+            copy_tile_to_dst_init_short(cb_in);
+            tile_regs_acquire();
+        }
+
+        // Welford SFPU state (running mean in LREG4, M2 in LREG5)
+        // persists across DST cycles because LREGs are separate from
+        // the DST register file managed by tile_regs_acquire/release.
+        for (uint32_t ht = 0; ht < Ht; ++ht) {
+            cb_in_obj.wait_front(onetile);
+
+            if constexpr (do_scale) {
                 tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-                tile_regs_commit();
-                cb_in_obj.pop_front(1);
+                // Reconfigure pipeline from FPU back to SFPU for welford.
+                // While it's confusing to use copy_tile_to_dst_init_short here,
+                // since no copy is done afterwards, there is no welford_init_short
+                // function or some other generic way to reset the pipeline state.
+                copy_tile_to_dst_init_short(cb_in);
+            } else {
+                copy_tile(cb_in, 0, input_dst);
+            }
+            cb_in_obj.pop_front(onetile);
 
-                // mul_tiles_bcast_scalar_init_short reconfigured the FPU math
-                // pipeline in a way that's incompatible with the subsequent
-                // SFPU Welford operation. While confusingly unusual, packing
-                // the result to an intermediate CB and reading it back before the
-                // SFPU Welford operation fixes the configuration.
-                cb_scaled_obj.reserve_back(onetile);
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_scaled);
-                pack_tile(input_dst, cb_scaled);
-                tile_regs_release();
-                cb_scaled_obj.push_back(onetile);
-
-                // --- Read scaled tile back into DST for Welford ---
-                cb_scaled_obj.wait_front(onetile);
-                tile_regs_acquire();
-                copy_tile_to_dst_init_short(cb_scaled);
-                copy_tile(cb_scaled, 0, input_dst);
-                cb_scaled_obj.pop_front(onetile);
-
-                if (ht < (Ht - 1)) {
-                    welford_update<0>(input_dst, start_N, {});
+            if (ht < (Ht - 1)) {
+                welford_update<0>(input_dst, start_N, {});
+                if constexpr (do_scale) {
+                    // No-op PACK cycle: resets pipeline state for the
+                    // next iteration's FPU mul_tiles_bcast_scalar.
                     tile_regs_commit();
                     tile_regs_wait();
                     tile_regs_release();
-                } else {
-                    // Last tile: process only valid rows, then finalize
-                    welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                    // scale_idx controls the divisor for M2 -> variance conversion:
-                    //   correction=false: scale_idx = H-1, reciprocal = 1/H  (population variance)
-                    //   correction=true:  scale_idx = H-2, reciprocal = 1/(H-1) (sample variance)
-                    constexpr uint32_t scale_idx = correction ? (H - 2) : (H - 1);
-                    welford_finalize_to_row<0>(mean_dst, scale_idx, {});
-                    if constexpr (is_std) {
-                        sqrt_tile_init();
-                        sqrt_tile(var_dst);
-                    }
-                    tile_regs_commit();
                 }
-                start_N += tile_height;
-            }
-        } else {
-            // No scaling: copy_tile (unpack) and welford_update (SFPU) are
-            // compatible operations, so the entire Ht loop runs in a single
-            // DST window — no per-tile acquire/release overhead.
-            copy_tile_to_dst_init_short(cb_in);
-            tile_regs_acquire();
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
-                cb_in_obj.wait_front(onetile);
-                copy_tile(cb_in, 0, input_dst);
-                cb_in_obj.pop_front(onetile);
-
-                if (ht < (Ht - 1)) {
-                    welford_update<0>(input_dst, start_N, {});
-                } else {
-                    // Last tile: process only valid rows, then finalize
-                    welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                    // scale_idx controls the divisor for M2 -> variance conversion:
-                    //   correction=false: scale_idx = H-1, reciprocal = 1/H  (population variance)
-                    //   correction=true:  scale_idx = H-2, reciprocal = 1/(H-1) (sample variance)
-                    constexpr uint32_t scale_idx = correction ? (H - 2) : (H - 1);
-                    welford_finalize_to_row<0>(mean_dst, scale_idx, {});
-                    if constexpr (is_std) {
-                        sqrt_tile_init();
-                        sqrt_tile(var_dst);
-                    }
+            } else {
+                // Last tile: process only valid rows, then finalize
+                welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                // scale_idx controls the divisor for M2 -> variance conversion:
+                //   correction=false: scale_idx = H-1, reciprocal = 1/H  (population variance)
+                //   correction=true:  scale_idx = H-2, reciprocal = 1/(H-1) (sample variance)
+                constexpr uint32_t scale_idx = correction ? (H - 2) : (H - 1);
+                welford_finalize_to_row<0>(mean_dst, scale_idx, {});
+                if constexpr (is_std) {
+                    sqrt_tile_init();
+                    sqrt_tile(var_dst);
                 }
-                start_N += tile_height;
+                tile_regs_commit();
             }
-            tile_regs_commit();
+            start_N += tile_height;
         }
 
         // Pack variance/std directly to output -- no transpose needed for H reduction
