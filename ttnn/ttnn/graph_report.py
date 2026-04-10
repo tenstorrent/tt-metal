@@ -765,7 +765,6 @@ def import_graph(
                 # If parent had no direct outputs, lift from nested children.
                 if output_idx == 0 and nested_output_tensor_ids:
                     intermediate_tids = all_nested_output_ids & all_nested_input_ids
-                    scope_start = start_node["counter"] if start_node else 0
                     has_scope_marker = not start_node.get("input_tensors") if start_node else False
                     seen = set()
                     kept_nodes = []

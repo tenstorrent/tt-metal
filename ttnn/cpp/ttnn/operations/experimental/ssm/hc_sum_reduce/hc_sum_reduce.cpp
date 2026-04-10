@@ -16,7 +16,7 @@ ttnn::Tensor hc_sum_reduce(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::hc_sum_reduce");
+    TT_OP_SCOPE("ttnn::experimental::hc_sum_reduce");
     return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 

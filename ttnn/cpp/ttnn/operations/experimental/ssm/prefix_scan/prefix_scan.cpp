@@ -18,7 +18,7 @@ ttnn::Tensor prefix_scan(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::prefix_scan");
+    TT_OP_SCOPE("ttnn::experimental::prefix_scan");
     return ttnn::prim::prefix_scan(a, bx, h_prev, memory_config, dtype, math_fidelity);
 }
 

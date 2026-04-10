@@ -27,7 +27,6 @@ Tensor pool_2d(
 
 Tensor global_avg_pool2d(
     const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
-    TT_OP_SCOPE("ttnn::global_avg_pool2d");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
 
     // Handle different tensor ranks: 2D [H,W], 3D [H,W,C], or 4D [N,H,W,C]
