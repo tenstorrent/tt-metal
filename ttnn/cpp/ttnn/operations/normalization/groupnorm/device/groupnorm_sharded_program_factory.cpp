@@ -29,9 +29,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     const auto& negative_mask = tensor_args.negative_mask;
     auto& output = tensor_return_value;
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
-    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
+    auto a_tile = a.layout() == Layout::TILE ? a.tensor_spec().tile() : Tile();
+    const uint32_t tile_height = a_tile.get_height();
+    const uint32_t tile_width = a_tile.get_width();
+    const uint32_t tile_hw = a_tile.get_tile_hw();
 
     const auto& program_config = std::get<GroupNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
     float eps = operation_attributes.eps;
