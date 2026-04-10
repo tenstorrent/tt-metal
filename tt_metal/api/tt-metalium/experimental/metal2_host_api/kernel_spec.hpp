@@ -31,7 +31,7 @@ struct ComputeConfiguration {
 
     // "Unpack to dest" mode must be specified on a per-DFB basis
     // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
+    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
 

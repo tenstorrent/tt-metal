@@ -352,7 +352,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);

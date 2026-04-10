@@ -1160,37 +1160,37 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     // c_0 is always predicate
     unpack_to_dest_mode[tt::CBIndex::c_0] = (predicate_tensor.dtype() == DataType::FLOAT32)
-                                                ? UnpackToDestMode::UnpackToDestFp32
-                                                : UnpackToDestMode::Default;
+                                                ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                : tt::tt_metal::UnpackToDestMode::Default;
 
     // c_1 assignment depends on variant
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     } else if (variant == TernaryVariant::TST) {
         // TST: c_1 = value_false tensor
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     } else {
         // TTT: c_1 = value_true tensor, c_2 = value_false tensor (including column broadcast)
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
         unpack_to_dest_mode[tt::CBIndex::c_2] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     }
 
     // Output CB depends on variant: c_2 for binary_ng compatibility (TTT col bcast), c_3 for other cases
     unpack_to_dest_mode[output_cb_index] =
-        (output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        (output.dtype() == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
 
     constexpr uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
 

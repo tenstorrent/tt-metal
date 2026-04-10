@@ -16,7 +16,7 @@ ttnn::Tensor prefix_scan(
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
+    const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     return ttnn::prim::prefix_scan(a, bx, h_prev, memory_config, dtype, math_fidelity);
 }
 

@@ -163,9 +163,9 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
     std::vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_llk_acc) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     tt::tt_metal::CreateKernel(

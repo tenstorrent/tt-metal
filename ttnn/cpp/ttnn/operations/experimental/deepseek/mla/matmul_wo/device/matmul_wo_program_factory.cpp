@@ -181,7 +181,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute.cpp",
         dram_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
@@ -209,7 +209,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
         collector_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,

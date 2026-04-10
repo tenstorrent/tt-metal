@@ -53,7 +53,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
-    export_enum<MathFidelity>(m_tensor);
+    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity");
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     // export_enum<ShardMode>(m_tensor);

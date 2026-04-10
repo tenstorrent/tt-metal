@@ -88,9 +88,9 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         src0_cb_index,
         output_cb_index};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     constexpr bool math_approx_mode = false;
@@ -112,7 +112,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         path,
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -132,7 +132,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             path,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -286,9 +286,9 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         src0_cb_index,
         output_cb_index};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
@@ -310,7 +310,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,

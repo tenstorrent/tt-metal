@@ -5,7 +5,7 @@
 #include "data_format.hpp"
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
-#include <base_types.hpp>     // for UnpackToDestMode
+#include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
 #include <iostream>       // for basic_ostream
@@ -145,7 +145,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
@@ -173,7 +173,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
             unpack_dst_format.push_back(src_format);
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
-                unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
+                unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
                 unpack_dst_format.push_back(
                     get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {

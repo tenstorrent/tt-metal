@@ -33,7 +33,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
-NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
+NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
 NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
@@ -583,12 +583,12 @@ void py_module_types(nb::module_& mod) {
         .def_rw("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
         .def_rw("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
 
-    export_enum<UnpackToDestMode>(mod, "UnpackToDestMode");
+    export_enum<tt::tt_metal::UnpackToDestMode>(mod, "UnpackToDestMode");
 
     // nanobind bind_vector docs:
     // the item accessor __getitem__ copies the accessed element by default.
     // Consequently, writes to elements may not propagate in the expected way.
-    nb::bind_vector<std::vector<UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
+    nb::bind_vector<std::vector<tt::tt_metal::UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
 
     nb::class_<tt::tt_metal::ComputeConfigDescriptor>(mod, "ComputeConfigDescriptor", R"pbdoc(
         Configuration descriptor for compute operations.
@@ -602,7 +602,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::ComputeConfigDescriptor* t,
-               MathFidelity math_fidelity,
+               tt::tt_metal::MathFidelity math_fidelity,
                bool math_approx_mode,
                bool fp32_dest_acc_en,
                bool dst_full_sync_en,
@@ -614,7 +614,7 @@ void py_module_types(nb::module_& mod) {
                     .bfp8_pack_precise = bfp8_pack_precise,
                     .math_approx_mode = math_approx_mode};
             },
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::HiFi4),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::HiFi4),
             nb::arg("math_approx_mode") = false,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("dst_full_sync_en") = false,

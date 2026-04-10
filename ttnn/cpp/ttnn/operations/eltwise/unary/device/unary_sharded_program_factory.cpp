@@ -130,10 +130,10 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core  // per_core_block_size
     };
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tmp_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[in_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tmp_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = std::all_of(
@@ -170,8 +170,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     const auto default_fp32_acc_math_fidelity =
-        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3
-                                                                                   : MathFidelity::HiFi4;
+        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                                   : tt::tt_metal::MathFidelity::HiFi4;
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,

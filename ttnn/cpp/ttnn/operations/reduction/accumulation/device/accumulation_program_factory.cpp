@@ -99,7 +99,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 silently when fp32_dest_acc_en is True on Wormhole B0.
     const auto math_fidelity =
-        (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+        (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     const ComputeConfig compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
