@@ -82,4 +82,36 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
     return desc.buffer->address() + desc.address_offset;
 }
 
+/**
+ * @brief Automatically computes a ShardSpec for a sharded MemoryConfig that is missing one.
+ *
+ * This is a general-purpose utility that can be used by any operation (unary, binary, matmul, etc.)
+ * to enable simplified sharding APIs where users pass e.g. L1_HEIGHT_SHARDED_MEMORY_CONFIG without
+ * manually computing shard shapes, core grids, and orientations.
+ *
+ * The function:
+ * 1. Returns the config unchanged if it's not sharded or already has a shard_spec.
+ * 2. Reuses the input tensor's shard_spec if available.
+ * 3. Otherwise, computes an optimal shard_spec based on the tensor shape, device grid, and
+ *    memory layout (WIDTH_SHARDED, HEIGHT_SHARDED, or BLOCK_SHARDED).
+ *
+ * Shard shape computation respects:
+ * - Tile alignment (32x32)
+ * - L1 alignment constraints
+ * - Device core grid limits
+ * - Even shard preference (avoids uneven shards for better perf)
+ *
+ * @param input_tensor  The input tensor (must be on device)
+ * @param output_memory_config  The desired output memory config (possibly missing shard_spec)
+ * @return MemoryConfig with shard_spec filled in if needed, otherwise the original config
+ *
+ * Example usage:
+ * @code
+ *   // In any op's compute_output_specs():
+ *   auto resolved_config = compute_auto_shard_spec(input_tensor, args.output_memory_config);
+ *   // resolved_config now has a valid shard_spec for sharded configs
+ * @endcode
+ */
+MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config);
+
 }  // namespace tt::tt_metal

@@ -2173,3 +2173,47 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        torch.Size([1, 1, 1024, 1024]),
+        torch.Size([3, 2048, 2048]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+@pytest.mark.parametrize(
+    "op_fn, golden_fn_name",
+    [
+        (ttnn.relu, "relu"),
+        (ttnn.sigmoid, "sigmoid"),
+        (ttnn.hardmish, "hardmish"),
+    ],
+)
+def test_unary_auto_shard(input_shape, memory_config, op_fn, golden_fn_name, device):
+    """Test automatic shard spec generation for unary ops with sharded output memory configs."""
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Pass sharded memory_config without explicit shard_spec — should be auto-generated
+    ttnn_result = op_fn(ttnn_input, memory_config=memory_config)
+
+    # Verify output is actually sharded
+    result_memory_config = ttnn_result.memory_config()
+    assert result_memory_config.is_sharded(), f"Expected sharded output, got {result_memory_config}"
+
+    golden_function = ttnn.get_golden_function(op_fn)
+    golden = (
+        golden_function(torch_input, device=device)
+        if "device" in golden_function.__code__.co_varnames
+        else golden_function(torch_input)
+    )
+
+    result = ttnn.to_torch(ttnn_result)
+    assert_with_pcc(golden, result, pcc=0.999)
