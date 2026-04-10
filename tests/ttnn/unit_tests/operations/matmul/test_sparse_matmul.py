@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -105,8 +105,14 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.01 * k,
+            rtol=10.188 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -197,8 +203,26 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+        if in1_dtype == ttnn.bfloat8_b:
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor[b_i, s_i, 0, e_i, :, :],
+                atol=0.008 * k,
+                rtol=6.313 * k,
+                frobenius_threshold=0.001 * k,
+                pcc_threshold=0.999,
+                check_ulp=False,
+            )
+        else:
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor[b_i, s_i, 0, e_i, :, :],
+                atol=0.01 * k,
+                rtol=10.188 * k,
+                frobenius_threshold=0.001 * k,
+                pcc_threshold=0.999,
+                check_ulp=False,
+            )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -291,8 +315,15 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, :, :],
+            atol=0.01 * k,
+            rtol=21.25 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -381,8 +412,15 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, :, :],
+            atol=0.01 * k,
+            rtol=25.875 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -477,8 +515,15 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, e_i, :, :],
+            atol=0.012 * k,
+            rtol=22.25 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -569,5 +614,12 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, e_i, :, :],
+            atol=0.01 * k,
+            rtol=22.25 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )

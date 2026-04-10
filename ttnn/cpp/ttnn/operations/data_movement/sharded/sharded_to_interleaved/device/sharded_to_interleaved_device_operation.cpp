@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,8 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
         TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
+        TT_FATAL(
+            output_tensor.layout() == input_tensor.layout(), "Output tensor layout must match input tensor layout");
     }
 
     TT_FATAL(
@@ -55,14 +57,10 @@ TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            args.output_dtype,
-            PageConfig(input_tensor.layout()),
-            args.output_mem_config,
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+        tt::tt_metal::TensorLayout(
+            args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
 Tensor ShardedToInterleavedDeviceOperation::create_output_tensors(

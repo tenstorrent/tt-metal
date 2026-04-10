@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat

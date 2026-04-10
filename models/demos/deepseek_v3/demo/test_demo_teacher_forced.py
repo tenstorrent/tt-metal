@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -8,10 +8,10 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN as GENERATOR_MAX_SEQ_LEN
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -65,6 +65,11 @@ def _assert_no_garbage_tokens(
             f"Garbage tokens detected: {expected_count}/{expected_checked} checked tokens are outside the "
             f"teacher top-{token_acc.topk_candidate_k}.\n" + "\n".join(expected_debug)
         )
+
+
+def _tile_align(length: int) -> int:
+    tile_size = int(ttnn.TILE_SIZE)
+    return ((int(length) + tile_size - 1) // tile_size) * tile_size
 
 
 @pytest.mark.timeout(3600)
@@ -123,15 +128,6 @@ def test_demo_teacher_forcing_accuracy(
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
-    max_supported_new_tokens = GENERATOR_MAX_SEQ_LEN - tf_prompt_len
-    if max_supported_new_tokens <= 0:
-        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {GENERATOR_MAX_SEQ_LEN}.")
-    if max_new_tokens > max_supported_new_tokens:
-        pytest.skip(
-            f"Requested max_new_tokens={max_new_tokens} exceeds generator capacity: "
-            f"max_seq_len={GENERATOR_MAX_SEQ_LEN}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
-        )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
@@ -181,10 +177,20 @@ def test_demo_teacher_forcing_accuracy(
             f"in {reference_file}. Regenerate the reference with a larger max_new_tokens."
         )
 
+    # Teacher forcing only needs enough configured context for the prompt plus the
+    # number of forced decode steps under test.
+    configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
+    if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
+        pytest.skip(
+            f"Requested teacher-forced context requires max_seq_len={configured_max_seq_len}, "
+            f"which exceeds the default demo max_seq_len {DEFAULT_MAX_SEQ_LEN}."
+        )
+
     logger.info("=== Phase 2: Run teacher forcing ===")
     logger.info("Loaded reference from: {}", reference_file)
     logger.info("Total reference tokens: {}, prompt length: {}", total_ref_tokens, tf_prompt_len)
     logger.info("Using max_new_tokens={}", max_new_tokens)
+    logger.info("Using configured max_seq_len={}", configured_max_seq_len)
 
     # Run the demo with teacher forcing
     results = run_demo(
@@ -193,6 +199,7 @@ def test_demo_teacher_forcing_accuracy(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_seq_len=configured_max_seq_len,
         repeat_batches=1,
         token_accuracy=True,
         reference_file=reference_file,

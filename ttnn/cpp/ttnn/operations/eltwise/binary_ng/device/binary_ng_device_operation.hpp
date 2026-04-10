@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
@@ -45,6 +44,9 @@ struct BinaryNgDeviceOperation {
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
+        Layout input_layout_a = Layout::TILE;
+        Layout input_layout_b = Layout::TILE;
+        Layout output_layout = Layout::TILE;
 
         ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;

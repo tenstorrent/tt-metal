@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,12 +79,15 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
 }
 
 void TestContext::wait_for_programs_with_progress() {
+    last_test_hung_ = false;
+
     if (!progress_config_.enabled) {
         fixture_->wait_for_programs();
         return;
     }
 
     // Create progress monitor (but don't start polling thread yet)
+    progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
     // Poll and check for completion in this thread
@@ -93,11 +96,16 @@ void TestContext::wait_for_programs_with_progress() {
         "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
         progress_config_.poll_interval_seconds,
         progress_config_.hung_threshold_seconds);
+    bool completed = monitor.poll_until_complete();
 
-    monitor.poll_until_complete();
+    if (!completed) {
+        last_test_hung_ = true;
+        has_test_failures_ = true;
+        log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
+        return;
+    }
+
     log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
-
-    // Now call wait_for_programs() to ensure proper cleanup
     fixture_->wait_for_programs();
 }
 
@@ -189,6 +197,7 @@ void TestContext::generate_latency_summary() {
 std::vector<std::string> TestContext::get_all_failed_tests() const {
     std::vector<std::string> combined;
     combined.insert(combined.end(), all_failed_bandwidth_tests_.begin(), all_failed_bandwidth_tests_.end());
+    combined.insert(combined.end(), hung_tests_.begin(), hung_tests_.end());
     if (latency_test_manager_) {
         const auto failed = latency_test_manager_->get_failed_tests();
         combined.insert(combined.end(), failed.begin(), failed.end());
@@ -324,6 +333,22 @@ void TestContext::compile_programs() {
         } else {
             // Normal mode: create standard kernels for all devices
             test_device.create_kernels();
+        }
+    }
+
+    if (show_workers_) {
+        for (const auto& [coord, test_device] : test_devices_) {
+            const auto& node_id = test_device.get_node_id();
+            const auto& senders = test_device.get_senders();
+            const auto& receivers = test_device.get_receivers();
+            if (!senders.empty() || !receivers.empty()) {
+                log_info(
+                    tt::LogTest,
+                    "Device {}: {} sender(s), {} receiver(s)",
+                    tt::tt_fabric::fabric_tests::format_device_label(node_id),
+                    senders.size(),
+                    receivers.size());
+            }
         }
     }
 

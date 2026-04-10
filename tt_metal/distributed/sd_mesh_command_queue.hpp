@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,6 +74,10 @@ private:
     std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 
     bool asynchronous_slow_dispatch_enabled_ = false;
+
+    std::shared_ptr<ThreadPool> launch_thread_pool_;
+    void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
+    std::mutex logical_cores_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed

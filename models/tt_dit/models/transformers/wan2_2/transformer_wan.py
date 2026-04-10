@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -39,6 +39,7 @@ class WanTransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -73,6 +74,7 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=True,
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
         )
 
         self.attn2 = WanAttention(
@@ -84,6 +86,7 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=False,
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
         )
 
         self.norm2 = (
@@ -210,16 +213,28 @@ class WanTransformerBlock(Module):
             spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
         )
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+        if self.ccl_manager.topology == ttnn.Topology.Linear:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                    spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+
+            spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+            # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+            # NOTE: higher precision compute config in addcmul may be needed for correctness
+            spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
+        else:
+            # Fused FFN + addcmul at the RS final write step (Phase 2).
+            # Both 'a' (spatial_1BND) and 'b' (c_gate_msa_1B1D) are already at [D/tp] size
+            # on each TP device — no AllGather or scatter matmul needed.
+            spatial_1BND = self.ffn.forward_fused_addcmul(
+                spatial_normed_1BND,
+                spatial_1BND,
+                c_gate_msa_1B1D,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
             )
-
-        spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
-
-        # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
-        # NOTE: higher precision compute config in addcmul may be needed for correctness
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
 
         return spatial_1BND
 
