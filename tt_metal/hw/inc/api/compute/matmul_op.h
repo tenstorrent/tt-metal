@@ -130,6 +130,29 @@ public:
         }
     }
 
+    // Tile-mode subblock accumulate: computes an (out_h x out_w) subblock of output tiles.
+    // Each output tile at (h, w) accumulates over inner_dim with the standard tile indexing:
+    //   in0 = in0_offset + h * inner_dim + k
+    //   in1 = in1_offset + k * in1_stride + w
+    //   dst = sequential (0, 1, 2, ...)
+    // Replaces the triple-nested h x w x inner_dim loop found in tile-mode matmul kernels.
+    FORCE_INLINE void accumulate_tile_subblock(
+        uint32_t in0_subblock_offset,
+        uint32_t in1_subblock_offset,
+        uint32_t out_h,
+        uint32_t out_w,
+        uint32_t inner_dim,
+        uint32_t in1_stride) const {
+        uint32_t dst_index = 0;
+        for (uint32_t h = 0; h < out_h; ++h) {
+            for (uint32_t w = 0; w < out_w; ++w) {
+                accumulate(
+                    in0_subblock_offset + h * inner_dim, in1_subblock_offset + w, dst_index, inner_dim, in1_stride);
+                ++dst_index;
+            }
+        }
+    }
+
     FORCE_INLINE void end_to_output(uint32_t dest_cb_id, uint32_t num_tiles) const {
         tile_regs_commit();
         cb_reserve_back(dest_cb_id, num_tiles);

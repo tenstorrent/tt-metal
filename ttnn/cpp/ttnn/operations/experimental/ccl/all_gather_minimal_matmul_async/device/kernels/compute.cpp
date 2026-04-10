@@ -283,15 +283,7 @@ void matmul_blocks(
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
 
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                mm.matmul(in0_index, in1_index, dst_index);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
+            mm.accumulate(in0_index_offset, in1_index_offset, 0, K_block_tiles, full_N_block_tiles);
             tile_regs_commit();
 
             tile_regs_wait();

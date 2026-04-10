@@ -104,9 +104,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         reconfig_data_format(cb_query, cb_key);
         mm_qk.init_short();
         tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < qWt; tile_idx++) {
-            mm_qk.matmul(tile_idx, tile_idx, matmul_accum_reg);
-        }
+        mm_qk.accumulate(0, 0, matmul_accum_reg, qWt, 1);
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
         // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)

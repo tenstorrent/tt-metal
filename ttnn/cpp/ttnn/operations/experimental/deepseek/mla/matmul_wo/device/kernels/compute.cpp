@@ -83,9 +83,8 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
-                mm.matmul(in0_index++, /*in1_tile_index=*/k, /*dst_tile_index=*/0);
-            }
+            mm.accumulate(in0_index, 0, 0, w_tiles_per_block / 7, 7);
+            in0_index += w_tiles_per_block / 7;
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }
 
