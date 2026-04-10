@@ -275,7 +275,8 @@ void kernel_main() {
 
 #ifndef SKIP_COMPUTE
                     // Compute output sub-block
-                    mm.accumulate(in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, in1_per_core_w);
+                    mm.accumulate(
+                        in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, 1, in1_per_core_w, 0);
 #endif  // SKIP_COMPUTE
 
                     if (last_out) {
