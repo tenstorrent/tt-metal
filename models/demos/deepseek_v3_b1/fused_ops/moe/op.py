@@ -123,6 +123,9 @@ class MoeContext:
     # CB reconfig
     reconfig_moe_cbs: bool = False
 
+    # BSPM compressed weights path
+    bspm_compressed: bool = False
+
 
 @dataclass
 class _MoeRoutedExpertContext:
@@ -268,6 +271,11 @@ class _MoeRoutedExpertContext:
     bcast_pkt_cb_descriptor: Any = None
     bcast_params: dict = None
 
+    # BSPM compressed weights
+    bspm_compressed: bool = False
+    noc_x_core_values: list = None
+    noc_y_core_values: list = None
+
 
 @dataclass
 class _MoeSharedExpertContext:
@@ -382,6 +390,13 @@ class MoeRoutedExpertOp:
         weights_tile_size = weights_tile.get_tile_size(weights_tensor.dtype)
         in1_page_size, in1_num_pages = MoeOp.get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
         in1_block_size_bytes = subblock_k * weights_tile_size
+
+        # Compressed path: CB must fit bfp8 tiles (1088 B each) — the largest possible format.
+        from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+
+        _BFP8_TILE_BYTES = 1088
+        if isinstance(weights_tensor, CompressedTensor):
+            in1_block_size_bytes = subblock_k * _BFP8_TILE_BYTES
 
         num_buffers = 3
         in1_total_size = num_buffers * in1_block_size_bytes
@@ -1098,6 +1113,16 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # DRAM Streaming Matmul: gate_proj
         # ==================================================================
+        # For the BSPM compressed path, use more subblocks to keep each subblock's
+        # max_bytes (subblock_k × 1088) × 3 within the SDPA KV buffer.
+        # gate/up: num_subblocks_k=8 → subblock_k=28 → 3×28×1088=91392 B (fits)
+        # down:    num_subblocks_k=4 → subblock_k=16 → 3×16×1088=52224 B (fits)
+        from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor as _CT
+
+        _is_compressed = gate_proj_weights_tensor is not None and isinstance(gate_proj_weights_tensor, _CT)
+        _gate_up_num_subblocks = 8 if _is_compressed else 4
+        _down_num_subblocks = 4 if _is_compressed else 2
+
         gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=gate_proj_weights_tensor,
@@ -1105,7 +1130,7 @@ class MoeRoutedExpertOp:
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
             fp32_dest_acc_en=False,
-            num_subblocks_k=4,
+            num_subblocks_k=_gate_up_num_subblocks,
         )
 
         # ==================================================================
@@ -1118,7 +1143,7 @@ class MoeRoutedExpertOp:
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
             fp32_dest_acc_en=False,
-            num_subblocks_k=4,
+            num_subblocks_k=_gate_up_num_subblocks,
         )
 
         # ==================================================================
@@ -1186,7 +1211,7 @@ class MoeRoutedExpertOp:
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
             fp32_dest_acc_en=False,
-            num_subblocks_k=2,
+            num_subblocks_k=_down_num_subblocks,
         )
 
         # ==================================================================
@@ -1370,6 +1395,8 @@ class MoeRoutedExpertOp:
         bank_id_core_values = []
         vc_core_values = []
         sender_idx_core_values = []
+        noc_x_core_values = []
+        noc_y_core_values = []
         bank_ids = []
         for idx, core in enumerate(gate_proj_optimal_workers):
             bank_id = core_to_bank_id[(core.x, core.y)]
@@ -1383,6 +1410,16 @@ class MoeRoutedExpertOp:
             bank_id_core_values.append((core, bank_id))
             vc_core_values.append((core, vc))
             sender_idx_core_values.append((core, idx))
+            phys = device.worker_core_from_logical_core(core)
+            noc_x_core_values.append((core, phys.x))
+            noc_y_core_values.append((core, phys.y))
+
+        # Detect BSPM compressed weights path
+        from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+
+        bspm_compressed = gate_proj_weights_tensor is not None and isinstance(
+            gate_proj_weights_tensor, CompressedTensor
+        )
 
         # ==================================================================
         # Return context
@@ -1458,6 +1495,10 @@ class MoeRoutedExpertOp:
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
             sender_idx_core_values=sender_idx_core_values,
+            # BSPM compressed
+            bspm_compressed=bspm_compressed,
+            noc_x_core_values=noc_x_core_values,
+            noc_y_core_values=noc_y_core_values,
             # --- Routing-only fields ---
             enable_routing=enable_routing,
             # Routing CB indices
@@ -1504,6 +1545,121 @@ class MoeRoutedExpertOp:
             bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if enable_bcast else None,
             bcast_params=bcast_params,
         )
+
+    @staticmethod
+    def _setup_compressed_matmul_metadata(routed_ctx, device, gate_proj_ct, up_proj_ct, down_proj_ct):
+        """Upload per-core meta and fmt L1 tensors for BSPM compressed matmul.
+
+        Computes per-core subblock byte sizes and tile format tables for gate/up/down proj.
+        Stores meta_l1_addr, fmt_l1_addr, and noc_max_page_size into each proj's params dict.
+        Called after _overlap_cbs_with_sdpa_buffer so in1_buf_addr is set.
+        """
+        import numpy as np
+        import torch
+
+        from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import (
+            _TILE_SIZES,
+            _compute_subblock_metadata,
+        )
+        from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
+
+        # NOC max page size (arch-dependent)
+        arch = device.arch()
+        if arch == ttnn.device.Arch.WORMHOLE_B0:
+            noc_max_page_size = 8192
+        elif arch == ttnn.device.Arch.BLACKHOLE:
+            noc_max_page_size = 16384
+        else:
+            raise ValueError(f"Unsupported architecture: {arch}")
+
+        compute_cores = routed_ctx.gate_proj_core_ranges
+        compute_cores_list = ttnn.corerange_to_cores(compute_cores, row_wise=True)
+        num_cores = len(compute_cores_list)
+
+        # Both gate_proj and up_proj share the same physical CB (CBIn1BaseAddr resets to base).
+        # Use gate_proj's in1_buf_addr for both — same L1 base, so same slot rotation.
+        gate_up_cb_in1_base = routed_ctx.gate_proj_params["in1_buf_addr"]
+        down_cb_in1_base = routed_ctx.down_proj_params["in1_buf_addr"]
+
+        for ct_tensor, params, cb_in1_base in [
+            (gate_proj_ct, routed_ctx.gate_proj_params, gate_up_cb_in1_base),
+            (up_proj_ct, routed_ctx.up_proj_params, gate_up_cb_in1_base),
+            (down_proj_ct, routed_ctx.down_proj_params, down_cb_in1_base),
+        ]:
+            subblock_k = params["subblock_k"]
+            per_core_n = params["per_core_n"]
+            num_subblocks_k = params["num_subblocks_k"]
+
+            max_subblock_bytes = subblock_k * _TILE_SIZES[0]  # bfp8 max tile size
+            cb_in1_base_shifted = (cb_in1_base >> _CB_ADDR_SHIFT) - 1
+            max_subblock_bytes_shifted = max_subblock_bytes >> _CB_ADDR_SHIFT
+            num_buffers = 3
+
+            dram_cores = ttnn.corerange_to_cores(ct_tensor.data.memory_config().shard_spec.grid)
+
+            per_core_block_sizes = {}
+            per_core_fmt_pairs = {}
+
+            for core_idx, compute_core in enumerate(compute_cores_list):
+                dram_core = dram_cores[core_idx]
+                shard_assignment = ct_tensor.get_assignment_per_shard(dram_core)
+                block_sizes, tile_infos = _compute_subblock_metadata(
+                    device,
+                    shard_assignment,
+                    subblock_k,
+                    per_core_n,
+                    num_subblocks_k,
+                    cb_in1_base_shifted,
+                    max_subblock_bytes_shifted,
+                    num_buffers,
+                    start_iteration=0,  # CBIn1BaseAddr always resets write ptr to base
+                )
+                per_core_block_sizes[core_idx] = block_sizes
+                per_core_fmt_pairs[core_idx] = tile_infos
+
+            # Upload block-size metadata to L1 (HEIGHT_SHARDED uint8)
+            meta_entries = per_core_n * num_subblocks_k
+            meta_flat = []
+            for core_idx in range(num_cores):
+                meta_flat.extend(per_core_block_sizes[core_idx])
+            meta_torch = torch.tensor(meta_flat, dtype=torch.int32).reshape(num_cores, meta_entries)
+            meta_shard_spec = ttnn.ShardSpec(compute_cores, [1, meta_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            meta_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, meta_shard_spec
+            )
+            meta_tensor = ttnn.from_torch(
+                meta_torch.view(torch.uint8).reshape(num_cores, meta_entries * 4),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=meta_mem_config,
+            )
+
+            # Upload per-tile format metadata to L1 (HEIGHT_SHARDED uint8)
+            num_tile_entries = subblock_k * num_subblocks_k * per_core_n
+            fmt_flat = []
+            for core_idx in range(num_cores):
+                fmt_flat.extend(per_core_fmt_pairs[core_idx])
+            fmt_np = np.array(fmt_flat, dtype=np.uint32).view(np.int32).reshape(num_cores, num_tile_entries)
+            fmt_torch = torch.from_numpy(fmt_np)
+            fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_tile_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            fmt_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec
+            )
+            fmt_tensor = ttnn.from_torch(
+                fmt_torch.view(torch.uint8).reshape(num_cores, num_tile_entries * 4),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=fmt_mem_config,
+            )
+
+            params["meta_l1_addr"] = meta_tensor.buffer_address()
+            params["fmt_l1_addr"] = fmt_tensor.buffer_address()
+            params["noc_max_page_size"] = noc_max_page_size
+            # Keep tensors alive — L1 buffers must persist for kernel lifetime
+            params["_meta_tensor"] = meta_tensor
+            params["_fmt_tensor"] = fmt_tensor
 
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
@@ -1609,6 +1765,16 @@ class MoeRoutedExpertOp:
             ("down_proj_cb_index", ctx.gate_proj_cb_index),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             ("down_proj_index_offset", mesh_chip_id if ctx.enable_routing else 0),
+            # BSPM compressed matmul: meta/fmt L1 addresses and CB sizes
+            ("gate_proj_meta_l1_addr", ctx.gate_proj_params.get("meta_l1_addr", 0)),
+            ("gate_proj_cb_in1_size_bytes", ctx.gate_proj_params["in1_total_size"]),
+            ("gate_proj_noc_max_page_size", ctx.gate_proj_params.get("noc_max_page_size", 0)),
+            ("up_proj_meta_l1_addr", ctx.up_proj_params.get("meta_l1_addr", 0)),
+            ("up_proj_cb_in1_size_bytes", ctx.up_proj_params["in1_total_size"]),
+            ("up_proj_noc_max_page_size", ctx.up_proj_params.get("noc_max_page_size", 0)),
+            ("down_proj_meta_l1_addr", ctx.down_proj_params.get("meta_l1_addr", 0)),
+            ("down_proj_cb_in1_size_bytes", ctx.down_proj_params["in1_total_size"]),
+            ("down_proj_noc_max_page_size", ctx.down_proj_params.get("noc_max_page_size", 0)),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -1794,6 +1960,10 @@ class MoeRoutedExpertOp:
             ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),
             ("down_proj_fp32_dest_acc_en", 0),
+            # BSPM compressed matmul: format L1 addresses
+            ("gate_proj_fmt_l1_addr", ctx.gate_proj_params.get("fmt_l1_addr", 0)),
+            ("up_proj_fmt_l1_addr", ctx.up_proj_params.get("fmt_l1_addr", 0)),
+            ("down_proj_fmt_l1_addr", ctx.down_proj_params.get("fmt_l1_addr", 0)),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -1971,6 +2141,37 @@ class MoeRoutedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="add_sender_index",
                 core_values=ctx.add_params["sender_index_core_values"],
+                other_value=0,
+            ),
+            # BSPM compressed: next-core NOC coordinates (self-pointing for cores_per_bank=1)
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="gate_proj_next_core_noc_x",
+                core_values=ctx.noc_x_core_values if ctx.noc_x_core_values else [],
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="gate_proj_next_core_noc_y",
+                core_values=ctx.noc_y_core_values if ctx.noc_y_core_values else [],
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="up_proj_next_core_noc_x",
+                core_values=ctx.noc_x_core_values if ctx.noc_x_core_values else [],
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="up_proj_next_core_noc_y",
+                core_values=ctx.noc_y_core_values if ctx.noc_y_core_values else [],
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="down_proj_next_core_noc_x",
+                core_values=ctx.noc_x_core_values if ctx.noc_x_core_values else [],
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="down_proj_next_core_noc_y",
+                core_values=ctx.noc_y_core_values if ctx.noc_y_core_values else [],
                 other_value=0,
             ),
         ]
@@ -3586,10 +3787,15 @@ class MoeOp:
         )
         gate_weights_tile = gate_proj_params["weights_tile"]
         gate_weights_tile_size = gate_weights_tile.get_tile_size(gate_proj_params["weights_dtype"])
+        # For compressed path the CB is sized with BFP8 slots (1088 B each) so that each
+        # cb_push_back(subblock_k) advances exactly one slot.  Use 1088 as the page_size
+        # so the CB pointer stride matches the slot stride in _compute_subblock_metadata.
+        _BFP8_TILE_BYTES = 1088
+        gate_cb9_page_size = _BFP8_TILE_BYTES if routed_ctx.bspm_compressed else gate_weights_tile_size
         cb9_fmt = ttnn.CBFormatDescriptor(
             buffer_index=routed_ctx.gate_proj_cb_in1,
             data_format=gate_proj_params["weights_dtype"],
-            page_size=gate_weights_tile_size,
+            page_size=gate_cb9_page_size,
             tile=ttnn.TileDescriptor(gate_weights_tile),
         )
         cb9_desc.format_descriptors = [cb9_fmt]
@@ -3605,10 +3811,11 @@ class MoeOp:
         )
         down_weights_tile = down_proj_params["weights_tile"]
         down_weights_tile_size = down_weights_tile.get_tile_size(down_proj_params["weights_dtype"])
+        down_cb18_page_size = _BFP8_TILE_BYTES if routed_ctx.bspm_compressed else down_weights_tile_size
         cb18_fmt = ttnn.CBFormatDescriptor(
             buffer_index=routed_ctx.down_proj_cb_in1,
             data_format=down_proj_params["weights_dtype"],
-            page_size=down_weights_tile_size,
+            page_size=down_cb18_page_size,
             tile=ttnn.TileDescriptor(down_weights_tile),
         )
         cb18_desc.format_descriptors = [cb18_fmt]
@@ -4543,6 +4750,16 @@ class MoeOp:
                 sdpa_out_interm_buffer_device,
                 reduce_all_cores_set=reduce_all_cores_set,
             )
+
+        if routed_ctx.bspm_compressed:
+            MoeRoutedExpertOp._setup_compressed_matmul_metadata(
+                routed_ctx,
+                routed_ctx.device,
+                gate_proj_weights_tensor,
+                up_proj_weights_tensor,
+                down_proj_weights_tensor,
+            )
+
         self.ctx = MoeContext(
             routed_ctx=routed_ctx,
             shared_ctx=shared_ctx,
@@ -4554,6 +4771,7 @@ class MoeOp:
             enable_reduce_to_one=routed_ctx.enable_reduce_to_one,
             enable_bcast=routed_ctx.enable_bcast,
             reconfig_moe_cbs=reconfig_moe_cbs,
+            bspm_compressed=routed_ctx.bspm_compressed,
             # IO tensors
             gate_mm_weights_tensor=gate_mm_weights_tensor,
             gate_bias_tensor=gate_bias_tensor,
@@ -4740,6 +4958,8 @@ class MoeOp:
             defines += [("ENABLE_BCAST", "1")]
         if self.ctx.reconfig_moe_cbs:
             defines += [("RECONFIG_MOE_CBS", "1")]
+        if self.ctx.bspm_compressed:
+            defines += [("BSPM_COMPRESSED", "1")]
         return defines
 
     def _build_descriptors(self):
