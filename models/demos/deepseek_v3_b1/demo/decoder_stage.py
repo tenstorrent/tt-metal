@@ -27,9 +27,11 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import RoutedExpert, SharedExpert
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
-from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
+from models.demos.deepseek_v3_b1.utils import (
+    deinterleave_kv_cache,
+    get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+)
 from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3MoELayerWeights,
@@ -452,8 +454,6 @@ def create_decoder_block_tensors(
     # ── Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer) ──
     # These are temporally disjoint: the kv cache on core (12,9) is done after SDPA,
     # so the attention output and MoE residual input can reuse that L1 region.
-    a_tile_size = a_tile.get_tile_size(ttnn.bfloat16)  # 1×32 tile → 64 bytes
-    num_output_tiles = output_size // 32  # 7168 / 32 = 224 tiles
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
