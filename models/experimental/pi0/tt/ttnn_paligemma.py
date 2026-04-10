@@ -148,6 +148,9 @@ class PaliGemmaBackboneTTNN:
             )
 
         # Initialize Expert transformer blocks (18 layers for Gemma 300M)
+        # Expert always processes suffix_len = action_horizon (50 for Pi0.5)
+        # Pre-slice RoPE for this known length to save 2 slice ops per layer per step
+        expert_seq_len = 50  # action_horizon for Pi0.5
         self.expert_blocks = []
         for i in range(config.expert_config.depth):
             block_weights = self._get_expert_block_weights_ttnn(weights["action_expert"], i)
@@ -159,6 +162,7 @@ class PaliGemmaBackboneTTNN:
                     device,
                     self.expert_cos_meta,
                     self.expert_sin_meta,
+                    expected_seq_len=expert_seq_len,
                 )
             )
 
@@ -178,21 +182,23 @@ class PaliGemmaBackboneTTNN:
 
         if q_key in weights and k_key in weights and v_key in weights:
             # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
+            # Use bfloat8_b for VLM weights too — reduces bandwidth
+            vlm_weight_dtype = ttnn.bfloat8_b
             wq_ttnn = ttnn.from_torch(
-                weights[q_key].T.contiguous(),  # [hidden, num_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                weights[q_key].T.contiguous(),
+                dtype=vlm_weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
-                weights[k_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                weights[k_key].T.contiguous(),
+                dtype=vlm_weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
-                weights[v_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                weights[v_key].T.contiguous(),
+                dtype=vlm_weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -227,12 +233,14 @@ class PaliGemmaBackboneTTNN:
                     layout = ttnn.TILE_LAYOUT
 
                 # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
+                # Use bfloat8_b for weight matrices, bfloat16 for norms/biases
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
+                    w_dtype = vlm_weight_dtype if ("weight" in new_key and "norm" not in new_key and "layernorm" not in new_key) else ttnn.bfloat16
                     block_weights[new_key] = ttnn.from_torch(
                         value,
-                        dtype=ttnn.bfloat16,
+                        dtype=w_dtype,
                         layout=layout,
                         device=self.device,
                     )
