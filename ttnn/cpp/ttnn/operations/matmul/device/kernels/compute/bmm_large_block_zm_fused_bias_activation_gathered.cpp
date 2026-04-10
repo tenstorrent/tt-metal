@@ -317,44 +317,26 @@ void kernel_main() {
                 // This should always be 0 when reading in1 from DRAM
                 int in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
 #endif
+                // Per-block MatmulOp with input0_cb_id (varies per ring iteration)
+                ckernel::MatmulOpConfig block_cfg = mm.config();
+                block_cfg.in0_cb_id = input0_cb_id;
+                ckernel::BlockMatmulOp block_mm(block_cfg);
+
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    mm.begin_subblock();
+                    block_mm.begin_subblock();
                     if (enable_reload) {
-                        // Inline reload: uses per-block input0_cb_id and per-batch mm_partials_cb_id
-                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-                        cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
-                        copy_block_matmul_partials(mm_partials_cb_id, 0, 0, out_subblock_num_tiles);
-                        cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
-                        mm_block_init_short_with_dt(
-                            input0_cb_id,
-                            in1_cb_id,
-                            mm_partials_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        block_mm.reload_partials(out_subblock_num_tiles);
                     }
 
 #ifndef SKIP_COMPUTE
-                    // Compute output sub-block using per-block input0_cb_id
-                    uint32_t dst_index = 0;
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
-                        matmul_block(
-                            input0_cb_id,
-                            in1_cb_id,
-                            in0_index,
-                            in1_index,
-                            dst_index,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index++;
-                        in1_index += in1_per_core_w;
-                    }
-
+                    block_mm.accumulate(
+                        in0_index_subblock_offset,
+                        in1_index_subblock_offset,
+                        0,
+                        unpadded_in0_block_w,
+                        1,
+                        in1_per_core_w,
+                        0);
 #endif  // SKIP_COMPUTE
 
                     if (last_out) {

@@ -1230,7 +1230,7 @@ ALWI void matmul_blocks(
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
 
-            mm.accumulate(in0_index_offset, in1_index_offset, 0, in0_block_w, N);
+            mm.accumulate(in0_index_offset, in1_index_offset, 0, in0_block_w, 1, N, 0);
 
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
