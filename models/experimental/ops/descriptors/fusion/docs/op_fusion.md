@@ -5,17 +5,16 @@ This document details the implementation of `Sequential` and `Parallel`, two bui
 
 <img src="images/overview.png" style="width:1000px;"/>
 
-The framework supports two usage modes:
+The framework supports two usage modes. Both start by creating descriptors:
 
-### Inline Mode (Simple)
+### Create Descriptors
 
-Create descriptors and run in one expression. Has some Python overhead per call — appropriate when surrounding ops hide the cost.
+Each descriptor wraps a device op with its input/output tensors. Predecessor outputs wire to successor inputs via `output_tensors[0]`. Activation tensors may be omitted for persistent mode.
 
 ```python
 import models.experimental.ops.descriptors as descriptors
 from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-# Define descriptors — each wires to its predecessor's output
 mm  = descriptors.matmul(act, weights, core_range_set=full_cores, compute_kernel_config=cc)
 sl  = descriptors.slice(mm.output_tensors[0], [0,0,0,0], [1,1,H,W//2], core_range_set=left_cores)
 sr  = descriptors.slice(mm.output_tensors[0], [0,0,0,W//2], [1,1,H,W], core_range_set=right_cores)
@@ -24,8 +23,13 @@ ln  = descriptors.layer_norm(sl.output_tensors[0], core_range_set=left_bot,
                              weight=ln_w, bias=ln_b, epsilon=1e-5, compute_kernel_config=cc)
 rms = descriptors.rms_norm(sr.output_tensors[0], core_range_set=right_cores,
                            weight=rms_w, epsilon=1e-5, compute_kernel_config=cc)
+```
 
-# Compose topology and run
+### Inline Mode (Simple)
+
+Compose the topology and run. Fresh descriptors each call. Has some Python overhead — appropriate when surrounding ops hide the cost.
+
+```python
 out_mm2, out_ln, out_rms = Sequential(
     mm=mm,
     branches=Parallel(
@@ -37,32 +41,16 @@ out_mm2, out_ln, out_rms = Sequential(
 
 ### Persistent Mode (Fast)
 
-In persistent mode, the topology and descriptors are created once and reused across calls. Only the changing input tensors are swapped via `update()` before each `run()`. This avoids the per-call overhead of descriptor creation, making it suitable for latency-sensitive hot loops.
-
-```python
-# Setup (once) — activation tensors omitted, only weights and config provided:
-q_norm = descriptors.rms_norm(weight=qw, memory_config=qm, ...)
-kv_norm = descriptors.rms_norm(weight=kw, memory_config=km, ...)
-fused = Parallel(q=q_norm, kv=kv_norm)
-
-# Each call — swap activations and run:
-fused.q.update(input_tensor=tt_q)
-fused.kv.update(input_tensor=tt_kv)
-tt_q, tt_kv = fused.run()
-```
-
-For Sequential chains, only the external inputs need updating — internal connections are handled automatically:
+Create the topology once and reuse it across calls. Only the changing input tensors are swapped via `update()` before each `run()`. This avoids the per-call overhead of descriptor creation and other fusion overhead, making it suitable for latency-sensitive hot loops. For Sequential chains, connections between ops are detected automatically — only external inputs need updating.
 
 ```python
 # Setup (once):
-norm = descriptors.rms_norm(weight=w1, ...)
-mm = descriptors.matmul(input_a=norm.output_tensors[0], input_b=W)
-fused = Sequential(norm=norm, mm=mm)
+fused = Parallel(q=q_norm, kv=kv_norm)
 
 # Each call:
-fused.norm.update(input_tensor=new_activation)
-fused.mm.update(input_b=new_weight)
-fused.run()
+fused.q.update(input_tensor=tt_q)
+fused.kv.update(input_tensor=tt_kv)
+tt_q, tt_kv = fused.run()
 ```
 
 The compositional framework both encourages op genericity and reuse and reduces the need to write single-use custom fused ops for cases where the performance of existing ops is satisfactory.
@@ -2773,7 +2761,7 @@ The three slot types:
 
 `Sequential.run()` and `Parallel.run()` combine `build()` + `launch()` into
 a single call.  The dispatch path depends on how many times `run()` has been
-called:
+called on the same container:
 
 | Call # | Path | Overhead |
 |--------|------|----------|
@@ -2787,25 +2775,8 @@ second call sees `_run_called=True` and caches a `FusedOp` via `self.build()`
 (a `_BUILD_CACHE` hit — cheap).  From the third call on, `_run_fused.launch()`
 skips all Python orchestration.
 
-```python
-# Inline mode (one-shot — no FusedOp cached):
-tt_q, tt_kv = Parallel(
-    q=descriptors.rms_norm(tt_q, weight=qw, ...),
-    kv=descriptors.rms_norm(tt_kv, weight=kw, ...),
-).run()
-
-# Persistent mode (reuses container across calls):
-# __init__:
-self.fused = Parallel(
-    q=descriptors.rms_norm(weight=qw, ...),
-    kv=descriptors.rms_norm(weight=kw, ...),
-)
-
-# forward:
-self.fused.q.update(tt_q)
-self.fused.kv.update(tt_kv)
-tt_q, tt_kv = self.fused.run()
-```
+See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
+at the top of this document for usage examples.
 
 The persistent fast path (`_run_fused.launch()`) calls `refresh_merged_io`
 which re-reads the branch descriptors' current `input_tensors` (mutated via
