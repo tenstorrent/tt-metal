@@ -24,7 +24,8 @@ import torch
 # Helpers
 # ---------------------------------------------------------------------------
 
-REF_AUDIO = "/tmp/jim_audio.wav"
+# REF_AUDIO = "/tmp/jim_audio.wav"
+REF_AUDIO = "/tmp/ttnn_tts_output.wav"
 REF_TEXT = "Good morning, I'm doing fine."
 # Text must be long enough that text_lens > codec_lens (~49 for 4s ref at 12Hz).
 # The combined ref_text + target_text tokenizes to ~58 tokens (> 49), ensuring
