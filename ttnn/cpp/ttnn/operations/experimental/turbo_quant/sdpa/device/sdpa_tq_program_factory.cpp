@@ -298,7 +298,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         Sq_chunk_t,
         vDHt,
         num_cores,
-        sdpa_float_to_bits(attrs.scale),  // scale for identity tile
+        [&]() -> uint32_t {
+            // Pack scale as BF16 doubled: (bf16 << 16) | bf16
+            // This matches what generate_reduce_scaler expects.
+            uint32_t f32_bits = sdpa_float_to_bits(1.0f);  // identity scalar = 1.0
+            uint16_t bf16 = static_cast<uint16_t>(f32_bits >> 16);
+            return (static_cast<uint32_t>(bf16) << 16) | bf16;
+        }(),
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
 
