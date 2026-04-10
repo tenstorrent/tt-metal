@@ -365,7 +365,18 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
+        prompt_len: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Forward pass for prefill mode, optionally returning only the logit at prompt_len-1.
+
+        When ``prompt_len`` is provided the method skips the all_gather + LMHead for
+        every transformer chunk that does not contain token ``prompt_len - 1``, and
+        slices the hidden state to a single row for the chunk that does.  The returned
+        logits tensor therefore has shape ``[1, 1, 1, vocab_size]`` instead of
+        ``[1, 1, seq_len, vocab_size]``.  This is valid only when the sequence is NOT
+        sharded across ring devices (i.e. ``mesh_device.shape[0] == 1``); callers are
+        responsible for enforcing this precondition.
+        """
         CHUNK_SIZE = 1024
         # CHUNK_SIZE = 2048
         # CHUNK_SIZE = 4096
@@ -387,13 +398,33 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
                 "trans_matrix": rope_tensors["trans_matrix"],
             }
+
+            # When prompt_len is set, only compute LMHead for the chunk that
+            # contains the target token; skip it (but still run decoder blocks
+            # for KV-cache population) for all other chunks.
+            lm_head_local_idx: int | None = None
+            skip_lm_head = False
+            if prompt_len is not None:
+                if start <= (prompt_len - 1) < end:
+                    lm_head_local_idx = (prompt_len - 1) - start
+                else:
+                    skip_lm_head = True
+
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
-                x_chunk, user_id, cfg, rope_chunk, page_tables, return_hidden
+                x_chunk,
+                user_id,
+                cfg,
+                rope_chunk,
+                page_tables,
+                return_hidden,
+                lm_head_local_idx=lm_head_local_idx,
+                skip_lm_head=skip_lm_head,
             )
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(rope_chunk["cos_matrix"])
             ttnn.deallocate(rope_chunk["sin_matrix"])
-            logits.append(logits_chunk)
+            if logits_chunk is not None:
+                logits.append(logits_chunk)
             if len(hidden_for_mtp_chunk) > 0:
                 hidden_for_mtp.append(hidden_for_mtp_chunk)
         logits_chunks = logits
@@ -414,8 +445,20 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
+        lm_head_local_idx: int | None = None,
+        skip_lm_head: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Forward pass for prefill mode."""
+        """Forward pass for prefill mode.
+
+        Args:
+            lm_head_local_idx: When set, the hidden state is sliced to this
+                single chunk-local row index before the all_gather and LMHead
+                linear, producing a ``[1, 1, 1, vocab_size]`` logits tensor.
+            skip_lm_head: When True, the all_gather and LMHead are skipped
+                entirely (decoder blocks still run for KV-cache population).
+                Returns ``(None,)`` / ``(None, hidden)`` so the caller can use
+                the same ``logits_chunk, *hidden = ...`` unpacking pattern.
+        """
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
@@ -440,6 +483,17 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         logger.debug(f"DistributedRMSNorm finished")
 
         ccl = cfg["lm_head"]["ccl"]
+
+        if skip_lm_head:
+            ttnn.deallocate(x)
+            if return_hidden:
+                return None, hidden_for_mtp
+            return (None,)
+
+        if lm_head_local_idx is not None:
+            x_sliced = ttnn.slice(x, [0, 0, lm_head_local_idx, 0], [1, 1, lm_head_local_idx + 1, x.shape[-1]])
+            ttnn.deallocate(x)
+            x = x_sliced
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         logger.debug(f"all_gather_async finished")
