@@ -51,6 +51,7 @@ inline void dequantize_one_tile(
     cb_reserve_back(cb_temp, 1);
     tile_regs_acquire();
 
+    copy_tile_to_dst_init_short(cb_idx);  // configure unpacker for BFP4 cb
     copy_tile(cb_idx, 0, 0);  // DST[0] = indices (BFP4 auto-unpack to f32)
     fill_tile_init();
     fill_tile(1, centroids[0]);
@@ -231,7 +232,9 @@ void kernel_main() {
 
             for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                 // ─── Step 1: Dequantize K chunk → cb_k_in ───
-                // BFP4 indices + BF16 norms → BF16 dequantized K tiles
+                // Reconfigure unpacker for BFP4 input (cb_k_idx) before dequantize
+                reconfig_data_format(cb_k_idx, cb_k_norms);
+                pack_reconfig_data_format(cb_dq_temp);
                 dequantize_chunk<Sk_chunk_t, DHt, num_levels>(
                     cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
 
@@ -272,6 +275,9 @@ void kernel_main() {
                     alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
                 // ─── Step 4: Dequantize V chunk → cb_v_in ───
+                // Reconfigure unpacker for BFP4 input before dequantize
+                reconfig_data_format(cb_v_idx, cb_v_norms);
+                pack_reconfig_data_format(cb_dq_temp);
                 dequantize_chunk<Sk_chunk_t, vDHt, num_levels>(
                     cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
 
