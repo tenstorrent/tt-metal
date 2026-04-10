@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Pre-SDPA unified kernel
@@ -285,17 +285,37 @@ if constexpr (!Core::skip_ccl) {
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(5),
         .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
-        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
         .kv_cache_cur_pos_ready_semaphore_addr =
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
+        .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+        .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+        .mla_sender_noc_x =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_x_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_7"),
+            },
+        .mla_sender_noc_y =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_y_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_7"),
+            },
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -496,6 +516,9 @@ if constexpr (!Core::skip_ccl) {
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .num_mcast_dests = get_named_compile_time_arg_val("mla_num_mcast_dests"),
             .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .St = get_named_compile_time_arg_val("St"),
             .DHt = get_named_compile_time_arg_val("DHt"),
@@ -693,6 +716,7 @@ if constexpr (!Core::skip_ccl) {
         .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
         .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
         .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
+        .kv_cache_intermed_sync_cb = get_common_arg_val<uint32_t>(7),
     };
     deepseek_b1_ops::FlashMLADecode::ComputeArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
@@ -806,7 +830,7 @@ if constexpr (!Core::skip_ccl) {
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(6);
 #elif defined(COMPILE_FOR_TRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(8);
 #endif
 
     // ========================================================================

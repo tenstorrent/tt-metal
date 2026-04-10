@@ -636,6 +636,10 @@ jobs:
 
   ttnn-eltwise-tests:
     if: ${{ inputs.run_eltwise_tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -652,7 +656,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly eltwise tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ttnn nightly eltwise tests group ${{ matrix.group }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
@@ -670,21 +674,9 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly eltwise tests group 1
+      - name: ttnn nightly eltwise tests group ${{ matrix.group }}
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - name: ttnn nightly eltwise tests group 2
-        if: ${{ !cancelled() }}
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - name: ttnn nightly eltwise tests group 3
-        if: ${{ !cancelled() }}
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - name: ttnn nightly eltwise tests group 4
-        if: ${{ !cancelled() }}
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group ${{ matrix.group }} -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

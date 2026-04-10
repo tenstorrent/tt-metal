@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -403,3 +403,37 @@ def test_unary_ng_reshard(device):
 
     ttnn_output = ttnn.to_torch(ttnn.relu(ttnn_input, memory_config=output_shard_config))
     assert torch.equal(ttnn_output, torch_output)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # Wide rows (row_width > tile_size): chunked across width
+        (1, 1032),
+        (1, 2048),
+        (2, 3000),
+        (1, 1, 1024, 3000),
+        # Narrow rows (row_width < tile_size): multiple rows packed per tile
+        (1024, 16),
+        (512, 32),
+        (100, 64),
+        (33, 128),
+        (1, 1, 64, 128),
+        (2, 3, 16, 64),
+        (1, 1, 1, 1),
+        (1, 1, 1, 512),
+    ],
+)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_unary_ng_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
+    """Test that unary_ng correctly handles ROW_MAJOR interleaved tensors.
+
+    Wide rows (row_width > tile_size) are chunked across the width.
+    Narrow rows (row_width < tile_size) are packed multiple-per-tile to amortize CB overhead.
+    Partial last blocks (non-tile-aligned row counts) are also covered.
+    """
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input))
+    golden_output = torch.abs(torch_input)
+    assert torch.equal(ttnn_output, golden_output)

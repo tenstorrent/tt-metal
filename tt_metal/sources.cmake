@@ -113,6 +113,12 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
+    api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
+    api/tt-metalium/experimental/metal2_host_api/program.hpp
+    api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
 )
 
 set(TT_METAL_SOURCES

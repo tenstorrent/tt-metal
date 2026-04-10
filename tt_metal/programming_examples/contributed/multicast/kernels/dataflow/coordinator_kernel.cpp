@@ -48,7 +48,8 @@ void kernel_main() {
     noc_semaphore_set(sender_addr_ptr, 0); // set to 0 rather than INVALID because sender_addr_ptr can take on a value > 1
 
     DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Tile ready for multicast. I am starting all inbound kernels in cores in given range." << ENDL() << ENDL();
+           << "): Tile ready for multicast. I am starting all inbound kernels in cores in given range." << ENDL()
+           << ENDL();
 
     ////////// MULTICAST TILE TO RECEIVERS //////////
     uint64_t identity_tile_global_multicast_addr =

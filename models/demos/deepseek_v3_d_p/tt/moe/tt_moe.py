@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ This module assembles the full MoE pipeline:
 
 from typing import Optional, Union
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -399,6 +400,21 @@ class TtMoe(LightweightModule):
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:
+            # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
+            _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+            max_token_count = int(_counts_host.to(torch.int64).max().item())
+            max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
+            if max_token_count > max_capacity:
+                logger.error(
+                    f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
+                    f"max_dispatched_tokens_per_expert ({max_capacity}). "
+                    f"Overflow tokens were dropped - output data is corrupted. "
+                    f"Increase capacity_factor or reduce sequence length."
+                )
+                logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+
             intermediates = TtMoEIntermediates(
                 gate_scores=weights,
                 gate_indices=indices,

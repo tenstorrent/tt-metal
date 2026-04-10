@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1146,8 +1146,12 @@ class Generator(WarmupForwardMixin):
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode
-        reset_inputs = reset_batch or not sampling_on_device
+        # reset inputs when mode switches from prefill to decode,
+        # or when sampling_on_device changes (different trace has stale inputs)
+        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
+        self._prev_sampling_on_device = sampling_on_device
+        sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
+        reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
