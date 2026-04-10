@@ -244,6 +244,7 @@ class GemmaAttentionTTNN:
         device: ttnn.Device,
         cos_meta: Optional[ttnn.Tensor] = None,
         sin_meta: Optional[ttnn.Tensor] = None,
+        expected_seq_len: Optional[int] = None,
     ):
         """
         Initialize attention layer with TTNN weights.
@@ -255,6 +256,7 @@ class GemmaAttentionTTNN:
             device: TTNN device
             cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
             sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
+            expected_seq_len: If set, pre-slice RoPE cos/sin for this seq_len (saves 2 slice ops per forward)
         """
         self.config = config
         self.layer_idx = layer_idx
@@ -274,7 +276,7 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # WormholeComputeKernelConfig for Blackhole — all shapes work after cache clear
+        # WormholeComputeKernelConfig for Blackhole — works with wheel when ttnn/ source disabled
         self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -287,6 +289,16 @@ class GemmaAttentionTTNN:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+        # OPTIMIZATION: Pre-slice RoPE for known sequence length (saves 2 slice ops per forward)
+        self._presliced_seq_len = expected_seq_len
+        if expected_seq_len is not None and cos_meta is not None:
+            self._cos_presliced = ttnn.slice(cos_meta, [0, 0, 0, 0], [1, 1, expected_seq_len, self.head_dim])
+            self._sin_presliced = ttnn.slice(sin_meta, [0, 0, 0, 0], [1, 1, expected_seq_len, self.head_dim])
+        else:
+            self._cos_presliced = None
+            self._sin_presliced = None
+
 
     def forward(
         self,
@@ -352,24 +364,22 @@ class GemmaAttentionTTNN:
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Slice cos/sin to match actual sequence length
-        cos_sliced = ttnn.slice(
-            self.cos_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
-        sin_sliced = ttnn.slice(
-            self.sin_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
+        # Use pre-sliced cos/sin when available (saves 2 slice ops per forward)
+        if self._cos_presliced is not None and seq_len == self._presliced_seq_len:
+            cos_sliced = self._cos_presliced
+            sin_sliced = self._sin_presliced
+            needs_dealloc = False
+        else:
+            cos_sliced = ttnn.slice(self.cos_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            sin_sliced = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            needs_dealloc = True
 
-        # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
         k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
 
-        ttnn.deallocate(cos_sliced)
-        ttnn.deallocate(sin_sliced)
+        if needs_dealloc:
+            ttnn.deallocate(cos_sliced)
+            ttnn.deallocate(sin_sliced)
 
         # rotary_embedding pads output to tile boundary, slice back to original seq_len
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
@@ -451,20 +461,17 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # HiFi2 for MLP (speed over precision)
-        try:
-            self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        except Exception:
-            self.compute_kernel_config_hifi2 = None
+        # WormholeComputeKernelConfig for MLP — works with wheel when ttnn/ source disabled
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         # Convert weights to TTNN if they're PyTorch tensors
-        # Use bfloat8_b for MLP weights to reduce memory and improve throughput
-        mlp_dtype = ttnn.bfloat8_b if config.width <= 1024 else ttnn.bfloat16
+        # Use bfloat8_b for all MLP weights — reduces bandwidth for VLM too
+        mlp_dtype = ttnn.bfloat8_b
 
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
@@ -563,9 +570,10 @@ class GemmaMLPTTNN:
             chunk_end = min(chunk_start + self.chunk_size, seq_len)
             actual_chunk_size = chunk_end - chunk_start
 
-            # Pad last chunk to tile alignment if needed
-            needs_chunk_padding = actual_chunk_size < self.chunk_size
-            padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
+            # Pad last chunk to tile alignment (32) if needed — NOT to full chunk_size
+            tile_aligned_size = ((actual_chunk_size + 31) // 32) * 32
+            needs_chunk_padding = actual_chunk_size != tile_aligned_size
+            padded_chunk_size = tile_aligned_size
 
             # Slice input chunk (always 4D)
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
@@ -577,24 +585,31 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # Gate and up projections - use bfloat8_b for 2x memory savings
-            # Use L1 interleaved (WIDTH_SHARDED incompatible with MLP dimensions)
-            gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-            up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(x_chunk)
+            # Fused gate+up projection — single matmul instead of 2 separate
+            mlp_ckc = self.compute_kernel_config_hifi2
+            if self.fused_gate_up is not None:
+                gate_up = ttnn.linear(x_chunk, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                ttnn.deallocate(x_chunk)
+                gate = ttnn.slice(gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim])
+                up = ttnn.slice(gate_up, [0, 0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim * 2])
+                ttnn.deallocate(gate_up)
+            else:
+                gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                ttnn.deallocate(x_chunk)
 
-            # GELU activation - inherits sharding and dtype
+            # GELU activation
             gate_activated = ttnn.gelu(gate)
             ttnn.deallocate(gate)
 
-            # Element-wise multiply - inherits sharding from inputs
+            # Element-wise multiply
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection - keep in L1 interleaved (simpler, avoids conversion overhead)
+            # Down projection
             output_chunk = ttnn.linear(
-                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
+                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc
             )
             ttnn.deallocate(hidden_out)
 
@@ -649,6 +664,7 @@ class GemmaBlockTTNN:
         device: ttnn.Device,
         cos_meta: Optional[ttnn.Tensor] = None,
         sin_meta: Optional[ttnn.Tensor] = None,
+        expected_seq_len: Optional[int] = None,
     ):
         """
         Initialize transformer block with TTNN weights.
@@ -660,6 +676,7 @@ class GemmaBlockTTNN:
             device: TTNN device
             cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
             sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
+            expected_seq_len: If set, pre-slice RoPE for this seq_len in attention
         """
         self.config = config
         self.layer_idx = layer_idx
@@ -679,7 +696,7 @@ class GemmaBlockTTNN:
             self.input_layernorm_weight = weights["input_layernorm.weight"]
             self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
-        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
+        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta, expected_seq_len)
         self.mlp = GemmaMLPTTNN(config, weights, device)
 
     def forward(
