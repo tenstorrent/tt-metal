@@ -184,6 +184,16 @@ def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
     return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
 
 
+def mark_corruptible(tensor):
+    """
+    Mark a specific tensor buffer as intentionally corruptible for trace
+    allocation safety checks.
+    """
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+    return UnsafeAllocationTracker.mark_corruptible(tensor)
+
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
