@@ -131,6 +131,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::SOFTSHRINK:
+        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
@@ -445,7 +446,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "polygamma_tile_init();",
                 fmt::format("polygamma_tile({}, {:#x}u, {:#x}u);", idst, as_uint(param0), as_uint(param1))};
         }
-        case UnaryOpType::HARDSHRINK:
+        case UnaryOpType::HARDSHRINK: {
+            uint32_t lambda_bits = as_uint(param0);
+            if (input_dtype.has_value() && *input_dtype == DataType::BFLOAT16) {
+                // For BF16 inputs, pre-round lambda to BF16 precision (RNE) then
+                // re-expand to FP32. This ensures the SFPU's FP32→FP19b truncation
+                // preserves the BF16 value exactly, matching the input's precision.
+                uint32_t bf16 = (lambda_bits + 0x7FFFu + ((lambda_bits >> 16) & 1u)) >> 16;
+                lambda_bits = bf16 << 16;
+            }
+            return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {:#x}u);", idst, lambda_bits)};
+        }
         case UnaryOpType::LOGIT:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
@@ -670,7 +681,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSHRINK: return "hardshrink_kernel.cpp";
         case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
