@@ -22,9 +22,6 @@ ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
 def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
-    """Power-of-2 token K-chunk for paged decode SDPA (Metal requires multiple of 32)."""
-    # 256 fits Wormhole N150 L1 for Gemma3 paged decode; 512+ commonly hits circular-buffer clash
-    # (program.cpp static CB vs L1). Larger chunks only move HF mismatch boundaries—they are not a root fix.
     default = 256
     raw = os.environ.get("GEMMA3_SDPA_DECODE_K_CHUNK", "").strip()
     if not raw:
@@ -96,16 +93,12 @@ class ModelArgs(TTModelArgs):
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        """Gemma3-only decode SDPA config.
+        force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False) or (
+            getattr(self.optimizations, "__name__", None) == "accuracy"
+        )
+        if not force_fixed_k_chunk:
+            return super().get_attn_sdpa_decode_program_config(prefetcher)
 
-        ``k_chunk_size=0`` uses ``get_dynamic_Sk_chunk_t()``, which jumps 4→8 tiles at cur_pos 127→128
-        and misaligns paged KV (HF cliff at pos 128). **256** tokens is the default fixed chunk: it fits
-        **N150** L1. Do not assume a larger chunk “fixes” quality—it can **L1-clash** on Wormhole and only
-        **shifts** mismatch to a later position; the real fix is **ttnn** ``paged_scaled_dot_product_attention_decode``.
-
-        Optional: ``GEMMA3_SDPA_DECODE_K_CHUNK`` (power of 2, multiple of 32). Try ``512`` only on setups
-        with enough L1; expect possible ``program.cpp`` circular-buffer errors.
-        """
         fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens()
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
@@ -120,6 +113,7 @@ class ModelArgs(TTModelArgs):
                 q_chunk_size=0,
                 k_chunk_size=fixed_k_chunk_tokens,
             )
+
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             exp_approx_mode=False,
