@@ -8,6 +8,7 @@
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <string_view>
+#include <tt_stl/assert.hpp>
 
 std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {
@@ -97,24 +98,16 @@ bool is_supported_quasar(tt::DataFormat format) {
         case tt::DataFormat::Float16:
         case tt::DataFormat::Float16_b:
         case tt::DataFormat::Float32:
+        case tt::DataFormat::Fp8_e4m3:
         case tt::DataFormat::Int8:
         case tt::DataFormat::Int32:
+        case tt::DataFormat::Lf8:
         case tt::DataFormat::RawUInt8:
         case tt::DataFormat::RawUInt16:
         case tt::DataFormat::RawUInt32:
-        case tt::DataFormat::Tf32: return true;
-        case tt::DataFormat::Bfp2:
-        case tt::DataFormat::Bfp2_b:
-        case tt::DataFormat::Bfp4:
-        case tt::DataFormat::Bfp4_b:
-        case tt::DataFormat::Bfp8:
-        case tt::DataFormat::Bfp8_b:
-        case tt::DataFormat::Fp8_e4m3:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8: return true;
         case tt::DataFormat::Invalid:
-        case tt::DataFormat::Lf8:
-        case tt::DataFormat::UInt8:
-        case tt::DataFormat::UInt16:
-        case tt::DataFormat::UInt32:
         default: return false;
     }
 }

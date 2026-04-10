@@ -422,9 +422,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Data format must be valid for the architecture
+    const tt::ARCH arch = get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
-            const tt::ARCH arch = get_arch();
             TT_FATAL(
                 tt::is_data_format_supported(dfb.data_format_metadata.value(), arch),
                 "DFB '{}' has data format '{}' which is not supported on architecture {}",
