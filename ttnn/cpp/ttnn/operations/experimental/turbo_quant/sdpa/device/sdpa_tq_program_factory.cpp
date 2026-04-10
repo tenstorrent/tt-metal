@@ -87,13 +87,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(k_chunk_tiles * bf16_tile_size, {{CBIndex::c_1, bf16_df}})
+        CircularBufferConfig(k_chunk_tiles * k_num_chunks * bf16_tile_size, {{CBIndex::c_1, bf16_df}})
             .set_page_size(CBIndex::c_1, bf16_tile_size));
 
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(v_chunk_tiles * bf16_tile_size, {{CBIndex::c_2, bf16_df}})
+        CircularBufferConfig(v_chunk_tiles * k_num_chunks * bf16_tile_size, {{CBIndex::c_2, bf16_df}})
             .set_page_size(CBIndex::c_2, bf16_tile_size));
 
     // Scale + column identity
