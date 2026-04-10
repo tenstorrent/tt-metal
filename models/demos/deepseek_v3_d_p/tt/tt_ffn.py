@@ -27,6 +27,24 @@ HIDDEN_DIM = 18432
 
 
 class TtFfn(TtSharedExpert):
+    @staticmethod
+    def build_ttnn_cache(
+        torch_weights: dict,
+        mesh_device: ttnn.MeshDevice,
+        cache_path: Path,
+        cache_name_prefix: str,
+    ):
+        """Build TTNN cache for dense FFN (delegates to TtSharedExpert)."""
+        TtSharedExpert.build_ttnn_cache(
+            torch_weights=torch_weights,
+            emb_dim=EMB_DIM,
+            hidden_dim=HIDDEN_DIM,
+            mesh_device=mesh_device,
+            weights_dtype=ttnn.bfloat8_b,
+            cache_path=cache_path,
+            cache_name_prefix=cache_name_prefix,
+        )
+
     """
     FFN module for DeepSeek V3 dense layers.
 

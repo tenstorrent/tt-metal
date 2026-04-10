@@ -308,13 +308,14 @@ def model_path():
     """
     Get model path and resolve symlinks to ensure all operations can find files.
     Automatically downloads weights from HuggingFace if not available locally.
+    Downloads weights for layers 0-11 (12 layers total) to support all test cases.
 
     Checks in order:
     1. DEEPSEEK_V3_HF_MODEL environment variable
     2. models/demos/deepseek_v3/reference/ (default location)
     3. Downloads from HuggingFace to HF cache if not found
     """
-    return get_or_download_model(layer_idx=0)
+    return get_or_download_model(layer_idx=0, num_layers=24)
 
 
 @pytest.fixture(scope="session")
