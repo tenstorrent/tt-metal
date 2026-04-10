@@ -498,6 +498,30 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBF
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Data format legality: ValidateProgramSpec currently targets Quasar only, so is_supported_for_gen2 applies.
+TEST_F(ProgramSpecTestQuasar, DFBDataFormatNotSupportedOnTargetArchitectureFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer", node);
+    auto consumer = MakeMinimalComputeKernel("consumer", node);
+    auto dfb = MakeMinimalDFB("dfb", node);
+
+    // Legacy Gen1 block-float format; is_supported_for_gen2(Bfp8) is false.
+    dfb.data_format_metadata = tt::DataFormat::Bfp8;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"}, {"dfb"})};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
 // ============================================================================
 // SECTION 3: WorkerSpec Validation Tests
 // ============================================================================
@@ -851,7 +875,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     auto dfb1 = MakeMinimalDFB("dfb1", node);
     dfb1.data_format_metadata = tt::DataFormat::Float16_b;
     auto dfb2 = MakeMinimalDFB("dfb2", node);
-    dfb2.data_format_metadata = tt::DataFormat::Bfp8_b;
+    dfb2.data_format_metadata = tt::DataFormat::Int8;
 
     BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(producer, "dfb2", "out2", KernelSpec::DFBEndpointType::PRODUCER);
