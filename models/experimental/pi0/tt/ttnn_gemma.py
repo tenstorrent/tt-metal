@@ -72,7 +72,11 @@ def adarms_norm_ttnn(
     eps: float = 1e-6,
     device: ttnn.Device = None,
     ones_weight: Optional[ttnn.Tensor] = None,  # deprecated, kept for API compat
+    use_fused: bool = True,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    # Use fused C++ op if available (source build custom op)
+    if use_fused and hasattr(ttnn.experimental, 'fused_adarms'):
+        return ttnn.experimental.fused_adarms(x, dense_weight, dense_bias, cond, eps)
     """
     Adaptive RMSNorm (Pi0.5) using TTNN operations.
 
