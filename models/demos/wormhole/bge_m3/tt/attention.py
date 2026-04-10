@@ -84,6 +84,8 @@ class BgeM3AttentionConfig:
     qkv_compute_kernel_cfg: object | None = None
     score_compute_kernel_cfg: object | None = None
     output_compute_kernel_cfg: object | None = None
+    # Compile-time max sequence length (selects Wormhole HiFi4 at S8192 for PCC).
+    max_seq_len: int | None = None
 
     @property
     def qkv_out_dim(self) -> int:
@@ -117,6 +119,7 @@ class BgeM3Attention(LightweightModule):
         bqkv: LazyWeight | None = None,
         wo_bias: LazyWeight | None = None,
         attention_scale: float | None = None,
+        max_seq_len: int | None = None,
     ):
         super().__init__()
         self.config = _resolve_attention_config(
@@ -129,6 +132,7 @@ class BgeM3Attention(LightweightModule):
                 bqkv=bqkv,
                 wo_bias=wo_bias,
                 attention_scale=attention_scale,
+                max_seq_len=max_seq_len,
             )
         )
         self._device_weights_loaded = False
@@ -373,12 +377,13 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             exp_approx_mode=False,
         )
 
+    max_seq = config.max_seq_len
     if config.qkv_compute_kernel_cfg is None:
-        to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+        to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
     if config.output_compute_kernel_cfg is None:
-        to_set["output_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+        to_set["output_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
     if config.score_compute_kernel_cfg is None:
-        to_set["score_compute_kernel_cfg"] = bge_m3_sdpa_compute_kernel_config(mesh_device)
+        to_set["score_compute_kernel_cfg"] = bge_m3_sdpa_compute_kernel_config(mesh_device, max_seq_len=max_seq)
 
     # Phase E: resolve LazyWeights with resolved dtype + memory config.
     qkv_dtype = to_set.get("qkv_dtype", config.qkv_dtype)
