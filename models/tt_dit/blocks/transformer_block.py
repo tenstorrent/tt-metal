@@ -41,7 +41,10 @@ class TransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         attention_k_chunk_size: int = 512,
-        attention_q_chunk_size: int = 256,
+        attention_q_chunk_size: int = 128,
+        sdpa_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
+        sdpa_exp_approx_mode: bool = False,
+        sdpa_fp32_dest_acc_en: bool = False,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -117,6 +120,9 @@ class TransformerBlock(Module):
             padding_config=padding_config,
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
+            sdpa_math_fidelity=sdpa_math_fidelity,
+            sdpa_exp_approx_mode=sdpa_exp_approx_mode,
+            sdpa_fp32_dest_acc_en=sdpa_fp32_dest_acc_en,
             is_fsdp=is_fsdp,
         )
 

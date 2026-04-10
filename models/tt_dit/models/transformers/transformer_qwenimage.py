@@ -99,6 +99,11 @@ class QwenImageTransformer(Module):
                 padding_config=padding_config,
                 mesh_device=device,
                 is_fsdp=is_fsdp,
+                # QwenImage-specific SDPA tuning: LoFi + fp32 acc + exp approx + larger q_chunk
+                attention_q_chunk_size=256,
+                sdpa_math_fidelity=ttnn.MathFidelity.LoFi,
+                sdpa_exp_approx_mode=True,
+                sdpa_fp32_dest_acc_en=True,
             )
             for i in range(num_layers)
         )

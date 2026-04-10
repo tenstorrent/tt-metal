@@ -44,6 +44,9 @@ class Attention(Module):
         padding_config: PaddingConfig | None,
         k_chunk_size: int = 512,
         q_chunk_size: int = 256,
+        sdpa_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
+        sdpa_exp_approx_mode: bool = False,
+        sdpa_fp32_dest_acc_en: bool = False,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -76,12 +79,12 @@ class Attention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
-            exp_approx_mode=True,  # Faster exponential approximation
+            exp_approx_mode=sdpa_exp_approx_mode,
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=sdpa_math_fidelity,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en,
         )
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
