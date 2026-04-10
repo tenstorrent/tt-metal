@@ -111,7 +111,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(scalar_tile_size, {{CBIndex::c_7, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_7, scalar_tile_size));
 
-    // BFP4 index CBs for reader → compute typecast pipeline
+    // BFP4 index CBs for reader → compute dequant pipeline
     CreateCircularBuffer(
         program,
         all_cores,
@@ -121,8 +121,28 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     CreateCircularBuffer(
         program,
         all_cores,
+        CircularBufferConfig(Sk_chunk_t * k_norms_tile_size, {{CBIndex::c_11, k_norms_df}})
+            .set_page_size(CBIndex::c_11, k_norms_tile_size));
+
+    CreateCircularBuffer(
+        program,
+        all_cores,
         CircularBufferConfig(v_chunk_tiles * k_idx_tile_size, {{CBIndex::c_12, k_idx_df}})
             .set_page_size(CBIndex::c_12, k_idx_tile_size));
+
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sk_chunk_t * k_norms_tile_size, {{CBIndex::c_13, k_norms_df}})
+            .set_page_size(CBIndex::c_13, k_norms_tile_size));
+
+    // Dequantize temp: holds one chunk's typecasted tiles for centroid gather + norm
+    uint32_t dq_temp_tiles = std::max(k_chunk_tiles, v_chunk_tiles);
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(dq_temp_tiles * bf16_tile_size, {{CBIndex::c_14, bf16_df}})
+            .set_page_size(CBIndex::c_14, bf16_tile_size));
 
     // SDPA intermediates
     CreateCircularBuffer(
