@@ -115,13 +115,13 @@ grid_11_10_configs = {
     (32, 3072, 6144): (2, 4, 8, (1, 2)),  # context mod 6×dim
     (32, 3072, 3072): (2, 4, 8, (2, 2)),  # time embed
     (32, 256, 3072): (2, 4, 8, (2, 2)),  # img_in / txt_in
-    # 4K denoising transformer - spatial sequence (18432 = 36864/SP2)
-    (18432, 3072, 4608): (8, 4, 8, (2, 2)),  # QKV proj: 72×18=1296 blocks
-    (18432, 3072, 1536): (8, 4, 4, (2, 2)),  # attn out: 72×12=864 blocks
-    (18432, 3072, 6144): (8, 4, 8, (2, 2)),  # FFN gate/up: 72×24=1728 blocks
-    (18432, 6144, 3072): (8, 4, 8, (2, 2)),  # FFN down: 72×12=864 blocks
-    (18432, 3072, 64): (8, 4, 2, (2, 2)),  # proj_out: 72×1=72 blocks
-    (18432, 64, 1536): (8, 2, 4, (2, 2)),  # small K proj: 72×12=864 blocks
+    # 4K denoising transformer - spatial sequence (18432 = 36864/SP2) — K_block=8 (safe, matches default)
+    (18432, 3072, 4608): (8, 8, 8, (2, 2)),  # QKV proj: 72×18=1296 blocks
+    (18432, 3072, 1536): (8, 8, 4, (2, 2)),  # attn out: 72×12=864 blocks
+    (18432, 3072, 6144): (8, 8, 8, (2, 2)),  # FFN gate/up: 72×24=1728 blocks
+    (18432, 6144, 3072): (8, 8, 8, (2, 2)),  # FFN down: 72×12=864 blocks
+    (18432, 3072, 64): (8, 8, 2, (2, 2)),  # proj_out: 72×1=72 blocks
+    (18432, 64, 1536): (8, 2, 8, (2, 2)),  # small K proj: 72×6=432 blocks
     # VAE decoder (1024x1024)
     (16384, 384, 1152): (8, 4, 4, (2, 2)),  # VAE linear
     (16384, 384, 384): (8, 4, 4, (2, 2)),  # VAE linear

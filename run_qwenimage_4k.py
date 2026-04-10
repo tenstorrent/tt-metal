@@ -18,7 +18,7 @@ import ttnn
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 
 MESH_SHAPE = (2, 2)
-NUM_INFERENCE_STEPS = 20  # Fewer steps for faster iteration during optimization
+NUM_INFERENCE_STEPS = 50
 # 4096x2304: 16:9 aspect, 9.4MP (larger than 4K UHD 8.3MP)
 # Patches: 256x144 = 36864, cleanly divisible by SP=2, k_chunk=512, tile=32
 WIDTH = 4096
