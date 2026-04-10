@@ -59,6 +59,148 @@ STARTOFTRANSCRIPT_TOKEN_ID = 50258  # <|startoftranscript|> token
 MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 
 
+# Max distinct (batch_key, encoder_seq_len) encoder traces to keep; evict oldest when exceeded.
+WHISPER_ENCODER_TRACE_MAX_BUCKETS = 16
+
+
+class EncoderTraceState:
+    """Holds captured encoder traces keyed by (trace_key, encoder_seq_len) for ``run_encoder_traced_or_eager``."""
+
+    def __init__(self):
+        self.trace_id_encoder = {}
+        self.trace_encoder_input = {}
+        self.trace_encoder_output = {}
+
+    def release_key(self, mesh_device, key):
+        tid = self.trace_id_encoder.pop(key, None)
+        if tid is not None:
+            ttnn.release_trace(mesh_device, tid)
+        tin = self.trace_encoder_input.pop(key, None)
+        if tin is not None:
+            ttnn.deallocate(tin, force=True)
+        tout = self.trace_encoder_output.pop(key, None)
+        if tout is not None:
+            ttnn.deallocate(tout, force=True)
+
+    def evict_oldest_if_full(self, mesh_device):
+        while len(self.trace_id_encoder) >= WHISPER_ENCODER_TRACE_MAX_BUCKETS:
+            oldest_key = next(iter(self.trace_id_encoder))
+            logger.debug(f"Evicting oldest encoder trace bucket {oldest_key} (max {WHISPER_ENCODER_TRACE_MAX_BUCKETS})")
+            self.release_key(mesh_device, oldest_key)
+
+    def release_all(self, mesh_device):
+        for key in list(self.trace_id_encoder.keys()):
+            self.release_key(mesh_device, key)
+
+
+def encoder_input_seq_len(input_embeds):
+    """Sequence length dimension of preprocessed encoder inputs (3D ``[B,S,D]`` or 4D ``[B,1,S,D]``)."""
+    shape = input_embeds.shape
+    if len(shape) == 3:
+        return int(shape[1])
+    if len(shape) == 4:
+        return int(shape[2])
+    raise ValueError(f"Unexpected encoder input_embeds rank {len(shape)}: {shape}")
+
+
+def encoder_trace_bucket_key(trace_key: int, seq_len: int) -> Tuple[int, int]:
+    """
+    Bucket key for encoder trace cache: ``(batch_size_per_device, encoder_seq_len)``.
+
+    Traces are captured per exact ``seq_len`` tensor shape. Optional coarser bucketing (e.g. rounding)
+    would require padded tensors and encoder attention masks — not applied here.
+    """
+    return (trace_key, seq_len)
+
+
+def run_encoder_traced_or_eager(
+    mesh_device,
+    config,
+    parameters_encoder,
+    trace_key,
+    input_embeds,
+    *,
+    enable_encoder_trace: bool,
+    trace_state: Optional[EncoderTraceState] = None,
+):
+    """
+    Run the Transformer ``encoder()`` stack, optionally using capture/replay per (trace_key, seq_len) bucket.
+
+    When ``enable_encoder_trace`` is True, ``trace_state`` must be provided and is mutated across calls.
+    """
+    if not enable_encoder_trace:
+        return ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=input_embeds,
+            parameters=parameters_encoder,
+        )
+    if trace_state is None:
+        raise ValueError("trace_state is required when enable_encoder_trace is True")
+
+    S = encoder_input_seq_len(input_embeds)
+    key = encoder_trace_bucket_key(trace_key, S)
+
+    if key in trace_state.trace_id_encoder:
+        try:
+            ttnn.copy(input_embeds, trace_state.trace_encoder_input[key])
+            ttnn.execute_trace(mesh_device, trace_state.trace_id_encoder[key], cq_id=0, blocking=True)
+            return trace_state.trace_encoder_output[key]
+        except Exception as exc:
+            logger.warning(
+                f"execute_trace failed for bucket key={key} ({exc}); invalidating bucket and falling back to eager encoder."
+            )
+            trace_state.release_key(mesh_device, key)
+            return ttnn_optimized_functional_whisper.encoder(
+                config=config,
+                inputs_embeds=input_embeds,
+                parameters=parameters_encoder,
+            )
+
+    trace_state.evict_oldest_if_full(mesh_device)
+
+    shape_list = list(input_embeds.shape)
+    trace_in = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape_list),
+        input_embeds.dtype,
+        input_embeds.layout,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.copy(input_embeds, trace_in)
+
+    warm_out = ttnn_optimized_functional_whisper.encoder(
+        config=config,
+        inputs_embeds=trace_in,
+        parameters=parameters_encoder,
+    )
+    ttnn.deallocate(warm_out, force=True)
+
+    try:
+        ttnn.copy(input_embeds, trace_in)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        captured_out = ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=trace_in,
+            parameters=parameters_encoder,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    except Exception as exc:
+        logger.warning(f"Encoder trace capture failed for bucket key={key} ({exc}); falling back to eager encoder.")
+        ttnn.deallocate(trace_in, force=True)
+        return ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=input_embeds,
+            parameters=parameters_encoder,
+        )
+
+    trace_state.trace_id_encoder[key] = trace_id
+    trace_state.trace_encoder_input[key] = trace_in
+    trace_state.trace_encoder_output[key] = captured_out
+    logger.info(f"Captured encoder trace for bucket (batch_pd={trace_key}, seq_len={S})")
+
+    return captured_out
+
+
 class WhisperGenerator:
     """
     Whisper generator with persistent trace support for efficient inference.
@@ -67,6 +209,11 @@ class WhisperGenerator:
     first generation and reused across all subsequent generations. The first decode iteration
     of each generation runs un-traced to populate the cross-attention cache with new encoder
     outputs, after which the persistent trace takes over.
+
+    Encoder trace (optional): the Transformer encoder stack (`encoder()` only, after mel
+    preprocessing) can be captured per `(batch_size_per_device, encoder_sequence_length)` and
+    replayed via `execute_trace` when the same bucket is seen again. New lengths fall back to
+    eager encoder, then capture for reuse. Preprocessing (conv front-end) stays eager.
 
     Pre-allocated DRAM tensors (KV cache, cross-attention cache, encoder hidden states,
     position tensors) maintain stable addresses across generations.
@@ -87,6 +234,7 @@ class WhisperGenerator:
         kv_cache_per_batch_size=None,
         cross_attn_cache_per_batch_size=None,
         max_batch_size=2,
+        enable_encoder_trace: bool = True,
     ):
         """
         Initialize the WhisperGenerator.
@@ -104,6 +252,8 @@ class WhisperGenerator:
             weights_mesh_mapper: Mesh mapper for weights
             kv_cache: Self-attention KV cache (optional)
             cross_attn_cache: Cross-attention cache (pre-allocated, optional)
+            enable_encoder_trace: If True (default), capture/replay `encoder()` per (batch_pd, seq_len)
+                bucket after the first occurrence; set False to always run eager encoder.
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -117,9 +267,13 @@ class WhisperGenerator:
         self.weights_mesh_mapper = weights_mesh_mapper
         self.kv_cache_per_batch_size = kv_cache_per_batch_size
         self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
+        self.enable_encoder_trace = enable_encoder_trace
 
         # Cross-attention cache validity flag
         self.cross_attn_cache_valid = False
+
+        # Encoder trace: key (trace_key, encoder_seq_len) -> captured graph for encoder() only
+        self.encoder_trace_state = EncoderTraceState()
 
         # Prefill trace (decoder-only, used during prefill with 2CQ events)
         self.trace_id_prefill_decoder = defaultdict(lambda: None)
@@ -220,6 +374,21 @@ class WhisperGenerator:
         """Invalidate cross-attention cache for new generation."""
         self.cross_attn_cache_valid = False
 
+    def _run_encoder_traced_or_eager(self, trace_key, input_embeds):
+        """
+        Run Transformer encoder: replay a captured trace when (trace_key, seq_len) matches,
+        otherwise eager encoder; capture on first sight of a bucket.
+        """
+        return run_encoder_traced_or_eager(
+            self.mesh_device,
+            self.config,
+            self.parameters.encoder,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=self.enable_encoder_trace,
+            trace_state=self.encoder_trace_state,
+        )
+
     def _reset_decode_pos(self, value, global_batch_size):
         """Reset current_decode_pos to a specific value in-place
 
@@ -244,8 +413,13 @@ class WhisperGenerator:
             )
             ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
 
+    def _release_all_encoder_traces(self):
+        """Release captured encoder traces and staging tensors."""
+        self.encoder_trace_state.release_all(self.mesh_device)
+
     def _release_decoder_trace(self):
         """Release all trace resources (for cleanup)."""
+        self._release_all_encoder_traces()
         # Release prefill traces
         for trace_key in list(self.trace_id_prefill_decoder.keys()):
             if self.trace_id_prefill_decoder[trace_key] is not None:
@@ -395,8 +569,10 @@ class WhisperGenerator:
         # Record event before trace execution
         self.op_event = ttnn.record_event(self.mesh_device, 0)
 
-        # Execute trace (non-blocking to allow Q1 overlap on next iteration)
-        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key], cq_id=0, blocking=False)
+        # Must block: the next prefill iteration overwrites trace_input_prefill_decoder via
+        # to_memory_config into the same L1 buffer; overlapping execution caused
+        # "Buffer is not allocated" / copy failures on long prompts (many prefix steps).
+        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key], cq_id=0, blocking=True)
 
         return self.trace_output_prefill_decoder[trace_key]
 
@@ -599,17 +775,12 @@ class WhisperGenerator:
             input_mesh_mapper=self.input_mesh_mapper,
         )
 
-        # Run encoder
-        encoder_output = ttnn_optimized_functional_whisper.encoder(
-            config=self.config,
-            inputs_embeds=input_embeds,
-            parameters=self.parameters.encoder,
-        )
+        # Run encoder (optional trace replay per batch/seq-length bucket; see _run_encoder_traced_or_eager)
+        trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+        encoder_output = self._run_encoder_traced_or_eager(trace_key, input_embeds)
 
         # Copy encoder output to pre-allocated tensor
-        ttnn.copy(
-            encoder_output, self.encoder_hidden_states_per_size[self._get_batch_size_per_device(unpadded_batch_size)]
-        )
+        ttnn.copy(encoder_output, self.encoder_hidden_states_per_size[trace_key])
         ttnn.synchronize_device(self.mesh_device)
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
