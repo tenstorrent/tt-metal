@@ -334,8 +334,7 @@ void kernel_main() {
             }
 
             // ─── Final normalization ───
-            // Perform final row-reduction on partial sum
-            // (matmul with column identity to reduce within-tile rows)
+            // Complete the partial sum reduction across tile columns
             matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
 
             // sum = 1.0 / sum
