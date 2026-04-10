@@ -7,7 +7,7 @@
 #include "internal/mod_div_lib.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -257,7 +257,7 @@ void kernel_main() {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
 
-    ckernel::MatmulOpConfig cfg{};
+    compute_kernel_lib::MatmulConfig cfg{};
     cfg.in0_cb_id = mm_in0_cb_id;
     cfg.in1_cb_id = in1_cb_id;
     cfg.out_cb_id = out_cb_id;
@@ -266,8 +266,7 @@ void kernel_main() {
     cfg.kt_dim = in0_block_w;
     cfg.transpose = false;
     cfg.partials_cb_id = spill ? matmul_partials_cb : 0u;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::BLOCK>(cfg);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -312,7 +311,8 @@ void kernel_main() {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
                                 in0_num_subblocks_read_last);
                         }
-                        mm.init_short_with_both_dt(in0_pretilize_cb_id, in0_pretilize_cb_id);
+                        compute_kernel_lib::matmul_init_short_with_both_dt(
+                            cfg, in0_pretilize_cb_id, in0_pretilize_cb_id);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -352,7 +352,7 @@ void kernel_main() {
                         }
                     }
 
-                    mm.init_short_with_both_dt(in0_cb_id, in0_cb_id);
+                    compute_kernel_lib::matmul_init_short_with_both_dt(cfg, in0_cb_id, in0_cb_id);
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
@@ -383,14 +383,22 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        mm.begin_subblock();
+                        compute_kernel_lib::matmul_acquire_dst();
                         if (enable_reload) {
-                            mm.reload_partials(out_subblock_num_tiles);
+                            compute_kernel_lib::matmul_reload_partials<compute_kernel_lib::MatmulMode::BLOCK>(
+                                cfg, out_subblock_num_tiles);
                         }
 
                         // Compute output sub-block
-                        mm.accumulate(
-                            in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, 1, in1_block_w, 0);
+                        compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::BLOCK>(
+                            cfg,
+                            in0_index_subblock_offset,
+                            in1_index_subblock_offset,
+                            0,
+                            in0_block_w,
+                            1,
+                            in1_block_w,
+                            0);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {

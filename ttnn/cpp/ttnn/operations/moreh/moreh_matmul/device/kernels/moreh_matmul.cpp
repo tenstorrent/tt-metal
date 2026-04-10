@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -189,11 +189,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     bool need_other_mask_h,
     bool need_other_mask_w) {
     // TODO: checking required when the input cb format and intermediate cb format are different.
-    ckernel::MatmulOpConfig mm_init_cfg{};
-    mm_init_cfg.in0_cb_id = cb_in0;
-    mm_init_cfg.in1_cb_id = cb_in1;
-    mm_init_cfg.out_cb_id = cb_out0;
-    ckernel::TileMatmulOp(mm_init_cfg).init();
+    auto mm_init_cfg = compute_kernel_lib::MatmulConfig::tile(cb_in0, cb_in1, cb_out0);
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::TILE>(mm_init_cfg);
     if (transpose_input || transpose_other) {
         transpose_wh_init(cb_in0, cb_out0);
     }
@@ -283,13 +280,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            ckernel::MatmulOpConfig mm_cfg{};
-            mm_cfg.in0_cb_id = mm_src0;
-            mm_cfg.in1_cb_id = mm_src1;
-            mm_cfg.out_cb_id = cb_out0;
-            ckernel::TileMatmulOp mm(mm_cfg);
-            mm.init_short();
-            mm.matmul_one_tile(0, 0, 0);
+            auto mm_cfg = compute_kernel_lib::MatmulConfig::tile(mm_src0, mm_src1, cb_out0);
+            compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::TILE>(mm_cfg);
+            compute_kernel_lib::matmul_tile<compute_kernel_lib::MatmulMode::TILE>(mm_cfg, 0, 0, 0);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
@@ -323,14 +316,10 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    ckernel::MatmulOpConfig mm_cfg{};
-    mm_cfg.in0_cb_id = cb_in0;
-    mm_cfg.in1_cb_id = cb_in1;
-    mm_cfg.out_cb_id = cb_out0;
-    ckernel::TileMatmulOp mm(mm_cfg);
-    mm.init();
+    auto mm_cfg = compute_kernel_lib::MatmulConfig::tile(cb_in0, cb_in1, cb_out0);
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::TILE>(mm_cfg);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        mm.compute_one_tile(Kt);
+        compute_kernel_lib::matmul_compute_tile(mm_cfg, Kt);
     }
 }
 

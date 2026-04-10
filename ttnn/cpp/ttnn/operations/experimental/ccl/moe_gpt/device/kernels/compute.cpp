@@ -5,7 +5,7 @@
 #include "moe_gpt_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -140,25 +140,23 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
     // Initialize matmul for W0/W1 data path
-    ckernel::MatmulOpConfig w0_w1_data_cfg{};
-    w0_w1_data_cfg.in0_cb_id = cb_s2c_in;
-    w0_w1_data_cfg.in1_cb_id = cb_r2c_w0_w1;
-    w0_w1_data_cfg.out_cb_id = cb_s2c_in2;
-    w0_w1_data_cfg.ct_dim = 4;
-    w0_w1_data_cfg.rt_dim = 1;
-    w0_w1_data_cfg.kt_dim = 1;
-    ckernel::BlockMatmulOp mm_data(w0_w1_data_cfg);
-    mm_data.init();
+    compute_kernel_lib::MatmulConfig w0_w1_data_cfg{
+        .in0_cb_id = cb_s2c_in,
+        .in1_cb_id = cb_r2c_w0_w1,
+        .out_cb_id = cb_s2c_in2,
+        .ct_dim = 4,
+        .rt_dim = 1,
+        .kt_dim = 1};
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::BLOCK>(w0_w1_data_cfg);
 
-    // Bias matmul: ones_tile @ bias_row (same ct/rt/kt, different in0 CB)
-    ckernel::MatmulOpConfig w0_w1_bias_cfg{};
-    w0_w1_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
-    w0_w1_bias_cfg.in1_cb_id = cb_r2c_w0_w1;
-    w0_w1_bias_cfg.out_cb_id = cb_s2c_in2;
-    w0_w1_bias_cfg.ct_dim = 4;
-    w0_w1_bias_cfg.rt_dim = 1;
-    w0_w1_bias_cfg.kt_dim = 1;
-    ckernel::BlockMatmulOp mm_bias(w0_w1_bias_cfg);
+    // Bias matmul config: ones_tile @ bias_row (same ct/rt/kt, different in0 CB)
+    compute_kernel_lib::MatmulConfig w0_w1_bias_cfg{
+        .in0_cb_id = cb_c2c_ones_tile,
+        .in1_cb_id = cb_r2c_w0_w1,
+        .out_cb_id = cb_s2c_in2,
+        .ct_dim = 4,
+        .rt_dim = 1,
+        .kt_dim = 1};
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
@@ -216,8 +214,14 @@ void kernel_main() {
                 uint32_t in0_index = in0_base;
 
                 tile_regs_acquire();
-                mm_data.moe_accumulate_with_bias(
-                    mm_bias, in0_index, w0_w1_blocks_per_two_elt_tile, w0_w1_tiles_per_block, 4, num_w0_w1_tiles_h);
+                compute_kernel_lib::matmul_moe_with_bias<compute_kernel_lib::MatmulMode::BLOCK>(
+                    w0_w1_data_cfg,
+                    w0_w1_bias_cfg,
+                    in0_index,
+                    w0_w1_blocks_per_two_elt_tile,
+                    w0_w1_tiles_per_block,
+                    4,
+                    num_w0_w1_tiles_h);
 
                 tile_regs_commit();
 
@@ -243,23 +247,21 @@ void kernel_main() {
             cb_push_back(cb_c2w_rdy, 1);
 
             // W2 matmul + untilize (dm1 does A2A ring, compute does W2) (with bias)
-            ckernel::MatmulOpConfig w2_data_cfg{};
-            w2_data_cfg.in0_cb_id = cb_s2c_in2;
-            w2_data_cfg.in1_cb_id = cb_r2c_w2;
-            w2_data_cfg.out_cb_id = cb_c2s_out;
-            w2_data_cfg.ct_dim = 4;
-            w2_data_cfg.rt_dim = 1;
-            w2_data_cfg.kt_dim = 1;
-            ckernel::BlockMatmulOp mm_w2_data(w2_data_cfg);
+            compute_kernel_lib::MatmulConfig w2_data_cfg{
+                .in0_cb_id = cb_s2c_in2,
+                .in1_cb_id = cb_r2c_w2,
+                .out_cb_id = cb_c2s_out,
+                .ct_dim = 4,
+                .rt_dim = 1,
+                .kt_dim = 1};
 
-            ckernel::MatmulOpConfig w2_bias_cfg{};
-            w2_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
-            w2_bias_cfg.in1_cb_id = cb_r2c_w2;
-            w2_bias_cfg.out_cb_id = cb_c2s_out;
-            w2_bias_cfg.ct_dim = 4;
-            w2_bias_cfg.rt_dim = 1;
-            w2_bias_cfg.kt_dim = 1;
-            ckernel::BlockMatmulOp mm_w2_bias(w2_bias_cfg);
+            compute_kernel_lib::MatmulConfig w2_bias_cfg{
+                .in0_cb_id = cb_c2c_ones_tile,
+                .in1_cb_id = cb_r2c_w2,
+                .out_cb_id = cb_c2s_out,
+                .ct_dim = 4,
+                .rt_dim = 1,
+                .kt_dim = 1};
 
             cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
             constexpr uint32_t w2_bias_blocks_per_iter_fused = w2_blocks_per_expert / num_a2a_iters;
@@ -269,12 +271,13 @@ void kernel_main() {
 
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 cb_wait_front(cb_w2c_rdy, 1);
-                ckernel::MoeDm1State dm1_fused{
+                compute_kernel_lib::MoeDm1State dm1_fused{
                     0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
 
                 tile_regs_acquire();
-                mm_w2_data.moe_w2_accumulate_with_dm1_cycling(
-                    mm_w2_bias,
+                compute_kernel_lib::matmul_moe_w2_dm1_cycling<compute_kernel_lib::MatmulMode::BLOCK>(
+                    w2_data_cfg,
+                    w2_bias_cfg,
                     dm1_fused,
                     w2_bias_blocks_per_iter_fused,
                     w2_tiles_per_block,
@@ -325,8 +328,9 @@ void kernel_main() {
             uint32_t in0_index = expert_id * num_w0_w1_tiles_h;
 
             tile_regs_acquire();
-            mm_data.moe_accumulate_with_bias(
-                mm_bias,
+            compute_kernel_lib::matmul_moe_with_bias<compute_kernel_lib::MatmulMode::BLOCK>(
+                w0_w1_data_cfg,
+                w0_w1_bias_cfg,
                 in0_index,
                 w0_w1_blocks_per_two_elt_tile,
                 w0_w1_tiles_per_block,
@@ -354,34 +358,33 @@ void kernel_main() {
         cb_push_back(cb_c2w_rdy, 1);
 
         // Compute in2 @ W2 with bias
-        ckernel::MatmulOpConfig w2_data_cfg{};
-        w2_data_cfg.in0_cb_id = cb_s2c_in2;
-        w2_data_cfg.in1_cb_id = cb_r2c_w2;
-        w2_data_cfg.out_cb_id = cb_c2s_out;
-        w2_data_cfg.ct_dim = 4;
-        w2_data_cfg.rt_dim = 1;
-        w2_data_cfg.kt_dim = 1;
-        ckernel::BlockMatmulOp mm_w2_data(w2_data_cfg);
+        compute_kernel_lib::MatmulConfig w2_data_cfg{
+            .in0_cb_id = cb_s2c_in2,
+            .in1_cb_id = cb_r2c_w2,
+            .out_cb_id = cb_c2s_out,
+            .ct_dim = 4,
+            .rt_dim = 1,
+            .kt_dim = 1};
 
-        ckernel::MatmulOpConfig w2_bias_cfg{};
-        w2_bias_cfg.in0_cb_id = cb_c2c_ones_tile;
-        w2_bias_cfg.in1_cb_id = cb_r2c_w2;
-        w2_bias_cfg.out_cb_id = cb_c2s_out;
-        w2_bias_cfg.ct_dim = 4;
-        w2_bias_cfg.rt_dim = 1;
-        w2_bias_cfg.kt_dim = 1;
-        ckernel::BlockMatmulOp mm_w2_bias(w2_bias_cfg);
+        compute_kernel_lib::MatmulConfig w2_bias_cfg{
+            .in0_cb_id = cb_c2c_ones_tile,
+            .in1_cb_id = cb_r2c_w2,
+            .out_cb_id = cb_c2s_out,
+            .ct_dim = 4,
+            .rt_dim = 1,
+            .kt_dim = 1};
 
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             cb_wait_front(cb_w2c_rdy, 1);
             constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
-            ckernel::MoeDm1State dm1_nonfused{
+            compute_kernel_lib::MoeDm1State dm1_nonfused{
                 0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
 
             tile_regs_acquire();
-            mm_w2_data.moe_w2_accumulate_with_dm1_cycling(
-                mm_w2_bias,
+            compute_kernel_lib::matmul_moe_w2_dm1_cycling<compute_kernel_lib::MatmulMode::BLOCK>(
+                w2_data_cfg,
+                w2_bias_cfg,
                 dm1_nonfused,
                 w2_bias_blocks_per_iter,
                 w2_tiles_per_block,

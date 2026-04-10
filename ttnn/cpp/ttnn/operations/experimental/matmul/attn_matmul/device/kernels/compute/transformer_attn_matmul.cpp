@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "experimental/circular_buffer.h"
@@ -40,22 +40,19 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    ckernel::MatmulOpConfig mm_cfg{};
-    mm_cfg.in0_cb_id = cb_in0;
-    mm_cfg.in1_cb_id = cb_in1;
-    mm_cfg.out_cb_id = cb_intermed0;
-    mm_cfg.transpose = static_cast<bool>(transpose_hw);
-    ckernel::TileMatmulOp mm(mm_cfg);
-    mm.init();
+    using namespace compute_kernel_lib;
+    MatmulConfig mm_cfg =
+        MatmulConfig::tile(cb_in0, cb_in1, cb_intermed0).with_transpose(static_cast<bool>(transpose_hw));
+    matmul_init<MatmulMode::TILE>(mm_cfg);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
-                    mm.begin_subblock();
-                    mm.accumulate_attn(Kt, tile_row_id == 0);
-                    mm.end_to_output(cb_intermed0, onetile);
+                    matmul_acquire_dst();
+                    matmul_attention(mm_cfg, Kt, tile_row_id == 0);
+                    matmul_pack_output(cb_intermed0, onetile);
 
                     // untilize tile and write to CBIndex::c_25 with reconfiguration
                     compute_kernel_lib::untilize<
@@ -66,7 +63,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    mm.init_short_with_dt(cb_intermed0);
+                    matmul_init_short_with_dt<MatmulMode::TILE>(mm_cfg, cb_intermed0);
                 }
                 cb_in0_obj.pop_front(Kt);
 

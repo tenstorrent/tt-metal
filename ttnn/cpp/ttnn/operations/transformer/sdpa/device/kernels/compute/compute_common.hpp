@@ -21,7 +21,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
@@ -1200,16 +1200,15 @@ ALWI void matmul_blocks(
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = in0_cb;
-    cfg.in1_cb_id = in1_cb;
-    cfg.out_cb_id = out_cb;
-    cfg.ct_dim = subblock_w;
-    cfg.rt_dim = subblock_h;
-    cfg.kt_dim = in0_block_w;
-    cfg.transpose = transpose;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init_short();
+    compute_kernel_lib::MatmulConfig mm_cfg{};
+    mm_cfg.in0_cb_id = in0_cb;
+    mm_cfg.in1_cb_id = in1_cb;
+    mm_cfg.out_cb_id = out_cb;
+    mm_cfg.ct_dim = subblock_w;
+    mm_cfg.rt_dim = subblock_h;
+    mm_cfg.kt_dim = in0_block_w;
+    mm_cfg.transpose = transpose;
+    compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::BLOCK>(mm_cfg);
 
     const uint32_t output_num_tiles = M * N;
     const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
@@ -1230,7 +1229,8 @@ ALWI void matmul_blocks(
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
 
-            mm.accumulate(in0_index_offset, in1_index_offset, 0, in0_block_w, 1, N, 0);
+            compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::BLOCK>(
+                mm_cfg, in0_index_offset, in1_index_offset, 0, in0_block_w, 1, N, 0);
 
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
@@ -1285,15 +1285,14 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
-    ckernel::MatmulOpConfig reduce_cfg{};
-    reduce_cfg.in0_cb_id = out_cb;
-    reduce_cfg.in1_cb_id = in1_cb;
-    reduce_cfg.out_cb_id = out_cb;
-    reduce_cfg.ct_dim = subblock_w;
-    reduce_cfg.rt_dim = subblock_h;
-    reduce_cfg.kt_dim = in0_block_w;
-    ckernel::BlockMatmulOp mm(reduce_cfg);
-    mm.init_short();
+    compute_kernel_lib::MatmulConfig reduce_mm_cfg{};
+    reduce_mm_cfg.in0_cb_id = out_cb;
+    reduce_mm_cfg.in1_cb_id = in1_cb;
+    reduce_mm_cfg.out_cb_id = out_cb;
+    reduce_mm_cfg.ct_dim = subblock_w;
+    reduce_mm_cfg.rt_dim = subblock_h;
+    reduce_mm_cfg.kt_dim = in0_block_w;
+    compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::BLOCK>(reduce_mm_cfg);
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
@@ -1302,7 +1301,8 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     cb_wait_front(in1_cb, N);
     cb_wait_front(out_cb, M);
 
-    mm.reduce_subblock_inplace(in0_num_subblocks, subblock_h);
+    compute_kernel_lib::matmul_reduce_subblock_inplace<compute_kernel_lib::MatmulMode::BLOCK>(
+        reduce_mm_cfg, in0_num_subblocks, subblock_h);
 }
 
 /**

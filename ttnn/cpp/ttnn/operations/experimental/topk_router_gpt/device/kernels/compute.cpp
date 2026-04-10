@@ -11,7 +11,7 @@
 //            insertion-sort topk → softmax → pack final output
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose_wh.h"
@@ -79,15 +79,14 @@ void kernel_main() {
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = cb_input;
-    cfg.in1_cb_id = cb_weight;
-    cfg.out_cb_id = cb_local_out;
-    cfg.ct_dim = 1;
-    cfg.rt_dim = 1;
-    cfg.kt_dim = 1;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    compute_kernel_lib::MatmulConfig cfg{
+        .in0_cb_id = cb_input,
+        .in1_cb_id = cb_weight,
+        .out_cb_id = cb_local_out,
+        .ct_dim = 1,
+        .rt_dim = 1,
+        .kt_dim = 1};
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::BLOCK>(cfg);
     tile_regs_acquire();
 
     uint32_t tiles_done = 0;
@@ -100,7 +99,7 @@ void kernel_main() {
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
 
-        mm.accumulate(0, 0, 0, block, 1, 1, 0);
+        compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::BLOCK>(cfg, 0, 0, 0, block, 1, 1, 0);
 
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);

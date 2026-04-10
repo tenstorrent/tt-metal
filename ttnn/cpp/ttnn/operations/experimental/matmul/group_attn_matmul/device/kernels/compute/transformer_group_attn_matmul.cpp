@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "experimental/circular_buffer.h"
@@ -60,13 +60,10 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
-    ckernel::MatmulOpConfig mm_cfg{};
-    mm_cfg.in0_cb_id = cb_in0;
-    mm_cfg.in1_cb_id = cb_in1;
-    mm_cfg.out_cb_id = cb_intermed0;
-    mm_cfg.transpose = static_cast<bool>(transpose_hw);
-    ckernel::TileMatmulOp mm(mm_cfg);
-    mm.init();
+    using namespace compute_kernel_lib;
+    MatmulConfig mm_cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_intermed0)
+                              .with_transpose(static_cast<bool>(transpose_hw));
+    matmul_init<MatmulMode::TILE>(mm_cfg);
 
     for (uint32_t b = 0; b < batch; b++) {
 
@@ -88,7 +85,8 @@ void kernel_main() {
 
                             tile_regs_acquire();
 
-                            mm.accumulate_tile_subblock(
+                            matmul_accumulate_subblock<MatmulMode::TILE>(
+                                mm_cfg,
                                 in0_index_subblock_offset,
                                 in1_index_subblock_offset,
                                 out_subblock_h,

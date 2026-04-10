@@ -6,7 +6,7 @@
 #include "tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -56,15 +56,9 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = cb_s2c_in;
-    cfg.in1_cb_id = cb_r2c_w;
-    cfg.out_cb_id = cb_c2w_out;
-    cfg.ct_dim = 7;
-    cfg.rt_dim = 1;
-    cfg.kt_dim = 1;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    compute_kernel_lib::MatmulConfig cfg{
+        .in0_cb_id = cb_s2c_in, .in1_cb_id = cb_r2c_w, .out_cb_id = cb_c2w_out, .ct_dim = 7, .rt_dim = 1, .kt_dim = 1};
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::BLOCK>(cfg);
 
     //---------------------------------------------------------------------
     // Compute in @ W
@@ -83,7 +77,8 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            mm.accumulate(in0_index, 0, 0, w_tiles_per_block / 7, 1, 7, 0);
+            compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::BLOCK>(
+                cfg, in0_index, 0, 0, w_tiles_per_block / 7, 1, 7, 0);
             in0_index += w_tiles_per_block / 7;
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }

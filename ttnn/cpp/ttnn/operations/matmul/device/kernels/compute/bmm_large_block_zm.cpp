@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
 
@@ -32,12 +32,9 @@ void kernel_main() {
     experimental::CircularBuffer out_cb(cb_out);
     experimental::CircularBuffer intermed0_cb(cb_intermed0);
 
-    ckernel::MatmulOpConfig mm_cfg{};
-    mm_cfg.in0_cb_id = cb_in0;
-    mm_cfg.in1_cb_id = cb_in1;
-    mm_cfg.out_cb_id = cb_intermed0;
-    ckernel::TileMatmulOp mm(mm_cfg);
-    mm.init();
+    using namespace compute_kernel_lib;
+    MatmulConfig mm_cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_intermed0);
+    matmul_init<MatmulMode::TILE>(mm_cfg);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -62,11 +59,12 @@ void kernel_main() {
                             copy_tile(cb_intermed0, i, i);
                         }
                         intermed0_cb.pop_front(out_subblock_num_tiles);
-                        mm.init_short_with_dt(cb_intermed0);
+                        matmul_init_short_with_dt<MatmulMode::TILE>(mm_cfg, cb_intermed0);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
-                    mm.accumulate_tile_subblock(
+                    matmul_accumulate_subblock<MatmulMode::TILE>(
+                        mm_cfg,
                         in0_index_subblock_offset,
                         in1_index_subblock_offset,
                         out_subblock_h,

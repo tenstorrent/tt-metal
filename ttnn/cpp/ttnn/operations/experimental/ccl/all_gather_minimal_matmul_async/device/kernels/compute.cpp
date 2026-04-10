@@ -5,7 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -268,7 +268,7 @@ void add_bias_and_addcmul_block(
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
-    const ckernel::BlockMatmulOp& mm,
+    const compute_kernel_lib::MatmulConfig& mm_cfg,
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
@@ -283,7 +283,8 @@ void matmul_blocks(
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
 
-            mm.accumulate(in0_index_offset, in1_index_offset, 0, K_block_tiles, 1, full_N_block_tiles, 0);
+            compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::BLOCK>(
+                mm_cfg, in0_index_offset, in1_index_offset, 0, K_block_tiles, 1, full_N_block_tiles, 0);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -343,7 +344,7 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    ckernel::MatmulOpConfig cfg{};
+    compute_kernel_lib::MatmulConfig cfg{};
     cfg.in0_cb_id = in0_cb;
     cfg.in1_cb_id = in1_cb;
     cfg.out_cb_id = intermediate_cb;
@@ -351,8 +352,7 @@ void kernel_main() {
     cfg.rt_dim = subblock_h;
     cfg.kt_dim = K_block_tiles;
     cfg.transpose = false;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::BLOCK>(cfg);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -383,8 +383,7 @@ void kernel_main() {
             cfg.ct_dim = current_subblock_w;
             cfg.rt_dim = current_subblock_h;
             cfg.kt_dim = K_block_tiles;
-            mm = ckernel::BlockMatmulOp(cfg);
-            mm.init_short();
+            compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::BLOCK>(cfg);
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
@@ -394,7 +393,7 @@ void kernel_main() {
                 cb_wait_front(in1_cb, in1_block_num_tiles);
 
                 matmul_blocks(
-                    mm,
+                    cfg,
                     intermediate_cb,
                     current_M_block_tiles,
                     current_N_block_tiles,

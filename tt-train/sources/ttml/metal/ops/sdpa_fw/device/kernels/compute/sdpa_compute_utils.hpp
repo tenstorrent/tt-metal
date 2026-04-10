@@ -14,9 +14,9 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
-#include "api/compute/matmul_op.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 
 constexpr uint32_t onetile = 1U;
 
@@ -140,17 +140,14 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    ckernel::MatmulOpConfig qkv_cfg{};
-    qkv_cfg.in0_cb_id = cb_qk_result;
-    qkv_cfg.in1_cb_id = cb_value;
-    qkv_cfg.out_cb_id = cb_cur_mm_out;
-    ckernel::TileMatmulOp mm(qkv_cfg);
-    mm.init_short();
+    auto qkv_cfg = compute_kernel_lib::MatmulConfig::tile(cb_qk_result, cb_value, cb_cur_mm_out);
+    compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::TILE>(qkv_cfg);
     pack_reconfig_data_format(cb_cur_mm_out);
     reconfig_data_format(cb_qk_result, cb_value);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        mm.accumulate(0, tile_idx, 0, block_size, 0, 1, 1);
+        compute_kernel_lib::matmul_accumulate<compute_kernel_lib::MatmulMode::TILE>(
+            qkv_cfg, 0, tile_idx, 0, block_size, 0, 1, 1);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -263,13 +260,9 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_matmul_reduce);  // reconfig data format to precise
     tile_regs_acquire();
 
-    ckernel::MatmulOpConfig reduce_cfg{};
-    reduce_cfg.in0_cb_id = cb_in_idx;
-    reduce_cfg.in1_cb_id = cb_matmul_reduce;
-    reduce_cfg.out_cb_id = cb_identity_scaler;
-    ckernel::TileMatmulOp mm_reduce(reduce_cfg);
-    mm_reduce.init();
-    mm_reduce.matmul_one_tile(0, 0, reduce_dst_idx);
+    auto reduce_cfg = compute_kernel_lib::MatmulConfig::tile(cb_in_idx, cb_matmul_reduce, cb_identity_scaler);
+    compute_kernel_lib::matmul_init<compute_kernel_lib::MatmulMode::TILE>(reduce_cfg);
+    compute_kernel_lib::matmul_tile<compute_kernel_lib::MatmulMode::TILE>(reduce_cfg, 0, 0, reduce_dst_idx);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);

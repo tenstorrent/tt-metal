@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
@@ -190,17 +190,18 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = in0_cb_id;
-    cfg.in1_cb_id = in1_cb_id;
-    cfg.out_cb_id = mm_partials_cb_id;
-    cfg.ct_dim = out_subblock_w;
-    cfg.rt_dim = out_subblock_h;
-    cfg.kt_dim = in0_block_w;
-    cfg.transpose = in1_transpose_tile;
-    cfg.partials_cb_id = spill ? mm_partials_cb_id : 0u;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    using namespace compute_kernel_lib;
+    MatmulConfig cfg{
+        .in0_cb_id = in0_cb_id,
+        .in1_cb_id = in1_cb_id,
+        .out_cb_id = mm_partials_cb_id,
+        .ct_dim = out_subblock_w,
+        .rt_dim = out_subblock_h,
+        .kt_dim = in0_block_w,
+        .transpose = in1_transpose_tile,
+        .partials_cb_id = spill ? mm_partials_cb_id : 0u,
+    };
+    matmul_init<MatmulMode::BLOCK>(cfg);
 
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -248,7 +249,7 @@ void kernel_main() {
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm.init_short_with_dt(in0_transpose_cb_id);
+                        matmul_init_short_with_dt<MatmulMode::BLOCK>(cfg, in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
@@ -259,14 +260,15 @@ void kernel_main() {
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            mm.begin_subblock();
+                            matmul_acquire_dst();
                             if (enable_reload) {
-                                mm.reload_partials(out_subblock_num_tiles);
+                                matmul_reload_partials<MatmulMode::BLOCK>(cfg, out_subblock_num_tiles);
                             }
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
-                            mm.accumulate(
+                            matmul_accumulate<MatmulMode::BLOCK>(
+                                cfg,
                                 in0_index_subblock_offset,
                                 in1_index_subblock_offset,
                                 0,
@@ -466,7 +468,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
-                    mm.init_short();
+                    matmul_init_short<MatmulMode::BLOCK>(cfg);
                 }
             }
         }

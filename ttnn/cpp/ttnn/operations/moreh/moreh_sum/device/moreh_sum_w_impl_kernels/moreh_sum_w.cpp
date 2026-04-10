@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -40,13 +40,10 @@ void kernel_main() {
             cb_input = tt::CBIndex::c_0;
             bool is_w_single_tile = (Wt == 1);
             if (!is_w_single_tile) {
-                ckernel::MatmulOpConfig mm_cfg{};
-                mm_cfg.in0_cb_id = cb_input;
-                mm_cfg.in1_cb_id = cb_scaler;
-                mm_cfg.out_cb_id = cb_out;
-                ckernel::TileMatmulOp mm(mm_cfg);
+                compute_kernel_lib::MatmulConfig mm_cfg =
+                    compute_kernel_lib::MatmulConfig::tile(cb_input, cb_scaler, cb_out);
                 tile_regs_acquire();
-                mm.reduce_w_tiles_with_init(Wt - 1, reduce_dst_idx);
+                compute_kernel_lib::matmul_reduce_w<true>(mm_cfg, Wt - 1, reduce_dst_idx);
                 tile_regs_commit();
                 cb_reserve_back(cb_accum_dst, onetile);
                 tile_regs_wait();
@@ -98,13 +95,10 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            ckernel::MatmulOpConfig mm_cfg2{};
-            mm_cfg2.in0_cb_id = cb_input;
-            mm_cfg2.in1_cb_id = cb_scaler;
-            mm_cfg2.out_cb_id = cb_out;
-            ckernel::TileMatmulOp mm2(mm_cfg2);
-            mm2.init_short();
-            mm2.matmul_one_tile(0, 0, reduce_dst_idx);
+            compute_kernel_lib::MatmulConfig mm_cfg2 =
+                compute_kernel_lib::MatmulConfig::tile(cb_input, cb_scaler, cb_out);
+            compute_kernel_lib::matmul_init_short<compute_kernel_lib::MatmulMode::TILE>(mm_cfg2);
+            compute_kernel_lib::matmul_tile<compute_kernel_lib::MatmulMode::TILE>(mm_cfg2, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);
