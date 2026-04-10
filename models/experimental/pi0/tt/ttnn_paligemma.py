@@ -85,7 +85,10 @@ class PaliGemmaBackboneTTNN:
         if self.use_expert_adarms:
             # Pi0.5: adaRMS for final expert norm - dense projection
             norm_dense_w = weights["action_expert"]["model.norm.dense.weight"]
-            norm_dense_b = weights["action_expert"]["model.norm.dense.bias"]
+            norm_dense_b = weights["action_expert"]["model.norm.dense.bias"].clone()
+            # Pre-add +1 to scale portion of bias (first expert_width elements)
+            expert_width = config.expert_config.width
+            norm_dense_b[:expert_width] += 1.0
             self.expert_norm_dense_weight = ttnn.from_torch(
                 norm_dense_w.T.contiguous(),
                 dtype=ttnn.bfloat16,
@@ -318,6 +321,11 @@ class PaliGemmaBackboneTTNN:
                         )
                     else:
                         # Bias: 1D -> 2D
+                        # Pre-add +1 to scale portion of bias (first hidden_dim elements)
+                        # This avoids a runtime add(scale, 1.0) op in adarms_norm_ttnn
+                        hidden_dim = self.config.expert_config.width
+                        value = value.clone()
+                        value[:hidden_dim] += 1.0
                         block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 elif "weight" in new_key and not is_norm_scalar:
                     # Regular weight matrices: transpose for TTNN linear

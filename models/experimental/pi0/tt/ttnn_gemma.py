@@ -110,12 +110,11 @@ def adarms_norm_ttnn(
     gate = ttnn.slice(modulation, [0, 0, hidden_dim * 2], [batch_size, 1, hidden_dim * 3])
     ttnn.deallocate(modulation)
 
-    # FUSED: rms_norm with dynamic weight=(1+scale) and bias=shift
-    # This replaces 3 separate ops (rms_norm + mac + add) with 2 ops (add + rms_norm)
-    weight_dynamic = ttnn.add(scale, 1.0)
+    # FUSED: rms_norm with dynamic weight=scale and bias=shift
+    # The +1 offset is pre-baked into the dense bias during initialization
+    # so scale already contains (1 + learned_scale)
+    normed = ttnn.rms_norm(x, weight=scale, bias=shift, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(scale)
-    normed = ttnn.rms_norm(x, weight=weight_dynamic, bias=shift, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(weight_dynamic)
     ttnn.deallocate(shift)
 
     return normed, gate
