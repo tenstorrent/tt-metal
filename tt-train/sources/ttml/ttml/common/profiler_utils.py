@@ -2,15 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Profiler marker that tracks both forward and backward passes.
+"""Profiler markers that track both forward and backward passes.
 
-Usage (model-level, with backward tracking)::
+Usage (zone markers for visualization)::
+
+    from ttml.common.profiler_utils import profiler_marker_start, profiler_marker_end
+
+    x = profiler_marker_start(x, "[Block] Attn")
+    x = self.attn(x, mask)
+    x = profiler_marker_end(x, "[Block] Attn")
+    # Forward:  "[FWD] [START] [Block] Attn" ... "[FWD] [END] [Block] Attn"
+    # Backward: "[BWD] [END] [Block] Attn"   ... "[BWD] [START] [Block] Attn"
+
+Usage (low-level, arbitrary name)::
 
     from ttml.common.profiler_utils import profiler_marker
 
-    x = profiler_marker(x, "[START] [Llama] after tok_emb")
-    # Emits "[FWD] [START] [Llama] after tok_emb" during forward
-    # Emits "[BWD] [START] [Llama] after tok_emb" during backward
+    x = profiler_marker(x, "my custom marker")
+    # Emits "[FWD] my custom marker" / "[BWD] my custom marker"
 
 Usage (training-loop, forward-only)::
 
@@ -115,3 +124,22 @@ def profiler_marker(x, name, dump_results=False):
         output.set_node(node_id)
 
     return output
+
+
+def profiler_marker_start(x, name, dump_results=False):
+    """Convenience wrapper: ``profiler_marker(x, "[START] <name>", ...)``.
+
+    Use with :func:`profiler_marker_end` to create ``[START]``/``[END]``
+    zone pairs recognised by the profiling visualisation notebook.
+
+    See :func:`profiler_marker` for full argument docs.
+    """
+    return profiler_marker(x, f"[START] {name}", dump_results=dump_results)
+
+
+def profiler_marker_end(x, name, dump_results=False):
+    """Convenience wrapper: ``profiler_marker(x, "[END] <name>", ...)``.
+
+    See :func:`profiler_marker_start`.
+    """
+    return profiler_marker(x, f"[END] {name}", dump_results=dump_results)

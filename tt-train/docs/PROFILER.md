@@ -157,35 +157,19 @@ to build a hierarchical flamegraph of your training step.
 ### API
 
 ```python
-from ttml.common.profiler_utils import profiler_marker
+from ttml.common.profiler_utils import profiler_marker_start, profiler_marker_end
 ```
 
-`**profiler_marker(x, name, dump_results=False)**`
+**`profiler_marker_start(x, name, dump_results=False)`** / **`profiler_marker_end(x, name, dump_results=False)`**
 
-
-| Argument       | Description                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `x`            | Autograd tensor to pass through, or `None` for a forward-only marker.                            |
-| `name`         | Marker name. Automatically prefixed with `[FWD]` or `[BWD]`.                                     |
-| `dump_results` | If `True`, flush device profiling data to disk. Expensive — use sparingly (e.g. once per block). |
-
-
-Returns a **new autograd tensor** wrapping the same device data. The caller
-**must use the returned value** — discarding it drops the backward node.
-
-- **Forward:** immediately fires a device noop tagged `[FWD] <name>`.
-- **Backward:** fires `[BWD] <name>` when gradients reach this node.
-- `**x=None`:** forward-only marker (no backward node). Use for training-loop
-events like `profiler_marker(None, "forward_pass_done")`.
-
-### Naming convention
-
-Use `[START]` / `[END]` prefixes so the notebook can pair them into zones:
+These are the recommended functions for annotating model regions. They
+automatically add the `[START]`/`[END]` prefix required by the visualisation
+notebook:
 
 ```python
-x = profiler_marker(x, "[START] [MyModule] SomeSection")
-x = some_computation(x)
-x = profiler_marker(x, "[END] [MyModule] SomeSection")
+x = profiler_marker_start(x, "[Block] Attn")
+x = self.attn(x, mask)
+x = profiler_marker_end(x, "[Block] Attn")
 ```
 
 Zones with the same name are accumulated — you don't need per-layer indices for
@@ -193,9 +177,41 @@ inner components. The outermost loop can use indices if needed:
 
 ```python
 for i, block in enumerate(self.blocks):
-    x = profiler_marker(x, "[START] [Model] Block")
+    x = profiler_marker_start(x, "[Model] Block")
     x = block(x, mask)
-    x = profiler_mark er(x, "[END] [Model] Block")
+    x = profiler_marker_end(x, "[Model] Block")
+```
+
+| Argument | Description |
+|----------|-------------|
+| `x` | Autograd tensor to pass through, or `None` for a forward-only marker. |
+| `name` | Zone name (e.g. `"[Block] Attn"`). `[START]`/`[END]` is added automatically. |
+| `dump_results` | If `True`, flush device profiling data to disk. Expensive — use sparingly (e.g. once per block). |
+
+Returns a **new autograd tensor** wrapping the same device data. The caller
+**must use the returned value** — discarding it drops the backward node.
+
+- **Forward:** immediately fires a device noop tagged `[FWD] [START] <name>` or
+  `[FWD] [END] <name>`.
+- **Backward:** fires `[BWD] [START] <name>` or `[BWD] [END] <name>` when
+  gradients reach this node.
+- **`x=None`:** forward-only marker (no backward node).
+
+#### Low-level: `profiler_marker`
+
+```python
+from ttml.common.profiler_utils import profiler_marker
+```
+
+**`profiler_marker(x, name, dump_results=False)`**
+
+The underlying function used by `profiler_marker_start`/`profiler_marker_end`.
+Emits `[FWD] <name>` and `[BWD] <name>` without any `[START]`/`[END]` prefix.
+Use for training-loop phase markers that don't represent zones:
+
+```python
+profiler_marker(None, "forward_pass_done")
+profiler_marker(None, "backward_pass_done")
 ```
 
 ### Insertion patterns
@@ -205,71 +221,71 @@ for i, block in enumerate(self.blocks):
 When a tensor flows through one operation at a time, chaining on `x` is safe:
 
 ```python
-h = profiler_marker(h, "[START] [Block] Attn")
+h = profiler_marker_start(h, "[Block] Attn")
 h = self.attn(h, mask)
-h = profiler_marker(h, "[END] [Block] Attn")
+h = profiler_marker_end(h, "[Block] Attn")
 ```
 
-Forward trace: `[FWD] START → attn ops → [FWD] END`
-Backward trace: `[BWD] END → attn backward → [BWD] START`
+Forward trace: `[FWD] [START] → attn ops → [FWD] [END]`
+Backward trace: `[BWD] [END] → attn backward → [BWD] [START]`
 
 #### Parallel branches (multiple consumers of one input)
 
-When the same input feeds multiple independent paths, each `[START]` marker must
+When the same input feeds multiple independent paths, each start marker must
 **branch from the original tensor** into a separate variable. Do **not** chain
-`x = profiler_marker(x, ...)` repeatedly — that builds a linear autograd chain
-and backward markers will fire in the wrong zones.
+`x = profiler_marker_start(x, ...)` repeatedly — that builds a linear autograd
+chain and backward markers will fire in the wrong zones.
 
 ```python
 # CORRECT — independent branches from x_in:
-x_in = profiler_marker(x, "[START] [MoE]")
+x_in = profiler_marker_start(x, "[MoE]")
 
-x_r = profiler_marker(x_in, "[START] [MoE] Routing")
+x_r = profiler_marker_start(x_in, "[MoE] Routing")
 logits = self.gate(x_r)
-scores = profiler_marker(scores, "[END] [MoE] Routing")
+scores = profiler_marker_end(scores, "[MoE] Routing")
 
-x_e = profiler_marker(x_in, "[START] [MoE] Experts")
+x_e = profiler_marker_start(x_in, "[MoE] Experts")
 # ... expert loop ...
-output = profiler_marker(output, "[END] [MoE] Experts")
+output = profiler_marker_end(output, "[MoE] Experts")
 
-x_s = profiler_marker(x_in, "[START] [MoE] SharedExp")
+x_s = profiler_marker_start(x_in, "[MoE] SharedExp")
 shared = self.shared_experts(x_s)
-shared = profiler_marker(shared, "[END] [MoE] SharedExp")
+shared = profiler_marker_end(shared, "[MoE] SharedExp")
 ```
 
 ```python
 # WRONG — linear chain corrupts backward zone boundaries:
-x = profiler_marker(x, "[START] [MoE] Routing")
-x = profiler_marker(x, "[START] [MoE] Experts")
-x = profiler_marker(x, "[START] [MoE] SharedExp")
+x = profiler_marker_start(x, "[MoE] Routing")
+x = profiler_marker_start(x, "[MoE] Experts")
+x = profiler_marker_start(x, "[MoE] SharedExp")
 ```
 
-Why: each `profiler_marker(x, ...)` wraps `x` with a new autograd node. Chaining
-means backward for SharedExp must flow through Experts and Routing backward nodes
-first, causing their `[BWD]` markers to fire inside the wrong zone.
+Why: each call wraps `x` with a new autograd node. Chaining means backward for
+SharedExp must flow through Experts and Routing backward nodes first, causing
+their `[BWD]` markers to fire inside the wrong zone.
 
 #### Loop over the same input (fan-out)
 
-When a loop runs N computations on the same input, each per-iteration `[START]`
+When a loop runs N computations on the same input, each per-iteration start
 must branch from a single parent — **not** chain through `x`:
 
 ```python
 # CORRECT — all experts branch from x_e:
-x_e = profiler_marker(x_in, "[START] [MoE] Experts")
+x_e = profiler_marker_start(x_in, "[MoE] Experts")
 for i in range(num_experts):
-    x_exp = profiler_marker(x_e, "[START] [MoE] Expert")
+    x_exp = profiler_marker_start(x_e, "[MoE] Expert")
     out = self.experts[i](x_exp)
-    out = profiler_marker(out, "[END] [MoE] Expert")
+    out = profiler_marker_end(out, "[MoE] Expert")
     # ... accumulate ...
-output = profiler_marker(output, "[END] [MoE] Experts")
+output = profiler_marker_end(output, "[MoE] Experts")
 ```
 
 ```python
 # WRONG — chains x through every iteration:
 for i in range(num_experts):
-    x = profiler_marker(x, "[START] [MoE] Expert")
+    x = profiler_marker_start(x, "[MoE] Expert")
     out = self.experts[i](x)
-    out = profiler_marker(out, "[END] [MoE] Expert")
+    out = profiler_marker_end(out, "[MoE] Expert")
 ```
 
 Why: the wrong version builds `x_e → exp0 → exp1 → ... → expN`. Any later
@@ -278,7 +294,8 @@ into its backward path.
 
 #### Forward-only markers (training loop)
 
-For markers outside the model's autograd graph, pass `None`:
+For markers outside the model's autograd graph, pass `None` to the low-level
+`profiler_marker`:
 
 ```python
 profiler_marker(None, "dataloader_step_done")
@@ -295,26 +312,24 @@ phases in the flamegraph.
 
 ### Quick reference
 
-
-| Situation                     | Pattern                                | Variable          |
-| ----------------------------- | -------------------------------------- | ----------------- |
-| Single pipeline               | `x = profiler_marker(x, ...)`          | Reuse `x`         |
-| Multiple paths from one input | `x_a = profiler_marker(x, ...)`        | Separate vars     |
-| Loop over same input          | `x_i = profiler_marker(x_parent, ...)` | Per-iteration var |
-| Training loop event           | `profiler_marker(None, ...)`           | No tensor         |
-
+| Situation | Pattern | Variable |
+|-----------|---------|----------|
+| Single pipeline | `x = profiler_marker_start(x, ...)` / `profiler_marker_end(x, ...)` | Reuse `x` |
+| Multiple paths from one input | `x_a = profiler_marker_start(x, ...)` | Separate vars |
+| Loop over same input | `x_i = profiler_marker_start(x_parent, ...)` | Per-iteration var |
+| Training loop event | `profiler_marker(None, ...)` | No tensor |
 
 ### Avoiding common pitfalls
 
 - **Shared modules in multiple contexts:** if the same module (e.g. `DeepSeekMLP`)
-is called from both a dense FFN path and as a shared expert inside MoE, do not
-put markers inside the shared module. The same marker name would fire in
-different nesting contexts, and the visualization cannot place them correctly.
-Instead, put markers at each call site.
-- `**dump_results=True`:** flushes profiler data to disk. Use at most once per
-block to prevent device memory overflow, typically on the outermost END marker.
+  is called from both a dense FFN path and as a shared expert inside MoE, do not
+  put markers inside the shared module. The same marker name would fire in
+  different nesting contexts, and the visualization cannot place them correctly.
+  Instead, put markers at each call site.
+- **`dump_results=True`:** flushes profiler data to disk. Use at most once per
+  block to prevent device memory overflow, typically on the outermost END marker.
 - **Integer tensors:** markers on non-float tensors (e.g. token IDs) are
-forward-only — the function detects integer dtypes and skips the backward node.
+  forward-only — the function detects integer dtypes and skips the backward node.
 
 ---
 
