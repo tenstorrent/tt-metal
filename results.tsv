@@ -1,3 +1,4 @@
 commit	accuracy_percent	tokens_per_second	peak_memory_gb	status	description
-d40a28a3	99.78	271.1	0.0	keep	10-step Pi0.5, 184.4ms end-to-end, PCC 0.9978 vs CPU ref
-d40a28a3	99.34	364.7	0.0	keep	5-step Pi0.5, 137.1ms end-to-end, PCC 0.9934 vs 10-step CPU ref
+33e0c362	99.78	271.1	0.0	keep	10-step, 184.4ms full pipeline (VLM + denoise every call)
+33e0c362	99.78	533.0	0.0	keep	10-step, 93.8ms steady denoise (cached prefix, settled allocator)
+33e0c362	99.34	364.7	0.0	keep	5-step, 137.1ms full pipeline, PCC 0.9934 vs 10-step CPU
