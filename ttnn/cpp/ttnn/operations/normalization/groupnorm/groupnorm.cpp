@@ -238,6 +238,13 @@ Tensor group_norm(
             // grid_size matches the cores where kernels are actually placed.
             const auto bbox = shard_spec_opt->grid.bounding_box();
             core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+        } else if (reciprocals.has_value() && reciprocals->shard_spec().has_value()) {
+            // The reciprocals LUT is height-sharded on a specific grid; its
+            // length encodes num_virtual_rows which must match the compute
+            // grid.  Infer the grid from the reciprocals tensor so the kernel
+            // sees a consistent LUT.
+            const auto bbox = reciprocals->shard_spec()->grid.bounding_box();
+            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
