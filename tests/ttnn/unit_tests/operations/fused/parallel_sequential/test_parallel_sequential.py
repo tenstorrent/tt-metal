@@ -1616,90 +1616,161 @@ class TestDocExample:
 
 
 class TestDeepSeekV3:
-    """DeepSeek V3 MLA block patterns using Parallel fusion."""
+    """DeepSeek V3 MLA Q/KV RMS norms — inline and persistent modes.
+
+    Both tests use the same shapes/configs as MLA1D decode:
+      Q:  [1,1,32,1536] width-sharded 4×4 (0,0)-(3,3), shard [32,96]
+      KV: [1,1,32,512]  width-sharded 2×8 (5,0)-(6,7), shard [32,32]
+    """
+
+    @staticmethod
+    def _setup_mla_norm_configs(device):
+        """Shared setup: DeepSeek V3 MLA decode shapes, sharding, weights, configs."""
+        from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
+        from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC
+
+        q_lora_rank = 1536
+        kv_lora_rank = 512
+        bsz = 32
+        shard_height = ttnn.core.roundup(bsz, ttnn.TILE_SIZE)
+        cc = COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC
+
+        q_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        q_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(q_cores, [shard_height, q_lora_rank // 16], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        q_pc = RMSNormBase._get_pc(q_mem)
+
+        kv_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7))})
+        kv_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(kv_cores, [shard_height, kv_lora_rank // 16], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        kv_pc = RMSNormBase._get_pc(kv_mem)
+
+        torch_q_w = torch.rand(1, 1, 1, q_lora_rank, dtype=torch.bfloat16)
+        torch_kv_w = torch.rand(1, 1, 1, kv_lora_rank, dtype=torch.bfloat16)
+        tt_q_w = ttnn.from_torch(torch_q_w, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_kv_w = ttnn.from_torch(torch_kv_w, device=device, layout=ttnn.TILE_LAYOUT)
+
+        return dict(
+            q_lora_rank=q_lora_rank,
+            kv_lora_rank=kv_lora_rank,
+            bsz=bsz,
+            q_cores=q_cores,
+            kv_cores=kv_cores,
+            q_mem=q_mem,
+            kv_mem=kv_mem,
+            q_pc=q_pc,
+            kv_pc=kv_pc,
+            cc=cc,
+            torch_q_w=torch_q_w,
+            torch_kv_w=torch_kv_w,
+            tt_q_w=tt_q_w,
+            tt_kv_w=tt_kv_w,
+        )
 
     @stress_test_program_cache
-    def test_q_kv_rms_norm(self, device):
-        """Parallel Q/KV RMS norms from the DeepSeek V3 MLA block (#41622).
+    def test_q_kv_rms_norm_inline(self, device):
+        """Inline mode: fresh descriptors + Parallel each iteration."""
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
 
-        Mimics production: weights persist, input tensors are fresh each
-        iteration (old buffers freed).  The decorator adds program cache
-        hit and miss re-runs on top.
+        s = self._setup_mla_norm_configs(device)
 
-        Q norm: 16 cores (0,0)-(3,3), width-sharded, shard [32, 96], total width 1536
-        KV norm: 16 cores (5,0)-(6,7), width-sharded, shard [32, 32], total width 512
+        for iteration in range(3):
+            torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+            tt_q = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+            tt_kv = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
+
+            q_desc = rms_norm.rms_norm(
+                tt_q,
+                epsilon=1e-6,
+                weight=s["tt_q_w"],
+                memory_config=s["q_mem"],
+                core_range_set=s["q_cores"],
+                program_config=s["q_pc"],
+                compute_kernel_config=s["cc"],
+            )
+            kv_desc = rms_norm.rms_norm(
+                tt_kv,
+                epsilon=1e-6,
+                weight=s["tt_kv_w"],
+                memory_config=s["kv_mem"],
+                core_range_set=s["kv_cores"],
+                program_config=s["kv_pc"],
+                compute_kernel_config=s["cc"],
+            )
+
+            out_q, out_kv = Parallel(q=q_desc, kv=kv_desc).run()
+
+            check_pcc(
+                torch_rms_norm(torch_q_in.float(), s["torch_q_w"].float(), eps=1e-6),
+                out_q,
+                pcc=0.98,
+                label=f"Q inline iter {iteration}",
+            )
+            check_pcc(
+                torch_rms_norm(torch_kv_in.float(), s["torch_kv_w"].float(), eps=1e-6),
+                out_kv,
+                pcc=0.98,
+                label=f"KV inline iter {iteration}",
+            )
+
+    @stress_test_program_cache
+    def test_q_kv_rms_norm_persistent(self, device):
+        """Persistent mode: lazy-init Parallel, update() + run() each iteration.
+
+        Replicates the code pattern from MLA1D._fwd_decode_norm_and_rope.
+        Cannot call the method directly because it also requires RoPE, concat,
+        and reshard configs unrelated to the norms.
         """
         from models.experimental.ops.descriptors.fusion import Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        q_cores = cores(0, 0, 3, 3)
-        kv_cores = cores(5, 0, 6, 7)
-        q_shard_w, kv_shard_w = 96, 32
-        q_total_w, kv_total_w = 16 * q_shard_w, 16 * kv_shard_w
+        s = self._setup_mla_norm_configs(device)
 
-        q_shard_spec = ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        q_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, q_shard_spec)
-        q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(4, 4),
-            subblock_w=q_shard_w // 32,
-            block_h=1,
-            block_w=q_shard_w // 32,
-            inplace=False,
-        )
+        # cfg mirrors MLA1D.create_state
+        cfg = {
+            "q_norm": dict(epsilon=1e-6, weight=s["tt_q_w"], compute_kernel_config=s["cc"]),
+            "kv_norm": dict(epsilon=1e-6, weight=s["tt_kv_w"], compute_kernel_config=s["cc"]),
+            "fused_qkv_norm": None,
+        }
 
-        kv_shard_spec = ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        kv_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, kv_shard_spec)
-        kv_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(2, 8),
-            subblock_w=kv_shard_w // 32,
-            block_h=1,
-            block_w=kv_shard_w // 32,
-            inplace=False,
-        )
+        for i in range(10):
+            torch.manual_seed(i)
+            torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+            tt_q = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+            tt_kv = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
 
-        # Weights persist (like a real model)
-        torch_q_weight = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
-        torch_kv_weight = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
-        tt_q_weight = ttnn.from_torch(torch_q_weight, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_kv_weight = ttnn.from_torch(torch_kv_weight, device=device, layout=ttnn.TILE_LAYOUT)
-
-        # Fresh input tensors each iteration (old buffers freed — stale addresses)
-        for iteration in range(3):
-            torch_q_input = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
-            torch_kv_input = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
-            tt_q_input = ttnn.from_torch(torch_q_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
-            tt_kv_input = ttnn.from_torch(torch_kv_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
-
-            q_branch = rms_norm.rms_norm(
-                tt_q_input,
-                epsilon=1e-5,
-                weight=tt_q_weight,
-                memory_config=q_mem,
-                core_range_set=q_cores,
-                program_config=q_pc,
-            )
-            kv_branch = rms_norm.rms_norm(
-                tt_kv_input,
-                epsilon=1e-5,
-                weight=tt_kv_weight,
-                memory_config=kv_mem,
-                core_range_set=kv_cores,
-                program_config=kv_pc,
-            )
-
-            [out_q, out_kv] = Parallel(q_branch, kv_branch).run()
+            # Same pattern as MLA1D._fwd_decode_norm_and_rope
+            fused = cfg["fused_qkv_norm"]
+            if fused is None:
+                fused = Parallel(
+                    q=rms_norm.rms_norm(program_config=s["q_pc"], **cfg["q_norm"]),
+                    kv=rms_norm.rms_norm(program_config=s["kv_pc"], **cfg["kv_norm"]),
+                )
+                cfg["fused_qkv_norm"] = fused
+            fused.q.update(input_tensor=tt_q)
+            fused.kv.update(input_tensor=tt_kv)
+            out_q, out_kv = fused.run()
 
             check_pcc(
-                torch_rms_norm(torch_q_input.float(), torch_q_weight.float()),
+                torch_rms_norm(torch_q_in.float(), s["torch_q_w"].float(), eps=1e-6),
                 out_q,
                 pcc=0.98,
-                label=f"Q norm iter {iteration}",
+                label=f"Q persistent iter {i}",
             )
             check_pcc(
-                torch_rms_norm(torch_kv_input.float(), torch_kv_weight.float()),
+                torch_rms_norm(torch_kv_in.float(), s["torch_kv_w"].float(), eps=1e-6),
                 out_kv,
                 pcc=0.98,
-                label=f"KV norm iter {iteration}",
+                label=f"KV persistent iter {i}",
             )
 
 
@@ -1882,20 +1953,22 @@ class TestPersistentMode:
         rl = rms(right.output_tensors[0], cores(4, 0, 5, 0), 5)
         rr = rms(right.output_tensors[0], cores(6, 0, 7, 0), 6)
 
+        # Compose topology — matches the doc example pattern
         fused = Sequential(
             root=root,
             branches=Parallel(
-                left_path=Sequential(left=left, left_leaves=Parallel(ll=ll, lr=lr)),
-                right_path=Sequential(right=right, right_leaves=Parallel(rl=rl, rr=rr)),
+                left_path=Sequential(left=left, leaves=Parallel(ll=ll, lr=lr)),
+                right_path=Sequential(right=right, rms=Parallel(rl=rl, rr=rr)),
             ),
         )
 
-        # Verify all names are hoisted
+        # Verify all names are hoisted to top level
         assert hasattr(fused, "root")
         assert hasattr(fused, "ll")
         assert hasattr(fused, "rr")
 
-        fused.run()
+        # Run with explicit results — same as doc example
+        out_ll, out_lr, out_rl, out_rr = fused.run(results=[ll, lr, rl, rr])
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
@@ -1907,8 +1980,8 @@ class TestPersistentMode:
             torch_rms_norm(g_right, ws[5].float()),
             torch_rms_norm(g_right, ws[6].float()),
         ]
-        for desc, golden, label in zip([fused.ll, fused.lr, fused.rl, fused.rr], goldens, ["LL", "LR", "RL", "RR"]):
-            check_pcc(golden, desc.output_tensors[0], label=f"tree {label}")
+        for out, golden, label in zip([out_ll, out_lr, out_rl, out_rr], goldens, ["LL", "LR", "RL", "RR"]):
+            check_pcc(golden, out, label=f"tree {label}")
 
     @stress_test_program_cache
     def test_persistent_matmul_deferred(self, device):
