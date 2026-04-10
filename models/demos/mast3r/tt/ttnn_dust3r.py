@@ -90,19 +90,25 @@ def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) ->
 # ---------- Encoder block (device-resident) ----------
 
 def _preload_enc_block_weights(state: dict, i: int, device) -> dict:
-    """Upload all weights for one encoder block once, returning ttnn tensors."""
+    """Upload weights for one encoder block.
+
+    Linear weights use BFLOAT8_B (tile-level block-float8) for compute speedup,
+    while biases and LayerNorm params stay in BFLOAT16 for numeric margin.
+    """
+    def mat8(t):
+        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     tt = {}
     tt["g1"] = _t2d(state[f"enc_blocks.{i}.norm1.weight"].reshape(1, 1, -1), device)
     tt["b1"] = _t2d(state[f"enc_blocks.{i}.norm1.bias"].reshape(1, 1, -1), device)
     tt["g2"] = _t2d(state[f"enc_blocks.{i}.norm2.weight"].reshape(1, 1, -1), device)
     tt["b2"] = _t2d(state[f"enc_blocks.{i}.norm2.bias"].reshape(1, 1, -1), device)
-    tt["qkv_w"] = _t2d(state[f"enc_blocks.{i}.attn.qkv.weight"].t().contiguous(), device)
+    tt["qkv_w"] = mat8(state[f"enc_blocks.{i}.attn.qkv.weight"])
     tt["qkv_b"] = _t2d(state[f"enc_blocks.{i}.attn.qkv.bias"].reshape(1, 1, -1), device)
-    tt["pw"] = _t2d(state[f"enc_blocks.{i}.attn.proj.weight"].t().contiguous(), device)
+    tt["pw"] = mat8(state[f"enc_blocks.{i}.attn.proj.weight"])
     tt["pb"] = _t2d(state[f"enc_blocks.{i}.attn.proj.bias"].reshape(1, 1, -1), device)
-    tt["w1"] = _t2d(state[f"enc_blocks.{i}.mlp.fc1.weight"].t().contiguous(), device)
+    tt["w1"] = mat8(state[f"enc_blocks.{i}.mlp.fc1.weight"])
     tt["b1f"] = _t2d(state[f"enc_blocks.{i}.mlp.fc1.bias"].reshape(1, 1, -1), device)
-    tt["w2"] = _t2d(state[f"enc_blocks.{i}.mlp.fc2.weight"].t().contiguous(), device)
+    tt["w2"] = mat8(state[f"enc_blocks.{i}.mlp.fc2.weight"])
     tt["b2f"] = _t2d(state[f"enc_blocks.{i}.mlp.fc2.bias"].reshape(1, 1, -1), device)
     return tt
 
@@ -436,7 +442,7 @@ def _preload_dec_block_weights(state: dict, idx: int, branch: int, device) -> di
     def vec(t):
         return _t2d(t.reshape(1, 1, -1), device)
     def mat(t):
-        return _t2d(t.t().contiguous(), device)
+        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     return {
         "g1": vec(w("norm1.weight")), "b1v": vec(w("norm1.bias")),
         "g2": vec(w("norm2.weight")), "b2v": vec(w("norm2.bias")),
