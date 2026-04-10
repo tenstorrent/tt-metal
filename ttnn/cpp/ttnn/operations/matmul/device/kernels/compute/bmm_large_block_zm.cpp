@@ -66,21 +66,13 @@ void kernel_main() {
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out_subblock_h; h++) {
-                        for (uint32_t w = 0; w < out_subblock_w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                mm.matmul(in0_index, in1_index, dst_index);
-                                in1_index_inner_dim_offset += in1_per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0_block_w;
-                    }
+                    mm.accumulate_tile_subblock(
+                        in0_index_subblock_offset,
+                        in1_index_subblock_offset,
+                        out_subblock_h,
+                        out_subblock_w,
+                        in0_block_w,
+                        in1_per_core_w);
 
                     if (last_out) {
                         // Pack out to output buffer

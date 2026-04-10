@@ -202,9 +202,7 @@ void compute_grad_attn_weights(
     ckernel::TileMatmulOp mm_grad_attn(grad_attn_cfg);
     mm_grad_attn.init_short();
     mm_grad_attn.begin_subblock();
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
-        mm_grad_attn.matmul(tile_idx, tile_idx, 0);
-    }
+    mm_grad_attn.accumulate(0, 0, 0, tiles_per_row, 1);
     tile_regs_commit();
 
     tile_regs_wait();
