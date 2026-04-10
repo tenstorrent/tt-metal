@@ -71,8 +71,8 @@ def test_vae(
     else:
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
-            device=device,
             dtype=ttnn.bfloat16,
+            device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

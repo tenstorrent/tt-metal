@@ -118,8 +118,8 @@ def test_clip_encoder(
     tt_tokens = ttnn.from_torch(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
-        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
