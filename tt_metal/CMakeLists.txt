@@ -114,6 +114,7 @@ target_link_libraries(
         TT::Metalium::Logging
         TT::ScaleoutTools
         Reflect::Reflect
+        TT::ThirdParty::cadical
 )
 
 tt_reuse_precompile_headers(tt_metal TT::CommonPCH)

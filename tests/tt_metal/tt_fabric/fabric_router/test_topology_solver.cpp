@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <tuple>
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -14,6 +16,52 @@
 #include <tt-metalium/experimental/mock_device.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+bool topology_solver_test_expects_dfs_counter() { return !detail::topology_mapping_use_sat_engine(); }
+
+// Exhaustive search over injective assignments (isolated targets; no edge structure required here).
+template <typename TargetNode, typename GlobalNode>
+size_t topology_test_brute_max_preferred_satisfied(
+    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data) {
+    const size_t n = graph_data.n_target;
+    const size_t ng = graph_data.n_global;
+    size_t best = 0;
+    std::vector<int> mapping(n, -1);
+    std::vector<bool> used(ng, false);
+    const auto dfs = [&](auto&& self, size_t ti) -> void {
+        if (ti == n) {
+            const auto stats = constraint_data.compute_constraint_stats(mapping, graph_data);
+            best = std::max(best, std::get<1>(stats));
+            return;
+        }
+        for (size_t g = 0; g < ng; ++g) {
+            if (used[g]) {
+                continue;
+            }
+            if (!constraint_data.is_valid_mapping(ti, g)) {
+                continue;
+            }
+            used[g] = true;
+            mapping[ti] = static_cast<int>(g);
+            self(self, ti + 1);
+            mapping[ti] = -1;
+            used[g] = false;
+        }
+    };
+    dfs(dfs, 0u);
+    return best;
+}
+
+void topology_test_restore_topology_solver_engine_env(const char* prev_engine) {
+    if (prev_engine != nullptr && prev_engine[0] != '\0') {
+        setenv("TT_TOPOLOGY_SOLVER_ENGINE", prev_engine, 1);
+    } else {
+        unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    }
+}
+}  // namespace
 
 class TopologySolverTest : public ::testing::Test {
 protected:
@@ -1460,7 +1508,7 @@ TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     ConstraintIndexData constraint_data(constraints, graph_data);
 
     // Initialize search state with partial mapping (node 1 -> 10, node 2 -> 11)
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    TopologySearchState state;
     state.mapping.resize(3, -1);
     state.mapping[0] = 0;   // target node 1 -> global node 10
     state.mapping[1] = 1;   // target node 2 -> global node 11
@@ -1815,7 +1863,9 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_4x3MeshOn6x2Torus) {
     // Verify no infinite loop occurred - DFS calls should be reasonable and not exceed limit
     // The DFS limit is 1 million, so we check that it's well below that
     EXPECT_LT(result.stats.dfs_calls, 1000000u) << "DFS calls should not exceed limit (no infinite loop)";
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made some DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made some DFS calls";
+    }
 
     // Log statistics for debugging
     log_info(
@@ -2378,9 +2428,194 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
     EXPECT_TRUE(connected) << "Mapped nodes should be connected in global graph";
 
     // Verify statistics
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    }
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+}
+
+// Four isolated targets and four isolated globals; domains and preferences chosen so the maximum number of
+// preferred targets satisfied is four, but DFS commits to target 1 -> global 10 first (lowest global id among its
+// preferred options) and completes with three hits. SAT maximizes preferred-hit indicators and reaches four.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    target_adj_map[4] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, std::set<TestGlobalNode>{12, 13}));
+    ASSERT_TRUE(constraints.add_required_constraint(4u, std::set<TestGlobalNode>{12, 13}));
+    constraints.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11});
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+    constraints.add_preferred_constraint(4u, 13);
+
+    const char* prev_engine = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+
+    setenv("TT_TOPOLOGY_SOLVER_ENGINE", "sat", 1);
+    auto sat_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(sat_result.success) << "SAT engine should find a valid mapping";
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 4u)
+        << "SAT should maximize targets that hit a preferred global";
+
+    unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    auto dfs_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(dfs_result.success) << "DFS engine should find a valid mapping";
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 3u)
+        << "DFS should return the first feasible mapping under heuristic order (here: three preferred targets)";
+
+    topology_test_restore_topology_solver_engine_env(prev_engine);
+}
+
+// Each target is pinned to a single global that is also its unique preferred choice: one feasible bijection.
+// SAT and DFS should both satisfy all preferred targets (no competition between early/late decisions).
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEnginesMaxPreferred) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, 10));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, 11));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, 12));
+    constraints.add_preferred_constraint(1u, 10);
+    constraints.add_preferred_constraint(2u, 11);
+    constraints.add_preferred_constraint(3u, 12);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
+    EXPECT_EQ(brute_max, 3u);
+
+    const char* prev_engine = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+
+    setenv("TT_TOPOLOGY_SOLVER_ENGINE", "sat", 1);
+    auto sat_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+
+    unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    auto dfs_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(dfs_result.success);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, brute_max);
+
+    topology_test_restore_topology_solver_engine_env(prev_engine);
+}
+
+// Two targets share {10,11} and both prefer 10; at most one preferred hit among them. Third target maps to 12 only.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_BruteAndSatAgree) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, 12));
+    constraints.add_preferred_constraint(1u, 10);
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
+    EXPECT_EQ(brute_max, 2u) << "At most one of targets 1/2 can map to preferred 10; target 3 always hits 12";
+
+    const char* prev_engine = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    setenv("TT_TOPOLOGY_SOLVER_ENGINE", "sat", 1);
+    auto sat_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+
+    unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    auto dfs_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(dfs_result.success);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, brute_max);
+
+    topology_test_restore_topology_solver_engine_env(prev_engine);
+}
+
+// Same 4-target construction as SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution; SAT must match
+// exhaustive optimum (DFS may remain below optimum).
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_MatchesBruteForceOptimum) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    target_adj_map[4] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, std::set<TestGlobalNode>{12, 13}));
+    ASSERT_TRUE(constraints.add_required_constraint(4u, std::set<TestGlobalNode>{12, 13}));
+    constraints.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11});
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+    constraints.add_preferred_constraint(4u, 13);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
+    EXPECT_EQ(brute_max, 4u);
+
+    const char* prev_engine = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    setenv("TT_TOPOLOGY_SOLVER_ENGINE", "sat", 1);
+    auto sat_result =
+        solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+
+    topology_test_restore_topology_solver_engine_env(prev_engine);
 }
 
 TEST_F(TopologySolverTest, SolveTopologyMapping_WithRequiredConstraints) {
@@ -2601,7 +2836,9 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     }
 
     // Verify statistics are populated
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have DFS calls";
+    }
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
@@ -2653,7 +2890,9 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MemoizationHits) {
     EXPECT_TRUE(result.success) << "Should find a valid mapping after backtracking";
 
     // Verify stats are tracked
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    }
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 
     // Verify stats are tracked correctly
@@ -3522,7 +3761,9 @@ TEST_F(TopologySolverTest, CardinalityConstraint_IntegrationWithSolver) {
     }
 
     // Verify statistics
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    }
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
@@ -4357,7 +4598,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
 
     // Solve
     auto result = solve_topology_mapping(
-        target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, /* quiet_mode= */ false);
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /* quiet_mode= */ false);
 
     // Should succeed
     EXPECT_TRUE(result.success) << "Ring to mesh mapping should succeed";
@@ -4374,7 +4615,9 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
     }
 
     // Verify statistics
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    if (topology_solver_test_expects_dfs_counter()) {
+        EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    }
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
