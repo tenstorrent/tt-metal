@@ -4,9 +4,10 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 
 using std::uint32_t;
+using namespace compute_kernel_lib;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
@@ -20,21 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
-    ckernel::MatmulOpConfig cfg{};
-    cfg.in0_cb_id = cb_in0;
-    cfg.in1_cb_id = cb_in1;
-    cfg.out_cb_id = cb_out;
-
-    ckernel::TileMatmulOp mm(cfg);
-    mm.init();
-    mm.run(
-        batch,
-        Mt,
-        Nt,
-        Kt,
-        /*in0_num_subblocks=*/1,
-        /*in1_num_subblocks=*/1,
-        /*in0_block_num_tiles=*/1,
-        /*in1_block_num_tiles=*/1,
-        /*in1_block_w=*/1);
+    auto cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_out);
+    matmul_init<TILE>(cfg);
+    matmul<TILE>(cfg, MatmulBlockShape::of(batch, Mt, Nt, Kt, 1, 1, 1, 1, 1));
 }

@@ -7,12 +7,14 @@
 
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
-#include "api/compute/matmul_op.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+
+using namespace compute_kernel_lib;
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -32,16 +34,8 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    ckernel::MatmulOpConfig mm_cfg{};
-    mm_cfg.in0_cb_id = in0_cb;
-    mm_cfg.in1_cb_id = in1_cb;
-    mm_cfg.out_cb_id = out_cb;
-    mm_cfg.ct_dim = subblock_w;
-    mm_cfg.rt_dim = subblock_h;
-    mm_cfg.kt_dim = in0_block_w;
-    mm_cfg.transpose = transpose;
-    ckernel::BlockMatmulOp mm(mm_cfg);
-    mm.init_short();
+    auto cfg = MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, in0_block_w, transpose);
+    matmul_init_short<BLOCK>(cfg);
 
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
@@ -52,8 +46,14 @@ void matmul_blocks(
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_subblock_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            mm.accumulate_and_pack(
-                in0_index_subblock_offset, in1_index_subblock_offset, in0_block_w, N, out_cb, out_subblock_num_tiles);
+            matmul_accumulate_and_pack<BLOCK>(
+                cfg,
+                in0_index_subblock_offset,
+                in1_index_subblock_offset,
+                in0_block_w,
+                N,
+                out_cb,
+                out_subblock_num_tiles);
             in1_index_subblock_offset += subblock_w;
         }
         in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -153,12 +153,8 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
 
-    ckernel::MatmulOpConfig init_cfg{};
-    init_cfg.in0_cb_id = cb_vol2col_tiled;
-    init_cfg.in1_cb_id = cb_weight_tiled;
-    init_cfg.out_cb_id = cb_matmul_interm_tiled;
-    ckernel::BlockMatmulOp mm_main(init_cfg);
-    mm_main.init();
+    auto mm_cfg = MatmulConfig::block(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled, 1, 1, 1);
+    matmul_init<BLOCK>(mm_cfg);
 
     // Load range parameters
     uint32_t argidx = 0;
