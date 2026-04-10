@@ -663,8 +663,7 @@ def prepare_attention_weights(
     def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         q_a = t[q_a_key].T.contiguous()
         attn_norm = t[attn_norm_key].T.contiguous()
-        # do mult here
-        breakpoint()
+        # deffered norm preprocessing step
         q_a = q_a * attn_norm.unsqueeze(-1)
 
         q_b = deinterleave_q_b_proj(t[q_b_key])
