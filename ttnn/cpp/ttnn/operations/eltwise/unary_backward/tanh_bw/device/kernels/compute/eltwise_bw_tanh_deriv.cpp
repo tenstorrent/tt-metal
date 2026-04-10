@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -23,14 +24,18 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
+    experimental::CircularBuffer exp_cb_grad_out(cb_grad_out);
+    experimental::CircularBuffer exp_cb_input(cb_input);
+    experimental::CircularBuffer exp_cb_grad_in(cb_grad_in);
+
     unary_op_init_common(cb_grad_out, cb_grad_in);
     tanh_derivative_tile_init<false>();
     mul_binary_tile_init();
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_reserve_back(cb_grad_in, per_core_block_size);
-        cb_wait_front(cb_grad_out, per_core_block_size);
-        cb_wait_front(cb_input, per_core_block_size);
+        exp_cb_grad_in.reserve_back(per_core_block_size);
+        exp_cb_grad_out.wait_front(per_core_block_size);
+        exp_cb_input.wait_front(per_core_block_size);
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             tile_regs_acquire();
@@ -48,8 +53,8 @@ void kernel_main() {
             tile_regs_release();
         }
 
-        cb_pop_front(cb_grad_out, per_core_block_size);
-        cb_pop_front(cb_input, per_core_block_size);
-        cb_push_back(cb_grad_in, per_core_block_size);
+        exp_cb_grad_out.pop_front(per_core_block_size);
+        exp_cb_input.pop_front(per_core_block_size);
+        exp_cb_grad_in.push_back(per_core_block_size);
     }
 }

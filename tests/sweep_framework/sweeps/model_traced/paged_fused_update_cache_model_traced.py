@@ -9,6 +9,7 @@ This operation updates the KV cache with paged memory support and fused operatio
 for efficient transformer attention in decode mode.
 """
 
+import os
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -85,6 +86,13 @@ def mesh_device_fixture():
         yield (device, device_name)
         ttnn.close_device(device)
         del device
+
+
+# CI sets TT_METAL_OPERATION_TIMEOUT_SECONDS=5 for hang detection.
+# paged_fused_update_cache operates on large KV cache tensors (1024-2048 pages)
+# which need more time, especially on multi-device setups.
+_prev_op_timeout = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
+os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "30"
 
 
 def run(
