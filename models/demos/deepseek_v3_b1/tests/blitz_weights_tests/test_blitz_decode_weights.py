@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
 from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_kv_b12,
     fuse_o_proj_gate_mm_norms,
+    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a,
     fuse_q_ab_kv_a,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.moe import fuse_gate_up
@@ -458,7 +459,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
 
-    Uses :meth:`BlitzDecodeWeights.get_tt_o_proj_tp4_shuffled_gate_mm_weights` (all nine tensors
+    Uses :func:`fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a` (all nine tensors
     in one ``overlap_tensors`` call).  Per mesh device, o_proj is the ``shuffle_q_a`` pack of the
     ``(8192, 1792)`` slice (``tp_dim=(1, 0)``), shard ``(4096, 32)`` on 112 cores.
     """
@@ -475,7 +476,9 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
     tile_1x32 = ttnn.Tile([1, 32])
 
     torch.manual_seed(42)
-    o_proj_raw = torch.randn(*cfg.o_proj.raw_tensor_shape, dtype=torch.bfloat16)
+    # TP4+shuffle fuse expects full-mesh logical weights (16384, 7168), not cfg.o_proj.raw_tensor_shape
+    # (8192, 7168) which is the per-device slice for the non-TP4 overlap path.
+    o_proj_raw = torch.randn(16384, 7168, dtype=torch.bfloat16)
     gate_mm_raw = torch.randn(cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
     attn_norm_raw = torch.randn(cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
     q_norm_raw = torch.randn(cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
@@ -485,9 +488,8 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
     q_b_raw = torch.randn(qab_cfg.q_b_proj_shape[0], qab_cfg.q_b_proj_shape[1] * q_b_tp, dtype=torch.bfloat16)
     kv_raw = torch.randn(qab_cfg.kv_a_proj_shape, dtype=torch.bfloat16)
 
-    bdw = BlitzDecodeWeights(submesh)
     logger.info("Building single fused buffer: TP4+shuffle o_proj + gate + norms + q_ab + kv_a ...")
-    fused = bdw.get_tt_o_proj_tp4_shuffled_gate_mm_weights(
+    fused = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         o_proj_raw,
         gate_mm_raw,
         attn_norm_raw,
@@ -497,6 +499,7 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
         q_a_raw,
         q_b_raw,
         kv_raw,
+        submesh,
         o_proj_dtype=o_proj_dtype,
         mla_proj_dtype=o_proj_dtype,
     )
