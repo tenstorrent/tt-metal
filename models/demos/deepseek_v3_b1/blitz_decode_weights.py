@@ -279,6 +279,39 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
         )
     )
 
+    @staticmethod
+    def pack_o_proj_weights_tp4_shuffled(o_proj_weights: torch.Tensor) -> torch.Tensor:
+        """Pack full-mesh o_proj weights for ``tp_dim=(1, 0)`` plus ``shuffle_q_a`` layout.
+
+        Input ``o_proj_weights`` has the same global shape as the legacy TP2-along-columns
+        layout: ``(16384, 7168)``.  Each mesh device's ``(8192, 1792)`` slice (height split by
+        mesh column, width split by mesh row) is packed with
+        :meth:`QAB_KVA_PROJ_SingleDeviceOverlapSpec.shuffle_q_a` to ``(4096, 3584)`` and
+        written to the sub-rectangle that :func:`overlap_tensors` reads for that device when
+        ``raw_tensor_shape=(8192, 14336)`` and ``tp_dim=(1, 0)``.
+
+        Returns:
+            Tensor of shape ``(8192, 14336)`` (element count matches the input).
+        """
+        if tuple(o_proj_weights.shape) != (16384, 7168):
+            raise ValueError(
+                f"pack_o_proj_weights_tp4_shuffled expects shape (16384, 7168), got {tuple(o_proj_weights.shape)}"
+            )
+        shuffle = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.shuffle_q_a
+        out = torch.empty((8192, 14336), dtype=o_proj_weights.dtype, device=o_proj_weights.device)
+        for mesh_row in range(4):
+            for mesh_col in range(2):
+                block = o_proj_weights[
+                    8192 * mesh_col : 8192 * (mesh_col + 1),
+                    1792 * mesh_row : 1792 * (mesh_row + 1),
+                ]
+                packed = shuffle(block)
+                out[
+                    4096 * mesh_col : 4096 * (mesh_col + 1),
+                    3584 * mesh_row : 3584 * (mesh_row + 1),
+                ] = packed
+        return out
+
 
 O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
 
@@ -535,6 +568,71 @@ class BlitzDecodeWeights:
     # MLA weight loading
     # ------------------------------------------------------------------
 
+    def _make_q_ab_kv_a_overlap_entries(
+        self,
+        cfg: QAB_KVA_PROJ_SingleDeviceOverlapSpec,
+        mesh_shape: tuple[int, int],
+        q_a_proj_weights: torch.Tensor,
+        q_b_proj_weights: torch.Tensor,
+        kv_a_proj_weights: torch.Tensor,
+        dtype: ttnn.DataType,
+    ) -> list[OverlapEntry]:
+        """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O)."""
+        q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
+
+        assert (
+            q_a_proj_weights.shape == cfg.q_a_proj_shape
+        ), f"q_a_proj_weights must be {cfg.q_a_proj_shape}, got {tuple(q_a_proj_weights.shape)}"
+        expected_q_b_shape = (cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp)
+        assert (
+            tuple(q_b_proj_weights.shape) == expected_q_b_shape
+        ), f"q_b_proj_weights must be {expected_q_b_shape}, got {tuple(q_b_proj_weights.shape)}"
+        assert (
+            kv_a_proj_weights.shape == cfg.kv_a_proj_shape
+        ), f"kv_a_proj_weights must be {cfg.kv_a_proj_shape}, got {tuple(kv_a_proj_weights.shape)}"
+
+        q_a_packed = cfg.shuffle_q_a(q_a_proj_weights)
+        kv_reordered = cfg.shuffle_kv_a(kv_a_proj_weights)
+
+        q_b_shuffled_slices = [
+            cfg.shuffle_q_b(cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)) for tp_idx in range(q_b_tp)
+        ]
+        q_b_preprocessed = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
+
+        q_ab_cores = cfg.q_a_shard_spec.core_range_set
+        kv_cores = cfg.kv_a_shard_spec.core_range_set
+
+        return [
+            OverlapEntry(
+                "q_a_proj",
+                q_a_packed,
+                OverlappedTensorSpec(
+                    core_range_set=q_ab_cores,
+                    raw_tensor_shape=tuple(q_a_packed.shape),
+                    dtype=dtype,
+                ),
+            ),
+            OverlapEntry(
+                "q_b_proj",
+                q_b_preprocessed,
+                OverlappedTensorSpec(
+                    core_range_set=q_ab_cores,
+                    raw_tensor_shape=tuple(q_b_preprocessed.shape),
+                    dtype=dtype,
+                    tp_dim=(None, 1),
+                ),
+            ),
+            OverlapEntry(
+                "kv_a_proj",
+                kv_reordered,
+                OverlappedTensorSpec(
+                    core_range_set=kv_cores,
+                    raw_tensor_shape=tuple(kv_reordered.shape),
+                    dtype=dtype,
+                ),
+            ),
+        ]
+
     def get_tt_q_ab_proj_and_kv_a_proj_weights(
         self,
         q_a_proj_weights: torch.Tensor,
@@ -573,9 +671,7 @@ class BlitzDecodeWeights:
         """
         cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
         mesh_shape = (self._device.shape[0], self._device.shape[1])
-        q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
-        # -- Validate device grid ----------------------------------------
         device_grid = self._device.compute_with_storage_grid_size()
         q_ab_bb = cfg.q_a_shard_spec.core_range_set.bounding_box()
         kv_bb = cfg.kv_a_shard_spec.core_range_set.bounding_box()
@@ -584,64 +680,10 @@ class BlitzDecodeWeights:
         assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
         assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
 
-        # -- Validate raw input shapes ----------------------------------
-        assert (
-            q_a_proj_weights.shape == cfg.q_a_proj_shape
-        ), f"q_a_proj_weights must be {cfg.q_a_proj_shape}, got {tuple(q_a_proj_weights.shape)}"
-        expected_q_b_shape = (cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp)
-        assert (
-            tuple(q_b_proj_weights.shape) == expected_q_b_shape
-        ), f"q_b_proj_weights must be {expected_q_b_shape}, got {tuple(q_b_proj_weights.shape)}"
-        assert (
-            kv_a_proj_weights.shape == cfg.kv_a_proj_shape
-        ), f"kv_a_proj_weights must be {cfg.kv_a_proj_shape}, got {tuple(kv_a_proj_weights.shape)}"
-
-        # -- Preprocess --------------------------------------------------
-        q_a_packed = cfg.shuffle_q_a(q_a_proj_weights)
-        kv_reordered = cfg.shuffle_kv_a(kv_a_proj_weights)
-
-        q_b_shuffled_slices = [
-            cfg.shuffle_q_b(cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)) for tp_idx in range(q_b_tp)
-        ]
-        q_b_preprocessed = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
-
-        q_ab_cores = cfg.q_a_shard_spec.core_range_set
-        kv_cores = cfg.kv_a_shard_spec.core_range_set
-
-        return overlap_tensors(
-            [
-                OverlapEntry(
-                    "q_a_proj",
-                    q_a_packed,
-                    OverlappedTensorSpec(
-                        core_range_set=q_ab_cores,
-                        raw_tensor_shape=tuple(q_a_packed.shape),
-                        dtype=dtype,
-                    ),
-                ),
-                OverlapEntry(
-                    "q_b_proj",
-                    q_b_preprocessed,
-                    OverlappedTensorSpec(
-                        core_range_set=q_ab_cores,
-                        raw_tensor_shape=tuple(q_b_preprocessed.shape),
-                        dtype=dtype,
-                        tp_dim=(None, 1),
-                    ),
-                ),
-                OverlapEntry(
-                    "kv_a_proj",
-                    kv_reordered,
-                    OverlappedTensorSpec(
-                        core_range_set=kv_cores,
-                        raw_tensor_shape=tuple(kv_reordered.shape),
-                        dtype=dtype,
-                    ),
-                ),
-            ],
-            device=self._device,
-            move_to_device=move_to_device,
+        entries = self._make_q_ab_kv_a_overlap_entries(
+            cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, dtype
         )
+        return overlap_tensors(entries, device=self._device, move_to_device=move_to_device)
 
     def get_tt_o_proj_and_gate_mm_weights(
         self,
@@ -695,6 +737,87 @@ class BlitzDecodeWeights:
                 OverlapEntry("q_norm", q_norm, cfg.q_norm),
                 OverlapEntry("ffn_norm", ffn_norm, cfg.ffn_norm),
                 OverlapEntry("kv_norm", kv_norm, cfg.kv_norm),
+            ],
+            device=self._device,
+            move_to_device=move_to_device,
+        )
+
+    def get_tt_o_proj_tp4_shuffled_gate_mm_weights(
+        self,
+        o_proj_weights: torch.Tensor,
+        gate_mm_weights: torch.Tensor,
+        attn_norm: torch.Tensor,
+        q_norm: torch.Tensor,
+        kv_norm: torch.Tensor,
+        ffn_norm: torch.Tensor,
+        q_a_proj_weights: torch.Tensor,
+        q_b_proj_weights: torch.Tensor,
+        kv_a_proj_weights: torch.Tensor,
+        *,
+        o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        move_to_device: bool = True,
+    ) -> dict[str, OverlappedTensor]:
+        """Fuse TP4 ``shuffle_q_a`` o_proj, gate_mm, norms, and q_a / q_b / kv_a into **one** L1 buffer.
+
+        Combines the same tensors as :meth:`get_tt_o_proj_and_gate_mm_weights` plus
+        :meth:`get_tt_q_ab_proj_and_kv_a_proj_weights` into a single ``overlap_tensors`` call so
+        lockstep L1 reservation is ``max_shard_bytes`` over **all** sub-tensors (greedy
+        placement hides disjoint-core tensors behind each other), rather than paying for two
+        separate fused allocations.
+
+        **o_proj** uses ``tp_dim=(1, 0)`` and :meth:`O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec.pack_o_proj_weights_tp4_shuffled`.
+        MLA inputs match :meth:`get_tt_q_ab_proj_and_kv_a_proj_weights`.
+
+        Requires a **4×2** mesh.  ``o_proj_weights`` shape ``(16384, 7168)``.
+
+        Returns:
+            Keys ``o_proj``, ``gate_mm``, ``attn_norm``, ``q_norm``, ``ffn_norm``, ``kv_norm``,
+            ``q_a_proj``, ``q_b_proj``, ``kv_a_proj``.
+        """
+        o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+        q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+        mesh_shape = (self._device.shape[0], self._device.shape[1])
+        if mesh_shape != (4, 2):
+            raise ValueError(
+                "get_tt_o_proj_tp4_shuffled_gate_mm_weights requires a 4x2 mesh; "
+                f"got {mesh_shape[0]}x{mesh_shape[1]}"
+            )
+        if tuple(o_proj_weights.shape) != (16384, 7168):
+            raise ValueError(
+                "o_proj_weights must have shape (16384, 7168) for TP4+shuffle layout; "
+                f"got {tuple(o_proj_weights.shape)}"
+            )
+
+        device_grid = self._device.compute_with_storage_grid_size()
+        q_ab_bb = q_cfg.q_a_shard_spec.core_range_set.bounding_box()
+        kv_bb = q_cfg.kv_a_shard_spec.core_range_set.bounding_box()
+        required_rows = max(q_ab_bb.end.y, kv_bb.end.y) + 1
+        required_cols = max(q_ab_bb.end.x, kv_bb.end.x) + 1
+        assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
+        assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
+
+        o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights)
+        o_spec = replace(
+            o_cfg.o_proj,
+            raw_tensor_shape=tuple(o_packed.shape),
+            dtype=o_proj_dtype,
+            tp_dim=(1, 0),
+        )
+
+        q_entries = self._make_q_ab_kv_a_overlap_entries(
+            q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mla_proj_dtype
+        )
+
+        return overlap_tensors(
+            [
+                OverlapEntry("o_proj", o_packed, o_spec),
+                OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm),
+                OverlapEntry("attn_norm", attn_norm, o_cfg.attn_norm),
+                OverlapEntry("q_norm", q_norm, o_cfg.q_norm),
+                OverlapEntry("ffn_norm", ffn_norm, o_cfg.ffn_norm),
+                OverlapEntry("kv_norm", kv_norm, o_cfg.kv_norm),
+                *q_entries,
             ],
             device=self._device,
             move_to_device=move_to_device,
