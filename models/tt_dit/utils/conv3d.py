@@ -105,7 +105,7 @@ def compute_decoder_dims(
 _BLOCKINGS = {
     # ===================================================================
     # BH Galaxy 6U 4x32, 720p, 81 frames full-T (latent T=21)
-    # Per-device: lat(23,5) mid(46,10) hi(92,20) full(184,40)
+    # Per-device (H,W): stage0(23,5) stage1(46,10) stage2(92,20) stage3(184,40)
     # ===================================================================
     (4, 32, 32, 384, (3, 3, 3), 23, 23, 5): (32, 128, 1, 16, 2),  # conv_in
     (4, 32, 384, 384, (3, 3, 3), 23, 23, 5): (96, 96, 3, 32, 1),  # lat_res+mid_res
@@ -120,8 +120,27 @@ _BLOCKINGS = {
     (4, 32, 96, 96, (3, 3, 3), 83, 184, 40): (96, 96, 6, 8, 4),  # up3_res
     (4, 32, 96, 3, (3, 3, 3), 83, 184, 40): (96, 32, 9, 8, 4),  # conv_out
     # ===================================================================
+    # BH Galaxy 4x8, 480p, 81 frames full-T (latent T=21)
+    # Per-device (H,W): stage0(15,13) stage1(30,26) stage2(60,52) stage3(120,104)
+    # Padded (int_pad=(0,1,1)): stage0(17,15) stage1(32,28) stage2(62,54) stage3(122,106)
+    # Swept 2026-04-10 on 1x1 mesh; results in sweep_results_h4w8_480p_full_t/.
+    # hw_product=32 + max_t_block=8. Partial: large-C_in/tconv layers hung mid-sweep.
+    # ===================================================================
+    (4, 8, 32, 384, (3, 3, 3), 23, 15, 13): (32, 128, 3, 4, 8),  # conv_in — 197us
+    (4, 8, 384, 384, (3, 3, 3), 23, 15, 13): (128, 64, 3, 16, 2),  # lat_mid_res — 711us
+    (4, 8, 384, 768, (3, 1, 1), 22, 15, 13): (192, 128, 5, 4, 8),  # up0_tconv — 277us partial
+    (4, 8, 384, 192, (1, 3, 3), 41, 30, 26): (192, 64, 1, 16, 2),  # up0_spatial — 790us
+    (4, 8, 192, 384, (3, 3, 3), 43, 30, 26): (64, 128, 6, 16, 2),  # up1_res0 — 1911us partial
+    (4, 8, 384, 384, (3, 3, 3), 43, 30, 26): (96, 96, 3, 16, 2),  # up1_res — 4069us partial
+    (4, 8, 384, 768, (3, 1, 1), 42, 30, 26): (384, 384, 1, 16, 2),  # up1_tconv — 1110us partial
+    (4, 8, 384, 192, (1, 3, 3), 81, 60, 52): (384, 64, 1, 8, 4),  # up1_spatial — 5030us
+    (4, 8, 192, 192, (3, 3, 3), 83, 60, 52): (96, 96, 3, 16, 2),  # up2_res — 7547us
+    (4, 8, 192, 96, (1, 3, 3), 81, 120, 104): (192, 96, 1, 8, 4),  # up2_spatial — table 5755us
+    (4, 8, 96, 96, (3, 3, 3), 83, 120, 104): (96, 96, 7, 4, 8),  # up3_res — 6839us
+    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 3, 16, 2),  # conv_out — 5400us
+    # ===================================================================
     # BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
-    # Per-device: lat(23,20) mid(46,40) hi(92,80) full(184,160)
+    # Per-device (H,W): stage0(23,20) stage1(46,40) stage2(92,80) stage3(184,160)
     # ===================================================================
     (4, 8, 32, 384, (3, 3, 3), 23, 23, 20): (32, 128, 1, 16, 16),  # conv_in
     (4, 8, 384, 384, (3, 3, 3), 23, 23, 20): (96, 96, 3, 8, 4),  # lat_res+mid_res
@@ -137,8 +156,8 @@ _BLOCKINGS = {
     (4, 8, 96, 3, (3, 3, 3), 83, 184, 160): (96, 32, 3, 8, 16),  # conv_out
     # ===================================================================
     # BH Galaxy 4x8, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
-    # BH (4,8): h_factor=4, w_factor=8. Per-device: same spatial as full-T above.
-    # Padded (int_pad=(0,1,1)): lat(25,22) mid(48,42) hi(94,82) full(186,162)
+    # BH (4,8): h_factor=4, w_factor=8. Per-device (H,W): same spatial as full-T above.
+    # Padded (int_pad=(0,1,1)): stage0(25,22) stage1(48,42) stage2(94,82) stage3(186,162)
     # Cached T: stage0(T_res=18,T_tconv=18,T_sp=32) stage1(34,34,64) stage2/3(66,_,64)
     # Swept 2026-04-10 on 1x1 mesh; results in sweep_results_h4w8_720p_t16/.
     # T=8 (t_chunk/2) wins for large stages; T=2-4 for mid; T=1 for tconv.
@@ -164,7 +183,7 @@ _BLOCKINGS = {
     # ===================================================================
     # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7)
     # BH (2,4): tp_axis=0, sp_axis=1 → h_factor=2, w_factor=4
-    # Per-device: lat(30,26) mid(60,52) hi(120,104) full(240,208)
+    # Per-device (H,W): stage0(30,26) stage1(60,52) stage2(120,104) stage3(240,208)
     # Cached T: cur_T grows 7 → 14 → 28 across stages
     # Swept 2026-04-10 on BH Loud Box 2x4; results stored in sweep_results_h2w4_480p_t7/
     # Note: lat_mid_res, up0_tconv, up1_res0/res, up2_res, up3_res, conv_out are

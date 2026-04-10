@@ -648,3 +648,74 @@ def test_bruteforce_sweep_h4w8_720p_t16(
         max_t_block=8,
         hw_product=32,
     )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 480p, full-T (81 frames, latent T=21)
+# ---------------------------------------------------------------------------
+# Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded):
+#   lat(15,13)  mid(30,26)  hi(60,52)  full(120,104)
+#
+# Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   lat(17,15)  mid(32,28)  hi(62,54)  full(122,106)
+# (3,1,1) kernels use no spatial padding: lat(15,13) mid(30,26)
+#
+# Temporal: same as all 81-frame configs — T_res=23, T_tconv=22,
+# T_spatial=41, T_res1=43, T_tconv1=42, T_spatial1=81, T_res2/3=83.
+#
+# Layers ordered most-to-least compute (T × H_sweep × W_sweep).
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_480P_FULL_T = [
+    # (name,           C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
+    # --- stage 3 / 2 (largest spatial) ---
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 122, 106, 4, 8),
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 122, 106, 4, 8),
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 122, 106, 4, 8),
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 62, 54, 4, 8),
+    # --- stage 1 ---
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 62, 54, 4, 8),
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 32, 28, 4, 8),
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 32, 28, 4, 8),
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 41, 32, 28, 4, 8),
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 42, 30, 26, 4, 8),
+    # --- stage 0 (small spatial) ---
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 17, 15, 4, 8),
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 17, 15, 4, 8),
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 22, 15, 13, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_480p_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_480P_FULL_T,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_480P_FULL_T],
+)
+def test_bruteforce_sweep_h4w8_480p_full_t(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_480p_full_t/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        hw_product=32,
+    )
