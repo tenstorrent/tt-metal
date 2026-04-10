@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 
 void kernel_main() {
@@ -39,10 +40,8 @@ void kernel_main() {
     // ── Generate identity/scale tile using proper helper ──
     generate_reduce_scaler(cb_identity_scale, identity_scalar_packed);
 
-    // ── Generate column identity (all 1s tile for reduce) ──
-    // For decode with Sq_chunk_t=1, this is just a scalar 1.0 tile
-    uint32_t one_packed = 0x3F803F80;  // BF16 1.0 packed as two values
-    generate_reduce_scaler(cb_col_identity, one_packed);
+    // ── Generate column identity (bcast col scalar for reduce) ──
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // ── Write output tiles ──
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
