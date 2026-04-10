@@ -6,14 +6,34 @@
 
 #include <atomic>
 #include <cstddef>
-#include <deque>
+#include <cstdint>
 #include <mutex>
-#include <numeric>
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/tt_pause.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+void atomic_update_min(std::atomic<double>& slot, double value) {
+    // CAS isn't the publication point so relaxed is fine
+    double cur = slot.load(std::memory_order_relaxed);
+    while (value < cur &&
+           !slot.compare_exchange_weak(cur, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+void atomic_update_max(std::atomic<double>& slot, double value) {
+    // CAS isn't the publication point so relaxed is fine
+    double cur = slot.load(std::memory_order_relaxed);
+    while (value > cur &&
+           !slot.compare_exchange_weak(cur, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+}  // namespace
 
 // --- TelemetryToken ---
 
@@ -27,13 +47,34 @@ void TelemetryToken::record(double value) {
     if (!recording_enabled_.load(std::memory_order_acquire)) {
         return;
     }
-    std::lock_guard lk(values_mutex_);
-    values_.push_back(value);
+    // Odd seq signals write-in-progress to concurrent snapshots.
+    stats_.seq.fetch_add(1, std::memory_order_acq_rel);
+    stats_.total.fetch_add(value, std::memory_order_relaxed);
+    atomic_update_min(stats_.min_val, value);
+    atomic_update_max(stats_.max_val, value);
+    // Even seq signals write complete.
+    stats_.seq.fetch_add(1, std::memory_order_release);
 }
 
-std::deque<double> TelemetryToken::snapshot() const {
-    std::lock_guard lk(values_mutex_);
-    return values_;
+TelemetryTokenSnapshot TelemetryToken::snapshot() const {
+    TelemetryTokenSnapshot out;
+    for (;;) {
+        const size_t seq1 = stats_.seq.load(std::memory_order_acquire);
+        if (seq1 & 1u) {
+            // Write in progress — spin until the writer is done.
+            ttsl::pause();
+            continue;
+        }
+        out.total = stats_.total.load(std::memory_order_relaxed);
+        out.min_val = stats_.min_val.load(std::memory_order_relaxed);
+        out.max_val = stats_.max_val.load(std::memory_order_relaxed);
+        out.count = stats_.seq.load(std::memory_order_acquire);
+        if (seq1 == out.count) {
+            out.count /= 2;
+            break;  // No write started or completed during our read.
+        }
+    }
+    return out;
 }
 
 // --- BuildCacheTelemetry ---
@@ -86,36 +127,36 @@ void BuildCacheTelemetry::record_compile(size_t num_srcs, size_t num_compiled) {
     if (!impl_) {
         return;
     }
-    impl_->total_srcs.fetch_add(num_srcs, std::memory_order_acq_rel);
-    impl_->compiled_count.fetch_add(num_compiled, std::memory_order_acq_rel);
+    impl_->total_srcs.fetch_add(num_srcs, std::memory_order_release);
+    impl_->compiled_count.fetch_add(num_compiled, std::memory_order_release);
 }
 
 void BuildCacheTelemetry::record_cache_hit() {
     if (!impl_) {
         return;
     }
-    impl_->cached_hit_count.fetch_add(1, std::memory_order_acq_rel);
+    impl_->cached_hit_count.fetch_add(1, std::memory_order_release);
 }
 
 void BuildCacheTelemetry::record_merge(size_t count) {
     if (!impl_) {
         return;
     }
-    impl_->merged_artifacts.fetch_add(count, std::memory_order_acq_rel);
+    impl_->merged_artifacts.fetch_add(count, std::memory_order_release);
 }
 
 void BuildCacheTelemetry::record_genfile_merge(size_t count) {
     if (!impl_) {
         return;
     }
-    impl_->merged_genfiles.fetch_add(count, std::memory_order_acq_rel);
+    impl_->merged_genfiles.fetch_add(count, std::memory_order_release);
 }
 
 void BuildCacheTelemetry::record_jit_once_dedup() {
     if (!impl_) {
         return;
     }
-    impl_->jit_once_dedup_count.fetch_add(1, std::memory_order_acq_rel);
+    impl_->jit_once_dedup_count.fetch_add(1, std::memory_order_release);
 }
 
 size_t BuildCacheTelemetry::get_srcs_count() const {
@@ -210,27 +251,19 @@ void BuildCacheTelemetry::dump_metrics() const {
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
 
     for (const auto* token : impl_->registered_tokens) {
-        auto vals = token->snapshot();
-        if (vals.empty()) {
+        const TelemetryTokenSnapshot snap = token->snapshot();
+        if (snap.count == 0) {
             continue;
         }
-        double min_val = std::numeric_limits<double>::max();
-        double max_val = std::numeric_limits<double>::lowest();
-        double sum = 0.0;
-        for (double v : vals) {
-            min_val = std::min(v, min_val);
-            max_val = std::max(v, max_val);
-            sum += v;
-        }
-        double mean_val = sum / static_cast<double>(vals.size());
+        const double mean_val = snap.total / static_cast<double>(snap.count);
         log_info(
             tt::LogBuildKernels,
             "JIT telemetry [{}]: count={}, total={:.3f}ms, min={:.3f}ms, max={:.3f}ms, mean={:.3f}ms",
             token->name(),
-            vals.size(),
-            sum,
-            min_val,
-            max_val,
+            snap.count,
+            snap.total,
+            snap.min_val,
+            snap.max_val,
             mean_val);
     }
 }

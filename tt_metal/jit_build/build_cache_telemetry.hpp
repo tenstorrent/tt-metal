@@ -6,7 +6,8 @@
 
 #include <atomic>
 #include <cstddef>
-#include <deque>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -16,19 +17,29 @@ namespace tt::tt_metal {
 
 class BuildCacheTelemetry;
 
+// Point-in-time copy of running stats from a TelemetryToken.
+// Snapshots are transactional and are internally consistent.
+struct TelemetryTokenSnapshot {
+    size_t count{0};
+    double total{0};
+    double min_val{std::numeric_limits<double>::infinity()};
+    double max_val{-std::numeric_limits<double>::infinity()};
+};
+
 // Opaque handle returned by BuildCacheTelemetry::register_metric().
-// Records a stream of double values into a deque.
+// Maintains lock-free running total/count/min/max per value stream.
 // record() and snapshot() are safe for concurrent use.
 // References stay valid for the lifetime of BuildCacheTelemetry::inst();
 // record() is a no-op while process-wide telemetry is disabled so values are
 // not appended after disable(), but the token object is not destroyed.
+// snapshots are guarenteed to be consistent
 class TelemetryToken {
 public:
     TelemetryToken() = default;
     explicit TelemetryToken(std::string name);
 
     void record(double value);
-    std::deque<double> snapshot() const;
+    TelemetryTokenSnapshot snapshot() const;
 
     const std::string& name() const { return name_; }
 
@@ -36,10 +47,16 @@ private:
     friend class BuildCacheTelemetry;
     void set_recording_enabled(bool enabled);
 
+    struct RunningStats {
+        std::atomic<size_t> seq{0};
+        std::atomic<double> total{0};
+        std::atomic<double> min_val{std::numeric_limits<double>::infinity()};
+        std::atomic<double> max_val{-std::numeric_limits<double>::infinity()};
+    };
+
     std::string name_;
     std::atomic<bool> recording_enabled_{true};
-    mutable std::mutex values_mutex_;
-    std::deque<double> values_;
+    RunningStats stats_;
 };
 
 struct BuildCacheTelemetryImpl {
@@ -62,7 +79,7 @@ struct BuildCacheTelemetryImpl {
 // enable()/disable() are NOT thread-safe with respect to recording methods;
 // call them only during setup/teardown when no concurrent builds are running.
 //
-// register_metric() returns a TelemetryToken (values in a std::deque) that is
+// register_metric() returns a TelemetryToken (running aggregate stats) that is
 // owned in owned_tokens_ for the life of the inst() singleton; disable()/enable()
 // tear down impl_ and the token registry but do not destroy tokens, so returned
 // references stay valid across disable/enable; only recording is toggled.
@@ -70,9 +87,6 @@ struct BuildCacheTelemetryImpl {
 // is still valid. tt::LoggerRegistry is a leaky singleton (allocated with `new`, never freed),
 // so its loggers and sinks are alive for the entire process lifetime and are safe to use
 // from the destructor.
-//
-// This is meant to be best-effort and minimally intrusive, so slight transient
-// inconsistencies from not having fully atomic transactions is acceptable.
 class BuildCacheTelemetry {
 public:
     static BuildCacheTelemetry& inst();
@@ -102,7 +116,7 @@ public:
     // disable()/enable(), which only clear impl_ and rebuild the registry while
     // leaving tokens allocated. Callers must not take ownership. While telemetry
     // is disabled, TelemetryToken::record() is a no-op; snapshot() still reflects
-    // values recorded while enabled.
+    // aggregates recorded while enabled.
     TelemetryToken& register_metric(const std::string& name);
 
     void dump_metrics() const;
