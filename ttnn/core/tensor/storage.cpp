@@ -260,20 +260,16 @@ DeviceStorage DeviceStorage::combine_device_storages(
                 return std::addressof(storage.get().get_mesh_tensor()) ==
                        std::addressof(model_storage.get_mesh_tensor());
             }),
-        "All DeviceStorages must point to the same device memory");
+        "tensor shards must be allocated on the same mesh buffer.");
 
     std::set<distributed::MeshCoordinate> seen_coords;
-    std::vector<distributed::MeshCoordinate> joint_coords;
     for (const auto& storage : storages) {
         for (const auto& coord : storage.get().get_coords()) {
-            TT_FATAL(
-                seen_coords.insert(coord).second,
-                "Found a tensor shard at duplicate coordinate {}",
-                coord);
-            joint_coords.push_back(coord);
+            auto [_, coord_is_new] = seen_coords.insert(coord);
+            TT_FATAL(coord_is_new, "Found a tensor shard at duplicate coordinate {}", coord);
         }
     }
-    std::sort(joint_coords.begin(), joint_coords.end());
+    std::vector<distributed::MeshCoordinate> vec_coords(seen_coords.begin(), seen_coords.end());
 
     const int tensor_rank = static_cast<int>(model_storage.get_tensor_spec().logical_shape().rank());
     TT_FATAL(
@@ -284,9 +280,9 @@ DeviceStorage DeviceStorage::combine_device_storages(
         tensor_rank);
 
     TensorTopology topology =
-        TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(joint_coords.size()), shard_dim);
+        TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(vec_coords.size()), shard_dim);
 
-    DeviceStorage res(model_storage, std::move(joint_coords));
+    DeviceStorage res(model_storage, std::move(vec_coords));
     res.get_mesh_tensor().update_tensor_topology(topology);
     return res;
 }

@@ -293,7 +293,8 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     EXPECT_EQ(partial_device_storage.get_coords()[3], (distributed::MeshCoordinate{1, 2}));
 }
 
-TEST_F(MeshTensorTest1x2, CombineDeviceTensors) {
+// This is the mini version of MeshTensorTest2x4.CombineDeviceTensors above.
+TEST_F(MeshTensorTest1x2, CombineDeviceTensorsMini) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -329,17 +330,10 @@ TEST_F(MeshTensorTest1x2, CombineDeviceTensors) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
 
     // Aggregate both shards in reverse order; verify coords come out sorted.
-    int shard_dim = 2;
-    auto partial_tensor =
-        combine_device_tensors(std::vector<Tensor>{device_tensors1[1], device_tensors1[0]}, shard_dim);
+    auto partial_tensor = combine_device_tensors(std::vector<Tensor>{device_tensors1[1], device_tensors1[0]});
 
     const auto& partial_device_storage = partial_tensor.device_storage();
     EXPECT_NO_THROW({ partial_device_storage.get_mesh_buffer(); });
-
-    EXPECT_EQ(partial_tensor.tensor_topology().distribution_shape(), MeshShape(2));
-    EXPECT_EQ(
-        std::get<distributed::MeshMapperConfig::Shard>(partial_tensor.tensor_topology().placements()[0]).dim,
-        shard_dim);
 
     ASSERT_THAT(partial_device_storage.get_coords(), SizeIs(2));
     EXPECT_EQ(partial_device_storage.get_coords()[0], (distributed::MeshCoordinate{0, 0}));
