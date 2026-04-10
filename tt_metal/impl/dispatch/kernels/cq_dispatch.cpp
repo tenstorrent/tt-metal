@@ -1462,7 +1462,9 @@ void kernel_main() {
     init_telemetry<tt::tt_metal::DispatchCoreTelemetry, dispatch_telemetry_base, telemetry_enabled>();
 
     // Initialize local state of any additional nocs used instead of the default
+#ifndef ARCH_QUASAR
     static_assert(my_noc_index != upstream_noc_index);
+#endif
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
