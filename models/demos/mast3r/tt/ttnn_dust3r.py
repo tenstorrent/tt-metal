@@ -596,8 +596,9 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
 
     _, _, taps1, taps2 = full_decoder(enc1, enc2, pos, state, device)
-    feats1 = [enc1.float(), taps1[0].float(), taps1[1].float(), taps1[2].float()]
-    feats2 = [enc2.float(), taps2[0].float(), taps2[1].float(), taps2[2].float()]
+    # feats already in bfloat16 (ttnn output); DPT head handles dtype internally.
+    feats1 = [enc1, taps1[0], taps1[1], taps1[2]]
+    feats2 = [enc2, taps2[0], taps2[1], taps2[2]]
 
     # Two independent DPT heads — run concurrently to overlap host conv work.
     from concurrent.futures import ThreadPoolExecutor
