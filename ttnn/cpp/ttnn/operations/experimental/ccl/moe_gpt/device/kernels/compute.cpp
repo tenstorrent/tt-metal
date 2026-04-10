@@ -225,12 +225,13 @@ void kernel_main() {
                             last_k_index = k;
                             break;
                         }
-                        mm_data.matmul(in0_index++, /*in1_index=*/k, /*dst_index=*/0);
+                        mm_data.accumulate(in0_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
+                        in0_index++;
                         k_tracker++;
                     }
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
-                        mm_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
+                        mm_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
                     }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -313,12 +314,13 @@ void kernel_main() {
                         }
                         dm1_tiles_remaining--;
 
-                        mm_w2_data.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
+                        mm_w2_data.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
+                        in2_index++;
                         k_tracker++;
                     }
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
-                        mm_w2_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
+                        mm_w2_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
@@ -372,12 +374,13 @@ void kernel_main() {
                         last_k_index = k;
                         break;
                     }
-                    mm_data.matmul(in0_index++, /*in1_index=*/k, /*dst_index=*/0);
+                    mm_data.accumulate(in0_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
+                    in0_index++;
                     k_tracker++;
                 }
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
-                    mm_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
+                    mm_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
                 }
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
@@ -449,12 +452,13 @@ void kernel_main() {
                         in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;
-                    mm_w2_data.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
+                    mm_w2_data.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
+                    in2_index++;
                     k_tracker++;
                 }
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
-                    mm_w2_bias.matmul(0, /*in1_index=*/last_k_index, /*dst_index=*/0);
+                    mm_w2_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }

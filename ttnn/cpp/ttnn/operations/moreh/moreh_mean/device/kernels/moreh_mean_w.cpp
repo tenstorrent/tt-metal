@@ -58,7 +58,7 @@ void kernel_main() {
                     mm_cfg.out_cb_id = cb_out;
                     ckernel::TileMatmulOp mm(mm_cfg);
                     mm.init_short();
-                    mm.matmul(0, 0, reduce_dst_idx);
+                    mm.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
                     cb_pop_front(cb_input, onetile);
                 }
                 tile_regs_commit();
@@ -112,7 +112,7 @@ void kernel_main() {
             mm_cfg2.out_cb_id = cb_out;
             ckernel::TileMatmulOp mm2(mm_cfg2);
             mm2.init_short();
-            mm2.matmul(0, 0, reduce_dst_idx);
+            mm2.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

@@ -150,9 +150,7 @@ void matmul_qk_by_v(
     reconfig_data_format(cb_qk_result, cb_value);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mm.matmul(0, tile_idx + block_idx, block_idx);
-        }
+        mm.accumulate(0, tile_idx, 0, block_size, 0, 1, 1);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
