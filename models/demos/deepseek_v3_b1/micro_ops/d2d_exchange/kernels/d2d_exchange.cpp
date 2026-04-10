@@ -148,6 +148,10 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     DPRINT << "Starting d2d exchange kernel" << ENDL();
+    DPRINT << " downstream_enc: " << downstream_enc.d2d.downstream_noc_x << "," << downstream_enc.d2d.downstream_noc_y
+           << ENDL();
+    DPRINT << " receiver_socket: " << receiver_socket.d2d.upstream_noc_x << "," << receiver_socket.d2d.upstream_noc_y
+           << ENDL();
     DEVICE_PRINT("Starting d2d exchange kernel\n");
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
@@ -191,10 +195,11 @@ void kernel_main() {
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "waiting for pages" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-
+        DPRINT << "pages received" << ENDL();
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 

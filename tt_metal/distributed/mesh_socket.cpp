@@ -232,6 +232,15 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
 
+    std::cout << "[rank " << my_rank << "] local_endpoint_desc:"
+              << " config_buf_addr=" << local_endpoint_desc.config_buffer_address
+              << " data_buf_addr=" << local_endpoint_desc.data_buffer_address
+              << " tag=" << *local_endpoint_desc.exchange_tag
+              << " sender_mesh_id=" << local_endpoint_desc.config.sender_mesh_id.value()
+              << " receiver_mesh_id=" << local_endpoint_desc.config.receiver_mesh_id.value()
+              << " sender_rank=" << *local_endpoint_desc.config.sender_rank
+              << " receiver_rank=" << *local_endpoint_desc.config.receiver_rank << std::endl;
+
     if (same_mesh) {
         // Override tag: the per-mesh_id counter diverges across ranks because each
         // rank creates different numbers of local socket pairs.  Use a deterministic
@@ -250,15 +259,15 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         int local_size = static_cast<int>(serialized_local.size());
 
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
-            std::cout << "[rank " << my_rank << "] SENDER: sending size " << local_size << " to rank " << *peer_rank
-                      << std::endl;
+            // std::cout << "[rank " << my_rank << "] SENDER: sending size " << local_size << " to rank " << *peer_rank
+            //          << std::endl;
             execute_with_timeout([&]() {
                 context->send(
                     tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_size), sizeof(local_size)),
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] SENDER: sending payload" << std::endl;
+            // std::cout << "[rank " << my_rank << "] SENDER: sending payload" << std::endl;
             execute_with_timeout([&]() {
                 context->send(
                     tt::stl::as_writable_bytes(
@@ -266,7 +275,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] SENDER: waiting for peer size" << std::endl;
+            //  std::cout << "[rank " << my_rank << "] SENDER: waiting for peer size" << std::endl;
             int remote_size = 0;
             execute_with_timeout([&]() {
                 context->recv(
@@ -274,8 +283,8 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] SENDER: recv'd size " << remote_size << ", waiting for payload"
-                      << std::endl;
+            // std::cout << "[rank " << my_rank << "] SENDER: recv'd size " << remote_size << ", waiting for payload"
+            //             << std::endl;
             std::vector<uint8_t> serialized_remote(remote_size);
             execute_with_timeout([&]() {
                 context->recv(
@@ -284,10 +293,11 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] SENDER: handshake complete" << std::endl;
+            //  std::cout << "[rank " << my_rank << "] SENDER: handshake complete" << std::endl;
             remote_endpoint_desc = deserialize_from_bytes(serialized_remote);
         } else {
-            std::cout << "[rank " << my_rank << "] RECEIVER: waiting for size from rank " << *peer_rank << std::endl;
+            //    std::cout << "[rank " << my_rank << "] RECEIVER: waiting for size from rank " << *peer_rank <<
+            //    std::endl;
             int remote_size = 0;
             execute_with_timeout([&]() {
                 context->recv(
@@ -295,8 +305,9 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] RECEIVER: recv'd size " << remote_size << ", waiting for payload"
-                      << std::endl;
+            //   std::cout << "[rank " << my_rank << "] RECEIVER: recv'd size " << remote_size << ", waiting for
+            //   payload"
+            //             << std::endl;
             std::vector<uint8_t> serialized_remote(remote_size);
             execute_with_timeout([&]() {
                 context->recv(
@@ -305,7 +316,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] RECEIVER: sending size " << local_size << std::endl;
+            //  std::cout << "[rank " << my_rank << "] RECEIVER: sending size " << local_size << std::endl;
             remote_endpoint_desc = deserialize_from_bytes(serialized_remote);
             execute_with_timeout([&]() {
                 context->send(
@@ -313,7 +324,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] RECEIVER: sending payload" << std::endl;
+            //  std::cout << "[rank " << my_rank << "] RECEIVER: sending payload" << std::endl;
             execute_with_timeout([&]() {
                 context->send(
                     tt::stl::as_writable_bytes(
@@ -321,19 +332,18 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                     peer_rank,
                     local_endpoint_desc.exchange_tag);
             });
-            std::cout << "[rank " << my_rank << "] RECEIVER: handshake complete" << std::endl;
+            //   std::cout << "[rank " << my_rank << "] RECEIVER: handshake complete" << std::endl;
         }
 
-        std::cout << "[rank " << my_rank << "] generating fabric_node_id_map" << std::endl;
         fabric_node_id_map_ = generate_fabric_node_id_map(config_);
         std::cout << "[rank " << my_rank << "] writing socket configs" << std::endl;
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
-        std::cout << "[rank " << my_rank << "] barrier between sender=" << *config_.sender_rank
-                  << " and receiver=" << *config_.receiver_rank << std::endl;
+        //        std::cout << "[rank " << my_rank << "] barrier between sender=" << *config_.sender_rank
+        //               << " and receiver=" << *config_.receiver_rank << std::endl;
         execute_with_timeout(
             [&]() { barrier_across_send_recv_ranks({config_.sender_rank}, {config_.receiver_rank}, context); });
-        std::cout << "[rank " << my_rank << "] connect_with_peer done" << std::endl;
+        //   std::cout << "[rank " << my_rank << "] connect_with_peer done" << std::endl;
     } else {
         // Cross-mesh socket: use the existing multi-rank handshake protocol
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
@@ -353,6 +363,13 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
     }
+    for (int ep = 0; ep < 2; ++ep) {
+        std::string ep_name = (ep == 0) ? "SENDER" : "RECEIVER";
+        for (const auto& [coord, fid] : fabric_node_id_map_[ep]) {
+            std::cout << "[rank " << my_rank << "] fabric_node_id_map[" << ep_name << "][" << coord[0] << ","
+                      << coord[1] << "] = M" << *fid.mesh_id << "D" << fid.chip_id << std::endl;
+        }
+    }
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
@@ -361,6 +378,7 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const SocketConfig& base_config) {
     TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
 
+    std::cout << "creating socket pair" << std::endl;
     auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
     auto recv_config_buffer = create_socket_config_buffer(receiver, config, SocketEndpoint::RECEIVER);

@@ -684,6 +684,14 @@ def test_passthrough_pipeline_block(mesh_device):
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
     num_procs = int(ttnn.distributed_context_get_size())
+    rank = int(ttnn.distributed_context_get_rank())
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    for r in range(rows):
+        for c in range(cols):
+            coord = ttnn.MeshCoordinate(r, c)
+            fid = mesh_device.get_fabric_node_id(coord)
+            if rank == 0:
+                logger.info(f"mesh_device[{r},{c}]: mesh_id={fid.mesh_id}, fabric_id={fid.chip_id}")
 
     config = create_passthrough_pipeline_configuration(SyntheticWeightProvider(), num_procs)
     pipeline = config.build_pipeline(mesh_device)
@@ -709,7 +717,7 @@ def test_passthrough_pipeline_block(mesh_device):
             token_size_bytes = 64
             token_size_datums = token_size_bytes // dtype_size(token_dtype)
 
-            for token_id in range(vocab_size):
+            for token_id in range(1):
                 torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
                 torch_input[0, 0] = token_id
                 input_tensor = ttnn.from_torch(

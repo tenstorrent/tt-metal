@@ -129,6 +129,7 @@ FORCE_INLINE void send_pages_over_socket(
 
 void kernel_main() {
     size_t rt_args_idx = 0;
+    DPRINT << " starting fused h2d receiver embedding kernel" << ENDL();
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;

@@ -333,6 +333,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
+    std::cout << " reserving bytes " << num_bytes << std::endl;
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
@@ -342,8 +343,11 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
     }
+    std::cout << "pushing bytes " << num_bytes << std::endl;
     this->push_bytes(num_bytes);
+    std::cout << "notifying receiver" << std::endl;
     this->notify_receiver();
+    std::cout << "notified receiver" << std::endl;
 }
 
 std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {recv_core_}; }

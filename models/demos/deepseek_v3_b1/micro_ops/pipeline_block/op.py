@@ -93,7 +93,10 @@ class PipelineBlock:
         if initialize_loopback:
             assert len(pipeline_config) == self.num_procs + 1
 
-        print("here2.1")
+        rank = int(ttnn.distributed_context_get_rank())
+        if rank == 0:
+            for i, cfg in enumerate(pipeline_config):
+                print(f"pipeline_config[{i}]: entry={cfg.entry_node_coord} exit={cfg.exit_node_coord}")
         self.is_pipeline_start = self.my_stage_idx == 0
         self.is_last_stage = self.my_stage_idx == self.num_procs - 1
         self.has_exit = not self.is_last_stage or initialize_loopback
@@ -386,6 +389,7 @@ class PipelineBlock:
 
     def write_token(self, token_tensor):
         assert self.is_first_pipeline_stage(), "Token can only be written to the first pipeline stage"
+        print("writing token")
         self.h2d_socket.write_tensor(token_tensor)
 
     def read_output(self, output_tensor):
