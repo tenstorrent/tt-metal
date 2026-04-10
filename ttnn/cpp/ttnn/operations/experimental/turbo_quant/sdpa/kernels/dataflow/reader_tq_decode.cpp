@@ -2,18 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TurboQuant SDPA decode reader kernel — BF16 direct push version.
+// TurboQuant SDPA decode reader kernel.
 //
-// For MVP: reads BF16 K/V tensors and pushes directly to cb_k_in/cb_v_in
-// (the SDPA input CBs). Also pushes raw BFP4 indices and norms to their CBs
-// for the compute kernel to discard (maintaining pipeline compatibility).
-//
-// Inputs:
-//   Q          (BF16, interleaved)  [B, NQH, 1, DH]
-//   K_bf16     (BF16, interleaved)  [B, NKH, Sk, DH]   -- direct K values
-//   K norms    (BF16, interleaved)  [B, NKH, Sk, 1]    -- unused but consumed
-//   V_bf16     (BF16, interleaved)  [B, NKH, Sk, vDH]  -- direct V values
-//   V norms    (BF16, interleaved)  [B, NKH, Sk, 1]    -- unused but consumed
+// Reads Q (BF16) directly to cb_q_in (c_0).
+// Reads K/V indices (BFP4 or BF16) to cb_k_idx/cb_v_idx (c_10/c_12).
+// K is read TRANSPOSED (matching standard SDPA reader behavior).
+// Compute kernel typecasts from c_10/c_12 → c_1/c_2 for sdpa_standard.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -53,37 +47,33 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
 
     // ── CB indices ──
-    // Push K/V directly to SDPA input CBs (c_1, c_2)
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;  // Direct K push
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;  // Direct V push
+    constexpr uint32_t cb_k_idx = tt::CBIndex::c_10;  // BFP4 K indices
+    constexpr uint32_t cb_v_idx = tt::CBIndex::c_12;  // BFP4 V indices
 
     // ── Tile sizes ──
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
-    // For MVP: K/V are BF16, same tile size as Q
-    constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
-    constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
+    constexpr uint32_t k_idx_tile_bytes = get_tile_size(cb_k_idx);
+    constexpr uint32_t v_idx_tile_bytes = get_tile_size(cb_v_idx);
 
     // ── Derived constants ──
-    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t q_heads_per_kv = NQH / NKH;
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
     // ── Tensor accessors ──
-    // k_idx and v_idx accessors are used for the K/V BF16 tensors
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_idx_args, k_idx_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_idx_args, v_idx_addr, v_tile_bytes);
+    const auto k_idx_reader = TensorAccessor(k_idx_args, k_idx_addr, k_idx_tile_bytes);
+    const auto v_idx_reader = TensorAccessor(v_idx_args, v_idx_addr, v_idx_tile_bytes);
 
     // Tile shapes
     const auto q_tile_shape = TensorTileShape(B, NQH, Sqt, DHt);
-    const auto k_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
-    const auto v_tile_shape = TensorTileShape(B, NKH, Skt, vDHt);
+    const auto k_idx_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
+    const auto v_idx_tile_shape = TensorTileShape(B, NKH, Skt, vDHt);
 
     // ── Main loop ──
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            // ── Read Q ──
+            // ── Read Q (BF16) directly to c_0 ──
             {
                 const uint32_t q_start = q_tile_shape.id_of(nb, nq, 0, 0);
                 read_chunk_with_padding<q_tile_bytes>(
@@ -92,20 +82,19 @@ void kernel_main() {
 
             const uint32_t k_head = nq / q_heads_per_kv;
 
-            // ── Push K/V directly to SDPA CBs chunk by chunk ──
+            // ── Push K/V indices to c_10/c_12 chunk by chunk ──
             for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                 const uint32_t chunk_start_row = k_chunk * Sk_chunk_t;
                 const uint32_t chunk_end_row =
                     (chunk_start_row + Sk_chunk_t < Skt) ? chunk_start_row + Sk_chunk_t : Skt;
                 const uint32_t kv_row_count = chunk_end_row - chunk_start_row;
 
-                // ── K: read BF16 directly into cb_k_in, TRANSPOSED ──
-                // K must be stored transposed in CB for Q×K^T matmul (matches standard SDPA)
+                // ── K indices: TRANSPOSED read to c_10 ──
                 {
-                    const uint32_t k_start = k_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
-                    read_chunk_with_padding<k_tile_bytes>(
-                        k_reader,
-                        cb_k_in,
+                    const uint32_t k_start = k_idx_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
+                    read_chunk_with_padding<k_idx_tile_bytes>(
+                        k_idx_reader,
+                        cb_k_idx,
                         k_start,
                         kv_row_count,
                         DHt,
@@ -116,11 +105,11 @@ void kernel_main() {
                     );
                 }
 
-                // ── V: read BF16 directly into cb_v_in ──
+                // ── V indices: NOT transposed, to c_12 ──
                 {
-                    const uint32_t v_start = v_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
-                    read_chunk_with_padding<v_tile_bytes>(
-                        v_reader, cb_v_in, v_start, kv_row_count, vDHt, Sk_chunk_t, vDHt, barrier_threshold);
+                    const uint32_t v_start = v_idx_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
+                    read_chunk_with_padding<v_idx_tile_bytes>(
+                        v_idx_reader, cb_v_idx, v_start, kv_row_count, vDHt, Sk_chunk_t, vDHt, barrier_threshold);
                 }
             }
         }
