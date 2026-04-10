@@ -114,11 +114,12 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (host_tensor.host_storage().is_uniform_storage()) {
-        tensor_impl::copy_to_device(cq, host_tensor.host_tensor(), device_tensor.mesh_tensor());
+        tensor_impl::copy_to_device(cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
         auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(
-            cq, host_tensor.host_tensor(), device_tensor.mesh_tensor());
-        device_tensor = Tensor(DeviceStorage(std::move(device_tensor.mesh_tensor()), std::move(coords)));
+            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+        device_tensor.device_storage() =
+            DeviceStorage(std::move(device_tensor.device_storage().get_mesh_tensor()), std::move(coords));
     }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -151,7 +152,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (device_tensor.device_storage().is_uniform_storage()) {
-        tensor_impl::copy_to_host(cq, device_tensor.mesh_tensor(), host_tensor.host_tensor(), blocking);
+        tensor_impl::copy_to_host(cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
     } else {
         auto coords = device_tensor.device_storage().get_coords();
         tensor_impl::non_uniform_data_movement::copy_to_host(cq, device_tensor, host_tensor, coords, blocking);
