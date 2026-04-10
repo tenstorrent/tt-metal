@@ -29,7 +29,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     test_dims = (
         (1, 9, 384, 1024),
         (1, 1, 24, 42),
-    )  # test is passing on this shape only when implicit padding is enabled else getting Segmentation fault (core dumped) (#31983))
+    )
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
@@ -38,7 +38,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         if test_id <= 5:
             in1 = torch.rand(test_shape) * 2 - 0.8
             in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-            # in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
         if test_id % 3 == 0:
             gamma = torch.ones(test_shape[3])

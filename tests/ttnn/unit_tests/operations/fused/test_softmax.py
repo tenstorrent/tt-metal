@@ -430,11 +430,6 @@ def test_softmax_sd(device):
     "shape, dim, dtype",
     [
         ([32, 32], -1, [torch.bfloat16, ttnn.bfloat16]),
-        (
-            [23, 42],
-            -1,
-            [torch.bfloat16, ttnn.bfloat16],
-        ),
         ([32, 32], -1, [torch.float32, ttnn.float32]),
         ([32, 32], 0, [torch.bfloat16, ttnn.bfloat16]),
         ([32, 32], 0, [torch.float32, ttnn.float32]),
@@ -444,6 +439,11 @@ def test_softmax_sd(device):
         ([32, 32, 32, 32], -2, [torch.float32, ttnn.float32]),
         ([32, 32, 32, 32], -3, [torch.bfloat16, ttnn.bfloat16]),
         ([32, 32, 32, 32], -3, [torch.float32, ttnn.float32]),
+        (
+            [23, 42],
+            -1,
+            [torch.bfloat16, ttnn.bfloat16],
+        ),
     ],
 )
 def test_softmax_dtypes(device, shape, dim, dtype):
@@ -469,11 +469,6 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     "shape, dim, dtype",
     [
         ([32, 32], -1, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralW path (rank!=4)
-        (
-            [23, 42],
-            -1,
-            [torch.bfloat16, ttnn.bfloat16],
-        ),
         ([32, 32, 32, 32], 0, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 1, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 3, [torch.bfloat16, ttnn.bfloat8_b]),  # AttentionOptimized path
@@ -485,6 +480,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
             [torch.bfloat16, ttnn.bfloat8_b],
         ),  # GeneralW path (rank>4 bypasses AttentionOptimized)
         ([1, 1, 32, 32, 32], 3, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralH path via rank>4
+        ([23, 42], -1, [torch.bfloat16, ttnn.bfloat16]),
     ],
 )
 def test_softmax_bfloat8_dims(device, shape, dim, dtype):

@@ -87,8 +87,6 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
     torch.manual_seed(41467)
 
     inp_shape = (1, 1, 32, 128)
-    # inp_shape = (1, 1, 24, 42) #test passing on this non-multiple shape of 32 regardless of implicit padding (#31983)
-    # inp_shape = (1, 1, 24, 38)  # test failing on this non-multiple shape of 32 only when implicit padding is enabled (#31983)
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
@@ -112,7 +110,6 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
     tt_res = torch2tt_tensor(
         torch_res,
         tt_dtype=ttnn.bfloat16,
@@ -128,7 +125,6 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
         compute_kernel_config=kernel_config,
         memory_config=dram_memcfg,
     )
-    tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
     tt_output_host = tt2torch_tensor(tt_stats)
     all_passing = True
@@ -222,9 +218,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    tt_inp = ttnn.fill_implicit_tile_padding(
-        tt_inp, TEST_PADDING_VALUE
-    )  # test failing when implicit padding is enabled (#31983)
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
 
     if use_pre_all_gather:
         tt_stats = ln_pre_allgather_op([tt_inp], 1, False, ttnn.bfloat16, pre_kernel_config)[0]
@@ -237,7 +231,6 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
-        tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
     tt_gamma = torch2tt_tensor(
         gamma_torch,
