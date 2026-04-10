@@ -60,7 +60,9 @@ def prefill_forward(
     xqkv = apply_qkv_projection(hidden_states, weights)
 
     # 2. Split into Q, K, V heads
-    tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv, config, weights.is_global, tp=tp)
+    tt_q, tt_k, tt_v = split_qkv_heads_prefill(
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+    )
 
     # 3. Per-head norms (only for Q if using shared K/V)
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)

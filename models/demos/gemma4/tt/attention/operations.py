@@ -16,6 +16,7 @@ Handles:
 """
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allreduce
 
 from .weights import AttentionWeights
 
@@ -25,13 +26,14 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     return ttnn.linear(hidden_states, weights.wqkv)
 
 
-def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1):
+def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
     """
     Split fused QKV into separate head tensors for decode mode.
     When TP > 1, uses local head counts (global / tp).
+    When kv_replicated, KV heads are not split (used when num_kv_heads < TP).
     """
     num_local_heads = config.num_attention_heads // tp
-    num_local_kv_heads = config.num_key_value_heads // tp
+    num_local_kv_heads = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // tp
     return ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
@@ -40,13 +42,14 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1):
     )
 
 
-def split_qkv_heads_prefill(xqkv_fused, config, is_global: bool, tp: int = 1):
+def split_qkv_heads_prefill(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
     """
     Split fused QKV into separate head tensors for prefill mode.
     When TP > 1, uses local head counts (global / tp).
+    When kv_replicated, KV heads are not split (used when num_kv_heads < TP).
     """
     num_local_heads = config.num_attention_heads // tp
-    num_local_kv_heads = config.num_key_value_heads // tp
+    num_local_kv_heads = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // tp
     return ttnn.experimental.nlp_create_qkv_heads(
         xqkv_fused,
         num_heads=num_local_heads,
@@ -127,15 +130,4 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """Apply tensor-parallel allreduce if TP > 1."""
-    if mesh_config is None or mesh_config.tp <= 1:
-        return tensor
-
-    result = ttnn.all_reduce(
-        tensor,
-        cluster_axis=mesh_config.tp_axis,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tensor.deallocate(True)
-    return result
+    return ccl_allreduce(tensor, mesh_config, ccl_manager)

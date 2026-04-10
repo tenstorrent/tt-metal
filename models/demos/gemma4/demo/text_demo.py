@@ -541,3 +541,19 @@ def test_demo_full_model_n300(mesh_device, model_path):
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_demo_full_model_t3k(mesh_device, model_path):
+    """Full model demo on T3K (TP=8) — MoE expert weights TP-sharded across 8 devices."""
+    prompts = ["Explain quantum computing in simple terms"]
+    results = run_generation(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        prompts=prompts,
+        max_new_tokens=64,
+        max_seq_len=512,
+    )
+    assert len(results) == 1
+    logger.info(f"Full model output: {results[0]}")

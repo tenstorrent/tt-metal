@@ -11,6 +11,7 @@ sparse_matmul output is 6D: [batch_dims..., num_experts, seq_tiles, n_dim].
 import math
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allreduce
 
 from .operations import apply_geglu
 from .weights import ExpertWeights
@@ -95,10 +96,12 @@ def decode_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
+    # sparse_matmul output uses logical intermediate dim (may differ from padded weight size)
+    sm_intermediate = gate.shape[-1]
     # Reshape 6D → 3D: [batch, num_experts, intermediate]
-    gate = ttnn.reshape(gate, (batch_size, num_experts, 1, intermediate_size))
+    gate = ttnn.reshape(gate, (batch_size, num_experts, 1, sm_intermediate))
     gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, num_experts, intermediate_size))
+    gate = ttnn.reshape(gate, (batch_size, num_experts, sm_intermediate))
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -111,16 +114,16 @@ def decode_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
-    up = ttnn.reshape(up, (batch_size, num_experts, 1, intermediate_size))
+    up = ttnn.reshape(up, (batch_size, num_experts, 1, sm_intermediate))
     up = ttnn.transpose(up, 1, 2)
-    up = ttnn.reshape(up, (batch_size, num_experts, intermediate_size))
+    up = ttnn.reshape(up, (batch_size, num_experts, sm_intermediate))
 
     # GeGLU activation
     down_input = apply_geglu(gate, up)
 
     # Prepare for down projection
     down_input = ttnn.transpose(down_input, 1, 0)
-    down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, intermediate_size))
+    down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, sm_intermediate))
 
     # Down projection: sparse, input is also sparse
     down = ttnn.sparse_matmul(
@@ -154,5 +157,9 @@ def decode_forward(
         (1, 1, batch_size, config.hidden_size),
         (1, 1, max(32, batch_size), config.hidden_size),
     )
+
+    # All-reduce after row-parallel down_proj
+    if mesh_config is not None and mesh_config.tp > 1:
+        next_states = ccl_allreduce(next_states, mesh_config, ccl_manager)
 
     return next_states

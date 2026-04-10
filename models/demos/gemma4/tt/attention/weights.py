@@ -32,6 +32,7 @@ class AttentionWeights:
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
+    kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
 
 
 def load_attention_weights(
@@ -52,6 +53,9 @@ def load_attention_weights(
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
 
+    # When KV heads < TP, replicate KV to all devices instead of splitting
+    kv_replicated = config.num_key_value_heads < tp
+
     # Compute o_proj padding for tile-aligned CCL
     hidden_size = config.hidden_size
     local_hidden = hidden_size // tp
@@ -69,11 +73,16 @@ def load_attention_weights(
 
         if tp > 1:
             # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
+            # When kv_replicated, keep full K/V on each device instead of chunking
             qkv_list = []
             for i in range(tp):
                 wq_chunk = torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)
-                wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
-                wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)
+                if kv_replicated:
+                    wk_chunk = k_w.transpose(-2, -1)
+                    wv_chunk = v_w.transpose(-2, -1)
+                else:
+                    wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
+                    wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)
                 qkv_list.append(torch.cat([wq_chunk, wk_chunk, wv_chunk], dim=-1))
             qkv = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
         else:
@@ -162,4 +171,5 @@ def load_attention_weights(
         q_norm_weight=q_norm_weight,
         k_norm_weight=k_norm_weight,
         is_global=is_global,
+        kv_replicated=kv_replicated,
     )

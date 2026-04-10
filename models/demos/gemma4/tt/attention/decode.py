@@ -61,7 +61,9 @@ def decode_forward(
     xqkv = apply_qkv_projection(hidden_states, weights)
 
     # 2. Split into Q, K, V heads
-    tt_q, tt_k, tt_v = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp)
+    tt_q, tt_k, tt_v = split_qkv_heads_decode(
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+    )
 
     # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()

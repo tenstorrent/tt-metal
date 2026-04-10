@@ -4,15 +4,20 @@
 """
 On-device expert prefill forward using sparse_matmul.
 
+Following gpt_oss pattern: sparse_matmul computes ALL experts (all-ones sparsity),
+then routing weights are applied after down projection to select active experts.
+
 For prefill (seq_len > 1), the sequence is reshaped into tile-sized groups:
   [1, 1, seq_len, H] -> [1, seq_len/32, 32, H]
-
-The sparsity pattern is repeated across groups, and nnz is scaled by group_size.
-This matches the gpt-oss prefill expert pattern.
 """
 
+import time
+
+import torch
+from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allreduce
 
 from .decode import _build_sparse_matmul_config
 from .operations import apply_geglu
@@ -21,32 +26,65 @@ from .weights import ExpertWeights
 TILE_SIZE = 32
 
 
+def create_prefill_sparsity(mesh_device, num_experts):
+    """Create all-ones sparsity mask for prefill (all experts active).
+
+    Following gpt_oss: prefill computes all experts, routing weights
+    zero out inactive experts afterward.
+
+    Returns:
+        [1, 1, 1, num_experts] ROW_MAJOR bfloat16 tensor on device
+    """
+    is_mesh = hasattr(mesh_device, "shape")
+    sparsity = torch.ones(1, 1, 1, num_experts, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        sparsity,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+
+
 def prefill_forward(
     hidden_states,
     routing_weights,
     weights: ExpertWeights,
     config,
+    prefill_sparsity,
     mesh_config=None,
     mesh_device=None,
     ccl_manager=None,
 ):
     """
-    On-device expert prefill forward using sparse_matmul with tile-grouped sequence.
+    On-device expert prefill forward using sparse_matmul.
+
+    Following gpt_oss pattern:
+    1. sparse_matmul gate/up/down with all-ones sparsity (compute ALL experts)
+    2. Apply routing weights after down projection to select active experts
+    3. Reduce across expert dimension
 
     Args:
         hidden_states: [1, 1, seq_len, hidden_size] on device (seq_len must be multiple of 32)
         routing_weights: [1, 1, seq_len, num_experts] on device (dense routing from router)
         weights: ExpertWeights
         config: Gemma4ExpertConfig
+        prefill_sparsity: [1, 1, 1, num_experts] all-ones sparsity mask (cached, do not deallocate)
 
     Returns:
         output: [1, 1, seq_len, hidden_size] on device
     """
     seq_len = hidden_states.shape[2]
     num_experts = config.num_experts
-    top_k = config.top_k
     intermediate_size = weights.intermediate_size_per_device
     hidden_size = config.hidden_size
+    tp = mesh_config.tp if mesh_config else 1
+
+    logger.info(
+        f"[prefill_experts] START seq_len={seq_len} num_experts={num_experts} "
+        f"intermediate_per_device={intermediate_size} hidden={hidden_size} tp={tp}"
+    )
+    t0 = time.perf_counter()
 
     assert seq_len % TILE_SIZE == 0, f"Prefill seq_len must be multiple of {TILE_SIZE}, got {seq_len}"
     group_size = seq_len // TILE_SIZE
@@ -54,14 +92,10 @@ def prefill_forward(
     # Reshape sequence into tile groups: [1, 1, S, H] -> [1, S/32, 32, H]
     hidden_grouped = ttnn.reshape(hidden_states, (1, group_size, TILE_SIZE, hidden_size))
 
-    # Create sparsity from routing: take the first token's routing as representative
-    # (all tokens in a tile group share the same sparsity pattern for sparse_matmul)
-    # For simplicity, use the routing from the first token and repeat across groups
-    routing_first = ttnn.slice(routing_weights, [0, 0, 0, 0], [1, 1, 1, num_experts])
-    sparsity_base = ttnn.to_layout(routing_first, ttnn.ROW_MAJOR_LAYOUT)
-    sparsity = ttnn.repeat(sparsity_base, ttnn.Shape((1, 1, group_size, 1)))
+    # All-ones sparsity repeated across groups
+    sparsity = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
 
-    # nnz scales with group_size (each group processes all its tokens independently)
+    # nnz = all experts × groups (compute every expert for every group)
     nnz = num_experts * group_size
 
     output_tile = ttnn.Tile([32, 32])
@@ -69,6 +103,8 @@ def prefill_forward(
     down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
 
     # Gate projection
+    logger.info(f"[prefill_experts] sparse_matmul GATE: nnz={nnz}")
+    t1 = time.perf_counter()
     gate = ttnn.sparse_matmul(
         hidden_grouped,
         weights.gate_proj,
@@ -79,11 +115,14 @@ def prefill_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
-    # Reshape: output is [1, group_size, E, 32, I] or similar -> [1, E, S, I]
+    # sparse_matmul output uses logical intermediate dim (before padding), not padded size
+    sm_intermediate = gate.shape[-1]
     gate = ttnn.transpose(gate, 1, 3)
-    gate = ttnn.reshape(gate, (1, num_experts, seq_len, intermediate_size))
+    gate = ttnn.reshape(gate, (1, num_experts, seq_len, sm_intermediate))
 
     # Up projection
+    logger.info(f"[prefill_experts] sparse_matmul UP: nnz={nnz}")
+    t1 = time.perf_counter()
     up = ttnn.sparse_matmul(
         hidden_grouped,
         weights.up_proj,
@@ -94,18 +133,23 @@ def prefill_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
+    hidden_grouped.deallocate(True)
     up = ttnn.transpose(up, 1, 3)
-    up = ttnn.reshape(up, (1, num_experts, seq_len, intermediate_size))
+    up = ttnn.reshape(up, (1, num_experts, seq_len, sm_intermediate))
 
     # GeGLU activation
+    t1 = time.perf_counter()
     down_input = apply_geglu(gate, up)
-    down_input = ttnn.reshape(down_input, (1, num_experts, seq_len, intermediate_size))
+    down_input = ttnn.reshape(down_input, (1, num_experts, seq_len, sm_intermediate))
+    logger.info(f"[prefill_experts] GeGLU done in {time.perf_counter()-t1:.3f}s")
 
-    # Down projection
+    # Down projection — all experts, using base sparsity (not repeated)
+    logger.info(f"[prefill_experts] sparse_matmul DOWN: nnz={num_experts}")
+    t1 = time.perf_counter()
     down = ttnn.sparse_matmul(
         down_input,
         weights.down_proj,
-        sparsity=sparsity_base,  # Original unscaled sparsity for down
+        sparsity=prefill_sparsity,
         nnz=num_experts,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
@@ -113,18 +157,29 @@ def prefill_forward(
         is_input_a_sparse=True,
         dtype=ttnn.bfloat16,
     )
+    logger.info(f"[prefill_experts] DOWN done in {time.perf_counter()-t1:.3f}s, output={down.shape}")
+    down_input.deallocate(True)
 
-    # Apply routing weights and reduce
-    # down: [1, E, S, H] -> [1, E, S, H]
+    # Reshape to [1, E, S, H]
     next_states = ttnn.reshape(down, (1, num_experts, seq_len, hidden_size))
 
+    # Apply routing weights to select active experts (gpt_oss pattern)
     # routing_weights: [1, 1, S, E] -> [1, E, S, 1] for broadcast mul
+    t1 = time.perf_counter()
     routing_permuted = ttnn.permute(routing_weights, (0, 3, 2, 1))  # [1, E, S, 1]
     next_states = ttnn.mul(next_states, routing_permuted)
 
-    # Sum across experts dimension -> [1, 1, S, H]
-    next_states = ttnn.sum(next_states, dim=1)
-    next_states = ttnn.unsqueeze_to_4D(next_states)
+    # Reduce across experts dimension using fast_reduce_nc (gpt_oss pattern)
+    next_states = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
     next_states = ttnn.reshape(next_states, (1, 1, seq_len, hidden_size))
+    logger.info(f"[prefill_experts] routing + reduce done in {time.perf_counter()-t1:.3f}s")
 
+    # All-reduce after row-parallel down_proj
+    if mesh_config is not None and mesh_config.tp > 1:
+        logger.info(f"[prefill_experts] all_reduce: shape={next_states.shape}")
+        t1 = time.perf_counter()
+        next_states = ccl_allreduce(next_states, mesh_config, ccl_manager)
+        logger.info(f"[prefill_experts] all_reduce done in {time.perf_counter()-t1:.3f}s")
+
+    logger.info(f"[prefill_experts] DONE total={time.perf_counter()-t0:.3f}s")
     return next_states

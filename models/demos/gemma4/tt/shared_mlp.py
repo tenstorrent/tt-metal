@@ -15,6 +15,7 @@ HF weight shapes:
 """
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -108,14 +109,6 @@ class SharedMLP:
 
         # Allreduce after row-parallel down_proj
         if self.mesh_config is not None and self.mesh_config.tp > 1:
-            result = ttnn.all_reduce(
-                output,
-                cluster_axis=self.mesh_config.tp_axis,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            output.deallocate(True)
-            output = result
+            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
 
         return output

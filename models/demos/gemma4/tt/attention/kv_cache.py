@@ -45,7 +45,10 @@ def init_kv_cache(
     is_mesh = hasattr(mesh_device, "shape")
     tp = mesh_device.shape[1] if is_mesh else 1
 
-    num_local_kv_heads = config.num_key_value_heads // tp
+    # When KV heads < TP, replicate all KV heads to each device (can't split evenly)
+    num_local_kv_heads = (
+        config.num_key_value_heads if config.num_key_value_heads < tp else config.num_key_value_heads // tp
+    )
     head_dim = config.head_dim
 
     if paged_attention_config:

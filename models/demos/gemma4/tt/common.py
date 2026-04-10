@@ -63,8 +63,7 @@ def create_tt_model(
     is_mesh = hasattr(mesh_device, "shape")
     num_devices = mesh_device.get_num_devices() if is_mesh else 1
     if is_mesh and num_devices > 1:
-        num_links = 1 if num_devices <= 2 else 4
-        ccl_manager = CCLManager(mesh_device, num_links=num_links)
+        ccl_manager = CCLManager(mesh_device, num_links=1)
     else:
         ccl_manager = None
 
