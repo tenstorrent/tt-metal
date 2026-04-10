@@ -6,7 +6,6 @@
 
 #include <functional>
 #include <memory>
-#include <set>
 #include <span>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -49,9 +48,6 @@ public:
 
     // Returns true if the tensor spans across all devices in the mesh.
     bool is_uniform_storage() const;
-
-    // Returns the coordinates of populated shards.
-    const std::set<distributed::MeshCoordinate>& get_coords() const;
 
     // Returns the host tensor.
     const HostTensor& host_tensor() const;

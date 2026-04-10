@@ -73,8 +73,6 @@ bool HostStorage::is_uniform_storage() const {
     return buf.shard_coords().size() == buf.shape().mesh_size();
 }
 
-const std::set<distributed::MeshCoordinate>& HostStorage::get_coords() const { return tensor.buffer().shard_coords(); }
-
 const HostTensor& HostStorage::host_tensor() const { return tensor; }
 HostTensor& HostStorage::host_tensor() { return tensor; }
 
