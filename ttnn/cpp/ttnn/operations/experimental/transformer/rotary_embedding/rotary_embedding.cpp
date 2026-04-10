@@ -96,4 +96,45 @@ ttnn::Tensor rotary_embedding(
         kernel_config_val);
 }
 
+ttnn::Tensor rotary_embedding_to_cache(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    Tensor& output_cache,
+    uint32_t update_idx,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    using namespace tt::constants;
+    TT_FATAL(
+        update_idx % TILE_HEIGHT == 0,
+        "update_idx ({}) must be a multiple of TILE_HEIGHT ({}) for fused rotary→cache write",
+        update_idx,
+        TILE_HEIGHT);
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == output_cache.padded_shape()[-1],
+        "Input and output cache must have same head_dim");
+    TT_FATAL(
+        input_tensor.dtype() == output_cache.dtype(),
+        "Input and output cache must have the same dtype for fused rotary→cache write");
+
+    uint32_t seq_len = input_tensor.padded_shape()[-2];
+    auto arch = input_tensor.device()->arch();
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+
+    // Compute tile offset: update_idx rows / TILE_HEIGHT tiles per row × Wt tiles per tile row
+    const uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t update_idx_tiles = (update_idx / TILE_HEIGHT) * Wt;
+
+    return ttnn::prim::rotary_embedding(
+        input_tensor,
+        cos_cache,
+        sin_cache,
+        seq_len,
+        /*token_idx=*/std::nullopt,
+        output_cache.memory_config(),
+        kernel_config_val,
+        /*output_tensor=*/output_cache,
+        /*dst_tile_offset=*/update_idx_tiles);
+}
+
 }  // namespace ttnn::experimental

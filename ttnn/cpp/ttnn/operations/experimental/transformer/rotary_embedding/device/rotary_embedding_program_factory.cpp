@@ -732,11 +732,14 @@ RotaryEmbeddingProgramFactory::cached_program_t RotaryEmbeddingProgramFactory::c
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
+        // Pi0.5 optimization: add dst_tile_offset so rotated tiles are written at
+        // an offset in a pre-allocated output tensor (e.g., KV cache at prefix_len)
+        const uint32_t writer_start_id = num_tiles_written + operation_attributes.dst_tile_offset;
         tt::tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
             core,
-            {dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
+            {dst_buffer->address(), num_rows_per_core * Wt, writer_start_id, cos_sin_offset, Wt, Wbytes});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
@@ -830,6 +833,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            // Pi0.5 optimization: update writer start_id with dst_tile_offset
+            runtime_args[2] = num_tiles_written + operation_attributes.dst_tile_offset;
             runtime_args[3] = cos_sin_offset;
         }
         num_tiles_written += num_rows_per_core * Wt;

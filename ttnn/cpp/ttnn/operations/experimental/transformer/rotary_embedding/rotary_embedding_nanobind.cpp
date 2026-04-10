@@ -49,4 +49,41 @@ void bind_rotary_embedding(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none());
 }
 
+void bind_rotary_embedding_to_cache(nb::module_& mod) {
+    ttnn::bind_function<"rotary_embedding_to_cache", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Fused rotary_embedding + write-to-cache. Applies RoPE to input_tensor and writes
+        the rotated tiles directly into output_cache at the tile offset corresponding to
+        update_idx. Eliminates the intermediate L1 allocation and separate fill_cache dispatch.
+
+        Requires:
+            - input_tensor shape [1, H, seq, D]
+            - output_cache shape [1, H, cache_seq, D] (must match input head_dim)
+            - update_idx % TILE_HEIGHT (32) == 0
+            - input.dtype == output_cache.dtype
+
+        Args:
+            input_tensor (ttnn.Tensor): the tensor to rotate.
+            cos_cache (ttnn.Tensor): the Cosine Cache tensor.
+            sin_cache (ttnn.Tensor): the Sine Cache tensor.
+            output_cache (ttnn.Tensor): pre-allocated destination cache tensor (written in-place).
+            update_idx (int): sequence index in the cache where rotated tiles will be written.
+
+        Keyword args:
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output_cache tensor (same as input `output_cache`, modified in place).
+        )doc",
+        &ttnn::experimental::rotary_embedding_to_cache,
+        nb::arg("input_tensor"),
+        nb::arg("cos_cache"),
+        nb::arg("sin_cache"),
+        nb::arg("output_cache"),
+        nb::arg("update_idx"),
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none());
+}
+
 }  // namespace ttnn::operations::experimental::transformer
