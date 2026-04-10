@@ -29,7 +29,6 @@
       - [Forward-only markers (training loop)](#forward-only-markers-training-loop)
     - [Quick reference](#quick-reference)
     - [Avoiding common pitfalls](#avoiding-common-pitfalls)
-  - [Problems](#problems)
 
 ---
 
@@ -136,7 +135,7 @@ At least one call with `dump_results=True` is required to produce or update the 
 
 ---
 
-##  Analysing Results
+## Analysing Results
 
 Install pandas, matplotlib and ipywidgets to use companion jupyter notebook. Open the companion notebook and point it to your freshly‑generated CSV:
 
@@ -246,7 +245,7 @@ chain and backward markers will fire in the wrong zones.
 x_in = profiler_marker_start(x, "[MoE]")
 
 x_r = profiler_marker_start(x_in, "[MoE] Routing")
-logits = self.gate(x_r)
+scores = self.gate(x_r)
 scores = profiler_marker_end(scores, "[MoE] Routing")
 
 x_e = profiler_marker_start(x_in, "[MoE] Experts")
@@ -337,7 +336,3 @@ phases in the flamegraph.
   forward-only — the function detects integer dtypes and skips the backward node.
 
 ---
-
-## Problems
-
-Unfortunately, we can't pass command arguments in tracy command, that's why you need to hardcode correct config path in cpp file before building tt-train.
