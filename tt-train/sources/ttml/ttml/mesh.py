@@ -29,21 +29,36 @@ class Mesh:
     def axis_size(self, name: str) -> int:
         return self.shape[idx] if (idx := self._axis_map.get(name)) is not None else 0
 
+    def axis_pos(self, name: str) -> int:
+        if not name in self._axis_map:
+            msg = (
+                f"Mesh has no axis named '{name}'.\n"
+                + f"  Shape: {self.shape}\n"
+                + f"  Axis names: {self.axis_names}\n"
+            )
+            raise RuntimeError(msg)
+        return self._axis_map[name]
+
+    def axis_mapper(self, name: str, dim: int):
+        dev = ttml.autograd.AutoContext.get_instance().get_device()
+        cluster_axis = self.axis_pos(name)
+        return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, dim, cluster_axis)
+
 
 _current_mesh: Mesh | None = None
 
 
-def open_device_mesh(mesh: tuple[int, ...] | Mesh, physical_ids: tuple[int, ...] | None = None):
+def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
     if not isinstance(mesh, Mesh):
         mesh = Mesh(mesh, tuple(f"_{i}" for i in range(len(mesh))))
-    if physical_ids is None:
-        physical_ids = ()
+    if device_ids is None:
+        device_ids = ()
 
     if mesh.num_devices() > 1:
         ttml.core.distributed.enable_fabric(mesh.num_devices())
 
     ttnn_shape = list(mesh.shape) + [1] * max(0, 2 - len(mesh.shape))
-    ttml.autograd.AutoContext.get_instance().open_device(ttnn_shape, list(physical_ids))
+    ttml.autograd.AutoContext.get_instance().open_device(ttnn_shape, list(device_ids))
 
     global _current_mesh
     _current_mesh = mesh
@@ -51,4 +66,16 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, physical_ids: tuple[int, ...]
 
 def current_mesh() -> Mesh | None:
     global _current_mesh
+    return _current_mesh
+
+
+def current_mesh_or_raise() -> Mesh:
+    global _current_mesh
+    if _current_mesh is None:
+        msg = (
+            "Device mesh is not initialized.\n"
+            + "Use ttml.open_device_mesh(ttml.Mesh(shape, axis_names)) "
+            + "to initialize the mesh.\n"
+        )
+        raise RuntimeError(msg)
     return _current_mesh

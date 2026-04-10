@@ -44,4 +44,4 @@ sys.modules[f"{__name__}.core"] = core
 optimizers = _ttml.optimizers
 sys.modules[f"{__name__}.optimizers"] = optimizers
 
-from .mesh import Mesh, open_device_mesh, current_mesh
+from .mesh import Mesh, open_device_mesh, current_mesh, current_mesh_or_raise
