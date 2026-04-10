@@ -47,6 +47,34 @@ Returns:
         &ttnn::turbo_quant_gather_centroids,
         nb::arg("input_tensor").noconvert(),
         nb::arg("centroids"));
+    ttnn::bind_function<"turbo_quant_sdpa_decode", "ttnn.experimental.">(
+        mod,
+        R"doc(
+Fused TurboQuant SDPA decode.  Reads BFP4 quantized KV indices + BF16 norms
+from paged cache and dequantizes on-the-fly during SDPA computation.
+Eliminates the full-cache BF16 dequantize temporary.
+
+Args:
+    q:           BF16 query [B, NQH, 1, DH].
+    k_indices:   BFP4 paged K indices [B, NKH, Sk, DH].
+    k_norms:     BF16 K norms [B, NKH, Sk, 1].
+    v_indices:   BFP4 paged V indices [B, NKH, Sk, vDH].
+    v_norms:     BF16 V norms [B, NKH, Sk, 1].
+    page_table:  Int32 page table [B, max_pages].
+    cur_pos:     Int32 current position [B].
+    centroids:   Centroid float values (len = 2^bits).
+    scale:       Attention scale factor.
+)doc",
+        &ttnn::turbo_quant_sdpa_decode,
+        nb::arg("q").noconvert(),
+        nb::arg("k_indices").noconvert(),
+        nb::arg("k_norms").noconvert(),
+        nb::arg("v_indices").noconvert(),
+        nb::arg("v_norms").noconvert(),
+        nb::arg("page_table").noconvert(),
+        nb::arg("cur_pos").noconvert(),
+        nb::arg("centroids"),
+        nb::arg("scale"));
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant
