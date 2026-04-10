@@ -537,9 +537,8 @@ class GemmaMLPTTNN:
         self.mlp_dim = config.mlp_dim
 
         # Chunk size must be tile-aligned (multiple of 32)
-        # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
-        # 256 tokens × 16384 mlp_dim × 1 byte = ~4MB total
-        # With auto-sharding across 64 cores = ~64KB per core (fits L1)
+        # 256 is optimal: smaller chunks have lower per-op time but the slice/concat
+        # overhead from more chunks dominates
         self.chunk_size = 256
 
     def forward_pre_down(self, x) -> ttnn.Tensor:

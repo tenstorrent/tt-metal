@@ -32,7 +32,7 @@ from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
 
 # Shared compute kernel config for all SigLIP ops
 _SIGLIP_CKC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
