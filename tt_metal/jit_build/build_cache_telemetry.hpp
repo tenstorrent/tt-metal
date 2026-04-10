@@ -45,28 +45,13 @@ private:
 
     std::string name_;
     std::atomic<bool> recording_enabled_{true};
-    mutable std::mutex data_mutex;
+    mutable std::mutex data_mutex_;
     TelemetryTokenData data_;
 };
 
-struct BuildCacheTelemetryImpl {
-    std::atomic<uint64_t> srcs_and_compiled{0};
-    std::atomic<uint32_t> cached_hit_count{0};
-    std::atomic<uint32_t> merged_artifacts{0};
-    std::atomic<uint32_t> merged_genfiles{0};
-    std::atomic<uint32_t> jit_once_dedup_count{0};
-
-    std::mutex token_registry_mutex;
-    std::vector<TelemetryToken*> registered_tokens;
-};
+struct BuildCacheTelemetryImpl;  // fwd delcaration
 
 // Process-wide telemetry for JIT build cache merge diagnostics.
-//
-// Wraps BuildCacheTelemetryImpl via unique_ptr: when the impl exists, telemetry
-// is active; when null, every method is a no-op.  Enabled by default.
-//
-// enable()/disable() are NOT thread-safe with respect to recording methods;
-// call them only during setup/teardown when no concurrent builds are running.
 //
 // register_metric() returns a TelemetryToken (running aggregate stats) that is
 // owned in owned_tokens_ for the life of the inst() singleton; disable()/enable()
@@ -80,6 +65,8 @@ class BuildCacheTelemetry {
 public:
     static BuildCacheTelemetry& inst();
 
+    // enable()/disable() are NOT thread-safe with respect to recording methods;
+    // call them only during setup/teardown when no concurrent builds are running.
     void enable();
     void disable();
     bool is_enabled() const { return impl_ != nullptr; }

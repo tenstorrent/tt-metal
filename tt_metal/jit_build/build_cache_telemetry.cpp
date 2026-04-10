@@ -26,7 +26,7 @@ void TelemetryToken::record(double value) {
     if (!recording_enabled_.load(std::memory_order_relaxed)) {
         return;
     }
-    std::lock_guard lk(data_mutex);
+    std::lock_guard lk(data_mutex_);
     ++data_.count;
     data_.total += value;
     data_.min_val = std::min(data_.min_val, value);
@@ -34,11 +34,22 @@ void TelemetryToken::record(double value) {
 }
 
 TelemetryTokenData TelemetryToken::snapshot() const {
-    std::lock_guard lk(data_mutex);
+    std::lock_guard lk(data_mutex_);
     return data_;
 }
 
 // --- BuildCacheTelemetry ---
+
+struct BuildCacheTelemetryImpl {
+    std::atomic<uint64_t> srcs_and_compiled{0};
+    std::atomic<uint32_t> cached_hit_count{0};
+    std::atomic<uint32_t> merged_artifacts{0};
+    std::atomic<uint32_t> merged_genfiles{0};
+    std::atomic<uint32_t> jit_once_dedup_count{0};
+
+    std::mutex token_registry_mutex;
+    std::vector<TelemetryToken*> registered_tokens;
+};
 
 BuildCacheTelemetry::BuildCacheTelemetry() { enable(); }
 
