@@ -11,7 +11,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*
+    sdpa/kernels/*
+)
 
 target_sources(
     ttnn_op_experimental_turbo_quant
@@ -28,6 +32,8 @@ target_sources(
         turbo_quant.cpp
         device/turbo_quant_device_operation.cpp
         device/turbo_quant_program_factory.cpp
+        sdpa/device/sdpa_tq_device_operation.cpp
+        sdpa/device/sdpa_tq_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_turbo_quant PRIVATE ${FixmeOpIncDirs})
