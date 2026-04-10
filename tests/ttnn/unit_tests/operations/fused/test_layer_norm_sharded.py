@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -317,7 +317,14 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
     golden = ttnn.get_golden_function(ttnn.layer_norm)
     golden_output = golden(torch_input_tensor, weight=torch_weight[0], bias=torch_bias[0]).to(dtype)
 
-    assert_with_pcc(golden_output, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.9998,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.015,
+    )
 
 
 @pytest.mark.parametrize("grid_offset", [(1, 1), (2, 0), (0, 2)])
@@ -385,7 +392,24 @@ def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford
         bias=tt_bias,
     )
 
-    assert_with_pcc(ref_output, output, 0.9998)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("grid_offset", [(2, 0), (1, 1)])
@@ -438,4 +462,21 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         subblock_w=1,
     )
 
-    assert_with_pcc(ref_output, output, 0.9998)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
