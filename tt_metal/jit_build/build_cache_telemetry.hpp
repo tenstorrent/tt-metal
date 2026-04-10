@@ -5,7 +5,6 @@
 #pragma once
 
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -17,29 +16,26 @@ namespace tt::tt_metal {
 
 class BuildCacheTelemetry;
 
-// Point-in-time copy of running stats from a TelemetryToken.
-// Snapshots are transactional and are internally consistent.
-struct TelemetryTokenSnapshot {
-    size_t count{0};
+struct TelemetryTokenData {
+    uint32_t count{0};
     double total{0};
     double min_val{std::numeric_limits<double>::infinity()};
     double max_val{-std::numeric_limits<double>::infinity()};
 };
 
 // Opaque handle returned by BuildCacheTelemetry::register_metric().
-// Maintains lock-free running total/count/min/max per value stream.
+// Maintains mutex-protected running total/count/min/max per value stream.
 // record() and snapshot() are safe for concurrent use.
 // References stay valid for the lifetime of BuildCacheTelemetry::inst();
 // record() is a no-op while process-wide telemetry is disabled so values are
 // not appended after disable(), but the token object is not destroyed.
-// snapshots are guarenteed to be consistent
 class TelemetryToken {
 public:
     TelemetryToken() = default;
     explicit TelemetryToken(std::string name);
 
     void record(double value);
-    TelemetryTokenSnapshot snapshot() const;
+    TelemetryTokenData snapshot() const;
 
     const std::string& name() const { return name_; }
 
@@ -47,25 +43,18 @@ private:
     friend class BuildCacheTelemetry;
     void set_recording_enabled(bool enabled);
 
-    struct RunningStats {
-        std::atomic<size_t> seq{0};
-        std::atomic<double> total{0};
-        std::atomic<double> min_val{std::numeric_limits<double>::infinity()};
-        std::atomic<double> max_val{-std::numeric_limits<double>::infinity()};
-    };
-
     std::string name_;
     std::atomic<bool> recording_enabled_{true};
-    RunningStats stats_;
+    mutable std::mutex data_mutex;
+    TelemetryTokenData data_;
 };
 
 struct BuildCacheTelemetryImpl {
-    std::atomic<size_t> total_srcs{0};
-    std::atomic<size_t> compiled_count{0};
-    std::atomic<size_t> cached_hit_count{0};
-    std::atomic<size_t> merged_artifacts{0};
-    std::atomic<size_t> merged_genfiles{0};
-    std::atomic<size_t> jit_once_dedup_count{0};
+    std::atomic<uint64_t> srcs_and_compiled{0};
+    std::atomic<uint32_t> cached_hit_count{0};
+    std::atomic<uint32_t> merged_artifacts{0};
+    std::atomic<uint32_t> merged_genfiles{0};
+    std::atomic<uint32_t> jit_once_dedup_count{0};
 
     std::mutex token_registry_mutex;
     std::vector<TelemetryToken*> registered_tokens;
@@ -95,18 +84,18 @@ public:
     void disable();
     bool is_enabled() const { return impl_ != nullptr; }
 
-    void record_compile(size_t num_srcs, size_t num_compiled);
+    void record_compile(uint32_t num_srcs, uint32_t num_compiled);
     void record_cache_hit();
-    void record_merge(size_t count);
-    void record_genfile_merge(size_t count);
+    void record_merge(uint32_t count);
+    void record_genfile_merge(uint32_t count);
     void record_jit_once_dedup();
 
-    size_t get_srcs_count() const;
-    size_t get_compile_count() const;
-    size_t get_cache_hit_count() const;
-    size_t get_merge_count() const;
-    size_t get_genfile_merge_count() const;
-    size_t get_jit_once_dedup_count() const;
+    uint32_t get_srcs_count() const;
+    uint32_t get_compile_count() const;
+    uint32_t get_cache_hit_count() const;
+    uint32_t get_merge_count() const;
+    uint32_t get_genfile_merge_count() const;
+    uint32_t get_jit_once_dedup_count() const;
 
     void log_compile_summary() const;
 

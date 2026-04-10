@@ -5,35 +5,14 @@
 #include "build_cache_telemetry.hpp"
 
 #include <atomic>
-#include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/tt_pause.hpp>
 
 namespace tt::tt_metal {
-
-namespace {
-
-void atomic_update_min(std::atomic<double>& slot, double value) {
-    // CAS isn't the publication point so relaxed is fine
-    double cur = slot.load(std::memory_order_relaxed);
-    while (value < cur &&
-           !slot.compare_exchange_weak(cur, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
-    }
-}
-
-void atomic_update_max(std::atomic<double>& slot, double value) {
-    // CAS isn't the publication point so relaxed is fine
-    double cur = slot.load(std::memory_order_relaxed);
-    while (value > cur &&
-           !slot.compare_exchange_weak(cur, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
-    }
-}
-
-}  // namespace
 
 // --- TelemetryToken ---
 
@@ -44,37 +23,19 @@ void TelemetryToken::set_recording_enabled(bool enabled) {
 }
 
 void TelemetryToken::record(double value) {
-    if (!recording_enabled_.load(std::memory_order_acquire)) {
+    if (!recording_enabled_.load(std::memory_order_relaxed)) {
         return;
     }
-    // Odd seq signals write-in-progress to concurrent snapshots.
-    stats_.seq.fetch_add(1, std::memory_order_acq_rel);
-    stats_.total.fetch_add(value, std::memory_order_relaxed);
-    atomic_update_min(stats_.min_val, value);
-    atomic_update_max(stats_.max_val, value);
-    // Even seq signals write complete.
-    stats_.seq.fetch_add(1, std::memory_order_release);
+    std::lock_guard lk(data_mutex);
+    ++data_.count;
+    data_.total += value;
+    data_.min_val = std::min(data_.min_val, value);
+    data_.max_val = std::max(data_.max_val, value);
 }
 
-TelemetryTokenSnapshot TelemetryToken::snapshot() const {
-    TelemetryTokenSnapshot out;
-    for (;;) {
-        const size_t seq1 = stats_.seq.load(std::memory_order_acquire);
-        if (seq1 & 1u) {
-            // Write in progress — spin until the writer is done.
-            ttsl::pause();
-            continue;
-        }
-        out.total = stats_.total.load(std::memory_order_relaxed);
-        out.min_val = stats_.min_val.load(std::memory_order_relaxed);
-        out.max_val = stats_.max_val.load(std::memory_order_relaxed);
-        out.count = stats_.seq.load(std::memory_order_acquire);
-        if (seq1 == out.count) {
-            out.count /= 2;
-            break;  // No write started or completed during our read.
-        }
-    }
-    return out;
+TelemetryTokenData TelemetryToken::snapshot() const {
+    std::lock_guard lk(data_mutex);
+    return data_;
 }
 
 // --- BuildCacheTelemetry ---
@@ -123,12 +84,12 @@ void BuildCacheTelemetry::disable() {
     impl_.reset();
 }
 
-void BuildCacheTelemetry::record_compile(size_t num_srcs, size_t num_compiled) {
+void BuildCacheTelemetry::record_compile(uint32_t num_srcs, uint32_t num_compiled) {
     if (!impl_) {
         return;
     }
-    impl_->total_srcs.fetch_add(num_srcs, std::memory_order_release);
-    impl_->compiled_count.fetch_add(num_compiled, std::memory_order_release);
+    impl_->srcs_and_compiled.fetch_add(
+        (static_cast<uint64_t>(num_srcs) << 32) | static_cast<uint64_t>(num_compiled), std::memory_order_release);
 }
 
 void BuildCacheTelemetry::record_cache_hit() {
@@ -138,14 +99,14 @@ void BuildCacheTelemetry::record_cache_hit() {
     impl_->cached_hit_count.fetch_add(1, std::memory_order_release);
 }
 
-void BuildCacheTelemetry::record_merge(size_t count) {
+void BuildCacheTelemetry::record_merge(uint32_t count) {
     if (!impl_) {
         return;
     }
     impl_->merged_artifacts.fetch_add(count, std::memory_order_release);
 }
 
-void BuildCacheTelemetry::record_genfile_merge(size_t count) {
+void BuildCacheTelemetry::record_genfile_merge(uint32_t count) {
     if (!impl_) {
         return;
     }
@@ -159,42 +120,42 @@ void BuildCacheTelemetry::record_jit_once_dedup() {
     impl_->jit_once_dedup_count.fetch_add(1, std::memory_order_release);
 }
 
-size_t BuildCacheTelemetry::get_srcs_count() const {
+uint32_t BuildCacheTelemetry::get_srcs_count() const {
     if (!impl_) {
         return 0;
     }
-    return impl_->total_srcs.load(std::memory_order_acquire);
+    return impl_->srcs_and_compiled.load(std::memory_order_acquire) >> 32;
 }
 
-size_t BuildCacheTelemetry::get_compile_count() const {
+uint32_t BuildCacheTelemetry::get_compile_count() const {
     if (!impl_) {
         return 0;
     }
-    return impl_->compiled_count.load(std::memory_order_acquire);
+    return impl_->srcs_and_compiled.load(std::memory_order_acquire) & 0xFFFF'FFFFu;
 }
 
-size_t BuildCacheTelemetry::get_cache_hit_count() const {
+uint32_t BuildCacheTelemetry::get_cache_hit_count() const {
     if (!impl_) {
         return 0;
     }
     return impl_->cached_hit_count.load(std::memory_order_acquire);
 }
 
-size_t BuildCacheTelemetry::get_merge_count() const {
+uint32_t BuildCacheTelemetry::get_merge_count() const {
     if (!impl_) {
         return 0;
     }
     return impl_->merged_artifacts.load(std::memory_order_acquire);
 }
 
-size_t BuildCacheTelemetry::get_genfile_merge_count() const {
+uint32_t BuildCacheTelemetry::get_genfile_merge_count() const {
     if (!impl_) {
         return 0;
     }
     return impl_->merged_genfiles.load(std::memory_order_acquire);
 }
 
-size_t BuildCacheTelemetry::get_jit_once_dedup_count() const {
+uint32_t BuildCacheTelemetry::get_jit_once_dedup_count() const {
     if (!impl_) {
         return 0;
     }
@@ -205,16 +166,20 @@ void BuildCacheTelemetry::log_compile_summary() const {
     if (!impl_) {
         return;
     }
-    const size_t total = impl_->total_srcs.load(std::memory_order_acquire);
+    const uint64_t packed = impl_->srcs_and_compiled.load(std::memory_order_acquire);
+    const uint32_t total = packed >> 32;
+    const uint32_t compiled = packed & 0xFFFF'FFFFu;
+
     if (total == 0) {
+        log_info(tt::LogBuildKernels, "JIT cache stats: no build info recorded");
         return;
     }
-    const size_t compiled = impl_->compiled_count.load(std::memory_order_acquire);
-    const size_t hits = total - compiled;
-    const size_t cached = impl_->cached_hit_count.load(std::memory_order_acquire);
-    const size_t artifacts = impl_->merged_artifacts.load(std::memory_order_acquire);
-    const size_t genfiles = impl_->merged_genfiles.load(std::memory_order_acquire);
-    const size_t dedup = impl_->jit_once_dedup_count.load(std::memory_order_acquire);
+
+    const uint32_t hits = total - compiled;
+    const uint32_t cached = impl_->cached_hit_count.load(std::memory_order_acquire);
+    const uint32_t artifacts = impl_->merged_artifacts.load(std::memory_order_acquire);
+    const uint32_t genfiles = impl_->merged_genfiles.load(std::memory_order_acquire);
+    const uint32_t dedup = impl_->jit_once_dedup_count.load(std::memory_order_acquire);
     log_info(
         tt::LogBuildKernels,
         "JIT cache stats: {}/{} hits ({:.1f}%) [{} cached, {} build-once dedup, "
@@ -251,7 +216,7 @@ void BuildCacheTelemetry::dump_metrics() const {
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
 
     for (const auto* token : impl_->registered_tokens) {
-        const TelemetryTokenSnapshot snap = token->snapshot();
+        const TelemetryTokenData snap = token->snapshot();
         if (snap.count == 0) {
             continue;
         }
