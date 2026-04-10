@@ -215,179 +215,96 @@ void kernel_main() {
     mm_init(cb_q_in, cb_k_in, cb_out);
 
     // ── Main loop: batch × head ──
+    // SIMPLIFIED: bypass-copy ALL K/V index tiles to cb_k_in/cb_v_in,
+    // then call sdpa_standard which handles the full SDPA math correctly.
+    // This requires CB capacity = full cache. For MVP/debugging only.
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            // Q is loaded once by the reader and stays fronted in cb_q_in
-            // across the entire K-chunk loop. matmul_blocks waits on in0
-            // but does not pop it — only in1 (K/V) gets popped.
-
-            // Set up ping-pong buffer aliases
-            uint32_t alias_prev_sum = cb_sum_A;
-            uint32_t alias_cur_sum = cb_sum_B;
-            uint32_t alias_prev_max = cb_max_A;
-            uint32_t alias_cur_max = cb_max_B;
-            uint32_t alias_mm2_prev_out = cb_out_im_A;
-            uint32_t alias_mm2_cur_out = cb_out_im_B;
-
-            // Decode: not causal, so iterate over all k_num_chunks
-            uint32_t processed_k_chunks = 0;
-
+            // ── Pre-fill: copy ALL K/V index tiles ──
             for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                // ─── Step 1: BYPASS dequantize — pass raw BFP4 tiles through as BF16 ──
-                // This skips centroid gather + norm multiply, just copies tiles.
-                // Used to isolate whether the SDPA math works with our CB pipeline.
-                {
-                    uint32_t k_tiles = Sk_chunk_t * DHt;
-                    for (uint32_t t = 0; t < k_tiles; t++) {
-                        cb_wait_front(cb_k_idx, 1);
-                        cb_reserve_back(cb_k_in, 1);
-                        tile_regs_acquire();
-                        copy_tile_to_dst_init_short(cb_k_idx);
-                        copy_tile(cb_k_idx, 0, 0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_reconfig_data_format(cb_k_in);
-                        pack_tile(0, cb_k_in);
-                        tile_regs_release();
-                        cb_pop_front(cb_k_idx, 1);
-                        cb_push_back(cb_k_in, 1);
-                    }
-                    // Consume and discard the norm tiles
-                    for (uint32_t t = 0; t < Sk_chunk_t; t++) {
-                        cb_wait_front(cb_k_norms, 1);
-                        cb_pop_front(cb_k_norms, 1);
-                    }
+                // Copy K idx tiles
+                for (uint32_t t = 0; t < k_chunk_tiles; t++) {
+                    cb_wait_front(cb_k_idx, 1);
+                    cb_reserve_back(cb_k_in, 1);
+                    tile_regs_acquire();
+                    copy_tile_to_dst_init_short(cb_k_idx);
+                    copy_tile(cb_k_idx, 0, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_k_in);
+                    pack_tile(0, cb_k_in);
+                    tile_regs_release();
+                    cb_pop_front(cb_k_idx, 1);
+                    cb_push_back(cb_k_in, 1);
                 }
-
-                // ─── Step 2: Q × K^T ───
-                // Re-initialize matmul after dequantize's SFPU operations
-                mm_init(cb_q_in, cb_k_in, cb_qk_im);
-                reconfig_data_format(cb_k_in, cb_q_in);
-                pack_reconfig_data_format(cb_qk_im);
-                matmul_blocks(
-                    cb_q_in,
-                    cb_k_in,
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    DHt,
-                    qk_num_blocks,
-                    qk_in0_num_subblocks,
-                    qk_in1_num_subblocks,
-                    qk_in0_block_w,
-                    qk_subblock_h,
-                    qk_subblock_w,
-                    true /*transpose*/);
-                // cb_k_in is now empty (popped by matmul_blocks)
-                // cb_q_in remains fronted (not popped by matmul_blocks)
-
-                // ─── Step 3: Online softmax update ───
-                // reduce_c computes row-max of QK scores.
-                // If not the first chunk, also does eltwise max with previous max.
-                //   cur_max = max(prev_max, rowmax(QK))    [if processed > 0]
-                //   cur_max = rowmax(QK)                    [if first chunk]
-                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                    alias_cur_max, alias_prev_max, processed_k_chunks > 0);
-
-                // QK = exp((QK - cur_max) * scale)
-                // Also partially reduces sum: cur_sum = sum(exp(...), dim=-1)
-                // Scale is fused into exp for free on the critical path.
-                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
-
-                // ─── Step 4: Dequantize V chunk → cb_v_in ───
-                // BYPASS V dequantize — pass raw BFP4 through
-                {
-                    uint32_t v_tiles = Sk_chunk_t * vDHt;
-                    for (uint32_t t = 0; t < v_tiles; t++) {
-                        cb_wait_front(cb_v_idx, 1);
-                        cb_reserve_back(cb_v_in, 1);
-                        tile_regs_acquire();
-                        copy_tile_to_dst_init_short(cb_v_idx);
-                        copy_tile(cb_v_idx, 0, 0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_reconfig_data_format(cb_v_in);
-                        pack_tile(0, cb_v_in);
-                        tile_regs_release();
-                        cb_pop_front(cb_v_idx, 1);
-                        cb_push_back(cb_v_in, 1);
-                    }
-                    for (uint32_t t = 0; t < Sk_chunk_t; t++) {
-                        cb_wait_front(cb_v_norms, 1);
-                        cb_pop_front(cb_v_norms, 1);
-                    }
+                // Discard K norms
+                for (uint32_t t = 0; t < Sk_chunk_t; t++) {
+                    cb_wait_front(cb_k_norms, 1);
+                    cb_pop_front(cb_k_norms, 1);
                 }
-
-                // ─── Step 5: Attn × V ───
-                mm_init(cb_qk_im, cb_v_in, alias_mm2_cur_out);
-                reconfig_data_format(cb_v_in, cb_qk_im);
-                pack_reconfig_data_format(alias_mm2_cur_out);
-                matmul_blocks(
-                    cb_qk_im,
-                    cb_v_in,
-                    alias_mm2_cur_out,
-                    Sq_chunk_t,
-                    vDHt,
-                    Sk_chunk_t,
-                    out_num_blocks,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_in0_block_w,
-                    out_subblock_h,
-                    out_subblock_w,
-                    false /*transpose*/);
-                // cb_v_in is now empty (popped by matmul_blocks)
-
-                // Pop QK intermediate — matmul_blocks leaves in0 (cb_qk_im) fronted
-                cb_pop_front(cb_qk_im, qk_chunk_tiles);
-
-                // ─── Step 6: Accumulate with previous chunks ───
-                reconfig_data_format(alias_prev_max, alias_cur_max);
-
-                if (processed_k_chunks > 0) {
-                    // exp_max_diff = exp((prev_max - cur_max) * scale)
-                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    cb_pop_front(alias_prev_max, Sq_chunk_t);
-
-                    // prev_sum *= exp_max_diff  (rescale old sum)
-                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
-                    // cur_sum += prev_sum
-                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-
-                    // Rescale previous output and accumulate:
-                    // mm2_cur_out += mm2_prev_out * exp_max_diff
-                    // Uses L1 pack accumulation onto mm2_cur_out.
-                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                // Copy V idx tiles
+                for (uint32_t t = 0; t < v_chunk_tiles; t++) {
+                    cb_wait_front(cb_v_idx, 1);
+                    cb_reserve_back(cb_v_in, 1);
+                    tile_regs_acquire();
+                    copy_tile_to_dst_init_short(cb_v_idx);
+                    copy_tile(cb_v_idx, 0, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_v_in);
+                    pack_tile(0, cb_v_in);
+                    tile_regs_release();
+                    cb_pop_front(cb_v_idx, 1);
+                    cb_push_back(cb_v_in, 1);
                 }
-
-                // Swap ping-pong handles for next iteration
-                std::swap(alias_prev_sum, alias_cur_sum);
-                std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
-                std::swap(alias_prev_max, alias_cur_max);
-
-                processed_k_chunks++;
+                // Discard V norms
+                for (uint32_t t = 0; t < Sk_chunk_t; t++) {
+                    cb_wait_front(cb_v_norms, 1);
+                    cb_pop_front(cb_v_norms, 1);
+                }
             }
 
-            // ─── Final normalization (matching standard SDPA non-streaming path) ───
-            // sub_exp_block_bcast_cols_inplace already produced fully reduced sum
-            // (no matmul_reduce needed for non-streaming standard path).
-
-            // sum = 1.0 / sum
-            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-
-            // out = mm2_prev_out * (1/sum)  →  cb_out
-            pack_reconfig_data_format(cb_out);
-            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
-
-            // Free prev_max that was held across the K-chunk loop
-            cb_pop_front(alias_prev_max, Sq_chunk_t);
-
-            // Pop Q for this head (reader sends one Q per batch×head iteration)
-            cb_pop_front(cb_q_in, q_chunk_tiles);
+            // ── Run standard SDPA on the pre-filled K/V CBs ──
+            mm_init(cb_q_in, cb_k_in, cb_out);
+            cb_wait_front(cb_identity_scale_in, 1);
+            sdpa_standard<cb_qk_im, cb_identity_scale_in, 0 /*cb_attention_sink*/, 0 /*cb_scale*/>(
+                Skt,
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                0,
+                1,
+                1,
+                0,
+                0,
+                k_num_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                v_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                tt::CBIndex::c_3 /*cb_mask_in unused*/,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_out);
         }
     }
 }
