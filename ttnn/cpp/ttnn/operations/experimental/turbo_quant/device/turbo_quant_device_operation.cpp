@@ -13,7 +13,11 @@ void TurboQuantDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input_tensor;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
     TT_FATAL(input.layout() == Layout::TILE, "Input must be in TILE layout");
-    TT_FATAL(input.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input must be BFLOAT16, got {}", input.dtype());
+    TT_FATAL(
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            input.dtype() == tt::tt_metal::DataType::BFLOAT4_B,
+        "Input must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B, got {}",
+        input.dtype());
 
     if (attrs.op_type == TurboQuantOpType::BUCKETIZE) {
         TT_FATAL(!attrs.params.empty(), "Bucketize requires at least 1 boundary");
@@ -25,11 +29,15 @@ void TurboQuantDeviceOperation::validate_on_program_cache_miss(
 }
 
 TurboQuantDeviceOperation::spec_return_value_t TurboQuantDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    // Bucketize: output matches input dtype (indices as BF16).
+    // Gather: output is always BF16 (centroid float values) regardless of input dtype.
+    auto out_dtype =
+        (attrs.op_type == TurboQuantOpType::GATHER_CENTROIDS) ? tt::tt_metal::DataType::BFLOAT16 : input.dtype();
     return TensorSpec(
         input.logical_shape(),
-        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(out_dtype, tt::tt_metal::PageConfig(input.layout()), MemoryConfig{}));
 }
 
 TurboQuantDeviceOperation::tensor_return_value_t TurboQuantDeviceOperation::create_output_tensors(
