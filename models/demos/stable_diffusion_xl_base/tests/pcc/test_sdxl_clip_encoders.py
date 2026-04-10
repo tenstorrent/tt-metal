@@ -119,9 +119,9 @@ def test_clip_encoder(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    tt_tokens = ttnn.to_device(tt_tokens, mesh_device)
 
     start_time = time.time()
     with torch.no_grad():
