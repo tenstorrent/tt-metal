@@ -112,7 +112,7 @@ ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreduce
     auto operation_attributes = OperationType::operation_attributes_t{
         ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(ignore_index),
         memory_config.value_or(target_tensor.memory_config()),
-        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

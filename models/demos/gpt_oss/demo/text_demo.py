@@ -447,10 +447,13 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    if batch_size > 1 and mesh_shape[0] == 1:
-        pytest.skip(
-            f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
-        )
+    if mesh_shape[0] == 1:
+        if batch_size > 1:
+            pytest.skip(
+                f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
+            )
+        elif max_seq_len > 64 * 1024:
+            pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:
