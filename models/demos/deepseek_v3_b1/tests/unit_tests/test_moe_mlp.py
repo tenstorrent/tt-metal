@@ -1834,10 +1834,11 @@ def _load_cached_expert_subset(cache_path, device, layer_idx: int, num_experts: 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("layer_idx", [4, 30, 57])
 def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
-    """MoE MLP: real BSPM-compressed weights from cache vs PyTorch float32 reference.
+    """MoE MLP: real BSPM-compressed weights from TensorCache vs PyTorch float32 reference.
 
-    Loads BSPM 3.5 b/e expert tensors from a pre-generated cache (bspm_b_3_5_miguel),
-    runs through MoeOp, and compares against a float32 PyTorch golden.
+    Loads BSPM 3.5 b/e expert tensors via prepare_routed_expert_weights() with a
+    TensorCache-backed CacheConfig (compact tiles.bin format), runs through MoeOp,
+    and compares against a float32 PyTorch golden.
 
     Only the expert gate/up/down float weights for the golden come from the real HF
     checkpoint. All scaffolding (routing matrix, gamma, attention weights, shared expert)
@@ -1848,31 +1849,59 @@ def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state
 
     Required env vars:
       DEEPSEEK_V3_HF_MODEL  — path to DeepSeek R1-0528 HF checkpoint (for expert float golden)
-      BSPM_CACHE_PATH       — path to pre-generated BSPM cache (bspm_b_3_5_miguel)
+      BSPM_DIR              — path to bit_sculpt results root (contains deepseek-r1-0528/ subdir)
+      TT_CACHE_PATH         — path to TensorCache root (will be populated on first run)
 
     Run (BH Galaxy only — requires 13x10 grid):
       TT_METAL_CLEAR_L1=1 TT_METAL_SLOW_DISPATCH_MODE=1 \\
         DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/.../DeepSeek-R1-0528 \\
-        BSPM_CACHE_PATH=/mnt/MLPerf/.../bspm_b_3_5_miguel \\
+        BSPM_DIR=/path/to/bit_sculpt/results \\
+        TT_CACHE_PATH=/mnt/MLPerf/.../tt_cache \\
         pytest .../test_moe_mlp.py -k test_moe_layer_real_weights -v -s
     """
     import os
+    from pathlib import Path
 
-    cache_path = os.environ.get("BSPM_CACHE_PATH")
-    if not cache_path:
-        pytest.skip("BSPM_CACHE_PATH not set — skipping real-weight BSPM cache test")
+    bspm_dir_env = os.environ.get("BSPM_DIR")
+    tt_cache_path = os.environ.get("TT_CACHE_PATH")
+    if not bspm_dir_env or not tt_cache_path:
+        pytest.skip("BSPM_DIR and TT_CACHE_PATH must be set — skipping real-weight BSPM cache test")
+
+    from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
 
     num_experts = device.get_num_devices()  # 1 on single-chip, 8 on 8-chip submesh
+    bspm_dir_path = Path(bspm_dir_env) / "deepseek-r1-0528"
+    cache_config = CacheConfig(
+        cache=TensorCache(Path(tt_cache_path)),
+        context=CacheContext(
+            schema_version=1,
+            hf_model_id="deepseek-ai/DeepSeek-R1-0528",
+            hf_revision="local",
+            mesh_shape=(1, 1),
+        ),
+    )
 
     logger.info(
-        "test_moe_layer_real_weights: layer={}, cache={}, num_experts={}",
+        "test_moe_layer_real_weights: layer={}, bspm_dir={}, cache={}, num_experts={}",
         layer_idx,
-        cache_path,
+        bspm_dir_path,
+        tt_cache_path,
         num_experts,
     )
 
-    # Load compressed experts from cache (all gate, then up, then down — preserves DRAM order).
-    experts = _load_cached_expert_subset(cache_path, device, layer_idx, num_experts)
+    # Load compressed experts via TensorCache (compact tiles.bin on miss, cached reload on hit).
+    result = prepare_routed_expert_weights(
+        device,
+        hf_state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_experts,
+        move_to_device=True,
+        bspm_dir=bspm_dir_path,
+        cache_config=cache_config,
+    )
+    experts = (result.routed_gate_proj, result.routed_up_proj, result.routed_down_proj)
 
     # Random state dict for all scaffolding (routing, gamma, attention, shared expert).
     # Avoids the FP8→ttnn.from_torch incompatibility in prepare_attention_weights when
@@ -2038,32 +2067,50 @@ def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state
 def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
     """MoE MLP: experts 0-7 of a single layer vs PyTorch float32 reference.
 
-    Tests 8 different experts from the BSPM cache sequentially on a single chip.
-    Each expert is loaded, run through MoeOp, and compared against a float32 golden
-    built from the real HF checkpoint.  PCC must be >= 0.25 for every non-near-zero expert.
+    Tests 8 different experts from the TensorCache sequentially on a single chip.
+    All 8 experts are loaded upfront via prepare_routed_expert_weights() with a
+    TensorCache-backed CacheConfig (compact tiles.bin format), then each expert is
+    run through MoeOp and compared against a float32 golden from the real HF checkpoint.
+    PCC must be >= 0.25 for every non-near-zero expert.
 
     Required env vars:
       DEEPSEEK_V3_HF_MODEL  — path to DeepSeek R1-0528 HF checkpoint
-      BSPM_CACHE_PATH       — path to pre-generated BSPM cache (bspm_b_3_5_miguel)
+      BSPM_DIR              — path to bit_sculpt results root (contains deepseek-r1-0528/ subdir)
+      TT_CACHE_PATH         — path to TensorCache root (will be populated on first run)
 
     Run (BH Galaxy only — 13x10 grid required):
       TT_METAL_CLEAR_L1=1 TT_METAL_SLOW_DISPATCH_MODE=1 \\
         DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/.../DeepSeek-R1-0528 \\
-        BSPM_CACHE_PATH=/mnt/MLPerf/.../bspm_b_3_5_miguel \\
+        BSPM_DIR=/path/to/bit_sculpt/results \\
+        TT_CACHE_PATH=/mnt/MLPerf/.../tt_cache \\
         pytest .../test_moe_mlp.py -k test_moe_layer_real_weights_8expert -v -s
     """
     import os
     from pathlib import Path
 
-    cache_path = os.environ.get("BSPM_CACHE_PATH")
-    if not cache_path:
-        pytest.skip("BSPM_CACHE_PATH not set")
+    bspm_dir_env = os.environ.get("BSPM_DIR")
+    tt_cache_path = os.environ.get("TT_CACHE_PATH")
+    if not bspm_dir_env or not tt_cache_path:
+        pytest.skip("BSPM_DIR and TT_CACHE_PATH must be set")
+
+    from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
 
     num_experts_to_test = 8
     K = RoutedExpert.K
     GATE_PROJ_N = RoutedExpert.GATE_PROJ_N
     layer_key = f"model.layers.{layer_idx}"
-    experts_dir = Path(cache_path) / f"layer_{layer_idx:03d}" / "experts"
+
+    bspm_dir_path = Path(bspm_dir_env) / "deepseek-r1-0528"
+    cache_config = CacheConfig(
+        cache=TensorCache(Path(tt_cache_path)),
+        context=CacheContext(
+            schema_version=1,
+            hf_model_id="deepseek-ai/DeepSeek-R1-0528",
+            hf_revision="local",
+            mesh_shape=(1, 1),
+        ),
+    )
 
     # Random scaffolding shared across all expert iterations.
     random_state = get_reference_model_state_dict(
@@ -2078,13 +2125,23 @@ def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_mod
         "test_moe_layer_real_weights_8expert: layer={}, testing experts 0-{}", layer_idx, num_experts_to_test - 1
     )
 
+    # Load all 8 experts upfront via TensorCache (compact tiles.bin on miss, cached on hit).
+    all_experts = prepare_routed_expert_weights(
+        device,
+        hf_state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_experts_to_test,
+        move_to_device=True,
+        bspm_dir=bspm_dir_path,
+        cache_config=cache_config,
+    )
+
     all_passing = True
     for e in range(num_experts_to_test):
-        # Load a single expert from cache (gate, up, down — in gate-all/up-all/down-all
-        # order mirrors what load_moe_routed_experts does for a 1-expert subset).
-        gate_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "gate_proj", device)
-        up_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "up_proj", device)
-        down_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "down_proj", device)
+        gate_ct = all_experts.routed_gate_proj[e]
+        up_ct = all_experts.routed_up_proj[e]
+        down_ct = all_experts.routed_down_proj[e]
         experts = ([gate_ct], [up_ct], [down_ct])
 
         r = create_routed_expert_tensors(
@@ -2258,9 +2315,9 @@ def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_mod
         ]:
             if t is not None and isinstance(t, ttnn.Tensor):
                 ttnn.deallocate(t)
-        # Drop Python references so CPython ref-counting frees expert DRAM buffers
-        # (CompressedTensor objects) immediately, before the next iteration allocates.
-        del r, s, gate_ct, up_ct, down_ct
+        # Drop scaffolding tensors; expert CompressedTensors (gate_ct/up_ct/down_ct) are
+        # owned by all_experts and stay in DRAM for the duration of the test.
+        del r, s
 
     assert all_passing, f"One or more experts failed PCC check (layer={layer_idx})"
     logger.info("test_moe_layer_real_weights_8expert PASSED (layer={})", layer_idx)

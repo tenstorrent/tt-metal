@@ -182,6 +182,16 @@ def _create_parser() -> argparse.ArgumentParser:
         help="Skip warm; only run the double-load check (use on an already-populated cache-root).",
     )
     parser.add_argument(
+        "--size-report",
+        action="store_true",
+        dest="size_report",
+        help=(
+            "Print compact vs BFP4 disk-size comparison for all CompressedTensor artifacts "
+            "in the cache-root (reads tiles.bin + metadata.json; no device required). "
+            "Can be used standalone with --verify-only and no --model-path."
+        ),
+    )
+    parser.add_argument(
         "--bspm-dir",
         type=Path,
         default=None,
@@ -424,6 +434,64 @@ def _verify(
     return True
 
 
+def _size_report(cache_root: Path) -> None:
+    """Print compact vs BFP4 disk-size comparison for all stored CompressedTensor artifacts.
+
+    Reads ``tiles.bin`` and ``metadata.json`` from the CAS object tree.
+    No device or model weights required — only the populated cache root.
+
+    Example output line::
+
+        ab12cd…: 4.81 MB compact vs 7.92 MB BFP4 (60.7%)
+        Total 768: 3.70 GB compact vs 6.08 GB BFP4 (60.9%)
+    """
+    import json
+
+    from models.demos.deepseek_v3_b1.compressed_tensor import bfp4_tile_byte_count
+
+    objs = cache_root / "objects"
+    if not objs.is_dir():
+        logger.warning("No objects/ directory in {} — cache may not yet be warmed", cache_root)
+        return
+
+    total_compact = 0
+    total_bfp4 = 0
+    count = 0
+
+    for tiles_bin in sorted(objs.rglob("tiles.bin")):
+        meta_path = tiles_bin.parent / "metadata.json"
+        if not meta_path.is_file():
+            continue
+        with open(meta_path) as f:
+            meta = json.load(f)
+        tiles_h = meta.get("tiles_h", 0)
+        tiles_w = meta.get("tiles_w", 0)
+        if not tiles_h or not tiles_w:
+            continue
+        compact = tiles_bin.stat().st_size
+        bfp4 = bfp4_tile_byte_count(tiles_h, tiles_w)
+        ratio = 100.0 * compact / bfp4 if bfp4 > 0 else 0.0
+        artifact_id = meta.get("artifact_id", tiles_bin.parent.name)
+        logger.info(
+            "{}: {:.2f} MB compact vs {:.2f} MB BFP4 ({:.1f}%)", artifact_id[:16], compact / 1e6, bfp4 / 1e6, ratio
+        )
+        total_compact += compact
+        total_bfp4 += bfp4
+        count += 1
+
+    if count > 0:
+        ratio = 100.0 * total_compact / total_bfp4
+        logger.info(
+            "Total {} artifacts: {:.3f} GB compact vs {:.3f} GB BFP4 ({:.1f}%)",
+            count,
+            total_compact / 1e9,
+            total_bfp4 / 1e9,
+            ratio,
+        )
+    else:
+        logger.info("No CompressedTensor artifacts (tiles.bin) found in {}", cache_root)
+
+
 def main() -> int:
     parser = _create_parser()
     args = parser.parse_args()
@@ -431,6 +499,12 @@ def main() -> int:
         logger.error("Use either --verify (warm then check) or --verify-only (check only), not both.")
         return 2
     cache_root = _cache_root_from_args(args)
+
+    # --size-report can run standalone (no device, no model weights) on an existing cache.
+    if getattr(args, "size_report", False) and args.verify_only and args.model_path is None:
+        _size_report(cache_root)
+        return 0
+
     _validate_args(args, cache_root)
 
     model_path = args.model_path.resolve()
@@ -463,7 +537,11 @@ def main() -> int:
             hf_revision=args.hf_revision,
             schema_version=args.schema_version,
         )
-        return 0 if ok else 1
+        if not ok:
+            return 1
+
+    if getattr(args, "size_report", False):
+        _size_report(cache_root)
 
     return 0
 
