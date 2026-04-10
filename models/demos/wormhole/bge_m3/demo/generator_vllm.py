@@ -336,7 +336,17 @@ class BgeM3ForEmbedding:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
-        colbert_tt = ttnn.multiply(colbert_tt, mask_tt)
+        # Element-wise multiply only: avoid column-broadcast [..., D] * [..., 1] in binary_ng.
+        # On Wormhole that broadcast can select an SFPU col-bcast compute kernel whose source
+        # file is not shipped in some builds; expanding the mask matches PyTorch semantics and
+        # uses the no-broadcast multiply path (same numerics as torch; Blackhole unchanged).
+        target_shape = tuple(colbert_tt.shape)
+        mask_expanded = ttnn.expand(mask_tt, target_shape)
+        ttnn.deallocate(mask_tt)
+        if mask_expanded.memory_config() != colbert_tt.memory_config():
+            mask_expanded = ttnn.to_memory_config(mask_expanded, colbert_tt.memory_config())
+        colbert_tt = ttnn.multiply(colbert_tt, mask_expanded)
+        ttnn.deallocate(mask_expanded)
 
         colbert_vecs = to_torch_auto_compose(colbert_tt, device=self.device)
         if colbert_vecs.dim() == 4 and colbert_vecs.shape[1] == 1:

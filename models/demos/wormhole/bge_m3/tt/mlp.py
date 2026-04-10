@@ -40,6 +40,7 @@ class BgeM3MLPConfig:
     wo_prg_config: object | None = None
     wi_compute_kernel_cfg: object | None = None
     wo_compute_kernel_cfg: object | None = None
+    max_seq_len: int | None = None
 
 
 class BgeM3MLP(LightweightModule):
@@ -173,10 +174,11 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for BgeM3MLP")
 
+    max_seq = config.max_seq_len
     if config.wi_compute_kernel_cfg is None:
-        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
     if config.wo_compute_kernel_cfg is None:
-        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
 
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
