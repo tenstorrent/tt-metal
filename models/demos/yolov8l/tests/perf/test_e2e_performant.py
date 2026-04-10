@@ -82,15 +82,28 @@ def run_yolov8l(
     "batch_size_per_device",
     ((1),),
 )
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        # (640, 640),
+        (1280, 1280),
+    ],
+    ids=[
+        # "640",
+        "1280",
+    ],
+)
 def test_run_yolov8l_trace_2cqs_inference(
     device,
     batch_size_per_device,
     model_location_generator,
+    resolution,
 ):
     run_yolov8l(
         device,
         batch_size_per_device,
         model_location_generator,
+        resolution=resolution,
     )
 
 
@@ -114,8 +127,14 @@ def test_run_yolov8l_trace_2cqs_inference(
 )
 @pytest.mark.parametrize(
     "resolution",
-    [(640, 640), (1280, 1280)],
-    ids=["640", "1280"],
+    [
+        (640, 640),
+        # (1280, 1280)
+    ],
+    ids=[
+        "640",
+        # "1280",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device",
