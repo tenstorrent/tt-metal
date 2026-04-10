@@ -91,8 +91,12 @@ void kernel_main() {
 
 #ifdef DST_ACCUM_MODE
 // The following define is needed for WH/BH if mul_tiles/_init is used
-#if defined(MUL_TILES_WITH_DST_ACCUM) && !defined(ARCH_QUASAR)
+#if defined(MUL_TILES_WITH_DST_ACCUM)
+    #ifdef ARCH_QUASAR
+        ELTWISE_OP_INIT(dfb_in0.get_id(), dfb_in1.get_id());
+    #else
         ELTWISE_OP_INIT(cb_inp0, cb_inp1);
+    #endif
 #else
     #ifdef ARCH_QUASAR
         ELTWISE_OP_INIT(dfb_in0.get_id(), dfb_in1.get_id(), true);

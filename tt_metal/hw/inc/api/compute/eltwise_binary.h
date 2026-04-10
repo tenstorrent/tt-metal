@@ -97,7 +97,9 @@ ALWI void binary_tiles_init(
  */
 // clang-format on
 ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, false, call_line);
+    // For WH/BH, acc_to_dest is unused and defaulted behaviour is to accumulate to dest. 
+    // For Quasar, there is more control to control acc_to_dest. For back-compatibility with existing kernels, acc_to_dest is defaulted to true.
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, true, call_line);
 }
 
 
@@ -112,7 +114,7 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __bu
  * | acc_to_dest    | If true, operation = A * B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest, uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, acc_to_dest, call_line);
 }
 
