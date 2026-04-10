@@ -66,7 +66,10 @@ def run_yolov11_inference(
         (640, 640),
         (1280, 1280),
     ],
-    ids=["640", "1280"],
+    ids=[
+        "640",
+        "1280",
+    ],
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
