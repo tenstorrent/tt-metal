@@ -10,6 +10,7 @@ import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
@@ -673,6 +674,127 @@ class TestFindGenerateRankBindingsExecutable:
         monkeypatch.setenv("TT_METAL_HOME", str(temp_dir))
         result = find_generate_rank_bindings_executable()
         assert result == executable_path.resolve()
+
+
+class TestPhase1CacheId:
+    """Tests for Phase 1 cache fingerprint (content-based MGD, order-invariant hosts)."""
+
+    def test_cache_id_is_short_hex(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"x")
+        cid = compute_phase1_cache_id(mgd, sorted(["single-host"]), None)
+        assert len(cid) == PHASE1_CACHE_ID_HEX_LEN
+        assert all(c in "0123456789abcdef" for c in cid)
+
+    def test_fingerprint_full_is_sha256_hex(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"x")
+        fp = compute_phase1_cache_fingerprint_full(mgd, sorted(["h"]), None)
+        assert len(fp) == 64
+        assert fp[:PHASE1_CACHE_ID_HEX_LEN] == compute_phase1_cache_id(mgd, sorted(["h"]), None)
+
+    def test_cache_id_same_bytes_and_sorted_hosts_stable(self, temp_dir):
+        mgd_src = REPO_ROOT / "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"
+        if not mgd_src.is_file():
+            pytest.skip(f"Mesh graph descriptor not present: {mgd_src}")
+        mgd_a = temp_dir / "a.textproto"
+        mgd_b = temp_dir / "subdir" / "b.proto"
+        mgd_b.parent.mkdir(parents=True, exist_ok=True)
+        data = mgd_src.read_bytes()
+        mgd_a.write_bytes(data)
+        mgd_b.write_bytes(data)
+        hosts = ["zebra-0", "alpha-1", "moon-2"]
+        assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+            mgd_b, sorted(hosts), None
+        )
+        assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+            mgd_a, sorted(reversed(hosts)), None
+        )
+
+    def test_cache_id_hosts_change_changes_id(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mesh-content-xyz")
+        a = compute_phase1_cache_id(mgd, sorted(["h1", "h2"]), None)
+        b = compute_phase1_cache_id(mgd, sorted(["h1", "h3"]), None)
+        assert a != b
+
+    def test_cache_id_mgd_content_change_changes_id(self, temp_dir):
+        mgd1 = temp_dir / "m1.textproto"
+        mgd2 = temp_dir / "m2.textproto"
+        mgd1.write_bytes(b"aaa")
+        mgd2.write_bytes(b"bbb")
+        hosts = sorted(["n1"])
+        assert compute_phase1_cache_id(mgd1, hosts, None) != compute_phase1_cache_id(mgd2, hosts, None)
+
+    def test_cache_id_mock_same_desc_bytes_different_paths(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mgd")
+        body = b"mock:\n  chip: 0\n"
+        p1 = temp_dir / "d1.yaml"
+        p2 = temp_dir / "other" / "d2.yaml"
+        p2.parent.mkdir(parents=True, exist_ok=True)
+        p1.write_bytes(body)
+        p2.write_bytes(body)
+        a = compute_phase1_cache_id(mgd, None, {0: p1, 1: p2})
+        b = compute_phase1_cache_id(mgd, None, {0: p2, 1: p1})
+        assert a == b
+
+    def test_cache_id_mock_desc_content_matters(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mgd")
+        p1 = temp_dir / "d1.yaml"
+        p2 = temp_dir / "d2.yaml"
+        p1.write_bytes(b"a")
+        p2.write_bytes(b"b")
+        assert compute_phase1_cache_id(mgd, None, {0: p1}) != compute_phase1_cache_id(mgd, None, {0: p2})
+
+
+class TestPhase1CacheArtifacts:
+    """Hostfile and cache completeness helpers."""
+
+    def test_write_phase1_openmpi_hostfile(self, temp_dir):
+        hf = temp_dir / "hostfile"
+        write_phase1_openmpi_hostfile(hf, ["b", "a"])
+        assert hf.read_text().strip().splitlines() == ["b slots=1", "a slots=1"]
+
+    def test_phase1_outputs_ready_real_cluster(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        assert phase1_outputs_ready(run_dir, mock_mode=False)
+
+    def test_phase1_outputs_ready_mock_needs_phase2_mapping(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text("m: 1\n")
+        assert phase1_outputs_ready(run_dir, mock_mode=True)
+
+    def test_phase1_cache_hit_valid_requires_key_file(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        fp = "a" * 64
+        assert not phase1_cache_hit_valid(run_dir, fp, mock_mode=False)
+        write_phase1_cache_key_file(run_dir, fp)
+        assert read_stored_phase1_cache_key(run_dir) == fp
+        assert phase1_cache_hit_valid(run_dir, fp, mock_mode=False)
+
+    def test_phase1_cache_hit_valid_wrong_fingerprint(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        write_phase1_cache_key_file(run_dir, "b" * 64)
+        assert not phase1_cache_hit_valid(run_dir, "c" * 64, mock_mode=False)
 
 
 class TestPhase1CacheId:

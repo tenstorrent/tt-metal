@@ -14,20 +14,28 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
-  # tcp flags are default for tt-run
-  local mpi_args="--hostfile /etc/mpirun/hostfile"
-  local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
-  local rank_binding="tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml"
-  local strict_rank_binding="tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml"
-  local bigmesh_rank_binding="tests/tt_metal/distributed/config/dual_t3k_1x16_experimental_bigmesh_rank_bindings.yaml"
+  local tcp_interface="cnx1"
+  local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo"
+  local hosts
+  # Extract hostnames: skip comment lines (#), empty lines; take first column (hostname) from "host slots=N" format
+  # Strip trailing 'e' from hostnames (e.g. f10cs04e -> f10cs04) for canonical hostname
+  hosts=$(grep -v '^#' /etc/mpirun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{print $1}' | sed 's/e$//' | paste -sd, 2>/dev/null || true)
+  if [[ -z "$hosts" ]]; then
+    echo "Error: No valid hosts found in /etc/mpirun/hostfile" >&2
+    exit 1
+  fi
+  local mesh_graph="tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto"
+  local strict_mesh_graph="tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_strict_connection_mgd.textproto"
+  local bigmesh_mesh_graph="tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto"
 
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  # Physical discovery with launcher NOT in hosts (OpenMPI #11830 - would hang without P2P workaround)
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
-  tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
-  tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$strict_mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$bigmesh_mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
