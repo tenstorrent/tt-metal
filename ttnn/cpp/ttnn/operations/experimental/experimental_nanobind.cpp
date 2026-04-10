@@ -96,6 +96,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_fused_adarms(mod);
     transformer::bind_rotary_embedding(mod);
+    transformer::bind_rotary_embedding_to_cache(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);

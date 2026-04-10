@@ -379,26 +379,18 @@ class GemmaAttentionTTNN:
             sin_sliced = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
             needs_dealloc = True
 
+        # Q: normal rotary_embedding (output used immediately for SDPA)
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
-        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
-
-        if needs_dealloc:
-            ttnn.deallocate(cos_sliced)
-            ttnn.deallocate(sin_sliced)
-
         # rotary_embedding pads output to tile boundary, slice back to original seq_len
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
-        k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-        # Handle KV cache via fill_cache — eliminates concat entirely (~12ms savings)
+        # Handle KV cache via FUSED rotary_embedding_to_cache + V fill_cache
         if past_key_value is not None:
             past_k, past_v = past_key_value
             prefix_len = past_k.shape[2]
-            suffix_len = k_rope.shape[2]
+            suffix_len = k.shape[2]
             if self._kv_concat_k is None:
                 # First call: pre-allocate with logical shape (prefix_len + suffix_len)
-                # and populate prefix + suffix via fill_cache
-                # L1 memory config for SDPA speedup (~5us/call faster than DRAM)
                 full_seq = prefix_len + suffix_len
                 cache_dtype = past_k.dtype
                 self._kv_concat_k = ttnn.zeros(
@@ -413,15 +405,27 @@ class GemmaAttentionTTNN:
                 )
                 ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
                 ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
-            # Ensure dtype match for fill_cache
-            if k_rope.dtype != self._kv_concat_k.dtype:
-                k_rope = ttnn.typecast(k_rope, self._kv_concat_k.dtype)
+            # Ensure dtype match for cache write
+            if k.dtype != self._kv_concat_k.dtype:
+                k = ttnn.typecast(k, self._kv_concat_k.dtype)
             if v.dtype != self._kv_concat_v.dtype:
                 v = ttnn.typecast(v, self._kv_concat_v.dtype)
-            ttnn.fill_cache(self._kv_concat_k, k_rope, 0, update_idx=prefix_len)
+            # FUSED: rotate K and write directly to cache at prefix_len offset
+            ttnn.experimental.rotary_embedding_to_cache(k, cos_sliced, sin_sliced, self._kv_concat_k, prefix_len)
+            # V: no rotation, regular fill_cache
             ttnn.fill_cache(self._kv_concat_v, v, 0, update_idx=prefix_len)
             k_rope = self._kv_concat_k
             v = self._kv_concat_v
+            if needs_dealloc:
+                ttnn.deallocate(cos_sliced)
+                ttnn.deallocate(sin_sliced)
+        else:
+            # VLM path: rotate K normally (no cache update)
+            k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+            k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
+            if needs_dealloc:
+                ttnn.deallocate(cos_sliced)
+                ttnn.deallocate(sin_sliced)
 
         new_cache = (k_rope, v) if use_cache else None
 
