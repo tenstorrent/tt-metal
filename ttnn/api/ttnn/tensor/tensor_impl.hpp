@@ -112,6 +112,9 @@ void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_te
 //                      Non-uniform .to_host() and .to_device()
 // ======================================================================================
 
+// Data movement for tensors whose shards don't cover the entire MeshDevice.
+// The host-side DistributedHostBuffer only populates a subset of MeshCoordinates,
+// so the resulting DeviceStorage must track which coordinates were actually written.
 namespace non_uniform_data_movement {
 
 Tensor to_host(
