@@ -21,7 +21,9 @@ from ttml.modules import (
     Parameter,
     ModuleList,
     LinearLayer,
+    TransformerBase,
 )
+from ttml.modules.parameter import TensorMetadata
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
@@ -53,16 +55,14 @@ class NanoGPTConfig:
     experimental: NanoGPTExperimentalConfig = field(default_factory=NanoGPTExperimentalConfig)
 
 
-class NanoGPT(AbstractModuleBase):
+class NanoGPT(TransformerBase):
     """NanoGPT model implemented in Python using ttml operations.
 
     This implementation matches the C++ ttml::models::gpt2::Transformer class.
     See tt-train/sources/ttml/models/gpt2.cpp for reference.
     """
 
-    def __init__(self, config: NanoGPTConfig) -> None:
-        super().__init__()
-
+    def __init__(self, config: NanoGPTConfig, **kwargs) -> None:
         self.config = config
 
         self.fc = LinearLayer(
@@ -79,7 +79,7 @@ class NanoGPT(AbstractModuleBase):
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(
@@ -111,10 +111,10 @@ class NanoGPT(AbstractModuleBase):
 
         # Final layer norm parameters
         ln_f_shape = (1, 1, 1, config.n_embd)
-        self.ln_f_gamma = Parameter(ttml.init.ones()(ln_f_shape))
+        self.ln_f_gamma = Parameter(TensorMetadata(shape=ln_f_shape, init_fn=ttml.init.ones()))
 
         if config.bias:
-            self.ln_f_beta = Parameter(ttml.init.zeros()(ln_f_shape))
+            self.ln_f_beta = Parameter(TensorMetadata(shape=ln_f_shape, init_fn=ttml.init.zeros()))
         else:
             self.ln_f_beta = None
 

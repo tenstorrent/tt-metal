@@ -24,7 +24,6 @@ class GroupedQueryAttention(AbstractModuleBase):
         bias_linears: bool = False,
     ) -> None:
         super().__init__()
-
         if embedding_size % num_heads != 0:
             raise ValueError(
                 "Embedding size must be divisible by the number of attention heads. "
@@ -36,30 +35,41 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.num_groups = num_groups
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.sdpa = ttml.ops.attention.scaled_dot_product_attention
 
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.kv_linear = LinearLayer(
-            embedding_size,
-            concat_kv_dim,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.out_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
+        self.q_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
+        self.kv_linear = LinearLayer(embedding_size, concat_kv_dim, bias_linears)
+        self.out_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
+
+    def parallelize(self, mesh_device, tp_axis, cp_axis=None):
+        from functools import partial
+
+        mesh_shape = mesh_device.shape
+
+        if tp_axis is not None:
+            tp_size = mesh_shape[tp_axis]
+            if self.num_heads % tp_size != 0:
+                raise ValueError(f"num_heads ({self.num_heads}) must be divisible by tp_size ({tp_size})")
+            if self.num_groups % tp_size != 0:
+                raise ValueError(f"num_groups ({self.num_groups}) must be divisible by tp_size ({tp_size})")
+            self.num_heads = self.num_heads // tp_size
+            self.num_groups = self.num_groups // tp_size
+
+        if cp_axis is not None:
+            cp_size = mesh_shape[cp_axis]
+            if cp_size > 1:
+                old_params = self.rope_params
+                new_params = ttml.ops.rope.build_rope_params(
+                    old_params.sequence_length,
+                    old_params.head_dim,
+                    old_params.theta,
+                    old_params.rope_scaling_params,
+                    cp_axis=cp_axis,
+                )
+                self.rope_params = new_params
+                self.sdpa = partial(ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis)
 
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
@@ -72,7 +82,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
+        attention = self.sdpa(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -122,9 +132,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_cache_to_process, v_cache_to_process, mask
-        )
+        attention = self.sdpa(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)

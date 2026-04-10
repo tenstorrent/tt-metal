@@ -462,10 +462,19 @@ In your training configuration YAML file, specify the device configuration:
 
 ```yaml
 device_config:
-  enable_tp: true      # Enable tensor parallelism
-  enable_ddp: true     # Enable data parallelism
   mesh_shape: [4, 8]   # 4 DP groups × 8 TP devices = 32 devices, should be the same as in MGD file
+  ddp_axis: 0          # Data parallel on mesh axis 0
+  tp_axis: 1           # Tensor parallel on mesh axis 1
   device_ids: []       # Optional: specific device IDs to use
+```
+
+The legacy `enable_ddp` / `enable_tp` flags are still accepted (axes are then inferred automatically), but explicit `ddp_axis` / `tp_axis` / `cp_axis` take precedence and are preferred for clarity:
+
+```yaml
+device_config:
+  mesh_shape: [4, 8]
+  enable_tp: true      # legacy: tp assigned to axis 1
+  enable_ddp: true     # legacy: ddp assigned to axis 0
 ```
 
 ### Parallelism Strategy Selection
@@ -536,9 +545,9 @@ if (config.enable_tp && mesh_shape[axis] > 1U) {
 }
 ```
 
-**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions:
-- 1D mesh `[N]`: Can use either DP or TP (but not both)
-- 2D mesh `[M, N]`: Can use both DP and TP together
+**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions. This is enforced identically in C++ (`ParallelismContext`) and Python (`DeviceConfig`):
+- **Line topology** (`[1, N]` or `[N, 1]`): exactly one parallelism type must be enabled
+- **2D mesh** (`[M, N]`, both dims > 1): exactly two parallelism types must be enabled
 
 ## Complete Example
 
@@ -714,9 +723,315 @@ Check that your mesh graph descriptor specifies the correct topology
 
 - **Topology persistence**: The topology configuration should persist across reboots, but may need to be reconfigured if hardware changes or after system updates.
 
+## Python Distributed Infrastructure
+
+This section describes the **layout-aware dispatch and parallelization** system used for Python distributed training (e.g. Llama TP).
+
+### Overview
+
+1. **DistributedLayout**: Describes how a tensor is placed across the mesh (`Shard(dim)` or `Replicate()` per mesh axis).
+2. **Dispatch**: Patched ops (e.g. `ttml.ops.linear.linear`) go through `dispatch()` which reads tensor topology, looks up a **sharding rule**, redistributes inputs, calls the raw op, and stamps the output layout.
+3. **TransformerBase + ParallelizationPlan**: Model subclasses `TransformerBase` and receives a `ParallelizationPlan` at construction. The plan handles weight materialization (lazy init with correct sharding) and parallelization (forward hooks + module adjustments) automatically via `__init_subclass__`.
+4. **Topology-aware CCL backward**: `all_reduce` and `broadcast` backward check gradient tensor topology to decide whether to reduce (sharded grad) or pass through (replicated grad). No `noop_backward` flags needed.
+
+### How to Use
+
+1. **Define a parallelization plan**: map module name patterns to a style.
+
+   ```python
+   from ttml.modules import ParallelizationPlan
+   from ttml.distributed import ColwiseParallel, RowwiseParallel
+
+   LLAMA_TP_STYLES = {
+       r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
+       r".*\.(out_linear|w2)": RowwiseParallel(),
+       "fc": ColwiseParallel(gather_output=True),  # LM head
+   }
+
+   plan = ParallelizationPlan(LLAMA_TP_STYLES, tp_axis=1, cp_axis=0)
+   ```
+
+2. **Create the model** with `mesh_device` and the plan. `TransformerBase.__init_subclass__` handles everything — lazy weight init with correct sharding, then parallelization (forward hooks + module `parallelize()` calls):
+
+   ```python
+   mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+   model = Llama(config, mesh_device=mesh_device, parallelization_plan=plan, on_device_init=True)
+   # Weights are already sharded, forward hooks installed, heads adjusted — ready to train.
+   ```
+
+3. **No `super().__init__()` needed** in `TransformerBase` subclasses. The `__init_subclass__` wrapper handles base class init, materialization, and parallelization after your `__init__` returns.
+
+4. **Module-level parallelization**: Override `parallelize(self, mesh_device, tp_axis, cp_axis)` in modules that need TP/CP adjustments (e.g. `GroupedQueryAttention` adjusts head counts and swaps to ring attention). Default is no-op.
+
+5. **Gradient synchronization** is handled automatically by `SFTTrainer` via `ttml.core.distributed.synchronize_gradients`.
+
+See `tt-train/sources/examples/llama_tp/train_llama_distributed.py` for a full example.
+
+### Column vs row linears, broadcast / all_reduce / all_gather, and gradients
+
+**Megatron pairing (expected pattern)**
+In a TP MLP (or FFN), you almost always alternate:
+
+- **`ColwiseParallel`**: weights sharded on **output** features; forward wrapper **`broadcast`**s activations on `tp_axis` so each rank sees the full input; linear output is **sharded** on the last dim.
+- **`RowwiseParallel`**: weights sharded on **input** features; expects that **sharded** activation; forward wrapper **`all_reduce`**s the partial sums so the block output is **replicated** again.
+
+
+**LM head / full replicated output**
+For the last linear (e.g. logits over vocab), use `ColwiseParallel(gather_output=True)`. The style wraps forward with **`all_gather`** on the output dim and uses **`GradOutputType.REPLICATED`** on that gather’s backward so that **replicated loss gradients** (same on each TP rank) are handled correctly—analogous to C++ column-parallel with `gather_output=true`. See `style.py` (`ColwiseParallel._wrapped_forward`) and `rules/matmul.py` / custom rules using `AllGather(..., gather_grad_replicated=True)`.
+
+**Where this appears in dispatch**
+Op rules return `ShardingPlan`s with optional **`Broadcast`** (pre), **`AllReduce`**, **`AllGather`** (post). `parallelize_module` + `ColwiseParallel`/`RowwiseParallel` attach the collectives by wrapping modules; dispatch still stamps layouts for `linear`/`matmul`.
+
+### DistributedLayout
+
+- **Construction**: `DistributedLayout(ndim=N)` (all Replicate) or `DistributedLayout(ndim=N, axis_placements={mesh_axis: Shard(dim), ...})`. Unspecified axes are Replicate.
+- **Placements**: `layout.placements` is a tuple of `Shard(dim)` or `Replicate()` per mesh dimension.
+- **Helpers**: `layout.with_placement(mesh_axis, placement)` returns a new DistributedLayout with that axis updated. `layout.ndim`, `layout.is_replicated()`, `layout.is_sharded_on(axis)`.
+
+### Op Rules (What They Are For)
+
+An **op rule** is a function that, given the **layouts of the tensor arguments** to an op, returns a **ShardingPlan**: required input layouts, output layout, and optional **pre-** and **post-collectives** per input/output. Dispatch uses this to:
+
+- Redistribute inputs to the required layouts (all_gather/scatter as needed),
+- Run pre-collectives (e.g. `Broadcast(mesh_axis)` on an input),
+- Call the raw C++ op,
+- Run post-collectives (e.g. `AllReduce(mesh_axis)`, `AllGather(dim, mesh_axis)`),
+- Attach the output layout to the result.
+
+Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@register_rule("op_name")` must match the name you use with `register_op("op_name", raw_callable)` when wrapping your op. You do **not** patch ttml.ops; built-in ops are patched by the lib, and your ops use your own names and the wrapper from `register_op`.
+
+### How to Create a Custom Op Rule (all in your code, no lib changes)
+
+1. **Implement the rule** (e.g. in your training script or a plugin module). The rule receives layouts as positional args (one per tensor input), then `runtime=None` and `**kwargs`. Return a `ShardingPlan`. Use the same op name as in step 3.
+
+   ```python
+   from ttml.distributed import register_rule, register_op
+   from ttml.distributed.rules.registry import ShardingPlan
+
+   @register_rule("my_custom_op")
+   def my_custom_op_rule(
+       input_layout,
+       *extra_layouts,
+       runtime=None,
+       **kwargs,
+   ):
+       return ShardingPlan(
+           input_layouts=[input_layout],
+           output_layout=input_layout,
+       )
+   ```
+
+2. **CCL types** (from `ttml.distributed.rules.registry`):
+   - **Pre-collectives**: `Broadcast(mesh_axis)` — broadcast tensor on that axis (e.g. align replicated activations with column-sharded weights).
+   - **Post-collectives**: `AllReduce(mesh_axis)` — sum partial results (typical row-parallel forward); backward is topology-aware (identity when grad is replicated, all_reduce when sharded).
+   - **Post-collectives**: `AllGather(dim, mesh_axis, gather_grad_replicated=False)` — gather shards along `dim`; set **`gather_grad_replicated=True`** when upstream loss provides **replicated** gradients w.r.t. the gathered tensor (same as `GradOutputType.REPLICATED` on the C++ `all_gather` path—required for correct LM-head-style training).
+
+3. **Define your op with `@register_op`**: The decorator registers the raw callable and returns a dispatch-aware wrapper. Use the same name as in `@register_rule`.
+
+   ```python
+   @register_op("my_custom_op")
+   def my_custom_op(*args, **kwargs):
+       # Your implementation (e.g. ttnn call or Python logic).
+       return ...
+
+   # From here on, call my_custom_op(...) so it goes through dispatch.
+   ```
+
+### Module-Level Parallelization
+
+Composite modules (e.g. `GroupedQueryAttention`) override the `parallelize(self, mesh_device, tp_axis, cp_axis)` method from `AbstractModuleBase` to adjust themselves for TP/CP. This is called automatically by `TransformerBase._parallelize_modules()` during model construction.
+
+The `parallelize()` method handles composite-specific logic only (e.g. head count adjustment, rope rebuild, ring_sdpa swap). Weight sharding is handled by lazy init, and forward hooks (broadcast/all_reduce) are applied by the style matching in `_parallelize_modules`.
+
+```python
+class GroupedQueryAttention(AbstractModuleBase):
+    def parallelize(self, mesh_device, tp_axis, cp_axis=None):
+        if tp_axis is not None:
+            tp_size = mesh_device.shape[tp_axis]
+            self.num_heads = self.num_heads // tp_size
+            self.num_groups = self.num_groups // tp_size
+
+        if cp_axis is not None:
+            cp_size = mesh_device.shape[cp_axis]
+            if cp_size > 1:
+                self.rope_params = ttml.ops.rope.build_rope_params(...)
+                self.sdpa = partial(ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis)
+```
+
+### End-to-End Example: Custom Op, Rule, and Module Rule
+
+The snippet below shows how to wire a new op and a composite module together in one place, analogous to adding a custom layer in HuggingFace Transformers:
+
+```python
+# my_distributed_layer.py
+import ttml
+from ttml.distributed import parallelize_module, register_op
+from ttml.distributed.rules.registry import (
+    ShardingPlan,
+    AllReduce,
+    register_rule,
+    register_module_rule,
+)
+from ttml.distributed.layout import DistributedLayout, Shard, Replicate
+
+
+# ── 1. Op (wraps a ttnn / Python call) ───────────────────────────────────────
+@register_op("my_proj")
+def my_proj(x, w):
+    """Row-parallel projection: expects x sharded on last dim, w sharded on rows."""
+    return ttml.ops.linear.linear_raw(x, w)   # or your ttnn call
+
+
+# ── 2. Op rule: tells dispatch how inputs/outputs are sharded ───────────────
+@register_rule("my_proj")
+def _my_proj_rule(x_layout, w_layout, *, runtime=None, **kwargs):
+    """Row-parallel: x sharded on last dim → partial sums → all_reduce."""
+    tp_axis = runtime.tp_axis
+    required_x = DistributedLayout(ndim=x_layout.ndim, axis_placements={tp_axis: Shard(-1)})
+    required_w = DistributedLayout(ndim=w_layout.ndim, axis_placements={tp_axis: Shard(0)})
+    out_layout = DistributedLayout(ndim=x_layout.ndim)   # fully replicated after reduce
+    return ShardingPlan(
+        input_layouts=[required_x, required_w],
+        output_layout=out_layout,
+        post_output_collectives=[AllReduce(tp_axis)],
+    )
+
+
+# ── 3. Composite module ──────────────────────────────────────────────────────
+class MyAttentionBlock(ttml.modules.ModuleBase):
+    def __init__(self, hidden_size, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+        self.q_linear  = ttml.modules.LinearLayer(hidden_size, hidden_size)
+        self.kv_linear = ttml.modules.LinearLayer(hidden_size, hidden_size * 2)
+        self.out_linear = ttml.modules.LinearLayer(hidden_size, hidden_size)
+
+    def forward(self, x):
+        q  = ttml.ops.linear.linear(x, self.q_linear.weight)
+        kv = ttml.ops.linear.linear(x, self.kv_linear.weight)
+        # ... attention logic ...
+        return my_proj(x, self.out_linear.weight)   # uses registered op
+
+
+# ── 4. Module rule: composite-only setup (head counts, CP swap, etc.) ────────
+@register_module_rule(MyAttentionBlock)
+def _distribute_my_attention(module, mesh_device, tp_axis, cp_axis=None):
+    """Adjust head count for TP; optionally swap to ring attention for CP."""
+    if tp_axis is not None:
+        tp_size = mesh_device.shape[tp_axis]
+        module.num_heads = module.num_heads // tp_size
+    if cp_axis is not None:
+        # swap module.forward or attention op for ring variant here
+        pass
+    # Do NOT shard sub-linears here — parallelize_module recurses and applies
+    # the plan's ColwiseParallel / RowwiseParallel styles to q_linear etc.
+    return module
+
+
+# ── 5. Parallelize plan + call ───────────────────────────────────────────────
+MY_PLAN = {
+    r".*\.q_linear":   ColwiseParallel(),
+    r".*\.kv_linear":  ColwiseParallel(),
+    r".*\.out_linear": RowwiseParallel(),
+}
+
+model = MyModel(...)
+mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+
+# parallelize_module: calls the module rule for MyAttentionBlock, then recurses
+# into children and applies ColwiseParallel / RowwiseParallel via the plan.
+# init_ops() is called automatically — no separate call needed.
+model = parallelize_module(model, mesh_device, MY_PLAN, tp_axis=1, cp_axis=0)
+```
+
+Key points:
+- **`@register_op("name")`** decorates your raw op and returns the dispatch-aware wrapper; use it instead of `ttml.ops.*` in your module.
+- **`@register_rule("name")`** must use the **same string** as `@register_op`.
+- **Module rule** only does composite-specific work (head counts, ring_sdpa swap). Sub-linear sharding comes from the plan styles on recursion.
+
+### Custom ParallelStyle
+
+To define a new style (e.g. a variant of column/row parallel):
+
+1. Subclass `ParallelStyle` and implement `_apply(module, mesh_device, tp_axis)` (mutate the module’s parameters with `distribute_tensor` and the layout you want).
+2. Implement `get_layout(mesh_device, tp_axis) -> DistributedLayout` when callers need the style’s weight layout without applying it to a module (e.g. tests, tooling). `parallelize_module` does **not** use this to detect composites; detection is **`get_module_rule(type(module))`** only.
+3. Add your style to the parallelize plan by name or regex, e.g. `{"my_layer": MyCustomStyle()}`.
+
+### Summary
+
+| Concept | Purpose |
+|--------|---------|
+| **DistributedLayout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
+| **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
+| **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
+| **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer). Optional `get_layout` for introspection / tests. |
+| **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; activates dispatch (`init_ops`) internally; no layout code in user model. |
+| **SFTTrainer (gradient sync)** | After each backward pass, automatically all-reduces gradients across any mesh axis where a parameter is replicated (topology-based; no explicit sync needed). |
+
+---
+
+## Debugging: DispatchTraceCallback
+
+`DispatchTraceCallback` is a trainer callback that records every op dispatch event (op name, input/output layouts, collectives) during training and prints or dumps the trace at the end. It lives in `ttml.distributed.debug` and works with any `SFTTrainer`-based script.
+
+### Usage
+
+```python
+from ttml.distributed.debug import DispatchTraceCallback
+
+callbacks = []
+if args.debug_dispatch_dump:
+    callbacks.append(
+        DispatchTraceCallback(
+            first_step_only=True,          # capture one step then stop
+            dump_path=args.debug_dispatch_dump,  # e.g. "trace.html" or "trace.jsonl"
+        )
+    )
+
+trainer = SFTTrainer(model, config, dataloader, optimizer, callbacks=callbacks)
+```
+
+### Options
+
+| Argument | Default | Description |
+|---|---|---|
+| `max_entries_to_print` | `20` | Max entries printed to stdout. |
+| `first_step_only` | `False` | If `True`, disables tracing after the first training step (cheaper for profiling). |
+| `dump_path` | `None` | File to write the full trace. Use `.html` for an interactive report, any other extension for JSONL. |
+
+### Output formats
+
+- **`.html`**: Self-contained interactive page (open in a browser). Also writes `.folded` (for `flamegraph.pl`) and `_flame.svg` if `flamegraph.pl` is on `PATH`.
+- **`.jsonl`** (any other extension): One JSON object per line; each line is a serialized `TraceEntry`.
+
+### What a trace shows
+
+Each recorded event contains:
+- `op_name`: the dispatched op (e.g. `"linear"`, `"matmul"`)
+- `input_layouts` / `output_layout`: the `DistributedLayout` stamped on each tensor
+- `rule_name`: which sharding rule was applied
+- `pre_collectives`: e.g. `Broadcast(axis=1)` before the op
+- `redistributions`: inputs that were resharded to match the rule's required layout
+- `post_collectives`: e.g. `AllReduce(axis=1)` or `AllGather(dim=2, axis=1)` after the op
+- `module_stack`: the module path where the op was called
+
+### Standalone context manager
+
+You can also use `DispatchTracer` directly outside a trainer:
+
+```python
+from ttml.distributed.debug import DispatchTracer, dispatch_trace
+
+with DispatchTracer() as tracer:
+    loss = model(batch)
+
+print(dispatch_trace.format_entries_tree(tracer.entries))
+```
+
 ## Additional Resources
 
 - **MGD Format Documentation**: `$TT_METAL_HOME/tt_metal/fabric/MGD_README.md`
 - **Multihost Training Examples**: `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/`
 - **Device Config Examples**: `$TT_METAL_HOME/tt-train/configs/training_configs/`
 - **TP+DP Example (Python)**: `$TT_METAL_HOME/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
+- **Llama TP+DP (Python, rules/dispatch)**: `$TT_METAL_HOME/tt-train/sources/examples/llama_tp/train_llama_distributed.py` - Full example using `parallelize_module`, `ColwiseParallel`/`RowwiseParallel`, and the rule-based dispatch layer with automatic DP gradient sync

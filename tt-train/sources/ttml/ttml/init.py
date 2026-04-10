@@ -6,15 +6,13 @@
 
 Factory variants (uniform, normal, constant, zeros, ones, xavier_uniform,
     xavier_normal, kaiming_uniform, kaiming_normal):
-    Each returns an initializer callable that takes a shape tuple and returns
-    a new ttml.autograd.Tensor.
+    Each returns an initializer callable with signature::
 
-    Usage:
-        layer = LinearLayer(
-            128, 64,
-            weight_init=ttml.init.xavier_uniform(gain=1.0),
-            bias_init=ttml.init.constant(0.0),
-        )
+        init_fn(shape, layout=None, mesh_device=None) -> Tensor
+
+    When ``layout`` (a ``DistributedLayout``) and ``mesh_device`` are provided,
+    the tensor is distributed across the mesh according to that layout (shard or
+    replicate). This is used by the lazy-init path in ``parallelize_module``.
 
 In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
     xavier_normal_, kaiming_uniform_, kaiming_normal_):
@@ -26,10 +24,6 @@ In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
     allocates a temporary tensor with the new values and then copies it
     into the existing tensor via set_value. The temporary is freed
     afterwards, but callers should be aware of the transient allocation.
-
-    Usage:
-        ttml.init.uniform_(tensor, a=-0.1, b=0.1)
-        ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
 """
 
 from __future__ import annotations
@@ -37,6 +31,8 @@ from __future__ import annotations
 import math
 from typing import Literal
 
+import numpy as np
+import ml_dtypes
 import ttnn
 import ttml
 
@@ -63,6 +59,37 @@ _FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
 def _get_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
+
+
+def _mesh_ndim(mesh_device):
+    mesh_shape = mesh_device.shape
+    return mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
+
+
+def _to_tensor(arr, layout=None, mesh_device=None):
+    """Numpy array -> ttml Tensor on mesh.
+
+    With ``layout`` (from TpPlan): shard/replicate per layout. With ``layout is None``
+    but ``mesh_device`` set: **replicate** full tensor on the mesh so non-TP params
+    (embedding, norm gamma, etc.) match distributed ops.
+    """
+    from ttml.distributed.layout import DistributedLayout, set_layout
+
+    mapper = None
+    stamp_layout = None
+    if mesh_device is not None:
+        rank = len(arr.shape)
+        if layout is not None:
+            mapper = layout.build_mapper(mesh_device, tensor_rank=rank)
+            stamp_layout = layout
+        else:
+            ndim = _mesh_ndim(mesh_device)
+            stamp_layout = DistributedLayout(ndim=ndim)
+            mapper = stamp_layout.build_mapper(mesh_device, tensor_rank=rank)
+    tensor = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, mapper=mapper)
+    if stamp_layout is not None:
+        set_layout(tensor, stamp_layout)
+    return tensor
 
 
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
@@ -146,11 +173,34 @@ def calculate_gain(nonlinearity: _NonlinearityType, param: int | float | None = 
 # ---------------------------------------------------------------------------
 
 
+def _resolve_layout(layout, mesh_device):
+    if layout is not None:
+        return layout
+    if mesh_device is not None:
+        from ttml.distributed.layout import DistributedLayout
+
+        return DistributedLayout(ndim=_mesh_ndim(mesh_device))
+    return None
+
+
+def _stamp_layout(tensor, layout):
+    if layout is not None:
+        from ttml.distributed.layout import set_layout
+
+        set_layout(tensor, layout)
+    return tensor
+
+
 def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
-    def uniform_init(shape):
-        return ttml.ops.rand(shape, a, b)
+    def uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+        if on_device_init and mesh_device is not None:
+            mapper = _resolve_layout(layout, mesh_device).build_mapper_config(tensor_rank=len(shape))
+            tensor = ttml.ops.rand(shape, a, b, mapper=mapper)
+            return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
+        arr = np.random.uniform(a, b, shape).astype(ml_dtypes.bfloat16)
+        return _to_tensor(arr, layout, mesh_device)
 
     return uniform_init
 
@@ -158,25 +208,74 @@ def uniform(a: float = 0.0, b: float = 1.0):
 def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
-    def normal_init(shape):
-        return ttml.ops.randn(shape, mean, std)
+    def normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
+        if on_device_init and mesh_device is not None:
+            mapper = _resolve_layout(layout, mesh_device).build_mapper_config(tensor_rank=len(shape))
+            tensor = ttml.ops.randn(shape, mean, std, mapper=mapper)
+            return _stamp_layout(tensor, _resolve_layout(layout, mesh_device))
+        arr = np.random.normal(mean, std, shape).astype(ml_dtypes.bfloat16)
+        return _to_tensor(arr, layout, mesh_device)
 
     return normal_init
+
+
+def _shard_shape(shape, layout, mesh_device):
+    """Compute per-device shape by dividing sharded dims by mesh axis size.
+
+    Args:
+        shape: the shape of the tensor.
+        layout: the layout of the tensor.
+        mesh_device: the mesh device.
+    """
+
+    from ttml.distributed.layout import Shard
+
+    mesh_shape = mesh_device.shape
+    shard = list(shape)
+    for mesh_axis, placement in enumerate(layout.placements):
+        if isinstance(placement, Shard):
+            dim = placement.dim if placement.dim >= 0 else len(shard) + placement.dim
+            axis_size = mesh_shape[mesh_axis]
+            assert (
+                shard[dim] % axis_size == 0
+            ), f"Shape dim {dim} ({shard[dim]}) not divisible by mesh axis {mesh_axis} size ({axis_size})"
+            shard[dim] //= axis_size
+    return shard
+
+
+def _on_device_fill(shape, fill_value, layout, mesh_device):
+    """Initialize a filled tensor directly on device (no host→device transfer).
+
+    Computes shard shape from layout, then uses ttnn.moreh_full to allocate
+    and fill on each device directly.
+
+    Args:
+        shape: global logical shape of the tensor.
+        fill_value: the value to fill the tensor with.
+        layout: the DistributedLayout (or None for replicate).
+        mesh_device: the mesh device.
+    """
+    resolved = _resolve_layout(layout, mesh_device)
+    shard = _shard_shape(shape, resolved, mesh_device)
+    tt = ttnn.moreh_full(
+        shard,
+        fill_value,
+        mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tensor = ttml.autograd.create_tensor(tt)
+    return _stamp_layout(tensor, resolved)
 
 
 def constant(val: float):
     """All elements set to val."""
 
-    def constant_init(shape):
-        device = _get_device()
-        t = ttnn.full(
-            shape,
-            fill_value=val,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
+    def constant_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, val, layout, mesh_device)
+        arr = np.full(shape, val, dtype=ml_dtypes.bfloat16)
+        return _to_tensor(arr, layout, mesh_device)
 
     return constant_init
 
@@ -184,15 +283,11 @@ def constant(val: float):
 def zeros():
     """All zeros."""
 
-    def zeros_init(shape):
-        device = _get_device()
-        t = ttnn.zeros(
-            shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
+    def zeros_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, 0.0, layout, mesh_device)
+        arr = np.zeros(shape, dtype=ml_dtypes.bfloat16)
+        return _to_tensor(arr, layout, mesh_device)
 
     return zeros_init
 
@@ -200,15 +295,11 @@ def zeros():
 def ones():
     """All ones."""
 
-    def ones_init(shape):
-        device = _get_device()
-        t = ttnn.ones(
-            shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
+    def ones_init(shape, layout=None, mesh_device=None, *, on_device_init=False, **_kwargs):
+        if on_device_init and mesh_device is not None:
+            return _on_device_fill(shape, 1.0, layout, mesh_device)
+        arr = np.ones(shape, dtype=ml_dtypes.bfloat16)
+        return _to_tensor(arr, layout, mesh_device)
 
     return ones_init
 
@@ -220,11 +311,11 @@ def xavier_uniform(gain: float = 1.0):
     Use ``calculate_gain`` to compute gain for a specific nonlinearity.
     """
 
-    def xavier_uniform_init(shape):
+    def xavier_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
         std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
         a = math.sqrt(3.0) * std
-        return uniform(-a, a)(shape)
+        return uniform(-a, a)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
 
     return xavier_uniform_init
 
@@ -236,10 +327,10 @@ def xavier_normal(gain: float = 1.0):
     Use ``calculate_gain`` to compute gain for a specific nonlinearity.
     """
 
-    def xavier_normal_init(shape):
+    def xavier_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
         std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
-        return normal(0.0, std)(shape)
+        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
 
     return xavier_normal_init
 
@@ -251,8 +342,6 @@ def kaiming_uniform(
 ):
     """Kaiming uniform initialization (He 2015).
 
-    Samples from U(-bound, bound) where bound = gain * sqrt(3 / fan).
-
     Args:
         a: negative slope of the rectifier (only used with leaky_relu).
         mode: "fan_in" preserves forward-pass variance,
@@ -261,12 +350,12 @@ def kaiming_uniform(
             "leaky_relu".
     """
 
-    def kaiming_uniform_init(shape):
+    def kaiming_uniform_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan = _calculate_correct_fan(shape, mode)
         gain = calculate_gain(nonlinearity, a)
         std = gain / math.sqrt(fan)
         bound = math.sqrt(3.0) * std
-        return uniform(-bound, bound)(shape)
+        return uniform(-bound, bound)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
 
     return kaiming_uniform_init
 
@@ -288,11 +377,11 @@ def kaiming_normal(
             "leaky_relu".
     """
 
-    def kaiming_normal_init(shape):
+    def kaiming_normal_init(shape, layout=None, mesh_device=None, *, on_device_init=False):
         fan = _calculate_correct_fan(shape, mode)
         gain = calculate_gain(nonlinearity, a)
         std = gain / math.sqrt(fan)
-        return normal(0.0, std)(shape)
+        return normal(0.0, std)(shape, layout=layout, mesh_device=mesh_device, on_device_init=on_device_init)
 
     return kaiming_normal_init
 

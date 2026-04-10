@@ -26,13 +26,14 @@ autograd::TensorPtr rand(
     float b,
     std::optional<uint32_t> seed,
     tt::tt_metal::DataType dtype,
-    tt::tt_metal::Layout layout) {
+    tt::tt_metal::Layout layout,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mapper) {
     auto* device = &autograd::ctx().get_device();
     ttnn::MemoryConfig mem_config{};
 
     uint32_t effective_seed = avoid_zero_seed(seed.value_or(autograd::ctx().get_generator()()));
 
-    auto t = ttnn::rand(shape, *device, dtype, layout, mem_config, a, b, effective_seed);
+    auto t = ttnn::rand(shape, *device, dtype, layout, mem_config, a, b, effective_seed, mapper);
     return ttml::autograd::create_tensor(t);
 }
 

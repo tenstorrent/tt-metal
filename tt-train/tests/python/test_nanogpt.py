@@ -93,6 +93,7 @@ class TestGPTMLP:
         embedding_dim = 64
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
+        mlp.materialize()
 
         assert mlp is not None
         assert hasattr(mlp, "fc1")
@@ -105,6 +106,7 @@ class TestGPTMLP:
         embedding_dim = 64
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
+        mlp.materialize()
 
         fc1_np = mlp.fc1.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
         fc2_np = mlp.fc2.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
@@ -121,6 +123,7 @@ class TestGPTMLP:
         seq_len = 32  # Tile-aligned
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
+        mlp.materialize()
         mlp.eval()  # Disable dropout
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
@@ -143,6 +146,7 @@ class TestGPTMLP:
         seq_len = 32  # Tile-aligned
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
+        mlp.materialize()
         mlp.eval()
 
         # Create input (4D matching embedding output)
@@ -163,6 +167,7 @@ class TestGPTMLP:
     def test_mlp_train_eval_mode(self):
         """Test that MLP train/eval mode switching works."""
         mlp = GPTMLP(64, dropout=0.1)
+        mlp.materialize()
 
         # Default is train mode
         assert mlp.get_run_mode() == RunMode.TRAIN
@@ -188,6 +193,7 @@ class TestMultiHeadAttention:
         num_heads = 4
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
+        attention.materialize()
 
         assert attention is not None
         assert hasattr(attention, "qkv_linear")
@@ -201,6 +207,7 @@ class TestMultiHeadAttention:
         num_heads = 4
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
+        attention.materialize()
 
         qkv_np = attention.qkv_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
         out_np = attention.out_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
@@ -218,6 +225,7 @@ class TestMultiHeadAttention:
         seq_len = 32  # Tile-aligned
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
+        attention.materialize()
         attention.eval()
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
@@ -244,6 +252,7 @@ class TestMultiHeadAttention:
         seq_len = 32  # Tile-aligned
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
+        attention.materialize()
         attention.eval()
 
         # Create input (4D matching embedding output)
@@ -283,6 +292,7 @@ class TestGPTBlock:
         num_heads = 4
 
         block = GPTBlock(embedding_dim, num_heads, dropout=0.0, bias=True)
+        block.materialize()
 
         assert block is not None
         assert hasattr(block, "attention")
@@ -298,6 +308,7 @@ class TestGPTBlock:
         seq_len = 32  # Tile-aligned
 
         block = GPTBlock(embedding_dim, num_heads, dropout=0.0, bias=True)
+        block.materialize()
         block.eval()
 
         # Create input (4D matching embedding output)
@@ -322,6 +333,7 @@ class TestGPTBlock:
         seq_len = 32  # Tile-aligned
 
         block = GPTBlock(embedding_dim, num_heads, dropout=0.0, bias=True)
+        block.materialize()
         block.eval()
 
         # Create input (4D matching embedding output)
@@ -343,6 +355,7 @@ class TestGPTBlock:
     def test_block_train_eval_propagation(self):
         """Test that train/eval mode propagates to submodules."""
         block = GPTBlock(64, 4, dropout=0.1, bias=True)
+        block.materialize()
 
         # Set to eval
         block.eval()

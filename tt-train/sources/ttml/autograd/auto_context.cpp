@@ -88,6 +88,10 @@ tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }
 
+[[nodiscard]] bool AutoContext::is_distributed_context_initialized() const {
+    return m_distributed_context != nullptr;
+}
+
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> AutoContext::get_distributed_context() const {
     if (!m_distributed_context) {
         throw std::runtime_error("DistributedContext is not initialized.");
@@ -120,6 +124,10 @@ core::TTProfiler& AutoContext::get_profiler() {
 
 void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket_type) {
     m_socket_manager = std::make_unique<core::distributed::SocketManager>(socket_type);
+}
+
+[[nodiscard]] bool AutoContext::is_socket_manager_initialized() const {
+    return m_socket_manager != nullptr;
 }
 
 [[nodiscard]] core::distributed::SocketManager& AutoContext::get_socket_manager() {

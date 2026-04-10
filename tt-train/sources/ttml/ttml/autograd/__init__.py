@@ -62,6 +62,7 @@ except ImportError:
     # C++ bindings not available yet (e.g., during build)
     pass
 
+
 __all__ = [
     # Python classes
     "Function",

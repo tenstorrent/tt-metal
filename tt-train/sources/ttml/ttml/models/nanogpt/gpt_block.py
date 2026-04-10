@@ -10,6 +10,7 @@ from typing import Optional
 
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules.parameter import TensorMetadata
 
 from .gpt_mlp import GPTMLP
 from .multi_head_attention import MultiHeadAttention
@@ -30,10 +31,10 @@ class LayerNorm(AbstractModuleBase):
         self.use_composite_layernorm = use_composite_layernorm
 
         ln_shape = (1, 1, 1, embedding_dim)
-        self.gamma = Parameter(ttml.init.ones()(ln_shape))
+        self.gamma = Parameter(TensorMetadata(shape=ln_shape, init_fn=ttml.init.ones()))
 
         if bias:
-            self.beta = Parameter(ttml.init.zeros()(ln_shape))
+            self.beta = Parameter(TensorMetadata(shape=ln_shape, init_fn=ttml.init.zeros()))
         else:
             self.beta = None
 

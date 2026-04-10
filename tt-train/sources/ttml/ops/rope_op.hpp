@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 
 // Forward declaration to avoid heavy include in files that only need the pointer type
@@ -50,7 +52,8 @@ RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,
     uint32_t head_dim,
     float theta = 10000.0F,
-    RopeScalingParams rope_scaling_params = RopeScalingParams{});
+    RopeScalingParams rope_scaling_params = RopeScalingParams{},
+    std::optional<uint32_t> cp_axis = std::nullopt);
 // Throws an exception if the input is bad, parameters are bad, or the two are
 // incompatible with one another.
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);

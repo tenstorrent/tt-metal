@@ -18,6 +18,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/topology_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -83,10 +84,24 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     return reduced;
 }
 
+void propagate_topology(
+    const tt::tt_metal::Tensor& src_a, const tt::tt_metal::Tensor& src_b, const autograd::TensorPtr& out) {
+    tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
+    ttml::core::distributed::propagate_topology(src_a, src_b, val);
+    out->set_value(val);
+}
+
+void propagate_topology(const tt::tt_metal::Tensor& src, const autograd::TensorPtr& out) {
+    tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
+    ttml::core::distributed::propagate_topology(src, val);
+    out->set_value(val);
+}
+
 }  // namespace
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
+    propagate_topology(a->get_value(), b, out);
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
@@ -94,6 +109,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& 
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
+    propagate_topology(a->get_value(), b.get_tensor(), out);
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
@@ -105,6 +121,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     out->set_value(
         ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));
@@ -127,6 +144,7 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));
@@ -154,6 +172,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         a->get_value(),
         b->get_value(),
         /* fast_and_approximate_mode*/ true));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         auto a_grad = ttnn::multiply(
             out->get_grad(),
@@ -183,6 +202,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
+    propagate_topology(a->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         auto a_grad = ttnn::multiply(out->get_grad(), b, /* fast_and_approximate_mode*/ true);
 
@@ -197,6 +217,7 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
+    propagate_topology(a->get_value(), b->get_value(), out);
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad()) || was_broadcasted(b, out->get_grad())) {
             throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");

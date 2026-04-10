@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
+import numpy as np
+import ml_dtypes
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
+from ttml.modules import Embedding, ModuleList, LinearLayer, TransformerBase
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .transformer import LlamaBlock, RMSNormLayer
@@ -73,28 +75,17 @@ class LlamaConfig:
             )
 
 
-class Llama(AbstractModuleBase):
-    def __init__(self, config: LlamaConfig) -> None:
-        super().__init__()
-
+class Llama(TransformerBase):
+    def __init__(self, config: LlamaConfig, **kwargs):
         self.config = config
 
-        self.fc = LinearLayer(
-            config.hidden_size,
-            config.vocab_size,
-            False,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(
-            vocab_size_divisible_by_32,
-            config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -126,7 +117,7 @@ class Llama(AbstractModuleBase):
                     attention_bias=config.attention_bias,
                 )
                 for _ in range(config.num_hidden_layers)
-            ]
+            ],
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size)

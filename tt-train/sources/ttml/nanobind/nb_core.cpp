@@ -139,6 +139,42 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
+        // Returns std::unique_ptr<TensorToMesh> for replicating tensor across mesh
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper", &ttnn::distributed::replicate_tensor_to_mesh_mapper, nb::arg("device"));
+
+        // Create a mapper with explicit placements for each mesh axis
+        // placements is a list where each element is either:
+        //   - None or "replicate" for Replicate
+        //   - An integer (shard dimension) for Shard
+        py_distributed.def(
+            "create_tensor_to_mesh_mapper",
+            [](ttnn::distributed::MeshDevice& device,
+               nb::list placements_py) -> std::unique_ptr<ttnn::distributed::TensorToMesh> {
+                const auto& mesh_shape = device.shape();
+                ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> placements(
+                    mesh_shape.dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
+
+                size_t idx = 0;
+                for (nb::handle h : placements_py) {
+                    if (idx >= placements.size())
+                        break;
+                    if (nb::isinstance<nb::int_>(h)) {
+                        int dim = nb::cast<int>(h);
+                        placements[idx] = ttnn::distributed::MeshMapperConfig::Shard{dim};
+                    }
+                    // None or anything else -> Replicate (already default)
+                    idx++;
+                }
+
+                return std::make_unique<ttnn::distributed::TensorToMesh>(ttnn::distributed::TensorToMesh::create(
+                    device, ttnn::distributed::MeshMapperConfig{.placements = placements}));
+            },
+            nb::arg("device"),
+            nb::arg("placements"),
+            "Create a tensor-to-mesh mapper with explicit placements. "
+            "placements is a list where each element is either None (replicate) or an int (shard dim).");
+
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
             "concat_mesh_to_tensor_composer",
@@ -164,7 +200,40 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
-            "synchronize_gradients", &ttml::core::distributed::synchronize_gradients, nb::arg("parameters"));
+            "synchronize_gradients",
+            [](const ttml::serialization::NamedParameters& parameters) {
+                ttml::core::distributed::synchronize_gradients(parameters);
+            },
+            nb::arg("parameters"));
+
+        // Set tensor topology placements on an autograd tensor
+        py_distributed.def(
+            "set_tensor_placements",
+            [](ttml::autograd::TensorPtr& tensor, nb::list placements_py) {
+                auto ttnn_tensor = tensor->get_value();
+                auto topo = ttnn_tensor.tensor_topology();
+                auto new_placements = topo.placements();
+
+                size_t idx = 0;
+                for (nb::handle h : placements_py) {
+                    if (idx >= new_placements.size())
+                        break;
+                    if (nb::hasattr(h, "dim")) {
+                        int dim = nb::cast<int>(h.attr("dim"));
+                        new_placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
+                    } else {
+                        new_placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+                    }
+                    idx++;
+                }
+
+                auto new_topo = tt::tt_metal::TensorTopology(
+                    topo.distribution_shape(), std::move(new_placements), topo.mesh_coords());
+                ttnn_tensor.update_tensor_topology(new_topo);
+                tensor->set_value(ttnn_tensor);
+            },
+            nb::arg("tensor"),
+            nb::arg("placements"));
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;

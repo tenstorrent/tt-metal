@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 if TYPE_CHECKING:
     from ttml.modules.lora import LoraConfig
 
+import time
+
 import numpy as np
 import ttnn
 from tqdm import tqdm
@@ -24,6 +26,8 @@ logger = logging.getLogger(__name__)
 import ttml
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
+
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 
 class TrainerCallback:
@@ -50,6 +54,52 @@ class TrainerCallback:
 
     def on_train_end(self, trainer: "SFTTrainer") -> None:
         pass
+
+
+class GradientSyncCallback(TrainerCallback):
+    """Synchronize gradients across distributed devices before optimizer step.
+
+    All-reduces gradients along axes where parameters are replicated (DDP/CP).
+    No-op on single device.
+    """
+
+    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+
+
+class MemoryTrackingCallback(TrainerCallback):
+    """Track DRAM/L1 memory usage during the first training step.
+
+    Captures memory snapshots at model creation, optimizer creation,
+    and after the first complete iteration, then prints a report.
+    """
+
+    def __init__(self) -> None:
+        self._guard = None
+        self._done = False
+
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        self._guard = MemoryUsageTracker.begin_capture()
+        MemoryUsageTracker.snapshot("TRAIN_BEGIN")
+
+    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
+        if not self._done:
+            MemoryUsageTracker.snapshot("BEFORE_OPTIMIZER_STEP")
+
+    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
+        if self._done:
+            return
+        self._done = True
+        MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+        print("\n" + "=" * 70)
+        print("MEMORY USAGE REPORT (First Step)")
+        print("=" * 70)
+        MemoryUsageTracker.print_memory_usage()
+        MemoryUsageTracker.clear()
+        if self._guard is not None:
+            self._guard.release()
+            self._guard = None
+        print("=" * 70 + "\n")
 
 
 @dataclass
@@ -233,21 +283,19 @@ class SFTTrainer:
 
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
         for _ in bar:
-            # self.step is 0-based so external lr_schedule callables (e.g.
-            # SpeedrunScheduler.lr_at) receive the expected step index.
-            lr = self._lr_schedule(self.step)
-            self._optimizer.set_lr(lr)
             self._optimizer.zero_grad()
 
             micro_losses = []
-            for _ in range(cfg.gradient_accumulation_steps):
+            for micro_step in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
                 loss = self._compute_loss(batch)
+
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
+
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
             for cb in self._callbacks:
@@ -256,7 +304,13 @@ class SFTTrainer:
             if cfg.max_grad_norm > 0:
                 ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
+            # Optimizer step
+            # self.step is 0-based so external lr_schedule callables (e.g.
+            # SpeedrunScheduler.lr_at) receive the expected step index.
+            self._optimizer.set_lr(self._lr_schedule(self.step))
             self._optimizer.step()
+            lr = float(self._optimizer.get_lr())
+
             self.step += 1
 
             step_loss = float(np.mean(micro_losses))
@@ -323,7 +377,8 @@ class SFTTrainer:
                 )
 
         loss = self._loss_fn(logits, batch.labels, ttml.ops.ReduceType.NONE)  # [B, 1, T, 1]
-        loss = loss * batch.loss_mask  # zero out prompt + padding
+        if batch.loss_mask is not None:
+            loss = loss * batch.loss_mask  # zero out prompt + padding
         return ttml.ops.unary.mean(loss)
 
     def _eval(self) -> float:
@@ -357,7 +412,7 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32, self._loss_composer)
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
@@ -365,7 +420,7 @@ class SFTTrainer:
     def _build_optimizer(self, optimizer: Any):
         """Resolve the *optimizer* argument into an ``OptimizerBase``.
 
-        * ``OptimizerBase`` instance -- returned as-is.
+        * ``OptimizerBase`` instance -- returned as-is (no memory snapshot taken).
         * ``dict`` -- forwarded to ``ttml.optimizers.create_optimizer``.
         * ``None`` -- a default AdamW is created with ``learning_rate=config.learning_rate``.
         """
@@ -373,13 +428,14 @@ class SFTTrainer:
             return optimizer
 
         if isinstance(optimizer, dict):
-            return ttml.optimizers.create_optimizer(optimizer, self.model.parameters())
-
-        # Default: AdamW with lr from config
-        return ttml.optimizers.create_optimizer(
-            {"type": "AdamW", "lr": self.config.learning_rate},
-            self.model.parameters(),
-        )
+            result = ttml.optimizers.create_optimizer(optimizer, self.model.parameters())
+        else:
+            # Default: AdamW with lr from config
+            result = ttml.optimizers.create_optimizer(
+                {"type": "AdamW", "lr": self.config.learning_rate},
+                self.model.parameters(),
+            )
+        return result
 
     def _build_lr_schedule(self):
         """Return a callable ``step -> lr`` implementing linear warmup then constant."""

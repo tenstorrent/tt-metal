@@ -9,27 +9,23 @@ from __future__ import annotations
 import ttml
 
 from .module_base import AbstractModuleBase
-from .parameter import Parameter
+from .parameter import Parameter, TensorMetadata
 
 
 class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
     def __init__(self, num_embeddings: int, embedding_dim: int, weight_init=None) -> None:
-        """Initialize embedding layer.
-
-        Args:
-            num_embeddings: Size of vocabulary
-            embedding_dim: Dimension of embeddings
-            weight_init: Initializer for weight tensor. Defaults to normal(0, 0.02).
-        """
         super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
 
-        if weight_init is None:
-            weight_init = ttml.init.normal(0.0, 0.02)
-
-        weight_shape = (1, 1, num_embeddings, embedding_dim)
-        self.weight = Parameter(weight_init(weight_shape))
+        self.weight = Parameter(
+            TensorMetadata(
+                shape=(1, 1, num_embeddings, embedding_dim),
+                init_fn=weight_init or ttml.init.normal(0.0, 1.0),
+            )
+        )
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.

@@ -32,7 +32,8 @@ autograd::TensorPtr randn(
     float stddev,
     std::optional<uint32_t> seed,
     tt::tt_metal::DataType dtype,
-    tt::tt_metal::Layout layout) {
+    tt::tt_metal::Layout layout,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mapper) {
     TT_FATAL(stddev >= 0.0f, "[ttml::ops::randn] stddev must be non-negative, got {}.", stddev);
 
     auto* device = &autograd::ctx().get_device();
@@ -49,9 +50,25 @@ autograd::TensorPtr randn(
     // Box-Muller transform: z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
     // u1 in (eps, 1] to avoid log(0); u2 in [0, 1)
     auto u1 = ttnn::rand(
-        shape, *device, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config, 1e-6f, 1.0f, u1_seed);
+        shape,
+        *device,
+        tt::tt_metal::DataType::FLOAT32,
+        tt::tt_metal::Layout::TILE,
+        mem_config,
+        1e-6f,
+        1.0f,
+        u1_seed,
+        mapper);
     auto u2 = ttnn::rand(
-        shape, *device, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config, 0.0f, 1.0f, u2_seed);
+        shape,
+        *device,
+        tt::tt_metal::DataType::FLOAT32,
+        tt::tt_metal::Layout::TILE,
+        mem_config,
+        0.0f,
+        1.0f,
+        u2_seed,
+        mapper);
 
     auto log_u1 = ttnn::log(u1, false, mem_config);
     auto neg2log = ttnn::multiply(log_u1, -2.0f, std::nullopt, mem_config);

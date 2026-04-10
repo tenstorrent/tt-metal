@@ -107,6 +107,7 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
+    [[nodiscard]] bool is_distributed_context_initialized() const;
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
         const;
 
@@ -116,6 +117,7 @@ public:
     [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
 
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
+    [[nodiscard]] bool is_socket_manager_initialized() const;
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
     [[nodiscard]] const ParallelismContext& get_parallelism_context() const;

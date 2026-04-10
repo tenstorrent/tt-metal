@@ -2,5 +2,5 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from .sft_trainer import SFTConfig, SFTTrainer, TrainerCallback
+from .sft_trainer import SFTConfig, SFTTrainer, TrainerCallback, GradientSyncCallback, MemoryTrackingCallback
 from ttml.modules.lora import LoraConfig

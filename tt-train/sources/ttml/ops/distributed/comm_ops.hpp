@@ -18,9 +18,7 @@ autograd::TensorPtr reduce_scatter(
 autograd::TensorPtr scatter(
     const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_reduce(
-    const autograd::TensorPtr& tensor,
-    const bool noop_backward = false,
-    const std::optional<uint32_t> cluster_axis = std::nullopt);
+    const autograd::TensorPtr& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_gather(
     const autograd::TensorPtr& tensor,
     const int dim,

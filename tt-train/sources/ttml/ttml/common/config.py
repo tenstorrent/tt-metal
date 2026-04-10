@@ -17,6 +17,15 @@ class DeviceConfig:
 
         Args:
             yaml_config: Dictionary containing configuration
+
+        Config fields:
+            mesh_shape: [rows, cols] shape of device mesh
+            device_ids: Optional list of device IDs to use
+            enable_tp: Enable tensor parallelism (legacy, use tp_axis instead)
+            enable_ddp: Enable data parallelism (legacy, use ddp_axis instead)
+            tp_axis: Tensor parallel axis (0 or 1), None to disable
+            ddp_axis: Data parallel axis (0 or 1), None to disable
+            cp_axis: Context parallel axis (0 or 1), None to disable
         """
         device_config = {}
         if isinstance(yaml_config, str):
@@ -26,11 +35,60 @@ class DeviceConfig:
 
         self.mesh_shape = device_config.get("mesh_shape", [1, 1])
         self.device_ids = device_config.get("device_ids", None)
+
+        # Legacy enable flags (for backward compatibility)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 
-        # Based on current configs, DDP and TP cannot be both enabled
-        assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
+        # Explicit axis configuration (takes precedence over enable flags)
+        self.tp_axis = device_config.get("tp_axis", None)
+        self.ddp_axis = device_config.get("ddp_axis", None)
+        self.cp_axis = device_config.get("cp_axis", None)
+
+        # Infer axes from enable flags if not explicitly set
+        # Mirrors C++ ParallelismContext axis assignment
+        enable_cp = self.cp_axis is not None
+        tp_enabled = self.enable_tp or self.tp_axis is not None
+        ddp_enabled = self.enable_ddp or self.ddp_axis is not None
+        cp_enabled = enable_cp
+        num_enabled = sum([tp_enabled, ddp_enabled, cp_enabled])
+
+        if num_enabled > 0:
+            is_line = len(self.mesh_shape) <= 1 or min(self.mesh_shape) == 1
+
+            if is_line:
+                assert num_enabled == 1, (
+                    f"For line mesh topology (shape {self.mesh_shape}), exactly one parallelism "
+                    f"type must be enabled. Got: ddp={ddp_enabled}, tp={tp_enabled}, cp={cp_enabled}"
+                )
+                # Find the non-trivial axis (size > 1)
+                active_axis = 0
+                for i, s in enumerate(self.mesh_shape):
+                    if s > 1:
+                        active_axis = i
+                        break
+                if ddp_enabled and self.ddp_axis is None:
+                    self.ddp_axis = active_axis
+                elif cp_enabled and self.cp_axis is None:
+                    self.cp_axis = active_axis
+                elif tp_enabled and self.tp_axis is None:
+                    self.tp_axis = active_axis
+            else:
+                assert num_enabled == len(self.mesh_shape), (
+                    f"For 2D mesh (shape {self.mesh_shape}), number of enabled parallelization "
+                    f"axes ({num_enabled}) must equal mesh dimensions ({len(self.mesh_shape)})."
+                )
+                # Axis assignment order: DP -> CP -> TP (same as C++)
+                axis = 0
+                if ddp_enabled and self.ddp_axis is None:
+                    self.ddp_axis = axis
+                    axis += 1
+                if cp_enabled and self.cp_axis is None:
+                    self.cp_axis = axis
+                    axis += 1
+                if tp_enabled and self.tp_axis is None:
+                    self.tp_axis = axis
+                    axis += 1
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.

@@ -4,33 +4,65 @@
 
 """Python module base inheriting from C++ ModuleBase with auto-registration."""
 
+import re
 from typing import Any, Iterable, Iterator, Optional, Union, overload
 from _ttml.modules import ModuleBase as CppModuleBase
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
+
+
+def _match_policy(path: str, tp_plan: Optional[dict]) -> Any:
+    """Return the Layout for the first matching pattern in tp_plan, or None."""
+    if tp_plan is None:
+        return None
+    for pattern, layout in tp_plan.items():
+        if re.search(pattern, path):
+            return layout
+    return None
 
 
 class AbstractModuleBase(CppModuleBase):
-    """Module base with PyTorch-like auto-registration via __setattr__."""
+    """Module base with PyTorch-like auto-registration via __setattr__.
+
+    Subclasses create ``TensorMetadata`` Parameters in their constructor
+    **before** calling ``super().__init__()``.  No materialization happens
+    here — use ``TransformerBase`` as the root to materialize the full tree.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         object.__setattr__(self, "_buffers", {})
         self.create_name(self.__class__.__name__)
 
+        # Retroactively register modules/params assigned before super().__init__().
+        for name, value in list(self.__dict__.items()):
+            if name.startswith("_"):
+                continue
+            if isinstance(value, CppModuleBase):
+                self._bind_module(value, name)
+            elif isinstance(value, Parameter) and not isinstance(value.tensor, TensorMetadata):
+                self._bind_parameter(value.tensor, name)
+            elif isinstance(value, Buffer):
+                self._bind_buffer(value.tensor, name)
+
+    # ------------------------------------------------------------------
+    # Attribute registration
+    # ------------------------------------------------------------------
+
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
 
-        # Skip if not initialized yet
+        # Skip if not initialized yet.
         if "_buffers" not in self.__dict__:
             return
 
-        # Auto-register modules and tensors
         if isinstance(value, CppModuleBase):
             self._bind_module(value, name)
             return
 
         if isinstance(value, Parameter):
-            self._bind_parameter(value.tensor, name)
+            # TensorMetadata Parameters are not bound to C++ until materialized.
+            if not isinstance(value.tensor, TensorMetadata):
+                self._bind_parameter(value.tensor, name)
             return
 
         if isinstance(value, Buffer):
@@ -43,6 +75,10 @@ class AbstractModuleBase(CppModuleBase):
     def __delattr__(self, name: str) -> None:
         self._buffers.pop(name, None)
         object.__delattr__(self, name)
+
+    # ------------------------------------------------------------------
+    # C++ registration helpers
+    # ------------------------------------------------------------------
 
     def _bind_module(self, module, name: str) -> None:
         """Register or override a child module by name."""
@@ -61,6 +97,10 @@ class AbstractModuleBase(CppModuleBase):
     def _bind_buffer(self, buffer, name: str) -> None:
         """Register a buffer by name."""
         self._buffers[name] = buffer
+
+    # ------------------------------------------------------------------
+    # Introspection helpers
+    # ------------------------------------------------------------------
 
     def named_parameters(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, parameter) pairs."""
@@ -109,9 +149,199 @@ class AbstractModuleBase(CppModuleBase):
         """Return state dictionary."""
         return {**dict(self.named_parameters()), **dict(self.named_buffers())}
 
+    def materialize(self, mesh_device=None, layout_map=None, on_device_init: bool = False) -> None:
+        """Materialize all TensorMetadata Parameters in this module tree.
+
+        Args:
+            mesh_device: Mesh device for distributed tensors (None for single device).
+            layout_map: Optional dict mapping full param paths (regex or exact)
+                to DistributedLayout. Matched via ``_match_policy``. None = default layout.
+            on_device_init: Generate tensors directly on device (skip numpy).
+        """
+        for prefix, module in self.named_modules():
+            if not isinstance(module, AbstractModuleBase):
+                continue
+            for name in list(vars(module)):
+                attr = getattr(module, name, None)
+                if isinstance(attr, Parameter) and isinstance(attr.tensor, TensorMetadata):
+                    full_path = f"{prefix}.{name}" if prefix else name
+                    layout = _match_policy(full_path, layout_map)
+                    metadata = attr.tensor
+                    tensor = metadata.init_fn(
+                        metadata.shape,
+                        layout=layout,
+                        mesh_device=mesh_device,
+                        on_device_init=on_device_init,
+                    )
+                    tensor.set_requires_grad(metadata.requires_grad)
+                    attr.tensor = tensor
+                    module._bind_parameter(tensor, name)
+
+    def parallelize(self, mesh_device, tp_axis: int, cp_axis: Optional[int] = None) -> None:
+        """Hook for modules to adjust themselves for tensor/context parallelism.
+
+        Override in subclasses that need TP/CP adjustments (e.g. head counts, rope).
+        Default is no-op.
+        """
+        pass
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke forward(). Subclasses implement forward()."""
-        return self.forward(*args, **kwargs)
+        from ttml.distributed.debug import dispatch_trace
+
+        if dispatch_trace.enabled:
+            name = getattr(self, "get_name", lambda: self.__class__.__name__)()
+            if callable(name):
+                name = name()
+            dispatch_trace.push_module(str(name))
+        result = self.forward(*args, **kwargs)
+        if dispatch_trace.enabled:
+            dispatch_trace.pop_module()
+        return result
+
+
+class ParallelizationPlan:
+    """Parallelization plan: style patterns + TP/CP axes.
+
+    Bundles a ``{pattern: ParallelStyle}`` dict with the mesh axes
+    so callers pass a single object to ``TransformerBase``.
+
+    Usage::
+
+        plan = ParallelizationPlan({
+            r".*\\.(q_linear|kv_linear)": ColwiseParallel(),
+            r".*\\.out_linear": RowwiseParallel(),
+        }, tp_axis=1, cp_axis=0)
+        model = Llama(config, mesh_device=mesh, parallelization_plan=plan)
+    """
+
+    __slots__ = ("styles", "tp_axis", "cp_axis")
+
+    def __init__(self, styles: dict, tp_axis: int = 0, cp_axis: int | None = None) -> None:
+        self.styles = styles
+        self.tp_axis = tp_axis
+        self.cp_axis = cp_axis
+
+    def resolve(self, mesh_device) -> dict:
+        """Convert styles to a ``{pattern: Layout}`` dict for materialization."""
+        resolved = {}
+        for pattern, style in self.styles.items():
+            for param_name, layout in style.get_layouts(mesh_device, self.tp_axis).items():
+                resolved[pattern + r"\." + param_name] = layout
+        return resolved
+
+    def __len__(self) -> int:
+        return len(self.styles)
+
+
+class TransformerBase(AbstractModuleBase):
+    """Root-level transformer base that materializes the full module tree.
+
+    Subclasses just create child modules in ``__init__`` — no
+    ``super().__init__()`` call needed.  ``mesh_device`` and ``parallelization_plan``
+    are popped from kwargs automatically, and ``__post_init__``
+    materializes every ``TensorMetadata`` Parameter after ``__init__``
+    returns.
+
+    Usage::
+
+        class Llama(TransformerBase):
+            def __init__(self, config):
+                self.fc = LinearLayer(...)
+    """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        if "__init__" in cls.__dict__:
+            import functools
+
+            orig = cls.__dict__["__init__"]
+
+            @functools.wraps(orig)
+            def wrapped(self, *args, _orig=orig, **kw):
+                mesh_device = kw.pop("mesh_device", None)
+                tp_plan = kw.pop("parallelization_plan", None)
+                on_device_init = kw.pop("on_device_init", False)
+                object.__setattr__(self, "_mesh_device", mesh_device)
+                object.__setattr__(self, "_parallelization_plan", tp_plan)
+                object.__setattr__(self, "_on_device_init", on_device_init)
+                _orig(self, *args, **kw)
+                if not hasattr(self, "_buffers"):
+                    AbstractModuleBase.__init__(self)
+                self._materialize_tree()
+                self._parallelize_modules()
+
+            cls.__init__ = wrapped
+
+    # ------------------------------------------------------------------
+    # Materialization
+    # ------------------------------------------------------------------
+
+    def _materialize_tree(self) -> None:
+        """Materialize the full module tree with layouts from the parallelization plan."""
+        resolved = (
+            self._parallelization_plan.resolve(self._mesh_device) if self._parallelization_plan is not None else None
+        )
+        self.materialize(
+            mesh_device=self._mesh_device,
+            layout_map=resolved,
+            on_device_init=self._on_device_init,
+        )
+
+    # ------------------------------------------------------------------
+    # Parallelization
+    # ------------------------------------------------------------------
+
+    def _parallelize_modules(self) -> None:
+        """Walk the module tree and apply parallelization after materialization."""
+        if self._parallelization_plan is None and self._mesh_device is None:
+            return
+
+        tp_plan = self._parallelization_plan
+        if tp_plan is None:
+            return
+
+        from ttml.distributed.style import ParallelStyle
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed._register_ops import init_ops
+
+        tp_axis = tp_plan.tp_axis
+        cp_axis = tp_plan.cp_axis
+        mesh_device = self._mesh_device
+
+        runtime = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, cp_axis=cp_axis)
+        init_ops()
+        set_runtime(runtime)
+
+        styles = tp_plan.styles
+
+        def _apply_recursive(module: AbstractModuleBase, prefix: str) -> None:
+            # Let the module adjust itself for TP/CP
+            module.parallelize(mesh_device, tp_axis, cp_axis)
+
+            # Match a style for forward hooks (broadcast/all_reduce)
+            style = _match_style(prefix, styles)
+            if style is not None:
+                style._apply(module, mesh_device, tp_axis)
+                return
+
+            for name, child in module.named_children():
+                if isinstance(child, AbstractModuleBase):
+                    child_prefix = f"{prefix}.{name}" if prefix else name
+                    _apply_recursive(child, child_prefix)
+
+        def _match_style(name: str, plan: dict) -> Optional[ParallelStyle]:
+            if name in plan:
+                return plan[name]
+            for pattern, style in plan.items():
+                try:
+                    if re.fullmatch(pattern, name):
+                        return style
+                except re.error:
+                    continue
+            return None
+
+        _apply_recursive(self, "")
 
 
 class ModuleList(AbstractModuleBase):
@@ -132,13 +362,12 @@ class ModuleList(AbstractModuleBase):
                 return x
     """
 
-    def __init__(self, modules: Optional[Iterable[CppModuleBase]] = None) -> None:
-        """Initialize ModuleList.
-
-        Args:
-            modules: Optional iterable of modules to add.
-        """
-        super().__init__()
+    def __init__(
+        self,
+        modules: Optional[Iterable[CppModuleBase]] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
         self._modules_list: list[CppModuleBase] = []
         if modules is not None:
             for module in modules:
@@ -326,13 +555,9 @@ class ModuleDict(AbstractModuleBase):
     def __init__(
         self,
         modules: Optional[Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]] = None,
+        **kwargs,
     ) -> None:
-        """Initialize ModuleDict.
-
-        Args:
-            modules: Optional dict or iterable of (name, module) pairs.
-        """
-        super().__init__()
+        super().__init__(**kwargs)
         self._modules_dict: dict[str, CppModuleBase] = {}
         if modules is not None:
             if isinstance(modules, dict):

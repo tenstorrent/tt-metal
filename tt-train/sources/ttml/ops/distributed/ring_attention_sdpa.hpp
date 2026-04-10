@@ -17,7 +17,7 @@ namespace ttml::ops::distributed {
  * Each device holds a chunk of Q, K, V and collaboratively computes attention over
  * the full sequence using ring communication.
  *
- * If CP is not enabled in ParallelismContext, falls back to regular SDPA.
+ * If CP is not enabled (neither explicit cp_axis nor ParallelismContext), falls back to regular SDPA.
  *
  * Algorithm:
  *   For each device holding Q_local, K_local, V_local:
@@ -34,12 +34,14 @@ namespace ttml::ops::distributed {
  *             where S_full = S_local * cp_size. Each device's mask contains
  *             attention values for its Q chunk attending to ALL K positions.
  *             Rolled per-device using ParallelismContext::get_cp_rank_tensor().
-               TODO: Custom mask is not currently supported!!!
+              TODO: Custom mask is not currently supported!!!
  * @param mask_type The type of mask to use.
  *             Each device only computes attention for valid chunks:
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param cp_axis Optional explicit CP axis. If provided, uses this axis for ring communication.
+ *                If not provided, falls back to ParallelismContext.
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,6 +52,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    std::optional<uint32_t> cp_axis = std::nullopt);
 
 }  // namespace ttml::ops::distributed
