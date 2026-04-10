@@ -618,12 +618,22 @@ _DPT_HEAD_CACHE: dict = {}
 
 
 def dpt_head(feats_list, hw, state: dict, branch: int, device):
-    """DPT head — host-torch fallback in bfloat16 for speed. Module cached."""
+    """DPT head — host-torch fallback in bfloat16 + torch.compile for speed."""
     from reference.torch_dust3r import load_dpt_head
-    key = (id(state), branch, "bf16")
+    key = (id(state), branch, "bf16c", hw)
     head = _DPT_HEAD_CACHE.get(key)
     if head is None:
-        head = load_dpt_head(state, branch=branch).to(torch.bfloat16)
+        base = load_dpt_head(state, branch=branch).to(torch.bfloat16).eval()
+        try:
+            compiled = torch.compile(base, mode="reduce-overhead", dynamic=False)
+            # Warm up compilation with dummy input matching shape.
+            with torch.no_grad():
+                dummy = [f.to(torch.bfloat16) for f in feats_list]
+                compiled(dummy, hw)
+                compiled(dummy, hw)
+            head = compiled
+        except Exception:
+            head = base
         _DPT_HEAD_CACHE[key] = head
     feats_bf16 = [f.to(torch.bfloat16) for f in feats_list]
     with torch.no_grad():
