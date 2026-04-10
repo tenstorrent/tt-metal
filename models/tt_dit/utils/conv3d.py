@@ -134,28 +134,57 @@ _BLOCKINGS = {
     #   stage 3 (cur_T=64): T_res=66
     # Needs sweep to fill in blocking values.
     # ===================================================================
+    # ===================================================================
+    # BH Galaxy 6U 4x32, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
+    # BH (4,32): tp_axis=1, sp_axis=0 → h_factor=4, w_factor=32
+    # Per-device (unpadded): lat(23,5) mid(46,10) hi(92,20) full(184,40)
+    # Padded (int_pad=(0,1,1)): lat(25,7) mid(48,12) hi(94,22) full(186,42)
+    # Cached T: stage0(T_res=18,T_tconv=18,T_sp=32) stage1(34,34,64) stage2/3(66,_,64)
+    # Swept 2026-04-10 on 1x1 mesh; results in sweep_results_h4w32_720p_t16/.
+    # T=3-4 wins for large stages; T=2-3 for small stages. T=5+ hangs on device.
+    # Layers marked partial were killed before full completion — best observed.
+    # ===================================================================
+    # Stage 0 (cur_T=16)
+    (4, 32, 32, 384, (3, 3, 3), 18, 23, 5): (32, 64, 3, 8, 4),  # conv_in — 174us
+    (4, 32, 384, 384, (3, 3, 3), 18, 23, 5): (96, 96, 2, 8, 4),  # lat_mid_res — 575us
+    (4, 32, 384, 768, (3, 1, 1), 18, 23, 5): (192, 256, 1, 8, 4),  # up0_tconv — 257us partial
+    (4, 32, 384, 192, (1, 3, 3), 32, 46, 10): (192, 96, 1, 16, 2),  # up0_spatial — 484us
+    # Stage 1 (cur_T=32)
+    (4, 32, 192, 384, (3, 3, 3), 34, 46, 10): (96, 128, 2, 16, 2),  # up1_res0 — 1055us
+    (4, 32, 384, 384, (3, 3, 3), 34, 46, 10): (96, 96, 4, 16, 2),  # up1_res — 1773us
+    (4, 32, 384, 768, (3, 1, 1), 34, 46, 10): (384, 128, 4, 8, 4),  # up1_tconv — 669us partial
+    (4, 32, 384, 192, (1, 3, 3), 64, 92, 20): (192, 96, 1, 8, 4),  # up1_spatial — 2086us table
+    # Stage 2 (cur_T=64, no temporal upsample)
+    (4, 32, 192, 192, (3, 3, 3), 66, 92, 20): (96, 96, 4, 16, 2),  # up2_res — 3091us
+    (4, 32, 192, 96, (1, 3, 3), 64, 184, 40): (192, 96, 1, 8, 4),  # up2_spatial — 1934us table
+    # Stage 3 (cur_T=64, no temporal upsample)
+    (4, 32, 96, 96, (3, 3, 3), 66, 184, 40): (96, 96, 4, 8, 4),  # up3_res — 3070us
+    (4, 32, 96, 3, (3, 3, 3), 66, 184, 40): (96, 32, 3, 16, 2),  # conv_out — 2459us
+    # ===================================================================
     # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7)
     # BH (2,4): tp_axis=0, sp_axis=1 → h_factor=2, w_factor=4
     # Per-device: lat(30,26) mid(60,52) hi(120,104) full(240,208)
     # Cached T: cur_T grows 7 → 14 → 28 across stages
-    # TODO: blockings are _DEFAULT_BLOCKINGS placeholders — sweep needed
+    # Swept 2026-04-10 on BH Loud Box 2x4; results stored in sweep_results_h2w4_480p_t7/
+    # Note: lat_mid_res, up0_tconv, up1_res0/res, up2_res, up3_res, conv_out are
+    # partial sweeps (device hangs after first T>1 combos — see CONV3D_BLOCKING_SWEEP_BH2X4_480P.md).
     # ===================================================================
     # Stage 0 (cur_T=7): T_res=9, T_tconv=9, T_spatial=14
-    (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 96, 1, 2, 32),  # conv_in
-    (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 8, 4),  # lat_res+mid_res
-    (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (96, 96, 1, 8, 4),  # up0_tconv
-    (2, 4, 384, 192, (1, 3, 3), 14, 60, 52): (192, 96, 1, 32, 4),  # up0_spatial
+    (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 128, 7, 2, 2),  # conv_in — swept 244us
+    (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res — partial 1009us
+    (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (192, 256, 1, 16, 2),  # up0_tconv — partial 417us
+    (2, 4, 384, 192, (1, 3, 3), 14, 60, 52): (192, 96, 1, 32, 4),  # up0_spatial — table wins 1034us
     # Stage 1 (cur_T=14): T_res=16, T_tconv=16, T_spatial=28
-    (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (64, 128, 1, 8, 4),  # up1_res0
-    (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 1, 8, 4),  # up1_res
-    (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (96, 96, 1, 8, 4),  # up1_tconv
-    (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (192, 96, 1, 32, 4),  # up1_spatial
+    (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res0 — partial 2446us
+    (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res — inferred from up1_res0
+    (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (192, 768, 1, 8, 4),  # up1_tconv — swept 1442us
+    (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (384, 96, 1, 4, 8),  # up1_spatial — swept 6809us
     # Stage 2 (cur_T=28): T_res=30, T_spatial=28 (no temporal upsample)
-    (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 1, 8, 4),  # up2_res
-    (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 8),  # up2_spatial
+    (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 7, 4, 8),  # up2_res — swept 9400us
+    (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial — swept 6509us
     # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
-    (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 1, 8, 8),  # up3_res
-    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 1, 16, 8),  # conv_out
+    (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res — swept 9364us
+    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
