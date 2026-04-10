@@ -1198,6 +1198,71 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
+    def line_all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight_tensor,
+        dim,
+        cluster_axis,
+        memory_config,
+        matmul_config,
+        compute_kernel_config,
+        dtype=ttnn.bfloat8_b,
+    ):
+        """
+        Fused AllGather + MatMul for prefill using all_gather_minimal_matmul_async.
+
+        """
+        topology = ttnn.Topology.Ring
+        force_transpose = True
+
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+
+        grid_size = matmul_config.compute_with_storage_grid_size
+        if hasattr(grid_size, "x"):
+            core_grid = ttnn.CoreCoord(grid_size.x, grid_size.y)
+        else:
+            core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+
+        div_axis = core_grid.x if force_transpose else core_grid.y
+        num_links = 1
+        for nl in [4, 3, 2, 1]:
+            if div_axis % nl == 0:
+                num_links = nl
+                break
+
+        max_workers_total = core_grid.x if force_transpose else core_grid.y
+        num_workers_per_link = max(1, min(8 // num_links, max_workers_total // num_links))
+
+        sem_current = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+        sem_next = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
+        if isinstance(sem_current, list):
+            semaphores = sem_current + sem_next
+        else:
+            semaphores = [sem_current, sem_next]
+
+        output = ttnn.experimental.all_gather_minimal_matmul_async(
+            input_tensor=input_tensor_mesh,
+            weight_tensor=weight_tensor,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config,
+            multi_device_global_semaphore=semaphores,
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            dtype=dtype,
+            force_transpose=force_transpose,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=8,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return output[0]
+
     def all_gather_concat(
         self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False
     ):
