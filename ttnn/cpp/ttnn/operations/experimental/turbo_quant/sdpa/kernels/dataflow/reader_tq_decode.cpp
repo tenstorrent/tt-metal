@@ -147,7 +147,7 @@ void kernel_main() {
                     k_idx_tile_bytes,
                     barrier_threshold,
                     page_table_ptr,
-                    true  // transpose=true for K reads
+                    false  // NOT transposed — matmul_blocks handles transpose
                 );
 
                 // ── K norms: contiguous read, NOT transposed ──
