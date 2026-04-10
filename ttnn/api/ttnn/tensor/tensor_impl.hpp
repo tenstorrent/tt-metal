@@ -94,13 +94,10 @@ MeshTensor allocate_mesh_tensor(
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
+Tensor to_host(distributed::MeshCommandQueue& cq, const Tensor& tensor, bool blocking = true);
 
 void copy_to_host(
-    const Tensor& device_tensor,
-    Tensor& host_tensor,
-    bool blocking = true,
-    std::optional<QueueId> cq_id = std::nullopt);
+    distributed::MeshCommandQueue& cq, const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
@@ -110,12 +107,12 @@ void copy_to_host(
     bool blocking = true);
 
 Tensor to_device(
+    distributed::MeshCommandQueue& cq,
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    std::optional<QueueId> cq_id = std::nullopt);
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+void copy_to_device(distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor);
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
