@@ -21,7 +21,7 @@ import signal
 import torch
 import ttnn
 
-_TIMEOUT_SECONDS = 60
+_TIMEOUT_SECONDS = 10
 
 
 def _timeout_handler(signum, frame):
