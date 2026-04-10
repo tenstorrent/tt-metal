@@ -63,10 +63,10 @@ class CCLManager:
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
-    """All-reduce that works on both N300 (TP=2) and T3K (TP=8).
+    """All-reduce using async reduce_scatter + all_gather with semaphores.
 
-    N300 (TP<=2): uses simple ttnn.all_reduce.
-    T3K (TP>2):  uses reduce_scatter + all_gather with async semaphores.
+    Works on both N300 (TP=2) and T3K (TP=8). The simple ttnn.all_reduce
+    hangs on some configurations, so we always use the async decomposition.
     """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
@@ -74,77 +74,53 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
 
-    if ccl_manager is not None and ccl_manager.num_devices > 2:
-        # T3K path: decompose into reduce_scatter + all_gather
-        scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            tensor,
-            dim=3,
-            cluster_axis=tp_axis,
-            num_links=ccl_manager.num_links,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            memory_config=memory_config,
-        )
-        tensor.deallocate(True)
-        gathered = ttnn.experimental.all_gather_async(
-            scattered,
-            dim=3,
-            cluster_axis=tp_axis,
-            mesh_device=ccl_manager.mesh_device,
-            num_links=ccl_manager.num_links,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            memory_config=memory_config,
-        )
-        scattered.deallocate(True)
-        return gathered
-    else:
-        # N300 path: simple all_reduce
-        result = ttnn.all_reduce(
-            tensor,
-            cluster_axis=tp_axis,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-            memory_config=memory_config,
-        )
-        tensor.deallocate(True)
-        return result
+    scattered = ttnn.experimental.reduce_scatter_minimal_async(
+        tensor,
+        dim=3,
+        cluster_axis=tp_axis,
+        num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
+        multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        memory_config=memory_config,
+    )
+    tensor.deallocate(True)
+    gathered = ttnn.experimental.all_gather_async(
+        scattered,
+        dim=3,
+        cluster_axis=tp_axis,
+        mesh_device=ccl_manager.mesh_device,
+        num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
+        multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        memory_config=memory_config,
+    )
+    scattered.deallocate(True)
+    return gathered
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
-    """All-gather along dim, works on both N300 and T3K."""
+    """All-gather using async all_gather with semaphores.
+
+    Works on both N300 and T3K.
+    """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
 
-    if ccl_manager is not None and ccl_manager.num_devices > 2:
-        # T3K path: async all_gather with semaphores
-        gathered = ttnn.experimental.all_gather_async(
-            tensor,
-            dim=dim,
-            cluster_axis=tp_axis,
-            mesh_device=ccl_manager.mesh_device,
-            num_links=ccl_manager.num_links,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            memory_config=memory_config,
-        )
-        tensor.deallocate(True)
-        return gathered
-    else:
-        # N300 path: simple all_gather
-        gathered = ttnn.all_gather(
-            tensor,
-            dim=dim,
-            cluster_axis=tp_axis,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-            memory_config=memory_config,
-        )
-        tensor.deallocate(True)
-        return gathered
+    gathered = ttnn.experimental.all_gather_async(
+        tensor,
+        dim=dim,
+        cluster_axis=tp_axis,
+        mesh_device=ccl_manager.mesh_device,
+        num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
+        multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        memory_config=memory_config,
+    )
+    tensor.deallocate(True)
+    return gathered
