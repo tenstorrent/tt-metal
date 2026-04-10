@@ -19,7 +19,16 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+    determine_device_name,
+    parse_decoder_json,
+)
 
 
 def get_accuracy_thresholds(model_args, optimizations):
@@ -90,6 +99,34 @@ def create_tt_model(
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+
+    if paged_attention_config and tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+        # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
+        tt_model_args.force_fixed_decode_k_chunk = True
+        if getattr(tt_model_args.optimizations, "__name__", None) == "performance":
+            gemma_text_perf = ModelOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                        TensorGroup.WQKV: PrecisionSetting.BF16,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                        TensorGroup.WO: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                    },
+                }
+            )
+            gemma_text_perf.__name__ = "performance"
+            for decoder_id in range(tt_model_args.n_layers):
+                tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
+            tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
