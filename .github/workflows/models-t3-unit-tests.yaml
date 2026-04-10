@@ -2,7 +2,7 @@ name: "[Tier 3] Models Unit Tests"
 
 on:
   schedule:
-    # 2 times a day — all models, all SKUs
+    # Twice a day at 06:00 and 18:00 UTC — all models, all SKUs
     - cron: "0 6,18 * * *"
   workflow_dispatch:
     inputs:
