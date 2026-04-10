@@ -146,3 +146,48 @@ def encoder_block(
 
     tt_out = ttnn.add(tt_x, tt_m)
     return ttnn.to_torch(tt_out)
+
+
+def full_encoder(
+    img: torch.Tensor,
+    state: dict,
+    device,
+    depth: int = 24,
+) -> torch.Tensor:
+    """Full encoder: patch_embed -> 24 encoder blocks -> enc_norm.
+
+    img: (B, 3, H, W) torch. Returns (B, N, 1024) torch on host.
+    """
+    # Patch embed on device.
+    x = patch_embed(img, state["patch_embed.proj.weight"], state["patch_embed.proj.bias"], device)
+    B, C, H, W = img.shape
+    hp, wp = H // 16, W // 16
+    # Make positions matching reference (row-major y then x).
+    ys = torch.arange(hp)
+    xs = torch.arange(wp)
+    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
+    pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
+
+    for i in range(depth):
+        w = {
+            "norm1.weight": state[f"enc_blocks.{i}.norm1.weight"],
+            "norm1.bias": state[f"enc_blocks.{i}.norm1.bias"],
+            "norm2.weight": state[f"enc_blocks.{i}.norm2.weight"],
+            "norm2.bias": state[f"enc_blocks.{i}.norm2.bias"],
+            "attn.qkv.weight": state[f"enc_blocks.{i}.attn.qkv.weight"],
+            "attn.qkv.bias": state[f"enc_blocks.{i}.attn.qkv.bias"],
+            "attn.proj.weight": state[f"enc_blocks.{i}.attn.proj.weight"],
+            "attn.proj.bias": state[f"enc_blocks.{i}.attn.proj.bias"],
+            "mlp.fc1.weight": state[f"enc_blocks.{i}.mlp.fc1.weight"],
+            "mlp.fc1.bias": state[f"enc_blocks.{i}.mlp.fc1.bias"],
+            "mlp.fc2.weight": state[f"enc_blocks.{i}.mlp.fc2.weight"],
+            "mlp.fc2.bias": state[f"enc_blocks.{i}.mlp.fc2.bias"],
+        }
+        x = encoder_block(x, pos, w, device)
+
+    # Final enc_norm on device.
+    tt_x = _t2d(x, device)
+    g = _t2d(state["enc_norm.weight"].reshape(1, 1, -1), device)
+    b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
+    tt_x = ttnn.layer_norm(tt_x, weight=g, bias=b, epsilon=1e-6)
+    return ttnn.to_torch(tt_x)
