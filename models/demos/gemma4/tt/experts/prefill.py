@@ -11,10 +11,7 @@ For prefill (seq_len > 1), the sequence is reshaped into tile-sized groups:
   [1, 1, seq_len, H] -> [1, seq_len/32, 32, H]
 """
 
-import time
-
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
@@ -78,13 +75,6 @@ def prefill_forward(
     num_experts = config.num_experts
     intermediate_size = weights.intermediate_size_per_device
     hidden_size = config.hidden_size
-    tp = mesh_config.tp if mesh_config else 1
-
-    logger.info(
-        f"[prefill_experts] START seq_len={seq_len} num_experts={num_experts} "
-        f"intermediate_per_device={intermediate_size} hidden={hidden_size} tp={tp}"
-    )
-    t0 = time.perf_counter()
 
     assert seq_len % TILE_SIZE == 0, f"Prefill seq_len must be multiple of {TILE_SIZE}, got {seq_len}"
     group_size = seq_len // TILE_SIZE
@@ -103,8 +93,6 @@ def prefill_forward(
     down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
 
     # Gate projection
-    logger.info(f"[prefill_experts] sparse_matmul GATE: nnz={nnz}")
-    t1 = time.perf_counter()
     gate = ttnn.sparse_matmul(
         hidden_grouped,
         weights.gate_proj,
@@ -121,8 +109,6 @@ def prefill_forward(
     gate = ttnn.reshape(gate, (1, num_experts, seq_len, sm_intermediate))
 
     # Up projection
-    logger.info(f"[prefill_experts] sparse_matmul UP: nnz={nnz}")
-    t1 = time.perf_counter()
     up = ttnn.sparse_matmul(
         hidden_grouped,
         weights.up_proj,
@@ -138,14 +124,10 @@ def prefill_forward(
     up = ttnn.reshape(up, (1, num_experts, seq_len, sm_intermediate))
 
     # GeGLU activation
-    t1 = time.perf_counter()
     down_input = apply_geglu(gate, up)
     down_input = ttnn.reshape(down_input, (1, num_experts, seq_len, sm_intermediate))
-    logger.info(f"[prefill_experts] GeGLU done in {time.perf_counter()-t1:.3f}s")
 
     # Down projection — all experts, using base sparsity (not repeated)
-    logger.info(f"[prefill_experts] sparse_matmul DOWN: nnz={num_experts}")
-    t1 = time.perf_counter()
     down = ttnn.sparse_matmul(
         down_input,
         weights.down_proj,
@@ -157,7 +139,6 @@ def prefill_forward(
         is_input_a_sparse=True,
         dtype=ttnn.bfloat16,
     )
-    logger.info(f"[prefill_experts] DOWN done in {time.perf_counter()-t1:.3f}s, output={down.shape}")
     down_input.deallocate(True)
 
     # Reshape to [1, E, S, H]
@@ -165,21 +146,15 @@ def prefill_forward(
 
     # Apply routing weights to select active experts (gpt_oss pattern)
     # routing_weights: [1, 1, S, E] -> [1, E, S, 1] for broadcast mul
-    t1 = time.perf_counter()
     routing_permuted = ttnn.permute(routing_weights, (0, 3, 2, 1))  # [1, E, S, 1]
     next_states = ttnn.mul(next_states, routing_permuted)
 
     # Reduce across experts dimension using fast_reduce_nc (gpt_oss pattern)
     next_states = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
     next_states = ttnn.reshape(next_states, (1, 1, seq_len, hidden_size))
-    logger.info(f"[prefill_experts] routing + reduce done in {time.perf_counter()-t1:.3f}s")
 
     # All-reduce after row-parallel down_proj
     if mesh_config is not None and mesh_config.tp > 1:
-        logger.info(f"[prefill_experts] all_reduce: shape={next_states.shape}")
-        t1 = time.perf_counter()
         next_states = ccl_allreduce(next_states, mesh_config, ccl_manager)
-        logger.info(f"[prefill_experts] all_reduce done in {time.perf_counter()-t1:.3f}s")
 
-    logger.info(f"[prefill_experts] DONE total={time.perf_counter()-t0:.3f}s")
     return next_states

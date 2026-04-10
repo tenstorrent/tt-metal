@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import time
-
-from loguru import logger
-
 import ttnn
 
 
@@ -47,11 +43,6 @@ class CCLManager:
         self._ag_idx = 0
         self._barrier_idx = 0
 
-        logger.info(
-            f"CCLManager: {self.num_devices} devices, num_links={self.num_links}, "
-            f"topology={topology}, semaphores created"
-        )
-
     def get_rs_semaphore(self):
         """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
         sems = self._rs_semaphores[self._rs_idx]
@@ -85,13 +76,6 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
     if ccl_manager is not None and ccl_manager.num_devices > 2:
         # T3K path: decompose into reduce_scatter + all_gather
-        logger.info(
-            f"[ccl_allreduce] T3K path: reduce_scatter+all_gather, "
-            f"shape={tensor.shape} dim=3 axis={tp_axis} "
-            f"num_links={ccl_manager.num_links} topology={ccl_manager.topology}"
-        )
-
-        t0 = time.perf_counter()
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             dim=3,
@@ -102,10 +86,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
             memory_config=memory_config,
         )
-        logger.info(f"[ccl_allreduce] reduce_scatter done in {time.perf_counter()-t0:.3f}s, shape={scattered.shape}")
         tensor.deallocate(True)
-
-        t0 = time.perf_counter()
         gathered = ttnn.experimental.all_gather_async(
             scattered,
             dim=3,
@@ -117,12 +98,10 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
             memory_config=memory_config,
         )
-        logger.info(f"[ccl_allreduce] all_gather done in {time.perf_counter()-t0:.3f}s, shape={gathered.shape}")
         scattered.deallocate(True)
         return gathered
     else:
         # N300 path: simple all_reduce
-        logger.info(f"[ccl_allreduce] N300 path: ttnn.all_reduce, shape={tensor.shape} axis={tp_axis}")
         result = ttnn.all_reduce(
             tensor,
             cluster_axis=tp_axis,

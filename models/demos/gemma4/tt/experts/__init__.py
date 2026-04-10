@@ -12,7 +12,6 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from loguru import logger
 
 from .decode import decode_forward
 from .prefill import create_prefill_sparsity, prefill_forward
@@ -82,17 +81,11 @@ class Gemma4Experts:
             output: [1, 1, seq_len, hidden_size] on device
         """
         seq_len = hidden_states.shape[2]
-        tp = self.mesh_config.tp if self.mesh_config else 1
 
         if self.weights is None:
-            logger.info(f"[experts] seq_len={seq_len} → CPU forward (no device weights)")
             return self._cpu_forward(hidden_states, dense_routing)
 
         if seq_len == 1:
-            logger.info(
-                f"[experts] seq_len=1 → decode_forward (tp={tp}, "
-                f"intermediate_per_device={self.weights.intermediate_size_per_device})"
-            )
             return decode_forward(
                 hidden_states=hidden_states,
                 routing_weights=dense_routing,
@@ -106,10 +99,6 @@ class Gemma4Experts:
             # Prefill: on-device via sparse_matmul with all-ones sparsity (gpt_oss pattern).
             # All experts are computed, routing weights select active ones afterward.
             if seq_len % 32 == 0:
-                logger.info(
-                    f"[experts] seq_len={seq_len} → prefill_forward (tp={tp}, "
-                    f"intermediate_per_device={self.weights.intermediate_size_per_device})"
-                )
                 return prefill_forward(
                     hidden_states=hidden_states,
                     routing_weights=dense_routing,
@@ -121,7 +110,6 @@ class Gemma4Experts:
                     ccl_manager=self.ccl_manager,
                 )
             else:
-                logger.info(f"[experts] seq_len={seq_len} → CPU forward (not tile-aligned)")
                 return self._cpu_forward(hidden_states, dense_routing)
 
     def _cpu_forward(self, hidden_states, dense_routing):
