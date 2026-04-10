@@ -288,7 +288,7 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_);
@@ -431,7 +431,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // (e.g. after a code change that modifies HAL output), the hash changes and cached
     // objects are invalidated, preventing stale binaries from being reused.
     {
-        tt::FNV1a hasher;
+        tt::StableHasher hasher;
         hasher.update(env_.gpp_);
         hasher.update(cflags_);
         hasher.update(defines_);

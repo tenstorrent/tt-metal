@@ -67,7 +67,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     char buf[65536];
     for (;;) {
         file.read(buf, sizeof(buf));
