@@ -88,10 +88,10 @@ Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(std::make_shared<TensorAttributes>(HostStorage(std::move(tensor)))) {}
 
-Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+Tensor::Tensor(MeshTensor tensor) : Tensor::Tensor(DeviceStorage(std::move(tensor))) {}
+
+Tensor::Tensor(DeviceStorage storage) :
+    tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {
     // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
     // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
     // buffer is deallocated. This prevents nullptr device propagation when operations
@@ -403,7 +403,7 @@ bool Tensor::is_allocated() const {
             [](const DeviceStorage& storage) { return storage.is_allocated(); },
             [](const HostStorage&) { return true; },
         },
-        this->storage());
+        tensor_attributes->get_storage());
     return output;
 }
 
@@ -413,7 +413,7 @@ StorageType Tensor::storage_type() const {
             [](const HostStorage&) { return StorageType::HOST; },
             [](const DeviceStorage&) { return StorageType::DEVICE; },
         },
-        this->storage());
+        tensor_attributes->get_storage());
 }
 
 tt::tt_metal::Shape Tensor::strides() const {
@@ -512,8 +512,6 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
-
 const tt::tt_metal::Shape& Tensor::logical_shape() const {
     return this->tensor_attributes->get_tensor_spec().logical_shape();
 }
@@ -531,21 +529,39 @@ const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
 const DeviceStorage& Tensor::device_storage() const& {
-    const auto* device_storage = std::get_if<DeviceStorage>(&this->storage());
+    const auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
+    return *device_storage;
+}
+
+DeviceStorage& Tensor::device_storage() & {
+    auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
     TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
     return *device_storage;
 }
 
 const HostStorage& Tensor::host_storage() const& {
-    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    const auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return *host_storage;
+}
+
+HostStorage& Tensor::host_storage() & {
+    auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
 }
 
 const HostTensor& Tensor::host_tensor() const& {
-    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    const auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return host_storage->host_tensor();
+}
+
+const MeshTensor& Tensor::mesh_tensor() const& {
+    const auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
+    return mesh_storage->get_mesh_tensor();
 }
 
 distributed::MeshDevice* Tensor::device() const {
