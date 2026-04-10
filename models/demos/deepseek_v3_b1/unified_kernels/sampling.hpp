@@ -163,6 +163,7 @@ uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
+#include "api/debug/dprint_tensix.h"
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "api/compute/compute_kernel_api.h"
@@ -317,6 +318,7 @@ void softmax_mul_block_bcast_scalar() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, 0, 0, 0);
+        dprint_tensix_dest_reg(0);
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
@@ -465,6 +467,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
+    PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
     release_dst();
 
@@ -558,6 +561,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
+    PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
     release_dst();
 
