@@ -34,7 +34,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.fixture
@@ -85,11 +85,29 @@ def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_softmax_5d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.999,
+        rtol=0.025,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
+    )
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_softmax_5d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.999,
+        rtol=0.025,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
+    )
 
     assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
@@ -101,11 +119,25 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.99)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.997,
+        rtol=0.060,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.99)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.997,
+        rtol=0.060,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
@@ -122,10 +154,28 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
     shape = [1, 1, 2, 32, 64]
 
     torch_ref1, tt_out1 = run_softmax_5d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.999,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.007,
+        ulp_threshold=6,
+        check_ulp=True,
+    )
 
     torch_ref2, tt_out2 = run_softmax_5d(device, shape, dim=-2, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.999,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.007,
+        ulp_threshold=6,
+        check_ulp=True,
+    )
 
     assert device.cache_entries_counter.total == 2
 
@@ -137,11 +187,29 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
 
     # 5D: general W factory
     torch_ref1, tt_out1 = run_softmax_5d(device, shape_5d, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.99)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.995,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
+    )
 
     # 4D last dim: attention optimized factory
     torch_ref2, tt_out2 = run_softmax_4d(device, shape_4d, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.99)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.995,
+        rtol=0.053,
+        atol=0.002,
+        frobenius_threshold=0.020,
+        ulp_threshold=11,
+        check_ulp=True,
+    )
 
     assert device.cache_entries_counter.total == 2
 
@@ -151,10 +219,26 @@ def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.99)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.992,
+        rtol=0.055,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
+    )
 
     torch_ref2, tt_out2 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.99)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.992,
+        rtol=0.044,
+        atol=0.001,
+        frobenius_threshold=0.019,
+    )
 
     assert device.cache_entries_counter.total == 2
 
@@ -166,12 +250,26 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
     torch_ref1, tt_out1 = run_softmax_4d(
         device, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref1, tt_out1, 0.99)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.992,
+        rtol=0.058,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     torch_ref2, tt_out2 = run_softmax_4d(
         device, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref2, tt_out2, 0.99)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.992,
+        rtol=0.058,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     assert device.cache_entries_counter.total == 2
 
@@ -180,10 +278,24 @@ def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
     """Different logical shapes -> different cache entries.
     logical_shape is in compute_program_hash() determining Wt, Ht, work distribution."""
     torch_ref1, tt_out1 = run_softmax_4d(device, [1, 1, 32, 64], dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.99)
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.991,
+        rtol=0.059,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     torch_ref2, tt_out2 = run_softmax_4d(device, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.99)
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.991,
+        rtol=0.059,
+        atol=0.002,
+        frobenius_threshold=0.021,
+    )
 
     assert device.cache_entries_counter.total == 2
 
@@ -214,7 +326,16 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     tt_mask_bf16 = ttnn.from_torch(torch_mask_bf16, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.scale_mask_softmax(tt_a, scale=None, mask=tt_mask_bf16)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out1), 0.99)
+    assert_numeric_metrics(
+        F.softmax(torch_a, dim=-1),
+        ttnn.to_torch(tt_out1),
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
+    )
 
     # Second call: mask in float32 (different dtype)
     torch_mask_fp32 = torch.zeros(mask_shape, dtype=torch.float32)
@@ -222,8 +343,16 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     tt_mask_fp32 = ttnn.from_torch(torch_mask_fp32, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_fp32)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.99)
-
+    assert_numeric_metrics(
+        F.softmax(torch_a, dim=-1),
+        ttnn.to_torch(tt_out2),
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
+    )
     assert device.cache_entries_counter.total == 2
 
 
@@ -251,8 +380,14 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     )
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.scale_mask_softmax(tt_a, scale=None, mask=tt_mask_dram)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out1), 0.99)
-
+    assert_numeric_metrics(
+        F.softmax(torch_a, dim=-1),
+        ttnn.to_torch(tt_out1),
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.020,
+    )
     # Second call: mask in L1 (different memory config)
     tt_a2 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     tt_mask_l1 = ttnn.from_torch(
@@ -260,8 +395,14 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     )
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_l1)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.99)
-
+    assert_numeric_metrics(
+        F.softmax(torch_a, dim=-1),
+        ttnn.to_torch(tt_out2),
+        pcc_threshold=0.994,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.020,
+    )
     assert device.cache_entries_counter.total == 2
 
 
