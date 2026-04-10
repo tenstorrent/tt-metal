@@ -71,10 +71,19 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     uint32_t bf16_tile_size = tile_size(bf16_df);
     uint32_t im_tile_size = tile_size(im_df);
 
-    // ── Work distribution: single core for MVP (TODO: multi-core) ──
-    uint32_t num_cores = 1;
-    uint32_t num_cores_y = 1;
-    CoreRangeSet all_cores({CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))});
+    // ── Work distribution: batch × heads across compute grid ──
+    auto grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores = grid_size.x * grid_size.y;
+    uint32_t num_cores_y = grid_size.y;
+    CoreRangeSet all_cores({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
+
+    // For decode: q_num_chunks=1, so parallelize over batch × heads only
+    uint32_t total_work = B * NQH;
+    uint32_t active_cores = std::min(num_cores, total_work);
+    uint32_t batch_parallel_factor = std::min(B, active_cores);
+    uint32_t nh_parallel_factor = std::min(active_cores / batch_parallel_factor, NQH);
+    uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
+    uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
 
     // ── Circular Buffers ──
     // Standard SDPA CBs
@@ -307,14 +316,18 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
-    // ── Runtime args ──
+    // ── Runtime args: distribute batch × heads across cores ──
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        // Single-core: process all (batch, head) pairs
-        uint32_t batch_start = 0;
-        uint32_t head_start = 0;
-        uint32_t batch_end = B;
-        uint32_t head_end = NQH;
+        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+        uint32_t batch_start = (i / nh_parallel_factor) * batch_per_core;
+        uint32_t batch_end = std::min(batch_start + batch_per_core, B);
+        uint32_t head_start = (i % nh_parallel_factor) * nh_per_core;
+        uint32_t head_end = std::min(head_start + nh_per_core, NQH);
+
+        // Clamp: cores beyond active_cores get empty ranges
+        batch_start = std::min(batch_start, B);
+        head_start = std::min(head_start, NQH);
 
         SetRuntimeArgs(
             program,
@@ -328,7 +341,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 v_norms.buffer()->address(),
                 i,  // core_id
                 batch_start,
-                std::min(batch_end, B),
+                batch_end,
                 head_start,
                 head_end,
             });
@@ -340,7 +353,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             {
                 i,  // core_id
                 batch_start,
-                std::min(batch_end, B),
+                batch_end,
                 head_start,
                 head_end,
                 (uint32_t)0,  // local_q_start
@@ -358,7 +371,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 output.buffer()->address(),
                 i,
                 batch_start,
-                std::min(batch_end, B),
+                batch_end,
                 head_start,
                 head_end,
                 (uint32_t)0,
@@ -372,7 +385,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
          .compute_kernel_id = compute_kernel,
          .writer_kernel_id = writer_kernel,
          .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+         .num_cores_y = num_cores_y,
+         .grid_size_x = grid_size.x}};
 }
 
 void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
@@ -382,10 +396,10 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto grid_size_x = cached_program.shared_variables.grid_size_x;
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {i % grid_size_x, i / grid_size_x};
 
         auto& reader_args = GetRuntimeArgs(program, cached_program.shared_variables.reader_kernel_id, core);
         reader_args[0] = args.q.buffer()->address();

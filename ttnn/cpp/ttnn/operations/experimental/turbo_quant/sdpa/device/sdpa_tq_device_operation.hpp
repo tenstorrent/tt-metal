@@ -41,6 +41,7 @@ struct SDPATQDeviceOperation {
             tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
+            std::size_t grid_size_x;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
