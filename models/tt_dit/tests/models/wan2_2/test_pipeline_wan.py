@@ -75,7 +75,7 @@ def test_pipeline_inference(
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = 81
-    num_inference_steps = 5
+    num_inference_steps = 40
 
     pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
