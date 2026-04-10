@@ -31,38 +31,9 @@ Prerequisites:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
-
-# Try to import from BitSculpt — required for BSPM loading
-try:
-    # First try assuming BitSculpt is in PYTHONPATH
-    from quantization.export import load_binary_precision_map
-except ImportError:
-    # Fall back to common BitSculpt locations
-    _COMMON_BITSCULPT_PATHS = [
-        Path.home() / "bit_sculpt",
-        Path(__file__).resolve().parent.parent.parent.parent.parent.parent / "bit_sculpt",
-    ]
-    _loaded = False
-    for candidate in _COMMON_BITSCULPT_PATHS:
-        if candidate.exists() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            try:
-                from quantization.export import load_binary_precision_map
-
-                _loaded = True
-                break
-            except ImportError:
-                sys.path.remove(str(candidate))
-    if not _loaded:
-        raise ImportError(
-            "Cannot import BitSculpt's load_binary_precision_map. "
-            "Ensure BitSculpt is in your Python path:\n"
-            "  export PYTHONPATH=/path/to/bit_sculpt:$PYTHONPATH"
-        )
 
 # ---------------------------------------------------------------------------
 # Code remapping
@@ -125,6 +96,15 @@ def load_bspm_for_layer(
             codes: np.ndarray (n_experts, 3, tiles_per_proj) with tt-metal format indices
             codes_bitsculpt: np.ndarray — original BitSculpt codes (for debugging)
     """
+    try:
+        from quantization.export import load_binary_precision_map
+    except ImportError as exc:
+        raise ImportError(
+            "Cannot import BitSculpt's load_binary_precision_map. "
+            "Ensure BitSculpt is in your Python path:\n"
+            "  export PYTHONPATH=/path/to/bit_sculpt:$PYTHONPATH"
+        ) from exc
+
     # Detect Git LFS pointer files before attempting to parse.
     # LFS pointers start with "version https://..." — reading the magic will
     # raise ValueError("Invalid magic: b'vers'") which is hard to diagnose.
