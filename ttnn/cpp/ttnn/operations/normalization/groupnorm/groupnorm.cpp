@@ -233,18 +233,11 @@ Tensor group_norm(
             TT_FATAL(
                 shard_spec_opt.has_value(),
                 "group_norm: Sharded input must have a shard spec when core_grid is not provided.");
-            const auto mem_layout = input_tensor.memory_config().memory_layout();
-            const bool is_height_sharded = mem_layout == TensorMemoryLayout::HEIGHT_SHARDED;
-            const bool is_row_major = is_height_sharded || (shard_spec_opt->orientation == ShardOrientation::ROW_MAJOR);
-            const auto gn_sharded =
-                ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
-                    input_tensor.device()->compute_with_storage_grid_size(),
-                    input_padded_shape[3],
-                    num_groups,
-                    nhw,
-                    is_height_sharded,
-                    is_row_major);
-            core_grid = gn_sharded.core_grid;
+            // Derive the grid directly from the tensor's existing shard layout
+            // rather than recomputing from scratch, so that program_config's
+            // grid_size matches the cores where kernels are actually placed.
+            const auto bbox = shard_spec_opt->grid.bounding_box();
+            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
