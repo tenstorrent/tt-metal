@@ -4,6 +4,7 @@
 #include <tt_stl/reflection.hpp>
 #include <fmt/format.h>
 #include <optional>
+#include <span>
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -750,6 +751,49 @@ void copy_to_device(
     queue.enqueue_write_shards(
         device_tensor.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
 }
+
+// ======================================================================================
+//                      Non-uniform .to_host() and .to_device()
+// ======================================================================================
+
+namespace non_uniform_data_movement {
+
+Tensor to_host(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& tensor,
+    std::span<const distributed::MeshCoordinate> coords [[maybe_unused]],
+    bool blocking) {
+    return tensor_impl::to_host(cq, tensor, blocking);
+}
+
+void copy_to_host(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    std::span<const distributed::MeshCoordinate> coords [[maybe_unused]],
+    bool blocking) {
+    tensor_impl::copy_to_host(cq, device_tensor, host_tensor, blocking);
+}
+
+std::pair<Tensor, std::vector<distributed::MeshCoordinate>> to_device(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& host_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config) {
+    auto result = tensor_impl::to_device(cq, host_tensor, mesh_device, memory_config);
+    auto coords_span = result.device_storage().get_coords();
+    auto coords = std::vector<distributed::MeshCoordinate>(coords_span.begin(), coords_span.end());
+    return {std::move(result), std::move(coords)};
+}
+
+std::vector<distributed::MeshCoordinate> copy_to_device(
+    distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor) {
+    tensor_impl::copy_to_device(cq, host_tensor, device_tensor);
+    auto coords = device_tensor.device_storage().get_coords();
+    return {coords.begin(), coords.end()};
+}
+
+}  // namespace non_uniform_data_movement
 
 // ======================================================================================
 //     Helpers for converting between logical <-> physical data with full tensor spec

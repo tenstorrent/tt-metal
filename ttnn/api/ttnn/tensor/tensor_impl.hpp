@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <span>
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -91,20 +92,13 @@ MeshTensor allocate_mesh_tensor(
     const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology);
 
 // ======================================================================================
-//                                         .to_host() and .to_device()
+//                        Uniform .to_host() and .to_device()
 // ======================================================================================
 
 Tensor to_host(distributed::MeshCommandQueue& cq, const Tensor& tensor, bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& cq, const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true);
-
-void copy_to_host(
-    distributed::MeshCommandQueue& queue,
-    const Tensor& device_tensor,
-    std::byte* dst,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
 
 Tensor to_device(
     distributed::MeshCommandQueue& cq,
@@ -113,6 +107,47 @@ Tensor to_device(
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
 void copy_to_device(distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor);
+
+// ======================================================================================
+//                      Non-uniform .to_host() and .to_device()
+// ======================================================================================
+
+namespace non_uniform_data_movement {
+
+Tensor to_host(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+void copy_to_host(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+std::pair<Tensor, std::vector<distributed::MeshCoordinate>> to_device(
+    distributed::MeshCommandQueue& cq,
+    const Tensor& host_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
+
+std::vector<distributed::MeshCoordinate> copy_to_device(
+    distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor);
+
+}  // namespace non_uniform_data_movement
+
+// ======================================================================================
+//                       Unit Tensor .to_host() and .to_device()
+// ======================================================================================
+
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region = std::nullopt,
+    bool blocking = true);
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,

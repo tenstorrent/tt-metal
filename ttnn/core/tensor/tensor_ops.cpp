@@ -98,7 +98,16 @@ Tensor to_device(
         return input_tensor;
     }
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
-    auto device_tensor = tensor_impl::to_device(cq, input_tensor, mesh_device, mem_config);
+    const auto& host_shard_coords = input_tensor.host_storage().buffer().shard_coords();
+    Tensor device_tensor;
+    if (host_shard_coords.size() == mesh_device->num_devices()) {
+        device_tensor = tensor_impl::to_device(cq, input_tensor, mesh_device, mem_config);
+        GraphTracker::instance().track_function_end(device_tensor);
+        return device_tensor;
+    } else {
+        auto [device_tensor, _] =
+            tensor_impl::non_uniform_data_movement::to_device(cq, input_tensor, mesh_device, mem_config);
+    }
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
@@ -106,7 +115,12 @@ Tensor to_device(
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    tensor_impl::copy_to_device(cq, host_tensor, device_tensor);
+    const auto& host_shard_coords = host_tensor.host_storage().buffer().shard_coords();
+    if (host_shard_coords.size() == device_tensor.device()->num_devices()) {
+        tensor_impl::copy_to_device(cq, host_tensor, device_tensor);
+    } else {
+        tensor_impl::non_uniform_data_movement::copy_to_device(cq, host_tensor, device_tensor);
+    }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
 }
@@ -137,7 +151,12 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    tensor_impl::copy_to_host(cq, device_tensor, host_tensor, blocking);
+    if (device_tensor.device_storage().is_uniform_storage()) {
+        tensor_impl::copy_to_host(cq, device_tensor, host_tensor, blocking);
+    } else {
+        auto coords = device_tensor.device_storage().get_coords();
+        tensor_impl::non_uniform_data_movement::copy_to_host(cq, device_tensor, host_tensor, coords, blocking);
+    }
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
@@ -149,7 +168,13 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
     auto& cq = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    auto output = tensor_impl::to_host(cq, input_tensor, blocking);
+    Tensor output;
+    if (input_tensor.device_storage().is_uniform_storage()) {
+        output = tensor_impl::to_host(cq, input_tensor, blocking);
+    } else {
+        auto coords = input_tensor.device_storage().get_coords();
+        output = tensor_impl::non_uniform_data_movement::to_host(cq, input_tensor, coords, blocking);
+    }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
