@@ -293,7 +293,8 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     EXPECT_EQ(partial_device_storage.get_coords()[3], (distributed::MeshCoordinate{1, 2}));
 }
 
-TEST_F(MeshTensorTest1x2, CombineDeviceTensors) {
+// This is the mini version of MeshTensorTest2x4.CombineDeviceTensors above.
+TEST_F(MeshTensorTest1x2, CombineDeviceTensorsMini) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
