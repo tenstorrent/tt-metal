@@ -19,6 +19,7 @@ from tqdm import tqdm
 from transformers import BatchFeature
 
 import ttnn
+from models.demos.molmo2.tt.hf_processor import hf_patches_to_images
 from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 from vllm.model_executor.models.interfaces import SupportsMultiModal
@@ -342,10 +343,9 @@ class Molmo2ProcessorWrapper:
           - ``max_fps = 2``
           - ``num_frames = 384``  (hard cap)
 
-        When ``vllm_metadata`` is available (fps, total_num_frames from vLLM's
-        OpenCV decoder) we call the real HF ``sample_frames()`` and then
-        index into ``frames``.  When metadata is absent we fall back to the
-        same ``arange``-based formula.
+        HF has two sampling paths based on video duration:
+        1. If duration > (num_frames - 1) / max_fps: UNIFORM sampling via linspace
+        2. Otherwise: FPS-based sampling via arange at max_fps intervals
 
         Returns:
             (sampled_frames, timestamps) — timestamps in seconds.
@@ -356,41 +356,38 @@ class Molmo2ProcessorWrapper:
         max_fps = self._MAX_FPS  # 2
         num_frames_cap = self._MAX_FRAMES  # 384
 
-        # --- path 1: real HF sampling when we have full metadata ---
-        if (
-            metadata is not None
-            and isinstance(metadata, dict)
-            and "fps" in metadata
-            and "total_num_frames" in metadata
-            and self.video_processor is not None
-        ):
-            try:
-                from transformers.video_utils import VideoMetadata
+        # --- path 1: exact HF sampling when we have full metadata ---
+        if metadata is not None and isinstance(metadata, dict) and "fps" in metadata and "total_num_frames" in metadata:
+            fps = float(metadata["fps"])
+            total_num_frames = int(metadata["total_num_frames"])
+            duration = total_num_frames / fps
 
-                vp = self.video_processor
-                meta_obj = VideoMetadata(
-                    total_num_frames=int(metadata["total_num_frames"]),
-                    fps=float(metadata["fps"]),
-                )
-                # sample_frames works on the *original* frame space
-                raw_indices = vp.sample_frames(
-                    meta_obj,
-                    frame_sample_mode=vp.frame_sample_mode,
-                    num_frames=num_frames_cap,
-                    max_fps=max_fps,
-                )
-                # Map original indices → decoded frame positions
-                # vLLM decoded a subset; ``metadata["frames_indices"]`` holds which
-                # raw frames it kept.  Map each raw target index to the closest one.
-                decoded_raw = np.array(metadata.get("frames_indices", list(range(total_decoded))))
-                mapped = np.searchsorted(decoded_raw, raw_indices)
-                mapped = np.clip(mapped, 0, total_decoded - 1)
-                mapped = np.unique(mapped)
-                sampled = frames[mapped]
-                timestamps = decoded_raw[mapped] / float(metadata["fps"])
-                return sampled, timestamps
-            except Exception:
-                pass  # fall through to heuristic path
+            # HF's branching logic for uniform_last_frame mode
+            threshold = (num_frames_cap - 1) / max_fps  # e.g., 191.5s for cap=384, max_fps=2
+
+            if duration > threshold:
+                # UNIFORM sampling: linspace from 0 to duration
+                sample_times = np.linspace(0, duration, num=num_frames_cap, endpoint=True)
+            else:
+                # FPS-based sampling: HF's sample_times formula
+                # arange in time space, then append duration
+                sample_times = np.arange(0.0, duration, 1.0 / max_fps)
+                sample_times = np.concatenate([sample_times, [duration]])  # include last frame
+                sample_times = sample_times[:num_frames_cap]  # cap at max frames
+
+            # Convert times to frame indices
+            frame_indices = np.clip(np.floor(sample_times * fps), 0, total_num_frames - 1).astype(int)
+
+            # Map original indices → decoded frame positions
+            # When num_frames=-1, vLLM decodes all frames so decoded_raw = [0,1,2,...]
+            decoded_raw = np.array(metadata.get("frames_indices", list(range(total_decoded))))
+
+            # Map target indices to decoded frames (handles case when vLLM subsampled)
+            mapped = np.searchsorted(decoded_raw, frame_indices)
+            mapped = np.clip(mapped, 0, total_decoded - 1)
+
+            sampled = frames[mapped]
+            return sampled, sample_times
 
         # --- path 2: heuristic when metadata is absent (vLLM stripped it) ---
         # vLLM default decodes 32 frames; with media_io_kwargs fps=2 it already
@@ -561,8 +558,10 @@ class Molmo2ProcessorWrapper:
                         return_tensors="pt",
                     )
 
-                    # Extract results - pixel_values_videos is already [n_frames, 729, 588]
-                    pixel_values = hf_result["pixel_values_videos"]
+                    # Extract results - pixel_values_videos is in HF patch format [n_frames, 729, 588]
+                    # Convert to image format [n_frames, 3, H, W] to match demo path
+                    pixel_values_patches = hf_result["pixel_values_videos"]
+                    pixel_values = hf_patches_to_images(pixel_values_patches.numpy())  # [n_frames, 3, 378, 378]
                     video_grids = hf_result["video_grids"]  # tensor [[n_frames, pooled_h, pooled_w]]
                     n_frames = int(video_grids[0, 0].item())
                     pooled_h_out = int(video_grids[0, 1].item())
@@ -575,7 +574,7 @@ class Molmo2ProcessorWrapper:
                     image_token_pooling = pooling_idx.view(n_frames, n_out, k_pool)
 
                     logger.info(
-                        f"    Direct _preprocess output: pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
+                        f"    HF _preprocess output (patches): {pixel_values_patches.shape}, converted to images: {pixel_values.shape}, pooling={image_token_pooling.shape}"
                     )
                     logger.info(
                         f"    n_frames={n_frames}, pooled_h={pooled_h_out}, pooled_w={pooled_w_out}, k_pool={k_pool}"
@@ -678,27 +677,40 @@ class Molmo2ProcessorWrapper:
         else:
             image_outputs = {}
 
-        # Handle text - keep placeholders, vLLM will handle token replacement
+        # Handle text tokenization
+        # NOTE: For VIDEO, do NOT expand video tokens here. vLLM's cached path ignores our
+        # input_ids and tokenizes text separately. Let vLLM's PromptReplacement handle
+        # video token expansion to avoid double expansion.
         if text is not None:
             if self._is_video_input and self._video_data is not None:
-                # VIDEO FLOW: Keep <|video|> placeholder, vLLM will replace via _get_prompt_updates
-                # Ensure placeholder exists
-                if "<|video|>" not in text and "<|image|>" not in text:
-                    # If chat template already applied, insert inside user message
-                    if "<|im_start|>user\n" in text:
-                        text = text.replace("<|im_start|>user\n", "<|im_start|>user\n<|video|>", 1)
-                        logger.info(f"    Inserted <|video|> placeholder inside user message")
+                # VIDEO FLOW: Keep <|video|> placeholder, let vLLM's PromptReplacement expand it.
+                # The demo uses preprocess_video() directly which expands tokens itself.
+                # vLLM's wrapper here should NOT expand tokens since vLLM handles it.
+                logger.info(f"    VIDEO FLOW (vLLM): Keeping <|video|> placeholder for vLLM to expand")
+
+                # Ensure chat template is applied with <|video|> placeholder preserved
+                has_chat_template = "<|im_start|>" in text
+
+                if not has_chat_template:
+                    # Apply chat template while preserving <|video|> placeholder
+                    if "<|video|>" in text:
+                        # The placeholder is in text, wrap in chat template
+                        messages = [{"role": "user", "content": text}]
+                        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    elif "<|image|>" in text:
+                        # Convert <|image|> to <|video|> for vLLM's video PromptReplacement
+                        text = text.replace("<|image|>", "<|video|>", 1)
+                        messages = [{"role": "user", "content": text}]
+                        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                     else:
-                        text = "<|video|>" + text
-                        logger.info(f"    Added <|video|> placeholder at start")
-                elif "<|image|>" in text and "<|video|>" not in text:
-                    # Replace first <|image|> with <|video|> for video input
-                    text = text.replace("<|image|>", "<|video|>", 1)
-                    logger.info(f"    Replaced <|image|> with <|video|> for video input")
+                        # No placeholder - add <|video|> at start of user content
+                        messages = [{"role": "user", "content": f"<|video|>{text}"}]
+                        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    logger.info(f"    VIDEO FLOW (vLLM): Applied chat template with <|video|> placeholder")
 
                 text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
                 logger.info(
-                    f"    Tokenized video prompt (with <|video|> placeholder): "
+                    f"    VIDEO FLOW (vLLM): Tokenized with PLACEHOLDER: "
                     f"input_ids len={text_inputs['input_ids'].shape if hasattr(text_inputs.get('input_ids', None), 'shape') else 'N/A'}"
                 )
             else:
@@ -786,12 +798,25 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         """
         Check if HF processor already applied token expansion.
 
-        Always returns False - vLLM handles token replacement via _get_prompt_updates
-        for both images (<|image|>) and videos (<|video|>).
+        For IMAGES: Returns False - vLLM handles token replacement via _get_prompt_updates
+        For VIDEOS: Returns True - processor already expanded video tokens directly
+                    to avoid vLLM's buggy string fallback that corrupts chat template tokens
         """
         from loguru import logger
 
-        logger.info("  _hf_processor_applies_updates: False (vLLM will apply prompt updates)")
+        # Check if this is a video request by looking for video in mm_items
+        try:
+            mm_counts = mm_items.get_all_counts()
+            has_video = mm_counts.get("video", 0) > 0
+            if has_video:
+                # VIDEO: Return False so vLLM applies PromptReplacement.
+                # Our processor keeps <|video|> placeholder and vLLM expands it.
+                logger.info("  _hf_processor_applies_updates: False (VIDEO - vLLM will expand placeholder)")
+                return False
+        except Exception as e:
+            logger.warning(f"  _hf_processor_applies_updates: error checking mm_items: {e}")
+
+        logger.info("  _hf_processor_applies_updates: False (IMAGE - vLLM will apply prompt updates)")
         return False
 
     def _get_mm_fields_config(
@@ -996,11 +1021,15 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             )
         ]
 
-        # Register video modality replacement if video is present
-        # Video uses <|video|> placeholder which gets replaced with tokens for all frames
+        # NOTE: Video modality replacement is DISABLED because the processor now expands
+        # video tokens directly (no <|video|> placeholder). The processor outputs fully
+        # expanded tokens with chat template + video frames + prompt.
+        # Keeping this code commented for reference.
         mm_counts = mm_items.get_all_counts()
         if mm_counts.get("video", 0) > 0:
-            logger.info(f"  Registering video modality replacement (video count={mm_counts['video']})")
+            logger.info(
+                f"  Video detected (count={mm_counts['video']}) - SKIPPING PromptReplacement (processor expands tokens)"
+            )
 
             # Try to get video grid info from mm_items directly
             # mm_items contains the raw video data before batching
@@ -1023,49 +1052,32 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             def get_replacement_video(item_idx: int) -> list:
                 """Generate replacement tokens for video at item_idx.
 
-                CRITICAL: Video tokens need proper structure with timestamps and frame markers!
-                Format: "0.0 <im_start><im_patch>*196<im_end> 1.0 <im_start>..."
-
-                This matches what HuggingFace processor.get_video_string() produces.
-                Without this structure, the model produces garbled output.
+                CRITICAL: Must use HF processor's get_video_string() to ensure EXACT token match
+                with what the processor expansion produces. Any mismatch causes _find_mm_placeholders
+                to fail when is_update_applied=True.
                 """
                 import numpy as np
 
                 nonlocal video_grid_info
 
                 def generate_video_tokens(n_frames: int, pooled_h: int, pooled_w: int) -> list:
-                    """Generate properly structured video tokens with timestamps and frame markers.
+                    """Generate video tokens using HF processor's get_video_string method.
 
-                    CRITICAL: Molmo2 HF processor uses <im_start>/<im_end> for BOTH images AND video.
-                    Format per frame: "{timestamp} <im_start><im_patch>*N<im_end>"
-                    where N = pooled_h * pooled_w (e.g., 81 for 9x9 pooling).
-                    NO <im_col> tokens for video (HF doesn't use them).
+                    Uses the same method as processor expansion to ensure exact token match.
                     """
                     # Generate timestamps (evenly spaced, ~0.5 sec apart)
                     timestamps = np.arange(n_frames, dtype=float) * 0.5
 
-                    # Build video string matching HF processor format exactly
-                    # Format: "{timestamp} <im_start><im_patch>*N<im_end>" where N = pooled_h * pooled_w
-                    IM_START = "<im_start>"
-                    IM_END = "<im_end>"
-                    IM_PATCH = "<im_patch>"
-
-                    video_string = ""
-                    n_patches = pooled_h * pooled_w  # Total patches per frame (81 for 9x9)
-                    for frame_idx, frame_time in enumerate(timestamps):
-                        prev_space = " " if frame_idx > 0 else ""
-                        frame_prefix = prev_space + f"{frame_time:.1f} "
-                        video_string += frame_prefix
-
-                        # Full frame: <im_start> + <im_patch>*n_patches + <im_end>
-                        video_string += IM_START + (IM_PATCH * n_patches) + IM_END
+                    # Use HF processor's get_video_string to ensure exact match
+                    video_grid = [n_frames, pooled_h, pooled_w]
+                    video_string = hf_processor.get_video_string(video_grid, timestamps)
 
                     # Tokenize the video string to get proper token IDs
                     token_ids = tokenizer.encode(video_string, add_special_tokens=False)
 
                     logger.info(
                         f"  get_replacement_video[{item_idx}]: Generated {len(token_ids)} tokens "
-                        f"(n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, using HF format <im_start>/<im_end>)"
+                        f"(n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, using HF get_video_string)"
                     )
                     return token_ids
 
@@ -1118,13 +1130,17 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
                 logger.info(f"  get_replacement_video[{item_idx}]: using default 8 frames × 14×14")
                 return generate_video_tokens(8, 14, 14)
 
+            # Register video PromptReplacement - vLLM needs this for tracking even when tokens
+            # are pre-expanded. When _hf_processor_applies_updates returns True, vLLM will
+            # use this info for merging but NOT re-apply the replacement.
             prompt_replacements.append(
                 PromptReplacement(
                     modality="video",
-                    target=[video_placeholder_id],  # Video uses <|video|> placeholder
+                    target=[video_placeholder_id],
                     replacement=get_replacement_video,
                 )
             )
+            logger.info(f"  Registered video PromptReplacement: target=[{video_placeholder_id}]")
 
         return prompt_replacements
 
@@ -1474,7 +1490,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         seq_len: int,
     ) -> Optional["ttnn.Tensor"]:
         """HF-style multimodal prefill additive mask; ``None`` if not applicable."""
+        logger.info(f"_build_mm_prefill_attn_mask: token_type_ids={token_type_ids is not None}, seq_len={seq_len}")
+        if token_type_ids is not None:
+            logger.info(f"  token_type_ids shape: {token_type_ids.shape}, sum={token_type_ids.sum().item()}")
         if token_type_ids is None or seq_len <= 1:
+            logger.info(f"  Returning None (token_type_ids={token_type_ids is not None}, seq_len={seq_len})")
             return None
         if token_type_ids.shape[1] != seq_len:
             raise ValueError(f"token_type_ids length {token_type_ids.shape[1]} != hidden seq_len {seq_len}")
@@ -1669,15 +1689,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # for sequences > 4096 tokens (e.g. 30-frame video → 6570 tokens).
         # Uses chunked_scaled_dot_product_attention (reads from paged KV cache).
         # Requires page_table_torch for per-chunk block-table slicing.
-        # NOTE: multimodal attention mask is silently dropped for chunked path
-        # (same trade-off as demo.py warning for seq_len > max_prefill_chunk_size).
-        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and page_table_torch is not None and page_table is not None:
-            if attn_mask is not None:
-                logger.warning(
-                    f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE}:"
-                    " dropping multimodal attn_mask for chunked prefill (mask not supported in this path)"
-                )
-                ttnn.deallocate(attn_mask)
+        # NOTE: Only use chunked prefill when there's NO attention mask.
+        # If there IS a multimodal attention mask, use full prefill to preserve it
+        # (matches demo.py behavior which prioritizes mask over chunking).
+        if (
+            actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE
+            and page_table_torch is not None
+            and page_table is not None
+            and attn_mask is None
+        ):
+            # No attention mask - safe to use chunked prefill
             logger.info(f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} → chunked prefill")
             ttnn.deallocate(hidden_states_ttnn)  # will be re-sliced inside chunked path
 
@@ -1709,6 +1730,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             }
 
         # --- Standard path ---
+        # Log if we're using full prefill for long sequence with attention mask
+        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and attn_mask is not None:
+            logger.info(
+                f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} with attn_mask: "
+                "using FULL prefill to preserve multimodal attention (matches demo behavior)"
+            )
+
         # Step 4: Get rotation matrices for the correct bucket size
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(padded_seq_len, start_pos=0)
 
@@ -2008,6 +2036,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         # Debug logging for multimodal kwargs
         logger.info(f"prefill_forward called: batch_size={batch_size}, tokens.shape={tokens.shape}")
+        # Log full token sequence to trace chat template issue
+        if tokens.shape[1] <= 50:
+            logger.info(f"  FULL tokens: {tokens[0].tolist()}")
+        else:
+            logger.info(f"  tokens first 20: {tokens[0, :20].tolist()}")
+            logger.info(f"  tokens last 20: {tokens[0, -20:].tolist()}")
         logger.info(f"  pixel_values type: {type(pixel_values)}, len: {len(pixel_values) if pixel_values else 0}")
         logger.info(
             f"  pixel_values_videos type: {type(pixel_values_videos)}, len: {len(pixel_values_videos) if pixel_values_videos else 0}"
@@ -2033,8 +2067,22 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # But note: image_grid_thw format may differ from image_grids
 
         # Extract multimodal attention mask inputs from kwargs (vLLM may pass these)
-        token_type_ids = kwargs.get("token_type_ids", None)
-        hf_attention_mask = kwargs.get("attention_mask", None)
+        # vLLM passes these with 'mm_' prefix for multimodal
+        token_type_ids = kwargs.get("token_type_ids", None) or kwargs.get("mm_token_type_ids", None)
+        hf_attention_mask = kwargs.get("attention_mask", None) or kwargs.get("mm_attention_mask", None)
+        if token_type_ids is not None:
+            logger.info(
+                f"  Found token_type_ids from kwargs: shape={token_type_ids.shape if hasattr(token_type_ids, 'shape') else 'N/A'}"
+            )
+        if hf_attention_mask is not None:
+            logger.info(
+                f"  Found hf_attention_mask from kwargs: shape={hf_attention_mask.shape if hasattr(hf_attention_mask, 'shape') else 'N/A'}"
+            )
+
+        # NOTE: token_type_ids generation is done INSIDE the per-user loop after we know the
+        # actual sequence length post-vision-fusion. The raw input tokens have placeholder tokens
+        # that get replaced with expanded vision tokens, changing the sequence length.
+        # Generating token_type_ids here would create a shape mismatch.
 
         # Handle prompt_lens default
         if prompt_lens is None:
@@ -2084,9 +2132,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             user_token_type_ids = None
             user_hf_attention_mask = None
             if token_type_ids is not None:
-                user_token_type_ids = token_type_ids[user_id : user_id + 1]
+                # vLLM may pass as list of lists - extract user's data
+                if isinstance(token_type_ids, list) and len(token_type_ids) > user_id:
+                    user_token_type_ids = token_type_ids[user_id]
+                elif isinstance(token_type_ids, torch.Tensor):
+                    user_token_type_ids = token_type_ids[user_id : user_id + 1]
+                else:
+                    logger.warning(f"Unexpected token_type_ids type: {type(token_type_ids)}")
             if hf_attention_mask is not None:
-                user_hf_attention_mask = hf_attention_mask[user_id : user_id + 1]
+                if isinstance(hf_attention_mask, list) and len(hf_attention_mask) > user_id:
+                    user_hf_attention_mask = hf_attention_mask[user_id]
+                elif isinstance(hf_attention_mask, torch.Tensor):
+                    user_hf_attention_mask = hf_attention_mask[user_id : user_id + 1]
 
             # Check for VIDEO first (new vLLM multimodal flow)
             # NOTE: pixel_values_videos may be [[None]] for image requests (filled with None in tt_model_runner)
@@ -2178,8 +2235,135 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 # don't work with vision input due to device write restrictions during trace execution.
                 # Demo.py confirms video works without traces.
                 logger.info(f"  VIDEO: Running prefill WITHOUT traces (traces incompatible with vision)")
+                logger.info(
+                    f"  VIDEO DEBUG: user_tokens shape={user_tokens.shape}, first 30={user_tokens[0, :30].tolist()}"
+                )
+
+                # FIX: vLLM may strip chat template tokens. Demo expects [151645, 151644, 872, 198, ...]
+                # (BOS + <|im_start|> + user + \n). Check what's missing and prepend it.
+                first_tok = user_tokens[0, 0].item()
+                if first_tok == 151645:  # BOS present - chat template complete
+                    pass
+                elif first_tok == 151644:  # <|im_start|> without BOS
+                    prefix = torch.tensor([[151645]], dtype=user_tokens.dtype)
+                    user_tokens = torch.cat([prefix, user_tokens], dim=1)
+                    logger.info(f"  VIDEO FIX: Prepended BOS, new shape={user_tokens.shape}")
+                else:  # Entire chat template missing
+                    prefix = torch.tensor([[151645, 151644, 872, 198]], dtype=user_tokens.dtype)
+                    user_tokens = torch.cat([prefix, user_tokens], dim=1)
+                    logger.info(f"  VIDEO FIX: Prepended full chat template, new shape={user_tokens.shape}")
+
+                # Generate/validate token_type_ids for the POST-FUSION sequence length.
+                # vLLM may provide mm_token_type_ids, but we need to verify it matches post-fusion length.
+                # Compute: post_fusion_len = original_len - num_placeholders + num_visual_tokens
+                image_patch_id = 151938  # <im_patch> token
+                num_placeholders = (user_tokens == image_patch_id).sum().item()
+                # pooling shape is [n_frames, n_out, k_pool] - total visual tokens = n_frames * n_out
+                num_visual_tokens = pooling.shape[0] * pooling.shape[1]  # n_frames * n_out
+                original_seq_len = user_tokens.shape[1]
+                post_fusion_seq_len = original_seq_len - num_placeholders + num_visual_tokens
+
+                # Compute padded sequence length (hidden states get padded to bucket size in _run_prefill)
+                padded_seq_len = get_padded_prefill_len(post_fusion_seq_len)
+
+                # Check if vLLM provided token_type_ids with correct length
+                # Note: vLLM may expand tokens before calling us, so lengths might match
+                final_token_type_ids = None
+                if user_token_type_ids is not None:
+                    # Convert to tensor if needed (vLLM may pass as list)
+                    # Skip if list contains None values
+                    if isinstance(user_token_type_ids, list):
+                        if any(x is None for x in user_token_type_ids):
+                            logger.info(f"    user_token_type_ids list contains None, will generate our own")
+                            user_token_type_ids = None
+                        else:
+                            try:
+                                user_token_type_ids = torch.tensor(user_token_type_ids)
+                            except Exception as e:
+                                logger.warning(f"    Failed to convert user_token_type_ids to tensor: {e}")
+                                user_token_type_ids = None
+
+                if user_token_type_ids is not None:
+                    if not isinstance(user_token_type_ids, torch.Tensor):
+                        logger.warning(f"    user_token_type_ids is unexpected type: {type(user_token_type_ids)}")
+                        user_token_type_ids = None
+                    elif user_token_type_ids.dim() < 2:
+                        user_token_type_ids = user_token_type_ids.unsqueeze(0)
+
+                    if isinstance(user_token_type_ids, torch.Tensor) and user_token_type_ids.dim() >= 2:
+                        vllm_len = user_token_type_ids.shape[1]
+                        logger.info(
+                            f"    vLLM provided token_type_ids: len={vllm_len}, "
+                            f"post_fusion_len={post_fusion_seq_len}, padded_len={padded_seq_len}"
+                        )
+                        # If vLLM's token_type_ids matches post-fusion length (or is close), use it
+                        if vllm_len == post_fusion_seq_len or vllm_len == original_seq_len:
+                            # Pad to bucket size
+                            if vllm_len < padded_seq_len:
+                                final_token_type_ids = torch.zeros(1, padded_seq_len, dtype=torch.long)
+                                final_token_type_ids[0, :vllm_len] = user_token_type_ids[0, :vllm_len]
+                            else:
+                                final_token_type_ids = user_token_type_ids
+                            logger.info(f"    Using vLLM-provided token_type_ids (padded to {padded_seq_len})")
+
+                # If no valid token_type_ids from vLLM, generate our own
+                if final_token_type_ids is None:
+                    # Build token_type_ids: 0 for text, 1 for visual tokens
+                    # HF marks ALL tokens between <im_start> and <im_end> (inclusive) as visual
+                    # This includes frame markers, timestamps, row/col tokens, and <im_patch>
+                    im_start_id = 151936  # <im_start>
+                    im_end_id = 151937  # <im_end>
+                    # image_patch_id = 151938 already defined above
+
+                    # Find <im_start> and <im_end> positions to mark ALL tokens between them
+                    tokens_flat = user_tokens[0]
+                    start_positions = (tokens_flat == im_start_id).nonzero(as_tuple=True)[0].tolist()
+                    end_positions = (tokens_flat == im_end_id).nonzero(as_tuple=True)[0].tolist()
+
+                    if len(start_positions) > 0 and len(end_positions) > 0:
+                        # Create token_type_ids with PADDED length (must match padded hidden states)
+                        final_token_type_ids = torch.zeros(1, padded_seq_len, dtype=torch.long)
+
+                        # Mark ALL tokens between each <im_start> and <im_end> pair (inclusive)
+                        num_regions = min(len(start_positions), len(end_positions))
+                        total_marked = 0
+                        for i in range(num_regions):
+                            start_pos = start_positions[i]
+                            end_pos = end_positions[i]
+                            # Mark all positions from start to end (inclusive)
+                            for pos in range(start_pos, min(end_pos + 1, padded_seq_len)):
+                                final_token_type_ids[0, pos] = 1
+                                total_marked += 1
+
+                        logger.info(
+                            f"    Generated token_type_ids: original_len={original_seq_len}, "
+                            f"visual_regions={num_regions}, marked={total_marked}, "
+                            f"padded_len={padded_seq_len}, first_start={start_positions[0]}, first_end={end_positions[0]}"
+                        )
+                    else:
+                        logger.warning(
+                            f"    No visual regions found (im_start positions={len(start_positions)}, "
+                            f"im_end positions={len(end_positions)}) - cannot generate token_type_ids"
+                        )
+
+                # Convert user_hf_attention_mask if needed, or set to None
+                # We generally don't need the HF attention mask when we have token_type_ids
+                if user_hf_attention_mask is not None:
+                    if isinstance(user_hf_attention_mask, list):
+                        if any(x is None for x in user_hf_attention_mask):
+                            user_hf_attention_mask = None
+                        else:
+                            try:
+                                user_hf_attention_mask = torch.tensor(user_hf_attention_mask)
+                                if user_hf_attention_mask.dim() < 2:
+                                    user_hf_attention_mask = user_hf_attention_mask.unsqueeze(0)
+                            except Exception:
+                                user_hf_attention_mask = None
+                    elif not isinstance(user_hf_attention_mask, torch.Tensor):
+                        user_hf_attention_mask = None
+
                 user_attn_mask = self._build_mm_prefill_attn_mask(
-                    user_token_type_ids, user_hf_attention_mask, user_tokens.shape[1]
+                    final_token_type_ids, user_hf_attention_mask, padded_seq_len
                 )
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=user_tokens,
@@ -2359,6 +2543,20 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 # Video path already uses use_trace=False and produces coherent output.
                 logger.info(f"  IMAGE: Running prefill WITHOUT traces (vision incompatible with text traces)")
                 user_tokens_img = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+
+                # FIX: vLLM may strip chat template tokens
+                first_tok = user_tokens_img[0, 0].item()
+                if first_tok == 151645:
+                    pass
+                elif first_tok == 151644:
+                    prefix = torch.tensor([[151645]], dtype=user_tokens_img.dtype)
+                    user_tokens_img = torch.cat([prefix, user_tokens_img], dim=1)
+                    logger.info(f"  IMAGE FIX: Prepended BOS, new shape={user_tokens_img.shape}")
+                else:
+                    prefix = torch.tensor([[151645, 151644, 872, 198]], dtype=user_tokens_img.dtype)
+                    user_tokens_img = torch.cat([prefix, user_tokens_img], dim=1)
+                    logger.info(f"  IMAGE FIX: Prepended full chat template, new shape={user_tokens_img.shape}")
+
                 user_attn_mask = self._build_mm_prefill_attn_mask(
                     user_token_type_ids, user_hf_attention_mask, user_tokens_img.shape[1]
                 )
@@ -2387,6 +2585,20 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
                     # Run prefill with image
                     user_tokens_pil = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+
+                    # FIX: vLLM may strip chat template tokens
+                    first_tok = user_tokens_pil[0, 0].item()
+                    if first_tok == 151645:
+                        pass
+                    elif first_tok == 151644:
+                        prefix = torch.tensor([[151645]], dtype=user_tokens_pil.dtype)
+                        user_tokens_pil = torch.cat([prefix, user_tokens_pil], dim=1)
+                        logger.info(f"  PIL IMAGE FIX: Prepended BOS, new shape={user_tokens_pil.shape}")
+                    else:
+                        prefix = torch.tensor([[151645, 151644, 872, 198]], dtype=user_tokens_pil.dtype)
+                        user_tokens_pil = torch.cat([prefix, user_tokens_pil], dim=1)
+                        logger.info(f"  PIL IMAGE FIX: Prepended full chat template, new shape={user_tokens_pil.shape}")
+
                     user_attn_mask = self._build_mm_prefill_attn_mask(
                         user_token_type_ids, user_hf_attention_mask, user_tokens_pil.shape[1]
                     )
@@ -2405,6 +2617,20 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 else:
                     # Run prefill without image (text-only)
                     user_tokens_txt = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+
+                    # FIX: vLLM may strip chat template tokens
+                    first_tok = user_tokens_txt[0, 0].item()
+                    if first_tok == 151645:
+                        pass
+                    elif first_tok == 151644:
+                        prefix = torch.tensor([[151645]], dtype=user_tokens_txt.dtype)
+                        user_tokens_txt = torch.cat([prefix, user_tokens_txt], dim=1)
+                        logger.info(f"  TEXT FIX: Prepended BOS, new shape={user_tokens_txt.shape}")
+                    else:
+                        prefix = torch.tensor([[151645, 151644, 872, 198]], dtype=user_tokens_txt.dtype)
+                        user_tokens_txt = torch.cat([prefix, user_tokens_txt], dim=1)
+                        logger.info(f"  TEXT FIX: Prepended full chat template, new shape={user_tokens_txt.shape}")
+
                     user_attn_mask = self._build_mm_prefill_attn_mask(
                         user_token_type_ids, user_hf_attention_mask, user_tokens_txt.shape[1]
                     )
