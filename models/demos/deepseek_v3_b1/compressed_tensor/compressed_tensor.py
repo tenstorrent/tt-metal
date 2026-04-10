@@ -673,6 +673,18 @@ class CompressedTensor:
 
         return result
 
+    def _get_replicated_axes(self):
+        """Return set of mesh axis indices that use PlacementReplicate."""
+        if self._mesh_mapper_config is None:
+            return set()
+        placements = self._mesh_mapper_config.placements
+        mesh_shape = self._mesh_shape
+        replicated = set()
+        for axis in range(mesh_shape.dims()):
+            if axis >= len(placements) or not isinstance(placements[axis], ttnn.PlacementShard):
+                replicated.add(axis)
+        return replicated
+
     def _pack_multi_device(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
         """Pack data for multi-device mesh. Splits tensor per device and packs independently."""
         num_devices = self._num_devices
@@ -699,7 +711,26 @@ class CompressedTensor:
         all_shard_data = {}  # {MeshCoordinate: shard_data}
         all_shard_sizes = {}  # {MeshCoordinate: shard_data_sizes}
 
+        # Optimization: devices that differ only on replicated axes have identical data.
+        # Build a reuse key from shard-axis coordinates only; pack once per unique key.
+        replicated_axes = self._get_replicated_axes()
+        packed_cache = {}  # {shard_key: coord} — first coord packed for each unique shard key
+
         for coord, dev_tensor, dev_assignment in per_device_slices:
+            coord_tuple = tuple(coord[i] for i in range(self._mesh_shape.dims()))
+            shard_key = tuple(coord_tuple[ax] for ax in range(len(coord_tuple)) if ax not in replicated_axes)
+
+            if shard_key in packed_cache:
+                # Reuse packed results from the first device with this shard key.
+                src = packed_cache[shard_key]
+                all_shard_data[coord] = all_shard_data[src]
+                all_shard_sizes[coord] = all_shard_sizes[src]
+                self._per_device_shard_mapping[coord] = self._per_device_shard_mapping[src]
+                self._per_device_tile_formats[coord] = self._per_device_tile_formats[src]
+                self._per_device_core_assignment[coord] = self._per_device_core_assignment[src]
+                self._per_device_assignment_flat[coord] = self._per_device_assignment_flat[src]
+                continue
+
             dev_data_np = self._to_2d(dev_tensor)
 
             # Compute shard mapping for per-device shape
@@ -722,6 +753,7 @@ class CompressedTensor:
             self._per_device_tile_formats[coord] = tile_formats
             self._per_device_core_assignment[coord] = self._build_core_assignment_from(shard_mapping, dev_assignment)
             self._per_device_assignment_flat[coord] = dev_assignment
+            packed_cache[shard_key] = coord
 
         # Global max shard size across all devices
         alignment = _get_alignment(memory_config.buffer_type)

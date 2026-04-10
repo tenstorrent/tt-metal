@@ -82,33 +82,62 @@ def _build_ab_grids(device):
 def _scale_tiles_random_formats(b_torch, formats):
     """Randomly assign formats to tiles so the assigner picks a mix.
 
-    Unlike scale_tiles_for_mixed_formats (which uses deterministic round-robin
-    and can cause entire tile columns to share one format), this randomly assigns
-    each tile a format. This avoids alignment issues with WIDTH_SHARDED cores.
+    Vectorized: assigns a random format to each tile, then applies format-specific
+    scaling in bulk using masked tensor ops instead of per-tile Python loops.
+    For single-format lists, all tiles get scaled for that format.
     """
-    if len(formats) <= 1:
-        return
+    assert formats, "formats must not be empty"
 
     M, N = b_torch.shape
     tiles_h, tiles_w = M // 32, N // 32
 
-    for tr in range(tiles_h):
-        for tc in range(tiles_w):
-            fmt = formats[torch.randint(0, len(formats), (1,)).item()]
-            r0, r1 = tr * 32, (tr + 1) * 32
-            c0, c1 = tc * 32, (tc + 1) * 32
-            if fmt == "bfp8":
-                for r in range(32):
-                    b_torch[r0 + r, c0:c1] *= 2.0 ** (r % 16)
-            elif fmt == "bfp2":
-                for r in range(32):
-                    exp = torch.randint(-3, 4, (1,)).float()
-                    signs = torch.sign(torch.randn(32))
-                    signs[signs == 0] = 1.0
-                    b_torch[r0 + r, c0:c1] = signs * (2.0**exp)
-            elif fmt == "bfp0":
-                b_torch[r0:r1, c0:c1] = torch.randn(32, 32) * 1e-3
-            # bfp4: keep randn as-is
+    # Random format index per tile: (tiles_h, tiles_w)
+    fmt_indices = torch.randint(0, len(formats), (tiles_h, tiles_w))
+
+    # bfp8: scale each row by 2^(row%16) — build a (32, 1) multiplier column
+    if "bfp8" in formats:
+        bfp8_idx = formats.index("bfp8")
+        bfp8_scale = (2.0 ** (torch.arange(32).float() % 16)).unsqueeze(1)  # (32, 1)
+        mask = fmt_indices == bfp8_idx
+        for tr in range(tiles_h):
+            for tc in range(tiles_w):
+                if mask[tr, tc]:
+                    r0, c0 = tr * 32, tc * 32
+                    b_torch[r0 : r0 + 32, c0 : c0 + 32] *= bfp8_scale
+
+    # bfp2: random sign × 2^exp per row — generate all at once
+    if "bfp2" in formats:
+        bfp2_idx = formats.index("bfp2")
+        mask = fmt_indices == bfp2_idx
+        num_bfp2 = mask.sum().item()
+        if num_bfp2 > 0:
+            all_exps = torch.randint(-3, 4, (num_bfp2, 32)).float()
+            all_signs = torch.sign(torch.randn(num_bfp2, 32, 32))
+            all_signs[all_signs == 0] = 1.0
+            all_vals = all_signs * (2.0 ** all_exps.unsqueeze(2))
+            idx = 0
+            for tr in range(tiles_h):
+                for tc in range(tiles_w):
+                    if mask[tr, tc]:
+                        r0, c0 = tr * 32, tc * 32
+                        b_torch[r0 : r0 + 32, c0 : c0 + 32] = all_vals[idx]
+                        idx += 1
+
+    # bfp0: small noise
+    if "bfp0" in formats:
+        bfp0_idx = formats.index("bfp0")
+        mask = fmt_indices == bfp0_idx
+        num_bfp0 = mask.sum().item()
+        if num_bfp0 > 0:
+            all_noise = torch.randn(num_bfp0, 32, 32) * 1e-3
+            idx = 0
+            for tr in range(tiles_h):
+                for tc in range(tiles_w):
+                    if mask[tr, tc]:
+                        r0, c0 = tr * 32, tc * 32
+                        b_torch[r0 : r0 + 32, c0 : c0 + 32] = all_noise[idx]
+                        idx += 1
+    # bfp4: keep randn as-is (no action needed)
 
 
 def _pad_to_dram_banks(n, tile_w, lcm):
