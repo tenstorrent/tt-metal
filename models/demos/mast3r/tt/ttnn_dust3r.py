@@ -573,8 +573,14 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     _, _, taps1, taps2 = full_decoder(enc1, enc2, pos, state, device)
     feats1 = [enc1.float(), taps1[0].float(), taps1[1].float(), taps1[2].float()]
     feats2 = [enc2.float(), taps2[0].float(), taps2[1].float(), taps2[2].float()]
-    out1 = dpt_head(feats1, (hp, wp), state, 1, device)
-    out2 = dpt_head(feats2, (hp, wp), state, 2, device)
+
+    # Two independent DPT heads — run concurrently to overlap host conv work.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(dpt_head, feats1, (hp, wp), state, 1, device)
+        f2 = pool.submit(dpt_head, feats2, (hp, wp), state, 2, device)
+        out1 = f1.result()
+        out2 = f2.result()
     return out1, out2
 
 
@@ -582,7 +588,7 @@ _DPT_HEAD_CACHE: dict = {}
 
 
 def dpt_head(feats_list, hw, state: dict, branch: int, device):
-    """DPT head — host-torch fallback. Module is cached per (state,branch)."""
+    """DPT head — host-torch fallback. Module cached per (state,branch)."""
     from reference.torch_dust3r import load_dpt_head
     key = (id(state), branch)
     head = _DPT_HEAD_CACHE.get(key)
