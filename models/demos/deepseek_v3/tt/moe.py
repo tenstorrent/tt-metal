@@ -830,9 +830,24 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(compute_output_token_counts)
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
-        combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
-            combine_output, **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]
-        )
+
+        if batches_per_device == ttnn.TILE_SIZE:
+            combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                combine_output,
+                **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"],
+            )
+
+        else:
+            combine_output_shape = list(combine_output.shape)
+            combine_output_shape[2] = (
+                (combine_output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+            ) * ttnn.TILE_SIZE
+            combine_output = ttnn.tilize_with_val_padding(
+                combine_output,
+                output_tensor_shape=combine_output_shape,
+                pad_value=0.0,
+                memory_config=fg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
+            )
 
         post_combine_output_tensor = ttnn.mul(
             combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]

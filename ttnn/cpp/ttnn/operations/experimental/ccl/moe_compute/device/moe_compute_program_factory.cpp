@@ -764,8 +764,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_core_range_set,
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
 
-    std::cout << "PROGRAM FACTORY: " << tilize_indices_tensor.buffer()->address() << std::endl;
-
     std::vector<uint32_t> tilize_runtime_args = {
         tilize_input_tensor.buffer()->address(),                           // 0
         tilize_indices_tensor.buffer()->address(),                         // 1
