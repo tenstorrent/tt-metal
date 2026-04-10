@@ -30,7 +30,9 @@ std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_
 
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto tile =
+        input_tensor.layout() == tt::tt_metal::Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_shape = tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -262,7 +264,9 @@ bool use_composite_all_gather(
         return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
     };
 
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto _tile =
+        input_tensor.layout() == tt::tt_metal::Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_shape = _tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -294,7 +298,9 @@ bool use_composite_all_to_all(
     int32_t in_dim,
     int32_t out_dim,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto _tile =
+        input_tensor.layout() == tt::tt_metal::Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_shape = _tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -334,7 +340,9 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto _tile =
+        input_tensor.layout() == tt::tt_metal::Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_shape = _tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -413,7 +421,9 @@ ttnn::Tensor composite_all_to_all(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto _tile =
+        input_tensor.layout() == tt::tt_metal::Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_shape = _tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
