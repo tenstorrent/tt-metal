@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, Comp
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import DRAMStreamingMatmulCompressed
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
+from models.demos.deepseek_v3_b1.weights.prepare import _shuffle_dram_assignment
 
 
 def pad_to_dram_banks(num, tile_w, lcm):
@@ -298,6 +299,11 @@ def test_dram_matmul_bspm_direct(device):
     if n_padded > N:
         pad_cols = (n_padded - N) // tile_w
         assignment = np.pad(assignment, ((0, 0), (0, pad_cols)), constant_values=1)  # pad with bfp4
+
+    # Apply the same tile permutation used by shuffle_tensor_tiles/shuffle_dram_tiles so that
+    # assignment[i] maps to the correct physical tile after the column-major reorder.
+    # Without this, from_bspm applies precision codes to the wrong physical tiles.
+    assignment = _shuffle_dram_assignment(assignment, num_banks)
 
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)

@@ -212,8 +212,13 @@ class CompressedTensor:
 
     @property
     def dtype(self):
-        """Logical dtype for CB setup — bfloat4_b (max tile size, matches uniform path)."""
-        return ttnn.bfloat4_b
+        """Conservative dtype for CB setup — use bfloat8_b to safely size the largest compressed tile.
+
+        Mixed-precision CompressedTensors can contain bfp8 tiles (1088 B each), which is larger than
+        bfp4 (576 B).  Reporting bfloat8_b ensures CBs are always allocated large enough regardless
+        of the actual mix, without requiring callers to special-case the compressed path.
+        """
+        return ttnn.bfloat8_b
 
     def get_tile(self):
         """Return the standard 32×32 tile used by the compressed kernel."""

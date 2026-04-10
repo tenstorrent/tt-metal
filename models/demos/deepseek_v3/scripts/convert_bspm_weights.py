@@ -160,6 +160,7 @@ class _BsprnStateDict:
 
     def _apply_bspm(self, w_orig: torch.Tensor, codes: np.ndarray, expert_idx: int, proj_name: str) -> torch.Tensor:
         """Quantize-dequantize a single expert weight tensor according to BSPM codes."""
+        orig_dtype = w_orig.dtype  # capture before .float() so output matches checkpoint dtype (bf16)
         proj_idx = _PROJ_IDX[proj_name]
         w_kn = w_orig.float().numpy().T  # HF layout (N, K) → compute in (K, N)
         K, N = w_kn.shape
@@ -185,7 +186,7 @@ class _BsprnStateDict:
 
         # (tiles_h, tiles_w, 32, 32) → (K, N) → (N, K) to restore HF layout
         w_out = torch.from_numpy(w_tiled.transpose(0, 2, 1, 3).reshape(K, N).T.copy())
-        return w_out.to(w_orig.dtype)
+        return w_out.to(orig_dtype)
 
 
 # ---------------------------------------------------------------------------
