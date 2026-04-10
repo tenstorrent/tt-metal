@@ -63,8 +63,22 @@ def main():
         "Ultra HD, 4K, cinematic composition, photorealistic."
     )
 
-    # Test run — no warmup, no tracing, just see if it works
-    print(f"Running 4K generation ({NUM_INFERENCE_STEPS} steps, no tracing)...")
+    # Warmup run (captures trace on first traced call)
+    print("Running warmup (2 steps, traced — captures trace)...")
+    t0 = time.time()
+    images = pipeline(
+        prompts=[prompt],
+        negative_prompts=[None],
+        num_inference_steps=2,
+        cfg_scale=4.0,
+        seed=0,
+        traced=True,
+    )
+    t1 = time.time()
+    print(f"Warmup done in {t1 - t0:.2f}s")
+
+    # Benchmark run (replays trace)
+    print(f"Running 4K benchmark ({NUM_INFERENCE_STEPS} steps, traced)...")
     t0 = time.time()
     images = pipeline(
         prompts=[prompt],
@@ -72,14 +86,14 @@ def main():
         num_inference_steps=NUM_INFERENCE_STEPS,
         cfg_scale=4.0,
         seed=42,
-        traced=False,  # No tracing for initial test
+        traced=True,
     )
     t1 = time.time()
 
     total_time = t1 - t0
     gen_speed = 1.0 / total_time if total_time > 0 else 0
 
-    images[0].save("qwenimage_4k_test.png")
+    images[0].save("qwenimage_4k_benchmark.png")
 
     print("=" * 80)
     print("4K BENCHMARK RESULTS")
