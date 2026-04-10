@@ -155,8 +155,9 @@ ttnn::Tensor tilize_with_zero_padding(
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
 
-    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+    auto tile = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : Tile();
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
 
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
