@@ -77,6 +77,14 @@ class PipelineBlock:
         entry_downstream_core=None,
         exit_upstream_cores=None,
     ):
+        import time as _pb_time
+
+        _pb_t0 = _pb_time.time()
+        print(
+            f"[PB] __init__ start: mesh_id={mesh_device.get_system_mesh_id()} parallel_dc={pipeline_device_coords is not None}",
+            flush=True,
+        )
+
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
         ), "Upstream D2D Socket FIFO Size must be greater than or equal to upstream D2D Socket Page Size"
@@ -90,7 +98,9 @@ class PipelineBlock:
         self.mesh_device = mesh_device
         self.parallel_devices = pipeline_device_coords is not None and len(pipeline_device_coords) > 0
 
+        print(f"[PB] calling generate_blitz_decode_pipeline...", flush=True)
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        print(f"[PB] generate_blitz_decode_pipeline done ({_pb_time.time()-_pb_t0:.3f}s)", flush=True)
         if initialize_loopback:
             assert len(pipeline_config) == self.num_procs + 1
 
@@ -108,6 +118,13 @@ class PipelineBlock:
         self.exit_socket_interface = None
 
         token_size_bytes = 64
+
+        print(
+            f"[PB] routing: is_pipeline_start={self.is_pipeline_start} "
+            f"is_last_stage={self.is_last_stage} parallel_devices={self.parallel_devices} "
+            f"initialize_loopback={self.initialize_loopback} ({_pb_time.time()-_pb_t0:.3f}s)",
+            flush=True,
+        )
 
         if self.is_pipeline_start:
             self._init_first_stage(
@@ -396,17 +413,26 @@ class PipelineBlock:
         self.entry_socket_interface = []
         self.exit_socket_interface = []
 
-        # Two-pass creation: all entries first, then all exits.
-        # MeshSocket creation is a blocking pairwise handshake between
-        # sender and receiver processes. Process 0 creates all exit sockets
-        # (via ParallelSocketInterface) before all entry sockets.  Forwarding
-        # stages must match that order — entries first (matching the previous
-        # stage's exits), then exits (matching the next stage's entries) — to
-        # avoid cascading delays that accumulate into timeouts with many channels.
+        print(
+            f"[PB] _init_parallel: mesh_id={self.my_mesh_id} "
+            f"is_last={self.is_last_stage} next_mesh={next_mesh_id} "
+            f"num_devices={len(pipeline_device_coords)} "
+            f"core_entry={core_entry} core_exit={core_exit} "
+            f"use_multi_upstream={use_multi_upstream} "
+            f"entry_downstream_core={entry_downstream_core} "
+            f"exit_upstream_cores={'None' if exit_upstream_cores is None else len(exit_upstream_cores)}",
+            flush=True,
+        )
 
         effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
 
-        for dc in pipeline_device_coords:
+        print(f"[PB] --- PASS 1: creating {len(pipeline_device_coords)} entry SocketInterfaces ---")
+        for idx_dc, dc in enumerate(pipeline_device_coords):
+            print(f"[PB] entry[{idx_dc}] dc={dc}", flush=True)
+            # When exit uses multi-upstream (NCRISC/Reader), entry must use
+            # BRISC (Writer) to avoid RISC conflict on the shared pipeline core.
+            # Only use reader config when exit is single-upstream (BRISC/Writer).
+            entry_use_reader = (core_entry == core_exit) and not use_multi_upstream
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
@@ -416,11 +442,14 @@ class PipelineBlock:
                 downstream_core_coord=ttnn.MeshCoreCoord(dc, effective_downstream_core),
                 sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
+                receiver_use_reader_config=entry_use_reader,
             )
             self.entry_socket_interface.append(entry_si)
 
+        print(f"[PB] --- PASS 2: creating {len(pipeline_device_coords)} exit SocketInterfaces ---")
         for i, dc in enumerate(pipeline_device_coords):
             entry_si = self.entry_socket_interface[i]
+            print(f"[PB] exit[{i}] dc={dc}", flush=True)
 
             if use_multi_upstream and len(exit_upstream_cores) > 0:
                 per_device_upstream_cores = [ttnn.MeshCoreCoord(dc, uc) for uc in exit_upstream_cores]
@@ -461,12 +490,23 @@ class PipelineBlock:
             self.exit_socket_interface.append(exit_si)
 
     def _dispatch_parallel_device_programs(self):
-        """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
-        all_entries = []
+        """Collect programs from all per-device socket interfaces and dispatch in a single generic_op.
+
+        Entry programs are built first, then exit programs are built on top of them
+        via base_program so that setup_fabric_connection sees already-allocated
+        semaphore IDs and avoids conflicts on the shared pipeline core.
+
+        When the exit uses multi-upstream mode, base_program merging is not
+        supported so entry programs are included directly and merged later
+        by merge_program_descriptors.
+        """
+        entry_entries = []
         for si in self.entry_socket_interface:
-            all_entries.extend(si.build_programs())
+            entry_entries.extend(si.build_programs())
+
+        all_entries = []
         for si in self.exit_socket_interface:
-            all_entries.extend(si.build_programs())
+            all_entries.extend(si.build_programs(base_programs=entry_entries))
 
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
@@ -474,7 +514,10 @@ class PipelineBlock:
         groups = _group_by_device(all_entries)
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for device_coord, progs in groups:
-            merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
+            if len(progs) > 1:
+                merged = ttnn.merge_program_descriptors(progs)
+            else:
+                merged = progs[0]
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 

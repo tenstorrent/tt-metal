@@ -20,7 +20,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+    BlitzDecodeWeights,
+    OverlappedTensor,
+)
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
@@ -252,6 +256,78 @@ def create_shared_expert_tensors(
     )
 
 
+def _create_standalone_gate_mm_and_ffn_norm(device, state_dict, layer_idx, is_moe, from_torch_kwargs):
+    """Create gate_mm and ffn_norm as standalone L1 tensors.
+
+    Avoids allocating the full o_proj_gate_mm_norms overlapped buffer (557 KB/core
+    across 122 cores) plus the q_ab_kv_a and kv_b12 overlaps. Instead, only the
+    gate_mm (458 KB across 8 cores) and ffn_norm (14 KB on 1 core) are placed in L1.
+    """
+    cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    layer_key = f"model.layers.{layer_idx}"
+
+    gate_mm_ot = None
+    if is_moe:
+        gate_mm_raw = state_dict[f"{layer_key}.mlp.gate.weight"].T.contiguous()
+        g_num_cores = cfg.gate_mm_core_range_set.num_cores()
+        g_shard_w = cfg.gate_mm_shape[1] // g_num_cores
+        gate_mm_shard_spec = ttnn.ShardSpec(
+            cfg.gate_mm_core_range_set,
+            (cfg.gate_mm_shape[0], g_shard_w),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        gate_mm_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_shard_spec)
+        gate_mm_tensor = ttnn.from_torch(
+            gate_mm_raw.reshape(1, 1, cfg.gate_mm_shape[0], cfg.gate_mm_shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=gate_mm_mem,
+            **from_torch_kwargs,
+        )
+        gate_mm_ot = OverlappedTensor(
+            fused_tensor=gate_mm_tensor,
+            tensor_shape=cfg.gate_mm_shape,
+            shard_shape=(cfg.gate_mm_shape[0], g_shard_w),
+            core_range_set=cfg.gate_mm_core_range_set,
+            dtype=ttnn.bfloat16,
+            tile_shape=(cfg.tile_h, cfg.tile_w),
+            byte_offset=0,
+            total_size=cfg.gate_mm_shard_bytes,
+        )
+
+    ffn_norm_key = f"{layer_key}.post_attention_layernorm.weight"
+    ffn_norm_raw = state_dict[ffn_norm_key].reshape(1, cfg.ffn_norm_shape[1]).to(torch.bfloat16)
+    gamma_core_crs = cfg.gamma_core_range_set
+    ffn_norm_shard_spec = ttnn.ShardSpec(
+        gamma_core_crs,
+        cfg.ffn_norm_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    ffn_norm_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ffn_norm_shard_spec)
+    ffn_norm_tensor = ttnn.from_torch(
+        ffn_norm_raw,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ffn_norm_mem,
+        tile=Tiles.TILE_1x32,
+        **from_torch_kwargs,
+    )
+    ffn_norm_ot = OverlappedTensor(
+        fused_tensor=ffn_norm_tensor,
+        tensor_shape=cfg.ffn_norm_shape,
+        shard_shape=cfg.ffn_norm_shape,
+        core_range_set=gamma_core_crs,
+        dtype=ttnn.bfloat16,
+        tile_shape=(1, 32),
+        byte_offset=0,
+        total_size=cfg.ffn_norm_bytes,
+    )
+
+    return gate_mm_ot, ffn_norm_ot
+
+
 # ============================================================================
 # Helper: create all routed-expert tensors
 # ============================================================================
@@ -265,6 +341,7 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
+    skip_attention_weights=False,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -287,6 +364,10 @@ def create_routed_expert_tensors(
         state_dict: State dict in HF key convention (read-only when using HF weights).
         is_moe: If True use MoE keys (experts.{e}.*). If False use dense keys and slice to 8 experts.
         layer_idx: Layer index for state dict. If None, uses ROUTED_EXPERT_LAYER_IDX when is_moe else DENSE_LAYER_IDX.
+        skip_attention_weights: If True, only create gate_mm and ffn_norm as standalone
+            L1 tensors instead of allocating all three large overlapped attention
+            weight buffers (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms). Saves ~1 MB/core
+            of L1 when the test only needs MoE weights, not full attention.
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -360,10 +441,14 @@ def create_routed_expert_tensors(
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
-    # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
-    ttnn_gate_mm_weights = attn.gate_mm
-    ttnn_rmsnorm_gamma = attn.ffn_norm
+    if skip_attention_weights:
+        ttnn_gate_mm_weights, ttnn_rmsnorm_gamma = _create_standalone_gate_mm_and_ffn_norm(
+            device, state_dict, layer_idx, is_moe, from_torch_kwargs
+        )
+    else:
+        attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+        ttnn_gate_mm_weights = attn.gate_mm
+        ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
         compute_core_grid = ttnn_gate_mm_weights.core_range_set
 

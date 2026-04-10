@@ -72,7 +72,9 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
+    DPRINT << "sending pages over socket\n";
     if constexpr (use_fabric_on_sender) {
+        DPRINT << "using fabric to send data from sender to receiver\n";
         constexpr uint32_t num_fabric_connections = 2;
         // Initialize base src + dst addrs pers link
         constexpr uint32_t page_size_per_link = page_size / num_fabric_connections;
@@ -119,6 +121,7 @@ FORCE_INLINE void send_pages_over_socket(
         }
         socket_push_pages(sender_socket, 1);
     } else {
+        DPRINT << "not using fabric, writing data directly from sender to receiver\n";
         write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, page_size);
     }
 }
@@ -260,4 +263,5 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "Finished d2d exchange kernel" << ENDL();
 }

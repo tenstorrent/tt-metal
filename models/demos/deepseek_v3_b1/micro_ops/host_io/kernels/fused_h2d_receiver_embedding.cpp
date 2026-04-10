@@ -128,6 +128,7 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
+    DPRINT << "Starting fused H2D receiver + embedding kernel\n";
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -154,6 +155,7 @@ void kernel_main() {
     }
 
     set_receiver_socket_page_size(receiver_socket, token_page_size);
+    DPRINT << "setting page size to " << token_page_size << ENDL();
 
     uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
     uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
@@ -197,9 +199,13 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
+        DPRINT << "h2d_recv_embed: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+               << ") waiting for pages in H2D socket" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "h2d_recv_embed: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+               << ") got page in H2D socket" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -221,6 +227,8 @@ void kernel_main() {
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
         noc_async_read_barrier();
+        DPRINT << "h2d_recv_embed: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") read token id "
+               << token_id_ptr[0] << " from H2D socket and embedding from NOC" << ENDL();
 
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
@@ -245,6 +253,8 @@ void kernel_main() {
                 l1_read_addr,
                 dst_addr);
         }
+        DPRINT << "h2d_recv_embed: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+               << ") sent embedding over downstream socket" << ENDL();
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
@@ -263,4 +273,5 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "Finished fused H2D receiver + embedding kernel\n" << ENDL();
 }
