@@ -15,48 +15,60 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based erfc via piecewise rational P(x)/Q(x)
 //
-// BF16: n4/d4, 3 segment(s), range [-5.0, 5.0]
-// FP32: n4/d4, 3 segment(s), range [-5.0, 5.0]
+// Uses abs(x) symmetry: erfc(-x) = 2 - erfc(x)
+// Fit on [0, 5.0] only, 2 segments with n4/d5 rational per segment.
+// BF16 MaxULP=61  (was 128 with 3-seg n4/d4 on [-5,5])
+// FP32 MaxULP≈9M  (was 1.47B)
+// 18 FMAs          (was 24)
 // ======================================================================
 
-#ifdef INP_FLOAT32
 constexpr uint32_t ERFC_NUM_DEGREE = 4;
-constexpr uint32_t ERFC_DEN_DEGREE = 4;
-constexpr uint32_t ERFC_NUM_SEGMENTS = 3;
-constexpr uint32_t ERFC_LUT_SIZE = 34;
-constexpr std::array<float, 34> ERFC_LUT = {
-    {-5.0000000000e+00f, -1.6666666667e+00f, 1.6666666667e+00f,  5.0000000000e+00f,  8.3347129822e-01f,
-     1.9954245090e+00f,  1.8438844681e+00f,  7.7074432373e-01f,  1.2812392414e-01f,  4.1895556450e-01f,
-     1.0000000000e+00f,  9.2282271385e-01f,  3.8552197814e-01f,  6.4071461558e-02f,  1.0008066893e+00f,
-     -2.0714581013e+00f, 1.6268670559e+00f,  -5.7597428560e-01f, 7.7643394470e-02f,  1.0000000000e+00f,
-     -9.3980979919e-01f, 5.7149255276e-01f,  -3.2921802998e-01f, 6.5222814679e-02f,  -9.8275504570e-06f,
-     8.1833359218e-06f,  -2.5547028599e-06f, 3.5436926282e-07f,  -1.8428352178e-08f, -5.0887596607e-01f,
-     1.0000000000e+00f,  -7.3091888428e-01f, 2.3553080857e-01f,  -2.8261199594e-02f}};
-
-#else
-
-constexpr uint32_t ERFC_NUM_DEGREE = 4;
-constexpr uint32_t ERFC_DEN_DEGREE = 4;
-constexpr uint32_t ERFC_NUM_SEGMENTS = 3;
-constexpr uint32_t ERFC_LUT_SIZE = 34;
-constexpr std::array<float, 34> ERFC_LUT = {
-    {-5.0000000000e+00f, -1.6666666667e+00f, 1.6666666667e+00f,  5.0000000000e+00f,  8.3347129822e-01f,
-     1.9954245090e+00f,  1.8438844681e+00f,  7.7074432373e-01f,  1.2812392414e-01f,  4.1895556450e-01f,
-     1.0000000000e+00f,  9.2282271385e-01f,  3.8552197814e-01f,  6.4071461558e-02f,  1.0008066893e+00f,
-     -2.0714581013e+00f, 1.6268670559e+00f,  -5.7597428560e-01f, 7.7643394470e-02f,  1.0000000000e+00f,
-     -9.3980979919e-01f, 5.7149255276e-01f,  -3.2921802998e-01f, 6.5222814679e-02f,  -9.8275504570e-06f,
-     8.1833359218e-06f,  -2.5547028599e-06f, 3.5436926282e-07f,  -1.8428352178e-08f, -5.0887596607e-01f,
-     1.0000000000e+00f,  -7.3091888428e-01f, 2.3553080857e-01f,  -2.8261199594e-02f}};
-
-#endif
+constexpr uint32_t ERFC_DEN_DEGREE = 5;
+constexpr uint32_t ERFC_NUM_SEGMENTS = 2;
+constexpr uint32_t ERFC_LUT_SIZE = 25;
+constexpr std::array<float, 25> ERFC_LUT = {{// Breakpoints
+                                             0.0000000000e+00f,
+                                             2.5000000000e+00f,
+                                             5.0000000000e+00f,
+                                             // Segment 0 [0, 2.5]: numerator (degree 4)
+                                             1.0000233650e+00f,
+                                             -1.3375675678e+00f,
+                                             6.8185544014e-01f,
+                                             -1.5691982210e-01f,
+                                             1.3746744953e-02f,
+                                             // Segment 0 [0, 2.5]: denominator (degree 5)
+                                             1.0000000000e+00f,
+                                             -2.0801517367e-01f,
+                                             4.3667086959e-01f,
+                                             -3.4568668343e-03f,
+                                             2.5104774162e-02f,
+                                             2.8375532478e-02f,
+                                             // Segment 1 [2.5, 5.0]: numerator (degree 4)
+                                             -2.5655237550e-05f,
+                                             2.1275576728e-05f,
+                                             -6.6162156145e-06f,
+                                             9.1439767402e-07f,
+                                             -4.7387182178e-08f,
+                                             // Segment 1 [2.5, 5.0]: denominator (degree 5)
+                                             1.0000000000e+00f,
+                                             -1.6457208991e-01f,
+                                             -2.0572184026e-01f,
+                                             -1.3888636231e-01f,
+                                             1.2677097321e-01f,
+                                             -2.1375391632e-02f}};
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] =
+        sfpi::vFloat ax = sfpi::setsgn(x, 0);
+        sfpi::vFloat r =
             piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, false, true>(
-                ERFC_LUT, x);
+                ERFC_LUT, ax);
+        // erfc(-x) = 2 - erfc(x)
+        v_if(x < 0.0f) { r = 2.0f - r; }
+        v_endif;
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
