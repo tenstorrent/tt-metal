@@ -305,10 +305,10 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
 
     const uint32_t reduce_dst_idx = 0;
 
-    reconfig_data_format(cb_in_idx, cb_matmul_reduce);
+    reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
+    mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 
