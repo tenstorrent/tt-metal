@@ -597,6 +597,7 @@ void copy_to_host(
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
 
     cq.enqueue_read(mesh_buffer, host_tensor.buffer(), /*shards=*/std::nullopt, blocking);
+    host_tensor.update_tensor_topology(device_tensor.tensor_topology());
 }
 
 void copy_to_host(
