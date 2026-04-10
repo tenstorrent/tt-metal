@@ -129,25 +129,27 @@ _BLOCKINGS = {
     # BH (4,8): h_factor=4, w_factor=8. Per-device: same spatial as full-T above.
     # Padded (int_pad=(0,1,1)): lat(25,22) mid(48,42) hi(94,82) full(186,162)
     # Cached T: stage0(T_res=18,T_tconv=18,T_sp=32) stage1(34,34,64) stage2/3(66,_,64)
-    # TODO: blockings are _DEFAULT_BLOCKINGS placeholders — sweep needed
-    # Sweep: sweep_results_h4w8_720p_t16/, run on 1x1 mesh (single P150b)
+    # Swept 2026-04-10 on 1x1 mesh; results in sweep_results_h4w8_720p_t16/.
+    # T=8 (t_chunk/2) wins for large stages; T=2-4 for mid; T=1 for tconv.
+    # hw_product=32 prevents device hangs. max_t_block=8 (T=9+ hangs).
+    # Partial: large-C_in layers (384ch) hung before sweep completion.
     # ===================================================================
     # Stage 0 (cur_T=16)
-    (4, 8, 32, 384, (3, 3, 3), 18, 23, 20): (32, 128, 1, 8, 4),  # conv_in — TODO
-    (4, 8, 384, 384, (3, 3, 3), 18, 23, 20): (96, 96, 1, 8, 4),  # lat_mid_res — TODO
-    (4, 8, 384, 768, (3, 1, 1), 18, 23, 20): (192, 256, 1, 8, 4),  # up0_tconv — TODO
-    (4, 8, 384, 192, (1, 3, 3), 32, 46, 40): (192, 96, 1, 8, 4),  # up0_spatial — TODO
+    (4, 8, 32, 384, (3, 3, 3), 18, 23, 20): (32, 128, 4, 4, 8),  # conv_in — 253us
+    (4, 8, 384, 384, (3, 3, 3), 18, 23, 20): (96, 96, 2, 8, 4),  # lat_mid_res — 991us partial
+    (4, 8, 384, 768, (3, 1, 1), 18, 23, 20): (192, 384, 1, 8, 4),  # up0_tconv — 474us partial
+    (4, 8, 384, 192, (1, 3, 3), 32, 46, 40): (192, 96, 1, 16, 2),  # up0_spatial — 1055us
     # Stage 1 (cur_T=32)
-    (4, 8, 192, 384, (3, 3, 3), 34, 46, 40): (96, 128, 1, 8, 4),  # up1_res0 — TODO
-    (4, 8, 384, 384, (3, 3, 3), 34, 46, 40): (96, 96, 1, 8, 4),  # up1_res — TODO
-    (4, 8, 384, 768, (3, 1, 1), 34, 46, 40): (192, 256, 1, 8, 4),  # up1_tconv — TODO
-    (4, 8, 384, 192, (1, 3, 3), 64, 92, 80): (192, 96, 1, 8, 4),  # up1_spatial — TODO
+    (4, 8, 192, 384, (3, 3, 3), 34, 46, 40): (96, 96, 2, 8, 4),  # up1_res0 — 3359us partial
+    (4, 8, 384, 384, (3, 3, 3), 34, 46, 40): (96, 96, 8, 8, 4),  # up1_res — 6502us partial
+    (4, 8, 384, 768, (3, 1, 1), 34, 46, 40): (192, 768, 1, 4, 8),  # up1_tconv — 1824us partial
+    (4, 8, 384, 192, (1, 3, 3), 64, 92, 80): (384, 96, 1, 4, 8),  # up1_spatial — 7914us
     # Stage 2 (cur_T=64, no temporal upsample)
-    (4, 8, 192, 192, (3, 3, 3), 66, 92, 80): (96, 96, 1, 8, 4),  # up2_res — TODO
-    (4, 8, 192, 96, (1, 3, 3), 64, 184, 160): (192, 96, 1, 8, 4),  # up2_spatial — TODO
+    (4, 8, 192, 192, (3, 3, 3), 66, 92, 80): (96, 96, 4, 16, 2),  # up2_res — 12401us
+    (4, 8, 192, 96, (1, 3, 3), 64, 184, 160): (192, 96, 1, 4, 8),  # up2_spatial — 7914us
     # Stage 3 (cur_T=64, no temporal upsample)
-    (4, 8, 96, 96, (3, 3, 3), 66, 184, 160): (96, 96, 1, 8, 4),  # up3_res — TODO
-    (4, 8, 96, 3, (3, 3, 3), 66, 184, 160): (96, 32, 1, 8, 4),  # conv_out — TODO
+    (4, 8, 96, 96, (3, 3, 3), 66, 184, 160): (96, 96, 8, 4, 8),  # up3_res — 11980us
+    (4, 8, 96, 3, (3, 3, 3), 66, 184, 160): (96, 32, 3, 16, 2),  # conv_out — 8887us
     # ===================================================================
     # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7)
     # BH (2,4): tp_axis=0, sp_axis=1 → h_factor=2, w_factor=4

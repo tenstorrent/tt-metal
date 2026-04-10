@@ -22,7 +22,6 @@ Run via pytest:
 import json
 import math
 import pathlib
-import signal
 import statistics
 import time
 
@@ -40,18 +39,6 @@ from ....utils.test import line_params
 
 WARMUP = 2
 RUNS = 3
-# Per-combo wall-clock timeout. SIGALRM fires if ttnn.synchronize_device hangs
-# (device kernel OOM / deadlock). Saves partial results cleanly instead of
-# requiring a kill + tt-smi reset from outside.
-COMBO_TIMEOUT_S = 45
-
-
-class _ComboTimeout(Exception):
-    pass
-
-
-def _alarm_handler(signum, frame):
-    raise _ComboTimeout()
 
 
 TILE_SIZE = 2048  # bf16 tile = 32 * 32 * 2
@@ -268,29 +255,23 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
 
 
 def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc):
-    old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
-    signal.alarm(COMBO_TIMEOUT_S)
-    try:
-        t0 = time.perf_counter()
-        o = ttnn.experimental.conv3d(
-            input_tensor=tt_input,
-            weight_tensor=tt_weight,
-            bias_tensor=tt_bias,
-            config=cfg,
-            output_channels=C_out,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            padding_mode="zeros",
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=ckc,
-        )
-        ttnn.synchronize_device(device)
-        us = (time.perf_counter() - t0) * 1e6
-        ttnn.deallocate(o)
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+    t0 = time.perf_counter()
+    o = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        config=cfg,
+        output_channels=C_out,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode="zeros",
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ckc,
+    )
+    ttnn.synchronize_device(device)
+    us = (time.perf_counter() - t0) * 1e6
+    ttnn.deallocate(o)
     return us
 
 
@@ -477,14 +458,6 @@ def run_sweep(
                     flush=True,
                 )
 
-        except _ComboTimeout:
-            print(
-                f"  TIMEOUT ({cin},{cout},{t_blk},{h_blk},{w_blk}): device hung >{COMBO_TIMEOUT_S}s — stopping sweep",
-                flush=True,
-            )
-            results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": None, "status": "timeout"})
-            break  # device is in a bad state; save what we have and exit
-
         except Exception as e:
             fail_count += 1
             print(f"  FAIL ({cin},{cout},{t_blk},{h_blk},{w_blk}): {e}", flush=True)
@@ -669,8 +642,9 @@ def test_bruteforce_sweep_h4w8_720p_t16(
         h_factor=h_factor,
         w_factor=w_factor,
         max_combos=500,
-        # BH hardware hang mitigations (same as 2x4/4x32): h*w≠32 and T>4
-        # cause device hangs on large-channel layers.
-        max_t_block=4,
+        # BH hardware hang mitigations: h*w≠32 causes device hangs.
+        # T=8 confirmed safe (t_chunk/2); T=9+ hangs for C_in≥192.
+        # Covers t_chunk divisors {1,2,4,8} naturally.
+        max_t_block=8,
         hw_product=32,
     )
