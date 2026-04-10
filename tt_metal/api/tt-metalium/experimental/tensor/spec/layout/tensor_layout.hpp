@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal {
 
-std::optional<std::string> check_shard_spec(
+std::optional<std::string> check_shard_tile_alignment(
     const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
 
 class IDevice;

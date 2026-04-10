@@ -216,9 +216,9 @@ Tensor create_tt_tensor_from_host_data(
         if (mesh_mapper != nullptr) {
             const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
 
-            auto fail_create_spec = check_shard_spec(memory_config, layout, optional_tile.value_or(Tile{}));
+            auto shard_align_error = check_shard_tile_alignment(memory_config, layout, optional_tile.value_or(Tile{}));
             TensorLayout src_tensor_layout =
-                fail_create_spec.has_value()
+                shard_align_error.has_value()
                     ? TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{})
                     : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
