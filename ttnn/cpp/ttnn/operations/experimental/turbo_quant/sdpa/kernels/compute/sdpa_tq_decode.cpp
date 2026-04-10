@@ -29,6 +29,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
 
@@ -214,9 +216,50 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    // ── Reader pushes BF16 K (transposed) and V directly to cb_k_in/cb_v_in ──
+    // ── Typecast BFP4→BF16 per chunk, then run SDPA ──
+    // DataFormat values: Bfp4_b=7, Float16_b=5
+    constexpr uint32_t DF_BFP4 = 7;
+    constexpr uint32_t DF_BF16 = 5;
+
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+            // ── Typecast K from BFP4 (c_10) → BF16 (c_1) ──
+            init_sfpu(cb_k_idx, cb_k_in);
+            for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+                cb_reserve_back(cb_k_in, k_chunk_tiles);
+                for (uint32_t t = 0; t < k_chunk_tiles; t++) {
+                    tile_regs_acquire();
+                    cb_wait_front(cb_k_idx, 1);
+                    copy_tile(cb_k_idx, 0, 0);
+                    typecast_tile_init<DF_BFP4, DF_BF16>();
+                    typecast_tile<DF_BFP4, DF_BF16>(0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_k_in);
+                    cb_pop_front(cb_k_idx, 1);
+                    tile_regs_release();
+                }
+                cb_push_back(cb_k_in, k_chunk_tiles);
+
+                // ── Typecast V from BFP4 (c_12) → BF16 (c_2) ──
+                init_sfpu(cb_v_idx, cb_v_in);
+                cb_reserve_back(cb_v_in, v_chunk_tiles);
+                for (uint32_t t = 0; t < v_chunk_tiles; t++) {
+                    tile_regs_acquire();
+                    cb_wait_front(cb_v_idx, 1);
+                    copy_tile(cb_v_idx, 0, 0);
+                    typecast_tile_init<DF_BFP4, DF_BF16>();
+                    typecast_tile<DF_BFP4, DF_BF16>(0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_v_in);
+                    cb_pop_front(cb_v_idx, 1);
+                    tile_regs_release();
+                }
+                cb_push_back(cb_v_in, v_chunk_tiles);
+            }
+
+            // ── Run SDPA on the BF16 K/V ──
             mm_init(cb_q_in, cb_k_in, cb_out);
             sdpa_standard<
                 cb_qk_im,

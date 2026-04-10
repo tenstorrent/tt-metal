@@ -111,8 +111,18 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(scalar_tile_size, {{CBIndex::c_7, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_7, scalar_tile_size));
 
-    // NOTE: TQ CBs (c_10-c_14) removed for BF16 direct mode debugging.
-    // Reader pushes K/V directly to c_1/c_2.
+    // BFP4 index CBs for reader → compute typecast pipeline
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(k_chunk_tiles * k_idx_tile_size, {{CBIndex::c_10, k_idx_df}})
+            .set_page_size(CBIndex::c_10, k_idx_tile_size));
+
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(v_chunk_tiles * k_idx_tile_size, {{CBIndex::c_12, k_idx_df}})
+            .set_page_size(CBIndex::c_12, k_idx_tile_size));
 
     // SDPA intermediates
     CreateCircularBuffer(
