@@ -100,7 +100,7 @@ void kernel_main() {
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
 
-        mm.accumulate(0, 0, 0, block, 1);
+        mm.accumulate(0, 0, 0, block, 1, 1, 0);
 
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);

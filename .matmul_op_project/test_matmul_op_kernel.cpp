@@ -112,11 +112,7 @@ void kernel_main() {
                     }
 
                     mm.accumulate(
-                        in0_index_subblock_offset,  // in0_index_start
-                        in1_index_subblock_offset,  // in1_index_start
-                        0,                          // dst_index_start
-                        in0_block_w,                // inner_dim
-                        in1_per_core_w);            // in1_stride
+                        in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, 1, in1_per_core_w, 0);
 
                     if (last_out) {
                         mm.end_to_output(cb_out, out_subblock_num_tiles);
@@ -158,7 +154,7 @@ void kernel_main() {
             cb_wait_front(cb_in0, 1);
             cb_wait_front(cb_in1, 1);
 
-            mm.matmul(0, 0, 0);
+            mm.accumulate(0, 0, 0, 1, 0, 0, 0);
 
             cb_pop_front(cb_in0, 1);
             cb_pop_front(cb_in1, 1);
@@ -174,7 +170,7 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // TEST MODE 3: Mode 1 Block-Level (BlockMatmulOp::matmul)
+    // TEST MODE 3: Mode 1 Block-Level (BlockMatmulOp::accumulate)
     // Maps to call sites B8/B11 (MOE gate with ct_dim > 1)
     // =========================================================================
     else if constexpr (test_mode == 3) {
@@ -204,7 +200,7 @@ void kernel_main() {
             cb_wait_front(cb_in0, block_in0_tiles);
             cb_wait_front(cb_in1, block_in1_tiles);
 
-            mm.matmul(0, 0, 0);
+            mm.accumulate(0, 0, 0, 1, 0, 0, 0);
 
             cb_pop_front(cb_in0, block_in0_tiles);
             cb_pop_front(cb_in1, block_in1_tiles);
@@ -247,11 +243,7 @@ void kernel_main() {
                 mm.begin_subblock();
 
                 mm.accumulate(
-                    in0_index_subblock_offset,  // in0_index_start
-                    in1_index_subblock_offset,  // in1_index_start
-                    0,                          // dst_index_start
-                    in0_block_w,                // inner_dim
-                    in1_per_core_w);            // in1_stride
+                    in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, 1, in1_per_core_w, 0);
 
                 mm.end_to_output(cb_out, out_subblock_num_tiles);
 

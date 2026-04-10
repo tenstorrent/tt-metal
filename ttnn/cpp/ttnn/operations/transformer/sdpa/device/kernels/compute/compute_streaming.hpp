@@ -508,7 +508,7 @@ void normalize_row_streaming(
 
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
-            norm_mm.matmul(0, 0, 0);
+            norm_mm.accumulate(0, 0, 0, 1, 0, 0, 0);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0, (int)VectorMode::C)));

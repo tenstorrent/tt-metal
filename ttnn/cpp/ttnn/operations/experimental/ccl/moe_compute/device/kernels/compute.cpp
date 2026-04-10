@@ -199,7 +199,7 @@ void kernel_main() {
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                    mm.accumulate(in0_index, 0, 0, w0_w1_tiles_per_block / 4, 4);
+                    mm.accumulate(in0_index, 0, 0, w0_w1_tiles_per_block / 4, 1, 4, 0);
                     in0_index += w0_w1_tiles_per_block / 4;
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -276,7 +276,8 @@ void kernel_main() {
                         }
                         dm1_tiles_remaining--;
 
-                        mm_w2.matmul(in2_index++, /*in1_index=*/k, /*dst_index=*/0);
+                        mm_w2.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
+                        in2_index++;
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }

@@ -289,7 +289,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             mm_cfg.out_cb_id = cb_out0;
             ckernel::TileMatmulOp mm(mm_cfg);
             mm.init_short();
-            mm.matmul(0, 0, 0);
+            mm.accumulate(0, 0, 0, 1, 0, 0, 0);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
@@ -330,16 +330,7 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     ckernel::TileMatmulOp mm(mm_cfg);
     mm.init();
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        mm.begin_subblock();
-        for (uint32_t kt = 0; kt < Kt; kt++) {
-            cb_wait_front(cb_in0, onetile);
-            cb_wait_front(cb_in1, onetile);
-            mm.matmul(0, 0, 0);
-            cb_pop_front(cb_in0, onetile);
-            cb_pop_front(cb_in1, onetile);
-        }
-        tile_regs_commit();
-        pack_onetile_to_cb(cb_out0);
+        mm.compute_one_tile(Kt);
     }
 }
 

@@ -177,9 +177,7 @@ struct Rope {
                 ckernel::TileMatmulOp mm_rope(rope_cfg);
                 mm_rope.init_short();
                 tile_regs_acquire();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    mm_rope.matmul(j, 0, j);
-                }
+                mm_rope.accumulate(0, 0, 0, Wt, 1, 0, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < Wt; ++j) {

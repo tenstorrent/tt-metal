@@ -1305,7 +1305,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         tile_regs_acquire();
 
-        mm.matmul(0, 0, 0);
+        mm.accumulate(0, 0, 0, 1, 0, 0, 0);
 
         tile_regs_commit();
         cb_pop_front(out_cb, subblock_h);

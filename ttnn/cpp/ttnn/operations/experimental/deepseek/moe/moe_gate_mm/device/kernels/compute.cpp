@@ -114,14 +114,14 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            mm.accumulate(tile_index, 0, 0, w_tiles_per_block / 2, 2);
+            mm.accumulate(tile_index, 0, 0, w_tiles_per_block / 2, 1, 2, 0);
             tile_index += w_tiles_per_block / 2;
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }
 
         // Last block
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
-        mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last / 2, 2);
+        mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last / 2, 1, 2, 0);
         tile_index += w_tiles_per_block_last / 2;
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
 
@@ -167,14 +167,14 @@ void kernel_main() {
     for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-        mm.accumulate(tile_index, 0, 0, w_tiles_per_block, 1);
+        mm.accumulate(tile_index, 0, 0, w_tiles_per_block, 1, 1, 0);
         tile_index += w_tiles_per_block;
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
 
     // Last block
     cb_wait_front(cb_r2c_w, w_tiles_per_block);
-    mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last, 1);
+    mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last, 1, 1, 0);
     tile_index += w_tiles_per_block_last;
 
     binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);

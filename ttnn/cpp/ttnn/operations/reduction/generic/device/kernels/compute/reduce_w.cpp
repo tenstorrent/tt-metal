@@ -47,7 +47,7 @@ void kernel_main() {
 #ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #else
-                mm.matmul(0, 0, 0);
+                mm.accumulate(0, 0, 0, 1, 0, 0, 0);
 #endif
                 cb0.pop_front(onetile);
             }
