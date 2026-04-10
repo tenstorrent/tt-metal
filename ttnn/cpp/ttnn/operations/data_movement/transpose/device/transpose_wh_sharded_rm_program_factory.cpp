@@ -190,9 +190,9 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
     std::map<std::string, std::string> compute_defines;
     compute_defines["SHARDED"] = "1";
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[im_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     CreateKernel(
         program,

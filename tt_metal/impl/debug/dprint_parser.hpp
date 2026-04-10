@@ -146,7 +146,7 @@ private:
         std::span<char> argument_types,
         std::span<const std::byte> payload_bytes,
         std::vector<ArgumentValue>& arguments);
-    static std::string_view format_message(
+    std::string_view format_message(
         ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
     // Loads all enum type definitions from DWARF debug info in the ELF file.

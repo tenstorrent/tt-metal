@@ -53,6 +53,7 @@ from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.profiler_utils import profiler_marker
 
 # Union type for models that share the same forward(input, mask) interface
 Model = Union[NanoGPT, Llama, DeepSeek]
@@ -398,12 +399,16 @@ def train_step(
 
     loss_float = get_loss_value(loss)
 
+    profiler_marker(None, "forward_pass_done")
+
     # Memory snapshot after forward pass
     if memory_snapshot_fn:
         memory_snapshot_fn("FORWARD_PASS")
 
     # Backward pass
     loss.backward(False)
+
+    profiler_marker(None, "backward_pass_done")
 
     # Memory snapshot after backward pass
     if memory_snapshot_fn:
@@ -433,8 +438,12 @@ def train_step(
                 False,  # error_if_nonfinite - set False to avoid errors on NaN
             )
 
+        profiler_marker(None, "gradient_sync_done")
+
         # Optimizer step
         optimizer.step()
+
+        profiler_marker(None, "optimizer_step_done")
 
         # Apply learning rate scheduler if provided)
         if compute_lr is not None:
@@ -1448,6 +1457,7 @@ def main():
                 batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
                 input_tokens, target_tokens = collate_fn(batch_samples, seq_len)
                 actual_batch_size = batch_end - batch_start
+                profiler_marker(None, "dataloader_step_done")
 
                 # Composite SDPA (used by DeepSeek) has no built-in causal masking,
                 # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
@@ -1513,6 +1523,10 @@ def main():
                         MemoryUsageTracker.clear()
                         if memory_guard:
                             memory_guard.release()
+
+                    profiler_marker(None, f"iteration_{global_step}", dump_results=True)
+                    if global_step == start_step + 1:
+                        profiler_marker(None, "compilation_finished")
 
                     if global_step >= max_steps:
                         break

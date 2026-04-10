@@ -56,7 +56,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
     if num_procs < 2:
         pytest.skip(f"Requires at least 2 distributed processes, got {num_procs}")
 
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     assert len(pipeline_config) == num_procs + 1
     assert 0 <= token_id < vocab_size
 
