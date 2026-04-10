@@ -94,16 +94,17 @@ void RunOneTest(
     }
 
     // Create compute kernels
-    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up for TRISCs is complete
-    auto num_processor_classes = hal.get_processor_classes_count(HalProgrammableCoreType::TENSIX);
-    if (!is_quasar && num_processor_classes > 1) {
-        auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
+    if (is_quasar) {
+        experimental::quasar::CreateKernel(
+            program_, path, coord, experimental::quasar::QuasarComputeConfig{.compile_args = compile_args});
+    } else {
         CreateKernel(program_, path, coord, ComputeConfig{.compile_args = compile_args});
-        for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
-            uint32_t processor_idx =
-                hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
-            add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
-        }
+    }
+    auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
+    for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
+        uint32_t processor_idx =
+            hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
+        add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
     }
 
     // Also run on idle ethernet, if present
