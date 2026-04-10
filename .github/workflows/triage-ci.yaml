@@ -19,4 +19,4 @@ jobs:
       consecutive-runs: ${{ inputs.consecutive-runs }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
