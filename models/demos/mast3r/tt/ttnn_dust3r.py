@@ -72,7 +72,136 @@ def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) ->
     return torch.cat((y, x), dim=-1)
 
 
-# ---------- Encoder block ----------
+# ---------- Encoder block (device-resident) ----------
+
+def _preload_enc_block_weights(state: dict, i: int, device) -> dict:
+    """Upload all weights for one encoder block once, returning ttnn tensors."""
+    tt = {}
+    tt["g1"] = _t2d(state[f"enc_blocks.{i}.norm1.weight"].reshape(1, 1, -1), device)
+    tt["b1"] = _t2d(state[f"enc_blocks.{i}.norm1.bias"].reshape(1, 1, -1), device)
+    tt["g2"] = _t2d(state[f"enc_blocks.{i}.norm2.weight"].reshape(1, 1, -1), device)
+    tt["b2"] = _t2d(state[f"enc_blocks.{i}.norm2.bias"].reshape(1, 1, -1), device)
+    tt["qkv_w"] = _t2d(state[f"enc_blocks.{i}.attn.qkv.weight"].t().contiguous(), device)
+    tt["qkv_b"] = _t2d(state[f"enc_blocks.{i}.attn.qkv.bias"].reshape(1, 1, -1), device)
+    tt["pw"] = _t2d(state[f"enc_blocks.{i}.attn.proj.weight"].t().contiguous(), device)
+    tt["pb"] = _t2d(state[f"enc_blocks.{i}.attn.proj.bias"].reshape(1, 1, -1), device)
+    tt["w1"] = _t2d(state[f"enc_blocks.{i}.mlp.fc1.weight"].t().contiguous(), device)
+    tt["b1f"] = _t2d(state[f"enc_blocks.{i}.mlp.fc1.bias"].reshape(1, 1, -1), device)
+    tt["w2"] = _t2d(state[f"enc_blocks.{i}.mlp.fc2.weight"].t().contiguous(), device)
+    tt["b2f"] = _t2d(state[f"enc_blocks.{i}.mlp.fc2.bias"].reshape(1, 1, -1), device)
+    return tt
+
+
+def encoder_block_device_pre(
+    tt_x,
+    pos: torch.Tensor,
+    tt_w: dict,
+    device,
+    heads: int = 16,
+):
+    """Encoder block with pre-uploaded device weights (no per-call upload)."""
+    shape = tt_x.shape
+    B, N, D = int(shape[0]), int(shape[1]), int(shape[2])
+    dh = D // heads
+
+    tt_n1 = ttnn.layer_norm(tt_x, weight=tt_w["g1"], bias=tt_w["b1"], epsilon=1e-6)
+    tt_qkv = ttnn.linear(tt_n1, tt_w["qkv_w"], bias=tt_w["qkv_b"])
+
+    qkv_host = ttnn.to_torch(tt_qkv).reshape(B, N, 3, heads, dh).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv_host[0], qkv_host[1], qkv_host[2]
+    q = _rope_apply(q, pos)
+    k = _rope_apply(k, pos)
+
+    tt_q = _t2d(q.reshape(B * heads, N, dh), device)
+    tt_k = _t2d(k.transpose(-2, -1).reshape(B * heads, dh, N).contiguous(), device)
+    tt_v = _t2d(v.reshape(B * heads, N, dh), device)
+    tt_scores = ttnn.matmul(tt_q, tt_k)
+    tt_scores = ttnn.multiply(tt_scores, 1.0 / math.sqrt(dh))
+    tt_attn = ttnn.softmax(tt_scores, dim=-1)
+    tt_ctx = ttnn.matmul(tt_attn, tt_v)
+
+    ctx_host = ttnn.to_torch(tt_ctx).reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    tt_ctx2 = _t2d(ctx_host, device)
+    tt_proj = ttnn.linear(tt_ctx2, tt_w["pw"], bias=tt_w["pb"])
+
+    tt_x = ttnn.add(tt_x, tt_proj)
+
+    tt_n2 = ttnn.layer_norm(tt_x, weight=tt_w["g2"], bias=tt_w["b2"], epsilon=1e-6)
+    tt_h = ttnn.linear(tt_n2, tt_w["w1"], bias=tt_w["b1f"])
+    tt_h = ttnn.gelu(tt_h)
+    tt_m = ttnn.linear(tt_h, tt_w["w2"], bias=tt_w["b2f"])
+
+    tt_x = ttnn.add(tt_x, tt_m)
+    return tt_x
+
+
+def encoder_block_device(
+    tt_x,  # ttnn tensor on device, (B, N, 1024)
+    pos: torch.Tensor,  # (B, N, 2) host
+    weights: dict,
+    device,
+    heads: int = 16,
+):
+    """Encoder block that keeps x on device end-to-end.
+
+    Only the attention q/k get briefly round-tripped to host for RoPE
+    (ttnn.experimental.rotary_embedding doesn't directly match DUSt3R's 2D
+     RoPE100 — TODO implement device RoPE).
+    """
+    # Read shape from x before work (tt_x shape == torch shape).
+    shape = tt_x.shape
+    B, N, D = int(shape[0]), int(shape[1]), int(shape[2])
+    dh = D // heads
+
+    # --- norm1 + qkv on device, keep residual ---
+    g1 = _t2d(weights["norm1.weight"].reshape(1, 1, -1), device)
+    b1 = _t2d(weights["norm1.bias"].reshape(1, 1, -1), device)
+    tt_n1 = ttnn.layer_norm(tt_x, weight=g1, bias=b1, epsilon=1e-6)
+
+    qkv_w = _t2d(weights["attn.qkv.weight"].t().contiguous(), device)
+    qkv_b = _t2d(weights["attn.qkv.bias"].reshape(1, 1, -1), device)
+    tt_qkv = ttnn.linear(tt_n1, qkv_w, bias=qkv_b)
+
+    # Round-trip qkv once for RoPE + attention (keeps attn on device for the bmm).
+    qkv_host = ttnn.to_torch(tt_qkv).reshape(B, N, 3, heads, dh).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv_host[0], qkv_host[1], qkv_host[2]
+    q = _rope_apply(q, pos)
+    k = _rope_apply(k, pos)
+
+    tt_q = _t2d(q.reshape(B * heads, N, dh), device)
+    tt_k = _t2d(k.transpose(-2, -1).reshape(B * heads, dh, N).contiguous(), device)
+    tt_v = _t2d(v.reshape(B * heads, N, dh), device)
+    tt_scores = ttnn.matmul(tt_q, tt_k)
+    tt_scores = ttnn.multiply(tt_scores, 1.0 / math.sqrt(dh))
+    tt_attn = ttnn.softmax(tt_scores, dim=-1)
+    tt_ctx = ttnn.matmul(tt_attn, tt_v)  # (B*H, N, dh)
+
+    # Permute heads/tokens back to (B, N, D) on host then re-upload for proj.
+    ctx_host = ttnn.to_torch(tt_ctx).reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    tt_ctx2 = _t2d(ctx_host, device)
+    pw = _t2d(weights["attn.proj.weight"].t().contiguous(), device)
+    pb = _t2d(weights["attn.proj.bias"].reshape(1, 1, -1), device)
+    tt_proj = ttnn.linear(tt_ctx2, pw, bias=pb)
+
+    tt_x = ttnn.add(tt_x, tt_proj)
+
+    # --- norm2 + mlp fully on device ---
+    g2 = _t2d(weights["norm2.weight"].reshape(1, 1, -1), device)
+    b2 = _t2d(weights["norm2.bias"].reshape(1, 1, -1), device)
+    tt_n2 = ttnn.layer_norm(tt_x, weight=g2, bias=b2, epsilon=1e-6)
+
+    w1 = _t2d(weights["mlp.fc1.weight"].t().contiguous(), device)
+    b1f = _t2d(weights["mlp.fc1.bias"].reshape(1, 1, -1), device)
+    tt_h = ttnn.linear(tt_n2, w1, bias=b1f)
+    tt_h = ttnn.gelu(tt_h)
+
+    w2 = _t2d(weights["mlp.fc2.weight"].t().contiguous(), device)
+    b2f = _t2d(weights["mlp.fc2.bias"].reshape(1, 1, -1), device)
+    tt_m = ttnn.linear(tt_h, w2, bias=b2f)
+
+    tt_x = ttnn.add(tt_x, tt_m)
+    return tt_x
+
 
 def encoder_block(
     x: torch.Tensor,
@@ -168,25 +297,17 @@ def full_encoder(
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
     pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
 
+    # Pre-upload all encoder block weights once (cached on module as a simple memo).
+    cache_key = id(state)
+    if not hasattr(full_encoder, "_cache") or full_encoder._cache_key != cache_key:
+        full_encoder._cache = [_preload_enc_block_weights(state, i, device) for i in range(depth)]
+        full_encoder._cache_key = cache_key
+
+    tt_x = _t2d(x, device)
     for i in range(depth):
-        w = {
-            "norm1.weight": state[f"enc_blocks.{i}.norm1.weight"],
-            "norm1.bias": state[f"enc_blocks.{i}.norm1.bias"],
-            "norm2.weight": state[f"enc_blocks.{i}.norm2.weight"],
-            "norm2.bias": state[f"enc_blocks.{i}.norm2.bias"],
-            "attn.qkv.weight": state[f"enc_blocks.{i}.attn.qkv.weight"],
-            "attn.qkv.bias": state[f"enc_blocks.{i}.attn.qkv.bias"],
-            "attn.proj.weight": state[f"enc_blocks.{i}.attn.proj.weight"],
-            "attn.proj.bias": state[f"enc_blocks.{i}.attn.proj.bias"],
-            "mlp.fc1.weight": state[f"enc_blocks.{i}.mlp.fc1.weight"],
-            "mlp.fc1.bias": state[f"enc_blocks.{i}.mlp.fc1.bias"],
-            "mlp.fc2.weight": state[f"enc_blocks.{i}.mlp.fc2.weight"],
-            "mlp.fc2.bias": state[f"enc_blocks.{i}.mlp.fc2.bias"],
-        }
-        x = encoder_block(x, pos, w, device)
+        tt_x = encoder_block_device_pre(tt_x, pos, full_encoder._cache[i], device)
 
     # Final enc_norm on device.
-    tt_x = _t2d(x, device)
     g = _t2d(state["enc_norm.weight"].reshape(1, 1, -1), device)
     b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
     tt_x = ttnn.layer_norm(tt_x, weight=g, bias=b, epsilon=1e-6)
