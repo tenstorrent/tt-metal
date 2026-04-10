@@ -73,7 +73,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("fmt_dram_addr"),
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
         get_named_compile_time_arg_val("fmt_per_core_bytes"),
-        get_named_compile_time_arg_val("accum_experts")>;
+        get_named_compile_time_arg_val("accum_experts"),
+        get_named_compile_time_arg_val("index_offset")>;
 
 #elif defined(COMPILE_FOR_BRISC)
     using SRAMArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
@@ -115,7 +116,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
         get_named_compile_time_arg_val("accum_experts"),
-        get_named_compile_time_arg_val("dram_fuse_silu")>;
+        get_named_compile_time_arg_val("dram_fuse_silu"),
+        get_named_compile_time_arg_val("index_offset")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

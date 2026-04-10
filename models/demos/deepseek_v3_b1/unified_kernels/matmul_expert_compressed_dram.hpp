@@ -73,7 +73,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t fmt_dram_addr_,
         uint32_t fmt_per_expert_bytes_,
         uint32_t fmt_per_core_bytes_,
-        uint32_t accum_experts_ = 0>
+        uint32_t accum_experts_ = 0,
+        uint32_t index_offset_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -102,6 +103,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t fmt_per_expert_bytes = fmt_per_expert_bytes_;
         static constexpr uint32_t fmt_per_core_bytes = fmt_per_core_bytes_;
         static constexpr bool accum_experts = accum_experts_ != 0;
+        static constexpr uint32_t index_offset = index_offset_;
     };
 
     template <
@@ -120,7 +122,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
         uint32_t accum_experts_ = 0,
-        uint32_t fuse_silu_ = 0>
+        uint32_t fuse_silu_ = 0,
+        uint32_t index_offset_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -138,6 +141,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t cb_fmt = cb_fmt_;
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr bool fuse_silu = fuse_silu_ != 0;
+        static constexpr uint32_t index_offset = index_offset_;
     };
 
     struct WriterCTArgs {};
@@ -182,7 +186,7 @@ struct MatmulExpertCompressedDRAM {
             bool first_dram_expert = true;
 
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t expert_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                uint32_t expert_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (!is_dram_arr[expert_idx]) {
                     continue;  // Skip SRAM experts
                 }
@@ -323,7 +327,7 @@ struct MatmulExpertCompressedDRAM {
             uint32_t num_dram_experts = 0;
             uint32_t dram_expert_eids[num_active_experts];
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i]);
+                uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (!is_dram_arr[eid]) {
                     continue;
                 }

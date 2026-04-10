@@ -214,6 +214,7 @@ def _build_program_for_device(
     sram_k_offsets: list = None,
     sram_out_tensor=None,
     dram_fuse_silu: bool = False,
+    index_offset: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -313,6 +314,7 @@ def _build_program_for_device(
         ("sram_k_per_core", sram_k_per_core),
         ("cb_out_sram", cb_out_sram),
         ("dram_fuse_silu", 1 if dram_fuse_silu else 0),
+        ("index_offset", index_offset),
     ]
 
     # Per-core descriptors.
@@ -854,6 +856,7 @@ class ExpertKernel:
         accum_experts: bool = False,
         sram_output_tensor: ttnn.Tensor = None,
         dram_fuse_silu: bool = False,
+        tp_expert: bool = True,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -885,6 +888,12 @@ class ExpertKernel:
             assert sram_core_grid is not None, "sram_core_grid must be set when has_sram=True"
             assert sram_fmt_tensors is not None, "sram_fmt_tensors must be set when has_sram=True"
             assert sram_output_tensor is not None, "sram_output_tensor must be set when has_sram=True"
+
+        if not tp_expert:
+            assert not has_sram, "Expert parallel (tp_expert=False) only supports DRAM matmul"
+            assert (
+                not accum_experts
+            ), "Expert parallel (tp_expert=False) processes 1 expert per device, accum not applicable"
 
         a_per_device = ttnn.get_device_tensors(a_tensor)
         out_per_device = ttnn.get_device_tensors(output_tensor)
@@ -937,11 +946,12 @@ class ExpertKernel:
                 sram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in sram_core_set]
                 dram_active_cv = [(c, 1) for c in all_cores_dev if (c.x, c.y) in dram_core_set]
 
+                dev_num_active = 1 if not tp_expert else num_active_experts
                 program = _build_program_for_device(
                     a_dev,
                     out_dev,
                     idx_dev,
-                    num_active_experts=num_active_experts,
+                    num_active_experts=dev_num_active,
                     sram_cts=sram_cts if has_sram else None,
                     sram_fmt_addrs=sram_fmt_l1,
                     sram_active_flags=sram_active_cv,
@@ -963,6 +973,7 @@ class ExpertKernel:
                     sram_k_offsets=sram_k_offsets,  # computed above
                     sram_out_tensor=sram_out_dev,
                     dram_fuse_silu=dram_fuse_silu,
+                    index_offset=dev_idx if not tp_expert else 0,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
