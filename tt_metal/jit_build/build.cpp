@@ -4,12 +4,14 @@
 
 #include "build.hpp"
 
+#include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -578,10 +580,13 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
 
     sync_build_steps(events);
+
+    BuildCacheTelemetry::inst().record_compile(this->srcs_.size(), compiled.count());
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -691,6 +696,7 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
+    auto t0_build = std::chrono::steady_clock::now();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -767,20 +773,35 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
     extract_zone_src_locations(out_dir);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
+    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    tok_build.record(elapsed_ms);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
+    auto t0 = std::chrono::steady_clock::now();
 
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
+    auto t0 = std::chrono::steady_clock::now();
+
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
     write_successful_jit_build_marker(primary, settings);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -807,7 +828,9 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events) {
 }
 
 void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
-    JitBuildCache::inst().build_once(hash, build_fn);
+    if (!JitBuildCache::inst().build_once(hash, build_fn)) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
 }
 
 void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
