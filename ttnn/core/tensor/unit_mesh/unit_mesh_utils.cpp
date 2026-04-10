@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include <ttnn/tensor/unit_mesh/unit_mesh_error.hpp>
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
@@ -11,6 +12,7 @@
 #include <tt-metalium/allocator_state.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include <fmt/format.h>
 
 namespace tt::tt_metal::experimental::unit_mesh {
 
@@ -33,7 +35,9 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
 }  // namespace
 
 Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
-    TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
+    if (tensors.empty()) {
+        throw ttnn::UnitMeshEmptyTensorVector("Cannot aggregate empty tensor vector");
+    }
 
     // Validate all tensors are allocated on the unit meshes.
     std::vector<tt::tt_metal::distributed::MeshDevice*> devices;
@@ -46,7 +50,10 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
             "Cannot aggregate tensors when unit mesh has non-default sub-device manager");
 
         const auto& shape = device->shape();
-        TT_FATAL(shape.mesh_size() == 1, "Expected unit mesh (1x1), but got mesh of size {}", shape.mesh_size());
+        if (shape.mesh_size() != 1) {
+            throw ttnn::UnitMeshNotUnitMesh(
+                fmt::format("Expected unit mesh (1x1), but got mesh of size {}", shape.mesh_size()));
+        }
 
         devices.push_back(device);
     }
@@ -54,7 +61,9 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     // Validate all devices have the same parent mesh.
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> parent_mesh = tensors[0].device()->get_parent_mesh();
     TT_FATAL(parent_mesh != nullptr, "First device must have a parent mesh");
-    TT_FATAL(parent_mesh->shape().mesh_size() == tensors.size(), "Input tensors must span the entire parent mesh");
+    if (parent_mesh->shape().mesh_size() != tensors.size()) {
+        throw ttnn::UnitMeshTensorsNotSpanningMesh("Input tensors must span the entire parent mesh");
+    }
     TT_FATAL(
         parent_mesh->get_active_sub_device_manager_id() == parent_mesh->get_default_sub_device_manager_id(),
         "Cannot aggregate tensors when parent mesh has non-default sub-device manager");
@@ -69,9 +78,12 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     const auto& reference_spec = tensors[0].tensor_spec();
     auto reference_address = tensors[0].mesh_buffer().address();
     for (size_t i = 1; i < tensors.size(); i++) {
-        TT_FATAL(tensors[i].tensor_spec() == reference_spec, "All tensors must have the same TensorSpec");
-        TT_FATAL(
-            tensors[i].mesh_buffer().address() == reference_address, "All mesh buffers must be at the same address");
+        if (tensors[i].tensor_spec() != reference_spec) {
+            throw ttnn::UnitMeshTensorSpecMismatch("All tensors must have the same TensorSpec");
+        }
+        if (tensors[i].mesh_buffer().address() != reference_address) {
+            throw ttnn::UnitMeshBufferAddressMismatch("All mesh buffers must be at the same address");
+        }
     }
 
     synchronize_parent_allocator_with_submeshes(parent_mesh.get());
@@ -110,11 +122,12 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id(),
         "Cannot disaggregate tensor when parent mesh has non-default sub-device manager");
     const auto submeshes = mesh_device->get_submeshes();
-    TT_FATAL(
-        submeshes.size() == mesh_device->shape().mesh_size(),
-        "Number of submeshes ({}) must match mesh size ({})",
-        submeshes.size(),
-        mesh_device->shape().mesh_size());
+    if (submeshes.size() != mesh_device->shape().mesh_size()) {
+        throw ttnn::UnitMeshSubmeshCountMismatch(fmt::format(
+            "Number of submeshes ({}) must match mesh size ({})",
+            submeshes.size(),
+            mesh_device->shape().mesh_size()));
+    }
     for (const auto& submesh : submeshes) {
         const auto& submesh_shape = submesh->shape();
         TT_FATAL(

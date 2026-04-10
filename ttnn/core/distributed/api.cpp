@@ -4,9 +4,13 @@
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/api.hpp"
+#include <ttnn/distributed/mesh_tensor_error.hpp>
 
 #include <memory>
+#include <algorithm>
+#include <unordered_set>
 
+#include <fmt/format.h>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -87,12 +91,17 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
 }
 
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {
-    TT_FATAL(tensor_shards.size() == mesh_shape.mesh_size(), "Number of tensor shards must match mesh size");
+    if (tensor_shards.size() != mesh_shape.mesh_size()) {
+        throw MeshTensorShardCountMismatch("Number of tensor shards must match mesh size");
+    }
     const auto& reference_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
-        TT_FATAL(shard.storage_type() == StorageType::HOST, "All tensor shards must be on host");
-        TT_FATAL(
-            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
+        if (shard.storage_type() != StorageType::HOST) {
+            throw MeshTensorShardsNotOnHost("All tensor shards must be on host");
+        }
+        if (shard.tensor_spec() != reference_shard.tensor_spec()) {
+            throw MeshTensorSpecMismatch("All tensor shards must have the same tensor spec");
+        }
     }
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
@@ -124,6 +133,32 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             tensor_shards.end(),
             [&](const auto& shard) { return shard.tensor_spec() == reference_shard.tensor_spec(); }),
         "All tensor shards must have the same spec");
+
+    // Validate all shards point to the same underlying mesh buffer.
+    const auto reference_mesh_buffer = reference_shard.device_storage().get_mesh_buffer_leak_ownership();
+    for (const auto& shard : tensor_shards) {
+        if (shard.device_storage().get_mesh_buffer_leak_ownership() != reference_mesh_buffer) {
+            throw MeshTensorBufferMismatch(
+                "All tensor shards must be allocated on the same mesh buffer.");
+        }
+    }
+
+    // Validate there are no duplicate coordinates.
+    std::vector<distributed::MeshCoordinate> all_coords;
+    all_coords.reserve(tensor_shards.size());
+    for (const auto& shard : tensor_shards) {
+        for (const auto& coord : shard.device_storage().get_coords()) {
+            all_coords.push_back(coord);
+        }
+    }
+    std::unordered_set<distributed::MeshCoordinate> seen_coords;
+    for (const auto& coord : all_coords) {
+        auto [it, inserted] = seen_coords.insert(coord);
+        if (!inserted) {
+            throw MeshTensorDuplicateCoordinate(
+                fmt::format("Found a tensor shard at duplicate coordinate {}", coord));
+        }
+    }
 
     // Combine the storages
     std::vector<std::reference_wrapper<const DeviceStorage>> device_storages;
