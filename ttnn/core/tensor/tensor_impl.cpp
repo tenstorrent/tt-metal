@@ -569,29 +569,25 @@ Tensor to_host(distributed::MeshCommandQueue& cq, const Tensor& tensor, bool blo
 //                               .to_device() details
 // ======================================================================================
 
-Tensor to_device(
+MeshTensor to_device(
     distributed::MeshCommandQueue& cq,
-    const Tensor& tensor,
+    const HostTensor& host_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
-    if (tensor.storage_type() == StorageType::DEVICE) {
-        return tensor;  // Tensor already on device
-    }
-
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
-        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(*memory_config);
+        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
                                   ? &tensor_spec_overriden_memory_config.value()
-                                  : &tensor.tensor_spec();
+                                  : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, tensor.tensor_topology());
-    tt::tt_metal::tensor_impl::copy_to_device(cq, tensor.host_tensor(), result);
-    return Tensor(std::move(result));
+    auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, host_tensor.tensor_topology());
+    tt::tt_metal::tensor_impl::copy_to_device(cq, host_tensor, result);
+    return result;
 }
 
 void copy_to_host(distributed::MeshCommandQueue& cq, const Tensor& device_tensor, Tensor& host_tensor, bool blocking) {
@@ -749,14 +745,24 @@ void copy_to_host(
     tensor_impl::copy_to_host(cq, device_tensor, host_tensor, blocking);
 }
 
-std::pair<Tensor, std::vector<distributed::MeshCoordinate>> to_device(
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
     distributed::MeshCommandQueue& cq,
-    const Tensor& host_tensor,
+    const HostTensor& host_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
-    auto result = tensor_impl::to_device(cq, host_tensor, mesh_device, memory_config);
-    auto coords_span = result.device_storage().get_coords();
-    auto coords = std::vector<distributed::MeshCoordinate>(coords_span.begin(), coords_span.end());
+    TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
+
+    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
+    if (memory_config) {
+        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+    }
+
+    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
+                                  ? &tensor_spec_overriden_memory_config.value()
+                                  : &host_tensor.tensor_spec();
+
+    auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, host_tensor.tensor_topology());
+    auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(cq, host_tensor, result);
     return {std::move(result), std::move(coords)};
 }
 

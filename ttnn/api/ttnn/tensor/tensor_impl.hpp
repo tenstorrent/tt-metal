@@ -100,9 +100,9 @@ Tensor to_host(distributed::MeshCommandQueue& cq, const Tensor& tensor, bool blo
 void copy_to_host(
     distributed::MeshCommandQueue& cq, const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true);
 
-Tensor to_device(
+MeshTensor to_device(
     distributed::MeshCommandQueue& cq,
-    const Tensor& tensor,
+    const HostTensor& host_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
@@ -127,9 +127,9 @@ void copy_to_host(
     std::span<const distributed::MeshCoordinate> coords,
     bool blocking = true);
 
-std::pair<Tensor, std::vector<distributed::MeshCoordinate>> to_device(
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
     distributed::MeshCommandQueue& cq,
-    const Tensor& host_tensor,
+    const HostTensor& host_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
