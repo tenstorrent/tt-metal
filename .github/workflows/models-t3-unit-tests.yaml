@@ -69,12 +69,7 @@ permissions:
   packages: write
   contents: write
 
-run-name: >-
-  [Tier 3] Models Unit${{
-    github.event_name == 'schedule'
-    && format(' ({0})', github.event.schedule)
-    || ''
-  }}
+run-name: "[Tier 3] Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
   resolve-skus:
@@ -83,7 +78,7 @@ jobs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       model: ${{ steps.resolve.outputs.model }}
     steps:
-      - name: Resolve SKU and model (scheduled runs mirror legacy pipeline scope)
+      - name: Resolve SKU and model selection
         id: resolve
         run: |
           ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
