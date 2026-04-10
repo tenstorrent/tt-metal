@@ -169,7 +169,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     auto& cq = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     Tensor output;
     if (input_tensor.device_storage().is_uniform_storage()) {
-        output = tensor_impl::to_host(cq, input_tensor, blocking);
+        output = Tensor(tensor_impl::to_host(cq, input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
         output = tensor_impl::non_uniform_data_movement::to_host(cq, input_tensor, coords, blocking);

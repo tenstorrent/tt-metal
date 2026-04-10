@@ -545,24 +545,22 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
-Tensor to_host(distributed::MeshCommandQueue& cq, const Tensor& tensor, bool blocking) {
-    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
-    const auto& storage = tensor.device_storage();
-    const auto& mesh_buffer = storage.get_mesh_buffer_leak_ownership();
-    distributed::MeshDevice* device = mesh_buffer->device();
+HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
+    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto& device = device_tensor.device();
 
-    // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device.get_view());
 
+    distributed::MeshCoordinateRange all_coords(device.shape());
+    std::vector<distributed::MeshCoordinate> coords(all_coords.begin(), all_coords.end());
     distributed_host_buffer.emplace_shards(
-        std::vector<distributed::MeshCoordinate>(storage.get_coords().begin(), storage.get_coords().end()),
-        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
+        coords,
+        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(device_tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    HostTensor host_tensor(std::move(distributed_host_buffer), tensor.tensor_spec(), tensor.tensor_topology());
-    return Tensor(std::move(host_tensor));
+    return HostTensor(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
 }
 
 // ======================================================================================
@@ -731,9 +729,23 @@ namespace non_uniform_data_movement {
 Tensor to_host(
     distributed::MeshCommandQueue& cq,
     const Tensor& tensor,
-    std::span<const distributed::MeshCoordinate> coords [[maybe_unused]],
+    std::span<const distributed::MeshCoordinate> coords,
     bool blocking) {
-    return tensor_impl::to_host(cq, tensor, blocking);
+    const auto& mesh_tensor = tensor.mesh_tensor();
+    auto mesh_buffer = mesh_tensor.mesh_buffer_invariant_breaking();
+
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_tensor.device().get_view());
+
+    distributed_host_buffer.emplace_shards(
+        {coords.begin(), coords.end()},
+        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
+    cq.enqueue_read(mesh_buffer, distributed_host_buffer, shard_set, blocking);
+
+    HostTensor host_tensor(std::move(distributed_host_buffer), tensor.tensor_spec(), tensor.tensor_topology());
+    return Tensor(std::move(host_tensor));
 }
 
 void copy_to_host(
