@@ -142,8 +142,6 @@ class LogProbsCalculator:
         batch_size: int = 32,
         use_topk_logprobs: bool = False,
     ):
-        self.global_max = None
-        self.global_exp_sum = None
         self.mesh_device = mesh_device
         self.enable_log_probs = False  # default to False
         # Per-user boolean array tracking which users have logprobs enabled
@@ -360,9 +358,9 @@ class LogProbsCalculator:
         gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, D, B), **self.common_args)
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
-        self.global_max = ttnn.max(gathered_max_tensors, dim=2, keepdim=True, **self.common_args)
+        global_max = ttnn.max(gathered_max_tensors, dim=2, keepdim=True, **self.common_args)
 
-        global_max_to_subtract = ttnn.to_layout(self.global_max, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        global_max_to_subtract = ttnn.to_layout(global_max, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         global_max_to_subtract = ttnn.reshape(global_max_to_subtract, (1, 1, B, 1), **self.common_args)
         global_max_to_subtract = ttnn.to_layout(global_max_to_subtract, ttnn.TILE_LAYOUT, **self.common_args)
 
@@ -386,8 +384,9 @@ class LogProbsCalculator:
         gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
-        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
-        ttnn.deallocate(gathered_sum_exp_tensors)
+        global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
+        return global_max, global_exp_sum
+        
 
     def _is_supported(self):
         """Check if logprobs computation is supported on this device configuration."""
@@ -472,13 +471,18 @@ class LogProbsCalculator:
 
         return selected_logits_tensor
 
-    def _calculate_log_probs(self, sampled_logits_tensor: ttnn.Tensor):
+    def _calculate_log_probs(
+        self,
+        sampled_logits_tensor: ttnn.Tensor,
+        global_max: ttnn.Tensor,
+        global_exp_sum: ttnn.Tensor,
+    ):
         """
         Calculate log-probs for a given logits tensor with formula:
         log-prob(x) = logits(x) - global_max - log(global_exp_sum)
         """
-        out = ttnn.subtract(sampled_logits_tensor, self.global_max, **self.common_args)
-        log_global_exp_sum = ttnn.log(self.global_exp_sum, **self.common_args)
+        out = ttnn.subtract(sampled_logits_tensor, global_max, **self.common_args)
+        log_global_exp_sum = ttnn.log(global_exp_sum, **self.common_args)
         # Subtract and put result to self.output_tensor
         ttnn.subtract(out, log_global_exp_sum, output_tensor=self.output_tensor, **self.common_args)
 
@@ -503,13 +507,13 @@ class LogProbsCalculator:
             logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
 
         # Compute global max and global sum(exp(logits - global_max)) for each chip
-        self._compute_global_stats(logits_tensor)
+        global_max, global_exp_sum = self._compute_global_stats(logits_tensor)
 
         # Prepare relevant logits for each user on each chip
         relevant_logits = self._prepare_relevant_logits(logits_tensor, indices_tensor)
 
         # Calculate log-probs for each user on each chip and stores in self.output_tensor
-        self._calculate_log_probs(relevant_logits)
+        self._calculate_log_probs(relevant_logits, global_max, global_exp_sum)
 
         return self.output_tensor
 
