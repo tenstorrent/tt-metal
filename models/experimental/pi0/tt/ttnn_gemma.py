@@ -401,17 +401,18 @@ class GemmaAttentionTTNN:
             if self._kv_concat_k is None:
                 # First call: pre-allocate with logical shape (prefix_len + suffix_len)
                 # and populate prefix + suffix via fill_cache
+                # L1 memory config for SDPA speedup (~5us/call faster than DRAM)
                 full_seq = prefix_len + suffix_len
                 cache_dtype = past_k.dtype
                 self._kv_concat_k = ttnn.zeros(
                     [1, self.num_kv_heads, full_seq, self.head_dim],
                     dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 self._kv_concat_v = ttnn.zeros(
                     [1, self.num_kv_heads, full_seq, self.head_dim],
                     dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
                 ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
