@@ -85,16 +85,13 @@ def test_experts(batch_size, seq_len, device):
 
 @skip_if_not_moe
 @parametrize_batch_seq(configs=[(1, 1), (1, 32)], ids=["decode", "prefill_32"])
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
 def test_experts_tp(batch_size, seq_len, mesh_device):
-    """Test MoE experts with TP on multi-device mesh against HF reference.
+    """Test MoE experts with TP on T3K (TP=8) against HF reference.
 
     Uses real model dimensions (128 experts, 704 intermediate, 2816 hidden).
     TP-shards expert weights with tile-aligned padding.
-
-    Filter by mesh shape:
-        pytest -k "1x2"   # N300 / TP=2
-        pytest -k "1x8"   # T3K  / TP=8
+    Requires T3K (TP=8) — 128 experts with replicated weights don't fit on N300 (TP=2).
     """
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
