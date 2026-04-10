@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+
 import pytest
 import torch
 import transformers
@@ -15,6 +17,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
@@ -488,9 +491,10 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1, 2])
+# Single batch: distil-large-v3 + preprocess_model_parameters peaks host RAM; mel length 3000 per HF.
+@pytest.mark.parametrize("batch_size_per_device", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+# device_params (l1 + trace_region) set in tests/conftest.py for encoder capture/replay.
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
@@ -510,6 +514,8 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
         prefix="encoder",
         device=mesh_device,
     )
+    del model
+    gc.collect()
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config=config,
@@ -519,14 +525,47 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
         weights_mesh_mapper=weights_mesh_mapper,
         input_mesh_mapper=input_mesh_mapper,
     )
-    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    trace_key = batch_size_per_device
 
-    # 4D to 3D and unpadding
-    if len(output.shape) == 4:
-        output = output.squeeze(1)
+    encoder_trace_state = EncoderTraceState()
+    try:
+        output = run_encoder_traced_or_eager(
+            mesh_device,
+            config,
+            ttnn_parameters,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=True,
+            trace_state=encoder_trace_state,
+        )
+        ttnn.synchronize_device(mesh_device)
+        # Pull capture result to host before replay: second call reuses the same device output buffer.
+        out_capture_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+
+        output_replay = run_encoder_traced_or_eager(
+            mesh_device,
+            config,
+            ttnn_parameters,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=True,
+            trace_state=encoder_trace_state,
+        )
+        ttnn.synchronize_device(mesh_device)
+        replay_torch = ttnn.to_torch(output_replay, mesh_composer=output_mesh_composer)
+    finally:
+        encoder_trace_state.release_all(mesh_device)
+
+    if len(out_capture_torch.shape) == 4:
+        out_capture_torch = out_capture_torch.squeeze(1)
+    if len(replay_torch.shape) == 4:
+        replay_torch = replay_torch.squeeze(1)
     sequence_size = torch_output.shape[-2]
-    output = output[:, :sequence_size, :]
+    out_capture_torch = out_capture_torch[:, :sequence_size, :]
+    replay_torch = replay_torch[:, :sequence_size, :]
+    _, pcc_replay = assert_with_pcc(out_capture_torch, replay_torch, 0.999)
+    logger.info(f"Encoder trace replay PCC (capture vs execute_trace): {pcc_replay}")
+    output = replay_torch
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
