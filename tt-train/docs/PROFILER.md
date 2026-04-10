@@ -131,7 +131,8 @@ The directory contains the following files:
 | `tracy_profile_log_host.tracy`     | Host-side Tracy profiler log, which can be opened with the Tracy GUI.                            |
 
 
-Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my_custom_marker")`
+Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my_custom_marker", dump_results=True)` for a final or periodic flush.
+At least one call with `dump_results=True` is required to produce or update the device-side profiling artifacts.
 
 ---
 
