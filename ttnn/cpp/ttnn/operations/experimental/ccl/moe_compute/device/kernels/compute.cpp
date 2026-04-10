@@ -5,7 +5,9 @@
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+
+using namespace compute_kernel_lib;
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -165,15 +167,8 @@ void kernel_main() {
             PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
             // Initialize matmul for W0
-            ckernel::MatmulOpConfig w0_w1_cfg{};
-            w0_w1_cfg.in0_cb_id = cb_s2c_in;
-            w0_w1_cfg.in1_cb_id = cb_r2c_w0_w1;
-            w0_w1_cfg.out_cb_id = cb_s2c_in2;
-            w0_w1_cfg.ct_dim = 4;
-            w0_w1_cfg.rt_dim = 1;
-            w0_w1_cfg.kt_dim = 1;
-            ckernel::BlockMatmulOp mm(w0_w1_cfg);
-            mm.init();
+            auto w0_w1_cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, 4, 1, 1);
+            matmul_init<BLOCK>(w0_w1_cfg);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
@@ -199,7 +194,7 @@ void kernel_main() {
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                    mm.accumulate(in0_index, 0, 0, w0_w1_tiles_per_block / 4, 1, 4, 0);
+                    matmul_accumulate<BLOCK>(w0_w1_cfg, in0_index, 0, 0, w0_w1_tiles_per_block / 4, 1, 4, 0);
                     in0_index += w0_w1_tiles_per_block / 4;
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -239,22 +234,16 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
-            ckernel::MatmulOpConfig w2_cfg{};
-            w2_cfg.in0_cb_id = cb_s2c_in2;
-            w2_cfg.in1_cb_id = cb_r2c_w2;
-            w2_cfg.out_cb_id = cb_c2s_out;
-            w2_cfg.ct_dim = 4;
-            w2_cfg.rt_dim = 1;
-            w2_cfg.kt_dim = 1;
-            ckernel::BlockMatmulOp mm_w2(w2_cfg);
+            auto w2_cfg = MatmulConfig::block(cb_s2c_in2, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 cb_wait_front(cb_w2c_rdy, 1);
-                ckernel::MoeDm1State dm1{0, moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0], 0, 0, 0};
+                MoeDm1State dm1{0, moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0], 0, 0, 0};
 
                 tile_regs_acquire();
-                mm_w2.moe_w2_accumulate_with_dm1_linear(
+                matmul_moe_w2_accumulate_with_dm1_linear<BLOCK>(
+                    w2_cfg,
                     dm1,
                     w2_blocks_per_four_mm2_tile,
                     w2_tiles_per_block,

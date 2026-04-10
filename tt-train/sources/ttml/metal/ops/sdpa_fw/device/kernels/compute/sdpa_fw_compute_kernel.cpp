@@ -23,11 +23,13 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/mask.h"
-#include "api/compute/matmul_op.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "sdpa_compute_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+
+using namespace compute_kernel_lib;
 
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
@@ -90,21 +92,16 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    ckernel::MatmulOpConfig qk_cfg{};
-    qk_cfg.in0_cb_id = cb_query;
-    qk_cfg.in1_cb_id = cb_key;
-    qk_cfg.out_cb_id = 0;
-    qk_cfg.transpose = true;
-    ckernel::TileMatmulOp mm_qk(qk_cfg);
+    auto qk_cfg = MatmulConfig::tile(cb_query, cb_key, 0, /*trans=*/true);
 
     const uint32_t matmul_accum_reg = 0;
     for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
         cb_wait_front(cb_key, qWt);
 
         reconfig_data_format(cb_query, cb_key);
-        mm_qk.init_short();
+        matmul_init_short<TILE>(qk_cfg);
         tile_regs_acquire();
-        mm_qk.accumulate(0, 0, matmul_accum_reg, qWt, 1, 1, 0);
+        matmul_accumulate<TILE>(qk_cfg, 0, 0, matmul_accum_reg, qWt, 1, 1, 0);
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
         // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
@@ -234,12 +231,8 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    ckernel::MatmulOpConfig init_cfg{};
-    init_cfg.in0_cb_id = cb_query;
-    init_cfg.in1_cb_id = cb_key;
-    init_cfg.out_cb_id = cb_qk_result;
-    ckernel::TileMatmulOp mm_init_op(init_cfg);
-    mm_init_op.init();
+    auto init_cfg = MatmulConfig::tile(cb_query, cb_key, cb_qk_result);
+    matmul_init<TILE>(init_cfg);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 

@@ -4,13 +4,15 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+
+using namespace compute_kernel_lib;
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -219,7 +221,7 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    ckernel::MatmulOpConfig cfg{};
+    MatmulConfig cfg{};
     cfg.in0_cb_id = in0_cb_id;
     cfg.in1_cb_id = in1_cb_id;
     cfg.out_cb_id = mm_partials_cb_ids[0];
@@ -228,8 +230,7 @@ void kernel_main() {
     cfg.kt_dim = in0_block_w;
     cfg.transpose = in1_transpose_tile;
     cfg.partials_cb_id = spill ? mm_partials_cb_ids[0] : 0u;
-    ckernel::BlockMatmulOp mm(cfg);
-    mm.init();
+    matmul_init<BLOCK>(cfg);
 
     for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
@@ -317,19 +318,19 @@ void kernel_main() {
                 // This should always be 0 when reading in1 from DRAM
                 int in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
 #endif
-                // Per-block MatmulOp with input0_cb_id (varies per ring iteration)
-                ckernel::MatmulOpConfig block_cfg = mm.config();
+                // Per-block config with input0_cb_id (varies per ring iteration)
+                MatmulConfig block_cfg = cfg;
                 block_cfg.in0_cb_id = input0_cb_id;
-                ckernel::BlockMatmulOp block_mm(block_cfg);
 
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    block_mm.begin_subblock();
+                    tile_regs_acquire();
                     if (enable_reload) {
-                        block_mm.reload_partials(out_subblock_num_tiles);
+                        matmul_reload_partials<BLOCK>(block_cfg, out_subblock_num_tiles);
                     }
 
 #ifndef SKIP_COMPUTE
-                    block_mm.accumulate(
+                    matmul_accumulate<BLOCK>(
+                        block_cfg,
                         in0_index_subblock_offset,
                         in1_index_subblock_offset,
                         0,

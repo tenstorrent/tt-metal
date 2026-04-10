@@ -10,7 +10,7 @@
 
 #include <type_traits>
 
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
@@ -23,6 +23,8 @@
 #define SDPA_NOINLINE __attribute__((noinline, noclone))
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
+
+using namespace compute_kernel_lib;
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
@@ -93,21 +95,13 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t inner_dim,
     uint32_t matmul_stride,
     bool trigger_reduce = false) {
-    ckernel::MatmulOpConfig bm_cfg{};
-    bm_cfg.in0_cb_id = in0_cb;
-    bm_cfg.in1_cb_id = in1_cb;
-    bm_cfg.out_cb_id = out_cb;
-    bm_cfg.ct_dim = subblock_w;
-    bm_cfg.rt_dim = subblock_h;
-    bm_cfg.kt_dim = matmul_stride;
-    bm_cfg.transpose = transpose;
-    ckernel::BlockMatmulOp bm(bm_cfg);
+    auto bm_cfg = MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, matmul_stride, transpose);
 
-    bm.begin_subblock();
+    tile_regs_acquire();
 #ifdef ARCH_BLACKHOLE
-    bm.accumulate_no_mop(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
+    matmul_accumulate_no_mop<BLOCK>(bm_cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
 #else
-    bm.accumulate(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
+    matmul_accumulate<BLOCK>(bm_cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
 #endif
     tile_regs_commit();
 
@@ -496,15 +490,8 @@ void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-            ckernel::MatmulOpConfig norm_cfg{};
-            norm_cfg.in0_cb_id = cur_sum_cb;
-            norm_cfg.in1_cb_id = col_identity_cb;
-            norm_cfg.out_cb_id = scratch_cb;
-            norm_cfg.ct_dim = N;
-            norm_cfg.rt_dim = 1;
-            norm_cfg.kt_dim = N;
-            ckernel::BlockMatmulOp norm_mm(norm_cfg);
-            norm_mm.init_short();
+            auto norm_cfg = MatmulConfig::block(cur_sum_cb, col_identity_cb, scratch_cb, N, 1, N);
+            matmul_init_short<BLOCK>(norm_cfg);
             reconfig_data_format(col_identity_cb, cur_sum_cb);
 
             cb_wait_front(col_identity_cb, N);
@@ -512,7 +499,7 @@ void normalize_row_streaming(
 
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
-            norm_mm.matmul_one_tile(0, 0, 0);
+            matmul_tile<BLOCK>(norm_cfg, 0, 0, 0);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0, (int)VectorMode::C)));
