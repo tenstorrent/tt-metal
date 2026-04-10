@@ -48,6 +48,8 @@ Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
@@ -57,15 +59,6 @@ from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     shared_down_torch_for_cache,
     shuffle_dram_tiles,
 )
-
-# BSPM mixed-precision integration (optional — requires compressed_tensor package)
-try:
-    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
-    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
-
-    HAS_BSPM_SUPPORT = True
-except ImportError:
-    HAS_BSPM_SUPPORT = False
 
 # MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
@@ -140,11 +133,11 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
 
     # CompressedTensor wraps a ttnn.Tensor in .data — unwrap for device check.
     first = tensors[0]
-    check_tensor = first.data if hasattr(first, "data") and isinstance(first.data, ttnn.Tensor) else first
+    check_tensor = first.data if isinstance(first, CompressedTensor) else first
     if not ttnn.is_tensor_storage_on_device(check_tensor):
         return
 
-    if hasattr(first, "data") and isinstance(first.data, ttnn.Tensor):
+    if isinstance(first, CompressedTensor):
         # CompressedTensor path: stride is variable-size (packed bytes), not tile-formula.
         # Deduce expected stride from the gap between first two experts.
         addrs = [t.buffer_address() for t in tensors]
@@ -1050,7 +1043,7 @@ def _compute_bspm_max_shard_bytes(
     return ((max_shard + dram_align - 1) // dram_align) * dram_align
 
 
-def _prepare_moe_routed_experts_bspm(
+def prepare_moe_routed_experts_bspm(
     device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
@@ -1136,7 +1129,6 @@ def prepare_routed_expert_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_model_name: str | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
@@ -1145,6 +1137,9 @@ def prepare_routed_expert_weights(
     When ``bspm_dir`` is provided and a BSPM file exists for this layer, routed MoE experts
     are encoded as mixed-precision CompressedTensor objects instead of uniform bfloat4_b.
     Falls back to uniform bfloat4_b if the file is not found or BSPM support is unavailable.
+
+    ``bspm_dir`` must be the model-specific subdirectory (e.g. ``results/deepseek-r1-0528``),
+    not the results root.
 
     Note: BSPM experts bypass the TensorCache (disk caching not yet supported for CompressedTensor).
     """
@@ -1155,10 +1150,9 @@ def prepare_routed_expert_weights(
     if is_moe:
         # --- BSPM path ---
         bspm_data = None
-        if HAS_BSPM_SUPPORT and bspm_dir is not None and bspm_model_name is not None:
+        if bspm_dir is not None:
             bspm_path = (
                 Path(bspm_dir)
-                / bspm_model_name
                 / f"layer_{layer_idx}"
                 / "precision_eval"
                 / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
@@ -1171,7 +1165,10 @@ def prepare_routed_expert_weights(
                 logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
 
         if bspm_data is not None:
-            return _prepare_moe_routed_experts_bspm(
+            # TODO: BSPM path bypasses TensorCache — CompressedTensor serialization not yet
+            # implemented (requires CompressedTensorTarget + _store_compressed/_load_compressed
+            # in weights/cache/). Tracked: test_dram_matmul_bspm_cache_roundtrip (SKIP).
+            return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
                 layer_idx=layer_idx,
@@ -1377,11 +1374,14 @@ def prepare_moe_layer_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_model_name: str | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
 ) -> DeepSeekV3MoELayerWeights:
-    """Prepare fused weights for a single MoE decoder layer."""
+    """Prepare fused weights for a single MoE decoder layer.
+
+    ``bspm_dir``, when provided, must be the model-specific BSPM subdirectory
+    (e.g. ``results/deepseek-r1-0528``), not the results root.
+    """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
     attn = prepare_attention_weights(
@@ -1404,7 +1404,6 @@ def prepare_moe_layer_weights(
         move_to_device=move_to_device,
         cache_config=cache_config,
         bspm_dir=bspm_dir,
-        bspm_model_name=bspm_model_name,
         bspm_variant=bspm_variant,
         bspm_budget=bspm_budget,
     )

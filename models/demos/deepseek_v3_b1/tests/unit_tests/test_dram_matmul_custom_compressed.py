@@ -368,7 +368,7 @@ def test_dram_matmul_bspm_direct(device):
 def test_dram_matmul_bspm_via_blitz(device):
     """[1, 7168] x [7168, 2048] via prepare_routed_expert_weights() BSPM path.
 
-    Tests: prepare_routed_expert_weights(bspm_dir=...) → _prepare_moe_routed_experts_bspm()
+    Tests: prepare_routed_expert_weights(bspm_dir=...) → prepare_moe_routed_experts_bspm()
     → CompressedTensor.from_bspm() → DRAMStreamingMatmulCompressed.
 
     Requires BSPM_DIR env var pointing to BitSculpt results root.
@@ -411,8 +411,7 @@ def test_dram_matmul_bspm_via_blitz(device):
         is_moe=True,
         num_routed_experts=1,
         move_to_device=True,
-        bspm_dir=Path(bspm_dir),
-        bspm_model_name="deepseek-r1-0528",
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
     )
 
     ct = result.routed_gate_proj[0]
@@ -512,8 +511,7 @@ def test_dram_matmul_bspm_down_proj(device):
         is_moe=True,
         num_routed_experts=1,
         move_to_device=True,
-        bspm_dir=Path(bspm_dir),
-        bspm_model_name="deepseek-r1-0528",
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
     )
 
     ct = result.routed_down_proj[0]
@@ -607,8 +605,7 @@ def test_dram_matmul_bspm_fallback(device):
         is_moe=True,
         num_routed_experts=1,
         move_to_device=True,
-        bspm_dir=Path(bspm_dir),
-        bspm_model_name="deepseek-r1-0528",
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
     )
 
     t = result.routed_gate_proj[0]
@@ -666,8 +663,7 @@ def test_dram_matmul_bspm_multi_expert(device):
         is_moe=True,
         num_routed_experts=num_experts,
         move_to_device=True,
-        bspm_dir=Path(bspm_dir),
-        bspm_model_name="deepseek-r1-0528",
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
     )
 
     gate_list = result.routed_gate_proj

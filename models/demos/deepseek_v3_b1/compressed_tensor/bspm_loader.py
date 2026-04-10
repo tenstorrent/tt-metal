@@ -22,18 +22,40 @@ Usage:
     assignment = load_bspm_for_expert("path/to/precision_map_B_3.5.bspm", expert_idx=0, proj_idx=0)
 
 Prerequisites:
-    BitSculpt must be in your Python path to load BSPM files:
-        export PYTHONPATH=/path/to/bit_sculpt:$PYTHONPATH
-    or:
-        import sys
-        sys.path.insert(0, "/path/to/bit_sculpt")
+    Only the .bspm result files from BitSculpt are required — no BitSculpt Python
+    package dependency.  The binary format is parsed directly here.
 """
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# BSPM binary format constants (must stay in sync with BitSculpt's export.py)
+# ---------------------------------------------------------------------------
+
+_BSPM_MAGIC = b"BSPM"
+_BSPM_VERSION = 1
+_BSPM_HEADER_SIZE = 64  # bytes; header is 48 bytes of fields + 16 bytes reserved
+# struct layout: "<4sIIIIIIIIB3xII" = 48 bytes
+#   4s  magic
+#   I   version
+#   I   layer_idx
+#   I   n_experts
+#   I   n_projections
+#   I   tiles_per_proj
+#   I   tile_rows
+#   I   tile_cols
+#   I   tile_size
+#   B   variant_code   (A=0, B=1, C=2)
+#   3x  padding
+#   I   budget_millibits
+#   I   actual_millibits
+_BSPM_STRUCT = struct.Struct("<4sIIIIIIIIB3xII")
+_VARIANT_NAMES = {0: "A", 1: "B", 2: "C"}
 
 # ---------------------------------------------------------------------------
 # Code remapping
@@ -96,30 +118,77 @@ def load_bspm_for_layer(
             codes: np.ndarray (n_experts, 3, tiles_per_proj) with tt-metal format indices
             codes_bitsculpt: np.ndarray — original BitSculpt codes (for debugging)
     """
-    try:
-        from quantization.export import load_binary_precision_map
-    except ImportError as exc:
-        raise ImportError(
-            "Cannot import BitSculpt's load_binary_precision_map. "
-            "Ensure BitSculpt is in your Python path:\n"
-            "  export PYTHONPATH=/path/to/bit_sculpt:$PYTHONPATH"
-        ) from exc
+    with open(bspm_path, "rb") as f:
+        raw = f.read(_BSPM_HEADER_SIZE)
+
+    if len(raw) < 4:
+        raise ValueError(f"File too small to be a BSPM: {bspm_path}")
 
     # Detect Git LFS pointer files before attempting to parse.
     # LFS pointers start with "version https://..." — reading the magic will
-    # raise ValueError("Invalid magic: b'vers'") which is hard to diagnose.
-    with open(bspm_path, "rb") as _f:
-        _magic = _f.read(4)
-    if _magic == b"vers":
+    # produce an invalid-magic error that is hard to diagnose.
+    if raw[:4] == b"vers":
         raise RuntimeError(
             f"BSPM file appears to be a Git LFS pointer, not the actual data: {bspm_path}\n"
             "Run `git lfs install && git lfs pull` in the bit_sculpt repo to download the real files."
         )
-    data = load_binary_precision_map(str(bspm_path), expected_n_experts=expected_n_experts)
-    original_codes = data["codes"].copy()
-    data["codes_bitsculpt"] = original_codes
-    data["codes"] = remap_bspm_to_ttnn(original_codes)
-    return data
+
+    if len(raw) < _BSPM_HEADER_SIZE:
+        raise ValueError(f"File too small for BSPM header: {len(raw)} bytes in {bspm_path}")
+
+    (
+        magic,
+        version,
+        layer_idx,
+        n_experts,
+        n_projections,
+        tiles_per_proj,
+        tile_rows,
+        tile_cols,
+        tile_size,
+        variant_code,
+        budget_millibits,
+        actual_millibits,
+    ) = _BSPM_STRUCT.unpack(raw[: _BSPM_STRUCT.size])
+
+    if magic != _BSPM_MAGIC:
+        raise ValueError(f"Invalid BSPM magic {magic!r} in {bspm_path}")
+    if version != _BSPM_VERSION:
+        raise ValueError(f"Unsupported BSPM version {version} in {bspm_path}")
+
+    if expected_n_experts is not None and n_experts != expected_n_experts:
+        raise ValueError(
+            f"BSPM n_experts mismatch in {bspm_path}: "
+            f"header={n_experts}, expected={expected_n_experts}. "
+            "Delete the BSPM file and re-run allocation."
+        )
+
+    body_size = n_experts * n_projections * tiles_per_proj
+    with open(bspm_path, "rb") as f:
+        f.seek(_BSPM_HEADER_SIZE)
+        body_bytes = f.read(body_size)
+
+    if len(body_bytes) < body_size:
+        raise ValueError(f"Truncated BSPM body in {bspm_path}: got {len(body_bytes)}, expected {body_size}")
+
+    original_codes = np.frombuffer(body_bytes, dtype=np.uint8).reshape(n_experts, n_projections, tiles_per_proj)
+
+    return {
+        "magic": magic.decode("ascii"),
+        "version": version,
+        "layer_idx": layer_idx,
+        "n_experts": n_experts,
+        "n_projections": n_projections,
+        "tiles_per_proj": tiles_per_proj,
+        "tile_rows": tile_rows,
+        "tile_cols": tile_cols,
+        "tile_size": tile_size,
+        "variant": _VARIANT_NAMES.get(variant_code, "?"),
+        "budget": budget_millibits / 1000.0,
+        "actual_bits": actual_millibits / 1000.0,
+        "codes_bitsculpt": original_codes,
+        "codes": remap_bspm_to_ttnn(original_codes),
+    }
 
 
 def load_bspm_for_expert(
