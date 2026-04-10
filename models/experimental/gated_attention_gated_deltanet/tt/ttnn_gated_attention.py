@@ -59,15 +59,36 @@ def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     return ttnn.multiply(x_normed, scale)
 
 
-def _get_sdpa_program_config(device, seq_len, q_seq_len=None):
+def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=None):
     """Build SDPAProgramConfig with chunk sizes tuned to sequence length.
 
+    For chunked paged prefill (chunk_start_idx >= 0), chunk sizes follow the
+    tt_transformers reference (model_config.py:1433). For chunk_start_idx > 0,
+    chunk sizes must divide chunk_start_idx (uses lowest-set-bit trick).
     For decode with pre-allocated cache (q_seq_len=1), use small chunks.
     For segmented prefill (q_seq_len < seq_len, both > 1), use small chunks.
     For regular prefill, scale chunks based on seq_len.
     """
     grid_size = device.compute_with_storage_grid_size()
-    if q_seq_len is not None and q_seq_len <= 1 and seq_len >= 512:
+    if chunk_start_idx is not None and chunk_start_idx == 0:
+        # First chunk of paged prefill: no divisibility constraint.
+        # Use small chunks on Blackhole — chunked_sdpa has higher L1 overhead
+        # than regular sdpa (page table indirection + block metadata).
+        # 256/256 causes L1 clash; 64/64 is safe on Blackhole P150.
+        q_chunk = 64
+        k_chunk = 64
+    elif chunk_start_idx is not None and chunk_start_idx > 0:
+        # Subsequent chunks of paged prefill: chunk sizes must divide chunk_start_idx.
+        # (x & -x) extracts the largest power-of-2 factor of x.
+        # Use conservative sizes on Blackhole to avoid L1 clashes.
+        if seq_len >= 2048:
+            q_chunk = min(64, chunk_start_idx & -chunk_start_idx)
+            k_chunk = min(64, chunk_start_idx & -chunk_start_idx)
+        else:
+            q_chunk = min(64, chunk_start_idx & -chunk_start_idx)
+            k_chunk = min(64, chunk_start_idx & -chunk_start_idx)
+        assert chunk_start_idx % q_chunk == 0, f"chunk_start_idx={chunk_start_idx} not divisible by q_chunk={q_chunk}"
+    elif q_seq_len is not None and q_seq_len <= 1 and seq_len >= 512:
         # Decode with large pre-allocated cache: use small chunks to avoid L1 OOM
         q_chunk = 32
         k_chunk = 64
@@ -160,6 +181,9 @@ def gated_attention_forward_ttnn(
     page_table=None,
     paged_kv_cache_key=None,  # DRAM paged cache [num_blocks, num_kv_heads, block_size, head_dim]
     paged_kv_cache_value=None,  # DRAM paged cache [num_blocks, num_kv_heads, block_size, head_dim]
+    # Paged prefill: fill K/V into paged cache, attend via chunked SDPA
+    chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
+    chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -233,7 +257,43 @@ def gated_attention_forward_ttnn(
     # KV cache handling
     _use_sdpa_decode = False
     _paged_sdpa_done = False
-    if page_table is not None and paged_kv_cache_key is not None and T == 1:
+    if paged_kv_cache_key is not None and page_table is not None and T > 1 and chunk_page_table is not None:
+        # Paged prefill: fill K/V into paged cache, then chunked SDPA.
+        # Q/K/V stay bfloat16 — no typecast. Production models (Qwen3_VL) typecast to
+        # bfloat8_b, but on Blackhole P150 this causes L1 clashes in downstream ops
+        # (head concat, gate multiply, output projection) whose programs were compiled
+        # for bfloat16. The core fix (paged KV) eliminates the growing-concat L1 issue;
+        # the bfloat8_b optimization can be added later with matching downstream changes.
+
+        # Slice K/V to page_len to handle tile-padded tensors.
+        block_size_cache = paged_kv_cache_key.shape[2]
+        page_len = chunk_page_table.shape[1] * block_size_cache
+        key_fill = key_states[:, :, :page_len, :] if page_len < key_states.shape[2] else key_states
+        value_fill = value_states[:, :, :page_len, :] if page_len < value_states.shape[2] else value_states
+
+        ttnn.experimental.paged_fill_cache(paged_kv_cache_key, key_fill, chunk_page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(paged_kv_cache_value, value_fill, chunk_page_table, batch_idx=0)
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+            query_states,
+            paged_kv_cache_key,
+            paged_kv_cache_value,
+            page_table,
+            chunk_start_idx,
+            scale=scaling,
+            program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
+            compute_kernel_config=_get_sdpa_compute_kernel_config(),
+        )
+
+        new_key = paged_kv_cache_key
+        new_value = paged_kv_cache_value
+        _paged_sdpa_done = True
+        S_total = paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
+        is_causal = False
+        segmented_attn_mask = None
+    elif page_table is not None and paged_kv_cache_key is not None and T == 1:
         # Paged attention decode: write K/V via page_table, attend via paged SDPA.
         # paged_update_cache with page_table expects input [1, B, num_kv_heads, head_dim],
         # where page_table.shape[0] == input.shape[1] == B.
