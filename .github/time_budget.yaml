@@ -80,6 +80,7 @@ ttnn:
   integration:
     wh_llmbox: 30
     wh_galaxy: 350
+    wh_galaxy_perf: 110
 
 shield:
   e2e:
