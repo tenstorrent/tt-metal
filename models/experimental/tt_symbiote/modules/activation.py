@@ -5,6 +5,7 @@
 """Activation function implementations for TTNN."""
 
 import math
+import os
 
 import torch
 import torch.nn.functional as F
@@ -188,33 +189,112 @@ class TTNNSnakeBeta(TTNNModule):
 
         return tree_map(_materialize_one_replica, output_tensors)
 
+    @staticmethod
+    def _snake_beta_chunk_t() -> int:
+        """Max time length per SnakeBeta kernel to cap FP32 activation DRAM (code2wav BCT can be 100k+)."""
+        raw = os.environ.get("TT_SYMBIOTE_SNAKEBETA_CHUNK_T", "4096")
+        try:
+            v = int(raw)
+        except ValueError:
+            v = 4096
+        return max(512, v)
+
+    def _forward_fp32_core(
+        self,
+        input_fp32: ttnn.Tensor,
+        alpha_exp: ttnn.Tensor,
+        reciprocal_beta: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """``x + 1/b * sin^2(x*exp(alpha))`` in FP32; frees intermediate tensors before return."""
+        x_times_alpha = ttnn.multiply(input_fp32, alpha_exp)
+        sin_result = ttnn.sin(x_times_alpha)
+        sin_squared = ttnn.pow(sin_result, 2.0)
+        scaled_sin = ttnn.multiply(reciprocal_beta, sin_squared)
+        result = ttnn.add(input_fp32, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in (x_times_alpha, sin_result, sin_squared, scaled_sin):
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+        return result
+
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         out_dtype = input_tensor.dtype
-        if out_dtype != ttnn.float32:
-            input_tensor = ttnn.typecast(input_tensor, ttnn.float32)
+        shape = tuple(int(s) for s in input_tensor.shape)
+        if len(shape) != 3:
+            raise ValueError(f"TTNNSnakeBeta expects rank-3 [B,C,T], got shape {shape}")
+        b, c, t_len = shape
 
+        chunk_t = self._snake_beta_chunk_t()
+        # Broadcast helpers (small): shared across time chunks.
         alpha_expanded = ttnn.unsqueeze(self.alpha, 0)
         alpha_expanded = ttnn.unsqueeze(alpha_expanded, -1)
         beta_expanded = ttnn.unsqueeze(self.beta, 0)
         beta_expanded = ttnn.unsqueeze(beta_expanded, -1)
-
         alpha_exp = ttnn.exp(alpha_expanded)
+        try:
+            ttnn.deallocate(alpha_expanded)
+        except Exception:
+            pass
         beta_exp = ttnn.exp(beta_expanded)
-
-        x_times_alpha = ttnn.multiply(input_tensor, alpha_exp)
-        sin_result = ttnn.sin(x_times_alpha)
-        sin_squared = ttnn.pow(sin_result, 2.0)
         beta_plus_eps = ttnn.add(beta_exp, self.no_div_by_zero)
         reciprocal_beta = ttnn.reciprocal(beta_plus_eps)
-        scaled_sin = ttnn.multiply(reciprocal_beta, sin_squared)
-        result = ttnn.add(input_tensor, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        try:
+            ttnn.deallocate(beta_expanded)
+            ttnn.deallocate(beta_exp)
+            ttnn.deallocate(beta_plus_eps)
+        except Exception:
+            pass
 
-        if out_dtype != ttnn.float32:
-            result = ttnn.typecast(result, out_dtype)
-        return result
+        if t_len <= chunk_t:
+            if out_dtype != ttnn.float32:
+                input_fp32 = ttnn.typecast(input_tensor, ttnn.float32)
+            else:
+                input_fp32 = input_tensor
+            result = self._forward_fp32_core(input_fp32, alpha_exp, reciprocal_beta)
+            if out_dtype != ttnn.float32:
+                if input_fp32 is not input_tensor:
+                    try:
+                        ttnn.deallocate(input_fp32)
+                    except Exception:
+                        pass
+                # Do not deallocate ``result`` before/after typecast: some TTNN paths may alias buffers;
+                # freeing FP32 activations here corrupted long code2wav outputs (truncated / bad audio).
+                result = ttnn.typecast(result, out_dtype)
+            try:
+                ttnn.deallocate(alpha_exp)
+                ttnn.deallocate(reciprocal_beta)
+            except Exception:
+                pass
+            return result
+
+        # Long sequences: avoid a full-length FP32 copy of activations (major DRAM spike with audio TTNN loaded).
+        # Do not ``deallocate`` slice/typecast/concat inputs or chunk outputs: ``ttnn.concat`` may retain views
+        # into chunk tensors; ``typecast`` may alias; early free caused truncated/garbled waveforms.
+        out_chunks = []
+        for t0 in range(0, t_len, chunk_t):
+            t1 = min(t0 + chunk_t, t_len)
+            sl = ttnn.slice(input_tensor, (0, 0, t0), (b, c, t1))
+            if out_dtype != ttnn.float32:
+                sl_fp32 = ttnn.typecast(sl, ttnn.float32)
+            else:
+                sl_fp32 = sl
+            res_fp32 = self._forward_fp32_core(sl_fp32, alpha_exp, reciprocal_beta)
+            if out_dtype != ttnn.float32:
+                out_chunks.append(ttnn.typecast(res_fp32, out_dtype))
+            else:
+                out_chunks.append(res_fp32)
+
+        merged = ttnn.concat(out_chunks, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        try:
+            ttnn.deallocate(alpha_exp)
+            ttnn.deallocate(reciprocal_beta)
+        except Exception:
+            pass
+        return merged
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
