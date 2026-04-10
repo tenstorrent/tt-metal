@@ -150,8 +150,7 @@ def encoder_block_device_pre(
     tt_x = ttnn.add(tt_x, tt_proj)
 
     tt_n2 = ttnn.layer_norm(tt_x, weight=tt_w["g2"], bias=tt_w["b2"], epsilon=1e-6)
-    tt_h = ttnn.linear(tt_n2, tt_w["w1"], bias=tt_w["b1f"])
-    tt_h = ttnn.gelu(tt_h)
+    tt_h = ttnn.linear(tt_n2, tt_w["w1"], bias=tt_w["b1f"], activation="gelu")
     tt_m = ttnn.linear(tt_h, tt_w["w2"], bias=tt_w["b2f"])
 
     tt_x = ttnn.add(tt_x, tt_m)
@@ -517,8 +516,7 @@ def decoder_block_device_pre(
 
     # --- MLP ---
     tt_n3 = ttnn.layer_norm(tt_x, weight=tt_w["g3"], bias=tt_w["b3v"], epsilon=1e-6)
-    tt_h = ttnn.linear(tt_n3, tt_w["fc1_w"], bias=tt_w["fc1_b"])
-    tt_h = ttnn.gelu(tt_h)
+    tt_h = ttnn.linear(tt_n3, tt_w["fc1_w"], bias=tt_w["fc1_b"], activation="gelu")
     tt_m = ttnn.linear(tt_h, tt_w["fc2_w"], bias=tt_w["fc2_b"])
     tt_x = ttnn.add(tt_x, tt_m)
     return tt_x
