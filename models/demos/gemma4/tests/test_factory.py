@@ -202,7 +202,8 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
 
     if mesh_shapes is None:
         # Default: offer every standard config that fits the current system
-        all_shapes = [(1, 2), (1, 8)]
+        # all_shapes = [(1, 2), (1, 8)]
+        all_shapes = [(1, 8)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
 
     if not mesh_shapes:

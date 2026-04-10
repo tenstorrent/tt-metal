@@ -19,11 +19,22 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
+
+
+def _compute_per_device_vocab(vocab_size, num_tp):
+    """Per-device vocab width: tile-aligned then rounded to next power of 2.
+
+    Power-of-2 rounding enables ttnn.topk's multi-core bitonic sort.
+    Must match between LM head weight padding and sampling args.
+    """
+    per_device = (((vocab_size + num_tp - 1) // num_tp + 31) // 32) * 32
+    return 1 << (per_device - 1).bit_length()
 
 
 def create_rope_caches(mesh_device, hf_config, max_seq_len):
@@ -321,6 +332,41 @@ class Gemma4Model:
             mesh_config=mesh_config,
         )
 
+        # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
+        self.sampling = None
+        if is_mesh and tp > 1:
+            per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
+            if per_device_padded <= 64 * 1024:
+                self.sampling = SamplingGenerator(
+                    args=self._make_sampling_args(hf_config, mesh_device, tp),
+                    mesh_device=mesh_device,
+                    tt_ccl=None,
+                    enable_internal_trace=False,
+                )
+                logger.info(
+                    f"On-device sampling initialized (vocab={hf_config.vocab_size}, per_device={per_device_padded})"
+                )
+
+    @staticmethod
+    def _make_sampling_args(hf_config, mesh_device, tp):
+        """Create minimal args object for SamplingGenerator/TTSampling."""
+
+        class _Args:
+            pass
+
+        args = _Args()
+        args.vocab_size = hf_config.vocab_size
+        per_device_vocab = _compute_per_device_vocab(args.vocab_size, tp)
+        args.padded_vocab_size = per_device_vocab * tp
+        args.cluster_shape = tuple(mesh_device.shape)
+        args.sampling_all_gather_axis = 1  # gather across TP (column) axis
+        args.sampling_dp = 1
+        args.num_devices = mesh_device.get_num_devices()
+        args.is_galaxy = mesh_device.shape[0] > 1
+        args.model_config = {}
+        args.use_topk_logprobs = False
+        return args
+
     def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):
         """Compute per-layer input embeddings on CPU (E2B/E4B).
 
@@ -600,11 +646,15 @@ class Gemma4Model:
             logits = ttnn.tanh(logits)
             logits = ttnn.mul(logits, cap)
 
-        # All-gather sharded vocab dim back to full vocab for argmax
+        # All-gather sharded vocab dim back to full vocab.
+        # Skip when on-device sampling is active (decode) — sampling handles distributed top-k.
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            from models.demos.gemma4.tt.ccl import ccl_allgather
+            if self.sampling is not None and is_decode:
+                pass  # Sampling module handles TP-sharded logits directly
+            else:
+                from models.demos.gemma4.tt.ccl import ccl_allgather
 
-            logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+                logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         return logits
 
@@ -724,5 +774,14 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             tokens_tt=tokens,
         )
+
+        # On-device sampling: return token IDs directly (avoids CPU logits read)
+        if self.sampling is not None:
+            # Pad batch dim to 32 (sampling module's internal minimum)
+            batch_dim = logits.shape[2]
+            if batch_dim < 32:
+                logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
+            tt_tokens, _ = self.sampling.sample(logits, enable_trace=False)
+            return tt_tokens, None
 
         return logits, None

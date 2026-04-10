@@ -244,7 +244,30 @@ def run_generation(
             ttnn.copy_host_to_device_tensor(position_h, trace_device_inputs["position"])
             ttnn.copy_host_to_device_tensor(position_int32_h, trace_device_inputs["position_int32"])
 
-        logger.info(f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'})...")
+        # On-device sampling: model returns token IDs (uint32) instead of logits
+        on_device_sampling = model.sampling is not None
+
+        def _extract_token(decode_output):
+            """Extract next token from model output (sampled tokens or logits)."""
+            if on_device_sampling:
+                # decode_output is sampled token IDs [1, 1, batch, 1] on device
+                tok_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    if is_mesh
+                    else ttnn.to_torch(decode_output)
+                )
+                return tok_cpu.reshape(-1)[0].item()
+            else:
+                logits_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    if is_mesh
+                    else ttnn.to_torch(decode_output)
+                )
+                return logits_cpu.squeeze().argmax().item()
+
+        logger.info(
+            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, sampling={'device' if on_device_sampling else 'CPU'})..."
+        )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
         for step in range(max_new_tokens - 1):
@@ -280,12 +303,7 @@ def run_generation(
                 pos_d = ttnn.to_device(position_h, device=mesh_device)
                 pos_cache_d = ttnn.to_device(position_int32_h, device=mesh_device)
                 decode_logits, _ = _fwd(tok_d, pos_d, pos_cache_d)
-                if is_mesh:
-                    logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(decode_logits)[0])
-                else:
-                    logits_cpu = ttnn.to_torch(decode_logits)
-
-                next_token = logits_cpu.squeeze().argmax().item()
+                next_token = _extract_token(decode_logits)
                 generated_tokens.append(next_token)
                 current_pos += 1
                 profiler.end(f"compile_decode", iteration=prompt_idx)
@@ -327,12 +345,7 @@ def run_generation(
                 pos_cache_d = ttnn.to_device(position_int32_h, device=mesh_device)
                 decode_logits, _ = _fwd(tok_d, pos_d, pos_cache_d)
 
-            if is_mesh:
-                logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(decode_logits)[0])
-            else:
-                logits_cpu = ttnn.to_torch(decode_logits)
-
-            next_token = logits_cpu.squeeze().argmax().item()
+            next_token = _extract_token(decode_logits)
             generated_tokens.append(next_token)
             current_pos += 1
 
