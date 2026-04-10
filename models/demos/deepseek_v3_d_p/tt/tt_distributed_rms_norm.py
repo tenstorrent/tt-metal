@@ -43,6 +43,81 @@ class TtDistributedRmsNorm(LightweightModule):
           mesh_mapper dims=(None, 2)
     """
 
+    @staticmethod
+    def _convert_and_cache_weight(
+        torch_weight: torch.Tensor,
+        emb_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        cache_path: Path | None,
+        cache_name_prefix: str | None,
+        device: ttnn.MeshDevice | None = None,
+    ):
+        """
+        Shared logic for converting norm weight to ttnn with caching.
+
+        Args:
+            torch_weight: Weight tensor [emb_dim]
+            emb_dim: Embedding dimension
+            mesh_device: Mesh device (for mesh_mapper, not necessarily for device placement)
+            cache_path: Cache directory path
+            cache_name_prefix: Prefix for cache file name
+            device: None for cache-only (no device copy), mesh_device for cache+load
+
+        Returns:
+            ttnn.Tensor if device is not None, else None
+        """
+        # Reshape weight to [1, 1, emb_dim // 32, 32]
+        torch_weight_reshaped = torch_weight.reshape(1, 1, emb_dim // 32, 32)
+
+        # Create mesh mapper: replicate across rows, shard dim 2 across cols
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(None, 2),
+        )
+
+        cache_file_name = str(cache_path / f"{cache_name_prefix}_weight") if cache_path and cache_name_prefix else None
+
+        tt_weight = ttnn.as_tensor(
+            torch_weight_reshaped,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+            cache_file_name=cache_file_name,
+        )
+
+        if device is None:
+            # Cache built, free host tensor
+            del tt_weight
+            return None
+        else:
+            # Return device tensor for __init__
+            return tt_weight
+
+    @staticmethod
+    def build_ttnn_cache(
+        torch_weight: torch.Tensor,
+        emb_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        cache_path: Path,
+        cache_name_prefix: str,
+    ):
+        """
+        Build TTNN cache for norm weight without device copy.
+
+        Args:
+            torch_weight: Weight tensor [emb_dim]
+            emb_dim: Embedding dimension
+            mesh_device: Mesh device reference (for mesh_mapper)
+            cache_path: Cache directory path
+            cache_name_prefix: Prefix for cache file name
+        """
+        TtDistributedRmsNorm._convert_and_cache_weight(
+            torch_weight, emb_dim, mesh_device, cache_path, cache_name_prefix, device=None
+        )
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -115,30 +190,16 @@ class TtDistributedRmsNorm(LightweightModule):
             torch_weight.shape[-1] == self.emb_dim
         ), f"Weight shape mismatch: expected emb_dim={self.emb_dim}, got {torch_weight.shape[-1]}"
 
-        # Reshape weight to [1, 1, emb_dim // 32, 32] for optimal performance
-        torch_weight_reshaped = torch_weight.reshape(1, 1, self.emb_dim // 32, 32)
-        logger.debug(f"Weight reshaped from {torch_weight.shape} to {torch_weight_reshaped.shape}")
+        logger.debug(f"Weight shape: {torch_weight.shape}")
 
-        # Create mesh mapper: replicate across mesh rows (dim 0), shard along dim 2 across mesh cols
-        mesh_mapper = ttnn.ShardTensor2dMesh(
+        # Use shared static method with device=self.mesh_device
+        tt_weight = self._convert_and_cache_weight(
+            torch_weight,
+            self.emb_dim,
             self.mesh_device,
-            mesh_shape=self.mesh_device.shape,
-            dims=(None, 2),
-        )
-
-        cache_file_name = (
-            str(self.weight_cache_path / f"{self.cache_name_prefix}_weight")
-            if self.weight_cache_path and self.cache_name_prefix
-            else None
-        )
-        tt_weight = ttnn.as_tensor(
-            torch_weight_reshaped,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_file_name,
+            self.weight_cache_path,
+            self.cache_name_prefix,
+            device=self.mesh_device,  # Cache + load to device
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")

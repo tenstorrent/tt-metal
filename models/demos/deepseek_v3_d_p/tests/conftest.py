@@ -307,13 +307,14 @@ def model_path():
     """
     Get model path and resolve symlinks to ensure all operations can find files.
     Automatically downloads weights from HuggingFace if not available locally.
+    Downloads weights for layers 0-11 (12 layers total) to support all test cases.
 
     Checks in order:
     1. DEEPSEEK_V3_HF_MODEL environment variable
     2. models/demos/deepseek_v3/reference/ (default location)
     3. Downloads from HuggingFace to HF cache if not found
     """
-    return get_or_download_model(layer_idx=0)
+    return get_or_download_model(layer_idx=0, num_layers=24)
 
 
 @pytest.fixture(scope="session")
@@ -542,7 +543,9 @@ def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
     if state_dict is None:
         pytest.skip("Failed to load state dict. Check model path and weights.")
 
-    num_layers = getattr(request, "param", 6)
+    # num_layers = getattr(request, "param", 6)
+    num_layers = request.node.callspec.params.get("num_layers", 1)
+
     first_k_dense = hf_config.first_k_dense_replace  # 3
     n_routed = hf_config.n_routed_experts  # 256
 

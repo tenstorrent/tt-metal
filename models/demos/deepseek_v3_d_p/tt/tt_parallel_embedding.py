@@ -38,6 +38,80 @@ class TtParallelEmbedding(LightweightModule):
     - SP sharding: each device processes its own token chunk
     """
 
+    @staticmethod
+    def _convert_and_cache_weight(
+        torch_weight: torch.Tensor,
+        vocab_size: int,
+        emb_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        tp_axis: int,
+        dtype: ttnn.DataType,
+        cache_path: Path | None,
+        device: ttnn.MeshDevice | None = None,
+    ):
+        """
+        Shared logic for converting embedding weight to ttnn with caching.
+
+        Args:
+            torch_weight: Weight tensor [vocab_size, emb_dim]
+            vocab_size: Vocabulary size
+            emb_dim: Embedding dimension
+            mesh_device: Mesh device (for mesh_mapper)
+            tp_axis: Tensor parallel axis
+            dtype: Data type
+            cache_path: Cache directory path
+            device: None for cache-only, mesh_device for cache+load
+
+        Returns:
+            ttnn.Tensor if device is not None, else None
+        """
+        assert torch_weight.shape == (
+            vocab_size,
+            emb_dim,
+        ), f"Weight shape mismatch: got {torch_weight.shape}, expected ({vocab_size}, {emb_dim})"
+
+        shard_dims = [None, None]
+        shard_dims[tp_axis] = -1  # shard emb_dim across TP axis
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=tuple(shard_dims),
+        )
+
+        cache_file_name = str(cache_path / "embed_weight") if cache_path else None
+
+        tt_weight = ttnn.as_tensor(
+            torch_weight,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+            cache_file_name=cache_file_name,
+        )
+
+        if device is None:
+            del tt_weight
+            return None
+        else:
+            return tt_weight
+
+    @staticmethod
+    def build_ttnn_cache(
+        torch_weight: torch.Tensor,
+        vocab_size: int,
+        emb_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        cache_path: Path,
+        tp_axis: int = 1,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ):
+        """Build TTNN cache for embedding weight without device copy."""
+        TtParallelEmbedding._convert_and_cache_weight(
+            torch_weight, vocab_size, emb_dim, mesh_device, tp_axis, dtype, cache_path, device=None
+        )
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -89,8 +163,7 @@ class TtParallelEmbedding(LightweightModule):
         """
         Convert torch embedding weight to TP-sharded ttnn tensor.
 
-        Unlike linear layers, embedding weight does NOT need transposition.
-        HuggingFace format [vocab_size, emb_dim] matches TTNN lookup table format.
+        Uses shared static method for conversion.
 
         Args:
             torch_weight: [vocab_size, emb_dim]
@@ -98,28 +171,16 @@ class TtParallelEmbedding(LightweightModule):
         Returns:
             Sharded ttnn tensor: each TP device gets [vocab_size, emb_dim / tp_factor]
         """
-        assert torch_weight.shape == (self.vocab_size, self.emb_dim), (
-            f"Weight shape mismatch: got {torch_weight.shape}, " f"expected ({self.vocab_size}, {self.emb_dim})"
-        )
-
-        shard_dims = [None, None]
-        shard_dims[self.tp_axis] = -1  # shard emb_dim across TP axis
-
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device,
-            mesh_shape=self.mesh_device.shape,
-            dims=tuple(shard_dims),
-        )
-
-        cache_file_name = str(self.weight_cache_path / "embed_weight") if self.weight_cache_path else None
-        tt_weight = ttnn.as_tensor(
+        # Use shared static method with device=self.mesh_device
+        tt_weight = self._convert_and_cache_weight(
             torch_weight,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_file_name,
+            self.vocab_size,
+            self.emb_dim,
+            self.mesh_device,
+            self.tp_axis,
+            self.dtype,
+            self.weight_cache_path,
+            device=self.mesh_device,  # Cache + load to device
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")

@@ -16,6 +16,130 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class ttMLA:
+    @staticmethod
+    def build_ttnn_cache(
+        state_dict: dict,
+        cache_path: Path,
+        mesh_device: ttnn.MeshDevice,
+        config,
+        layer_idx: int,
+        seq_len: int,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+    ):
+        """Build TTNN cache for MLA weights using device=None (no device copy)."""
+
+        # Extract dimensions from config
+        hidden_size = config.hidden_size
+        num_heads = config.num_attention_heads
+        kv_lora_rank = config.kv_lora_rank
+        q_lora_rank = config.q_lora_rank
+        qk_nope_head_dim = config.qk_nope_head_dim
+        qk_rope_head_dim = config.qk_rope_head_dim
+        v_head_dim = config.v_head_dim
+
+        def _cache_name(name):
+            return str(cache_path / f"layer_{layer_idx}.mla.{name}") if cache_path else None
+
+        # q_a_layernorm
+        q_a_ln_weight = state_dict["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        ttnn.as_tensor(
+            q_a_ln_weight,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cache_name("q_a_layernorm"),
+        )
+
+        # kv_a_layernorm
+        kv_a_ln_weight = state_dict["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        ttnn.as_tensor(
+            kv_a_ln_weight,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cache_name("kv_a_layernorm"),
+        )
+
+        # q_a_proj
+        q_a_proj = state_dict["q_a_proj.weight"].transpose(-2, -1)
+        shard_dims = [None, None]
+        shard_dims[tp_axis] = 0
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+        ttnn.as_tensor(
+            q_a_proj,
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            cache_file_name=_cache_name("q_a_proj"),
+        )
+
+        # q_b_proj
+        shard_dims[tp_axis] = 1
+        shard_dims[sp_axis] = None
+        mesh_mapper_q_b_proj = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+        ttnn.as_tensor(
+            state_dict["q_b_proj.weight"].transpose(-2, -1),
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=_cache_name("q_b_proj"),
+        )
+
+        # kv_a_proj_with_mqa
+        shard_dims[tp_axis] = 0
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+        ttnn.as_tensor(
+            state_dict["kv_a_proj_with_mqa.weight"].transpose(-2, -1),
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            cache_file_name=_cache_name("kv_a_proj_with_mqa"),
+        )
+
+        # kv_b_proj - split into wkv_b1 and wkv_b2
+        kv_b_proj_weights = state_dict["kv_b_proj.weight"].reshape(
+            1, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank
+        )
+        torch_weights_k = kv_b_proj_weights[..., :qk_nope_head_dim, :].transpose(-2, -1)
+        torch_weights_v = kv_b_proj_weights[..., qk_nope_head_dim:, :]
+
+        shard_dims[tp_axis] = 1
+        shard_dims[sp_axis] = None
+        ttnn.as_tensor(
+            torch_weights_k.transpose(-2, -1),
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=_cache_name("wkv_b1"),
+        )
+        ttnn.as_tensor(
+            torch_weights_v.transpose(-2, -1),
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=_cache_name("wkv_b2"),
+        )
+
+        # o_proj
+        shard_dims[tp_axis] = 0
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+        ttnn.as_tensor(
+            state_dict["o_proj.weight"].transpose(-2, -1),
+            device=None,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            cache_file_name=_cache_name("o_proj"),
+        )
+
     def __init__(
         self,
         config: PretrainedConfig,
@@ -187,18 +311,43 @@ class ttMLA:
         """
         Load weights from state dict and convert to TT tensors.
 
-        Expected keys in state_dict:
-        - q_a_proj.weight
-        - q_a_layernorm.weight
+        Expected keys in state_dict (when weights provided):
+        - q_a_proj.weight, q_a_layernorm.weight
         - q_b_proj.weight
-        - kv_a_proj_with_mqa.weight
-        - kv_a_layernorm.weight
+        - kv_a_proj_with_mqa.weight, kv_a_layernorm.weight
         - kv_b_proj.weight
         - o_proj.weight
+
+        If state_dict is empty, loads from cache using dummy tensors.
         """
 
+        # Check if weights are provided (following TtMoe pattern)
+        if state_dict and "q_a_layernorm.weight" in state_dict:
+            # Weights provided - use direct access (all keys should exist)
+            q_a_ln_weight = state_dict["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+            kv_a_ln_weight = state_dict["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+            q_a_proj = state_dict["q_a_proj.weight"].transpose(-2, -1)
+            q_b_proj_weight = state_dict["q_b_proj.weight"].transpose(-2, -1)
+            kv_a_proj_weight = state_dict["kv_a_proj_with_mqa.weight"].transpose(-2, -1)
+            kv_b_proj_weights = state_dict["kv_b_proj.weight"].reshape(
+                1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
+            )
+            o_proj_weight = state_dict["o_proj.weight"].transpose(-2, -1)
+        else:
+            # Cache-only mode - create dummy tensors (ignored when cache exists)
+            # TODO: Validate if smoke test works or some of these need to be tranposed
+            q_a_ln_weight = torch.empty(1, 1, self.qk_rope_head_dim, ttnn.TILE_SIZE)
+            kv_a_ln_weight = torch.empty(1, 1, self.kv_lora_rank, ttnn.TILE_SIZE)
+            q_a_proj = torch.empty(self.q_lora_rank, self.hidden_size)
+            q_b_proj_weight = torch.empty(self.qk_rope_head_dim * self.num_heads, self.q_lora_rank)
+            kv_a_proj_weight = torch.empty(self.kv_lora_rank + self.qk_rope_head_dim, self.hidden_size)
+            kv_b_proj_weights = torch.empty(
+                1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
+            )
+            o_proj_weight = torch.empty(self.hidden_size, self.qk_rope_head_dim * self.num_heads)
+
         # Mesh Device = (sp x tp)
-        q_a_ln_weight = state_dict["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        # Convert q_a_layernorm
         self.q_a_layernorm_weight = ttnn.as_tensor(
             q_a_ln_weight,
             device=self.mesh_device,
@@ -209,7 +358,7 @@ class ttMLA:
             cache_file_name=self._cache_name("q_a_layernorm"),
         )
 
-        kv_a_ln_weight = state_dict["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        # Convert kv_a_layernorm
         self.kv_a_layernorm_weight = ttnn.as_tensor(
             kv_a_ln_weight,
             device=self.mesh_device,
@@ -220,9 +369,7 @@ class ttMLA:
             cache_file_name=self._cache_name("kv_a_layernorm"),
         )
 
-        q_a_proj = state_dict["q_a_proj.weight"]
-        q_a_proj = q_a_proj.transpose(-2, -1)
-
+        # Convert q_a_proj
         shard_dims = [None, None]
         shard_dims[self.tp_axis] = 0
         mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -238,13 +385,14 @@ class ttMLA:
             cache_file_name=self._cache_name("q_a_proj"),
         )
 
+        # Convert q_b_proj
         shard_dims[self.tp_axis] = 1
         shard_dims[self.sp_axis] = None
         mesh_mapper_q_b_proj = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
         self.q_b_proj_weight = ttnn.as_tensor(
-            state_dict["q_b_proj.weight"].transpose(-2, -1),
+            q_b_proj_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -253,8 +401,9 @@ class ttMLA:
             cache_file_name=self._cache_name("q_b_proj"),
         )
 
+        # Convert kv_a_proj_with_mqa
         self.kv_a_proj_with_mqa_weight = ttnn.as_tensor(
-            state_dict["kv_a_proj_with_mqa.weight"].transpose(-2, -1),
+            kv_a_proj_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -262,10 +411,8 @@ class ttMLA:
             mesh_mapper=mesh_mapper,
             cache_file_name=self._cache_name("kv_a_proj_with_mqa"),
         )
-        kv_b_proj_weights = state_dict["kv_b_proj.weight"].reshape(
-            1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
-        )
 
+        # Convert kv_b_proj (split into k and v)
         torch_weights_k = kv_b_proj_weights[..., : self.qk_nope_head_dim, :].transpose(-2, -1)
         torch_weights_v = kv_b_proj_weights[..., self.qk_nope_head_dim :, :]
 
@@ -290,8 +437,9 @@ class ttMLA:
             cache_file_name=self._cache_name("wkv_b2"),
         )
 
+        # Convert o_proj
         self.o_proj_weight = ttnn.as_tensor(
-            state_dict["o_proj.weight"].transpose(-2, -1),
+            o_proj_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
