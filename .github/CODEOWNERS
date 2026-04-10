@@ -356,6 +356,10 @@ tests/ttnn/docs_examples/test_tensor_creation_examples.py @tenstorrent/metalium-
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 
+# TTNN Graph Report
+ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+
 # models
 /models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass

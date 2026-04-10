@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload master JSON artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ttnn-operations-master-json
           path: model_tracer/traced_operations/ttnn_operations_master.json
@@ -121,7 +121,7 @@ jobs:
 
       - name: Upload preflight artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: validation-preflight
           path: validation_artifacts/config_hash_preflight.md
@@ -161,7 +161,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /work/model_tracer/traced_operations
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-model_traced
           path: /work/tests/sweep_framework/validation_vectors/model_traced/
@@ -228,7 +228,7 @@ jobs:
 
       - name: Upload lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-lead_models
           path: /work/tests/sweep_framework/validation_vectors/lead_models/
@@ -256,21 +256,21 @@ jobs:
           pip install pyyaml
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /tmp/validation-master-json
 
       - name: Download model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sweeps-vectors-model_traced
           path: /tmp/validation-vectors/model_traced
 
       - name: Download lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sweeps-vectors-lead_models
           path: /tmp/validation-vectors/lead_models
@@ -345,7 +345,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download sweep vectors
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
@@ -380,7 +380,7 @@ jobs:
 
       - name: Upload sweep traces
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweep-traces-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json
@@ -388,7 +388,7 @@ jobs:
 
       - name: Upload sweep results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-results-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/tests/sweep_framework/results_export/
@@ -404,20 +404,20 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: model_tracer/traced_operations
 
       - name: Download sweep traces
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sweep-traces-*
           path: validation_traces
           merge-multiple: true
 
       - name: Download sweep results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sweeps-results-*
           path: validation_results
@@ -482,7 +482,7 @@ jobs:
 
       - name: Upload validation summary
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: validation-summary
           path: validation_summary.md
