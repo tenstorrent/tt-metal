@@ -390,7 +390,7 @@ void kernel_main() {
 
                         // Compute output sub-block
                         mm.accumulate(
-                            in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, in1_block_w);
+                            in0_index_subblock_offset, in1_index_subblock_offset, 0, in0_block_w, 1, in1_block_w, 0);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
