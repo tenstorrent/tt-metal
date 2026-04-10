@@ -29,13 +29,18 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeVisionAttention,
     Qwen3OmniMoeVisionRotaryEmbedding,
     Qwen3OmniMoeTalkerCodePredictorAttention,
+    Qwen3OmniMoeMLP,
 )
 from qwen_omni_utils import process_mm_info
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
+from models.experimental.tt_symbiote.modules.moe import (
+    TTNNGlm4MoeMLP,
+    TTNNQwen3OmniThinkerNaiveMoE,
+    TTNNQwen3TalkerMoE,
+)
 from models.experimental.tt_symbiote.core.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.modules.attention import TTNNQwenAudioAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCode2WavAttention
@@ -97,6 +102,7 @@ NN_TO_TTNN_TALKER = {
 NN_TO_TTNN_CODE_PREDICTOR = {
     **NN_TO_TTNN_TALKER,
     Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -137,7 +143,7 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
 
 
 def _register_code_predictor_nn_to_ttnn(model) -> dict:
-    """Register on ``talker.code_predictor`` so ``Qwen3OmniMoeTalkerCodePredictorAttention`` → ``TTNNQwen3Attention``.
+    """Register on ``talker.code_predictor``: attention → ``TTNNQwen3Attention``, ``Qwen3OmniMoeMLP`` → ``TTNNGlm4MoeMLP``.
 
     Nested ``PreTrainedModel`` may not get the same ``named_modules`` map when only registering from ``talker``;
     explicit registration avoids HF ``Qwen3OmniMoeTalkerCodePredictorAttention_forward`` showing up in timing pivots.
@@ -764,6 +770,9 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 f"talker.code_predictor.model.layers[{i}].self_attn expected TTNNQwen3Attention, "
                 f"got {type(layer.self_attn)} (HF Qwen3OmniMoeTalkerCodePredictorAttention_forward in pivots if not TTNN)"
             )
+            assert isinstance(
+                layer.mlp, TTNNGlm4MoeMLP
+            ), f"talker.code_predictor.model.layers[{i}].mlp expected TTNNGlm4MoeMLP, got {type(layer.mlp)}"
 
     n_audio = len(model.thinker.audio_tower.layers)
     for i, layer in enumerate(model.thinker.audio_tower.layers):
@@ -783,7 +792,7 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     print(
         f"Replacements OK: thinker {n_thinker} (MoE+attn), vision {n_vision} (TTNN attn), talker MoE+attn "
         f"(mesh {mesh_device.get_num_devices()} device(s)); "
-        f"audio_tower {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN self_attn), talker {n_talker} layers"
+        f"audio_tower {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN self_attn+MLP), talker {n_talker} layers"
     )
 
 

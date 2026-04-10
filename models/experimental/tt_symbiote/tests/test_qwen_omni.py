@@ -257,9 +257,12 @@ NN_TO_TTNN_TALKER = {
 }
 
 # Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
+# ``Qwen3OmniMoeTalkerCodePredictorDecoderLayer`` uses ``Qwen3OmniMoeMLP`` for ``layer.mlp`` (HF class not in
+# ``NN_TO_TTNN_TALKER``); map it like thinker dense ``Qwen3OmniMoeThinkerTextMLP`` → ``TTNNGlm4MoeMLP``.
 NN_TO_TTNN_CODE_PREDICTOR = {
     **NN_TO_TTNN_TALKER,
     Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -302,10 +305,11 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
 def _register_code_predictor_nn_to_ttnn(model) -> dict:
     """Register TTNN layers on ``talker.code_predictor`` (nested ``PreTrainedModel``).
 
-    ``NN_TO_TTNN_TALKER`` maps ``Qwen3OmniMoeTalkerCodePredictorAttention`` → ``TTNNQwen3Attention``.
+    ``NN_TO_TTNN_CODE_PREDICTOR`` maps ``Qwen3OmniMoeTalkerCodePredictorAttention`` → ``TTNNQwen3Attention`` and
+    ``Qwen3OmniMoeMLP`` → ``TTNNGlm4MoeMLP`` (decoder layer MLP).
     Replacement from ``register_module_replacement_dict(model.talker, ...)`` usually reaches this subtree;
-    calling this explicitly matches ``_register_code2wav_nn_to_ttnn`` and guarantees code-predictor attention
-    is converted and later receives ``set_device`` like the main talker stack.
+    calling this explicitly matches ``_register_code2wav_nn_to_ttnn`` and guarantees code-predictor layers
+    are converted and later receive ``set_device`` like the main talker stack.
     """
     talker = getattr(model, "talker", None)
     cp = getattr(talker, "code_predictor", None) if talker is not None else None
@@ -896,6 +900,10 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 f"talker.code_predictor.model.layers[{i}].self_attn expected TTNNQwen3Attention "
                 f"(TalkerCodePredictorAttention on device), got {type(layer.self_attn)}"
             )
+            assert isinstance(layer.mlp, TTNNGlm4MoeMLP), (
+                f"talker.code_predictor.model.layers[{i}].mlp expected TTNNGlm4MoeMLP "
+                f"(Qwen3OmniMoeMLP → TTNN), got {type(layer.mlp)}"
+            )
 
     n_audio = len(model.thinker.audio_tower.layers)
     for i, layer in enumerate(model.thinker.audio_tower.layers):
@@ -916,7 +924,7 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
         f"Replacements OK: thinker {n_thinker} (MoE+attn), vision {n_vision} (TTNN attn+MLP), "
         f"patch merger + {n_deepstack} deepstack merger(s), talker MoE+attn "
         f"(mesh {mesh_device.get_num_devices()} device(s)); "
-        f"audio_tower {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN attn), talker {n_talker} layers"
+        f"audio_tower {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN attn+MLP), talker {n_talker} layers"
     )
 
 

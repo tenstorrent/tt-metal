@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+import os
+
+import torch
+import torch.nn.functional as F
 from torch import nn
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -14,6 +18,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 
 
 def _lm_head_logits_dtensor_config(mesh_device):
@@ -35,6 +40,14 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
     all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
     then runs ``ttnn.linear`` with replicated weights. Readback uses a replicated mesh config that
     slices dim 0 after compose so ``torch.argmax`` / generation see ``[batch, seq, vocab]``.
+
+    Long prefills allocate logits ``[batch, seq, vocab]`` in BF16; a single ``ttnn.linear`` can
+    exceed device DRAM (e.g. multimodal prompts). When ``seq`` exceeds
+    ``TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS`` (default ``128``), the forward runs **chunked** along
+    sequence. Chunk **hidden** states are read back once per chunk; logits use **PyTorch**
+    ``F.linear`` on host with the same ``weight``/``bias`` as HuggingFace (avoids per-chunk
+    ``ttnn.linear`` + readback drift vs a single full matmul, which was skewing sampling and
+    corrupting late talker / code2wav audio). Device DRAM is not used for the full logits tensor.
     """
 
     @classmethod
@@ -114,6 +127,44 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
 
         return tree_map(apply, output_tensors)
 
+    def _hidden_chunk_to_torch(self, x_c):
+        """Hidden slice (TTNN) → one logical host tensor (same mesh rules as activations)."""
+        return _ttnn_mesh_to_torch_one_replica(x_c, getattr(self, "device", None))
+
+    def _linear_chunked_along_seq(self, x, *, b: int, seq_len: int, h: int, input_tensor_shape: list):
+        """Chunk along sequence; compute logits with host ``F.linear`` (HF weights) to match reference math."""
+        chunk = int(os.environ.get("TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS", "128"))
+        if chunk <= 0:
+            chunk = seq_len
+        if seq_len <= chunk:
+            tt_out = ttnn.linear(x, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.reshape(tt_out, input_tensor_shape[:-1] + [self.out_features])
+
+        W, wb = self.weight, self.bias
+        chunks_pt = []
+        for s0 in range(0, seq_len, chunk):
+            s1 = min(s0 + chunk, seq_len)
+            x_c = ttnn.slice(x, (0, 0, s0, 0), (b, 1, s1, h))
+            h_t = self._hidden_chunk_to_torch(x_c)
+            # Do not deallocate slice output: it may share storage with ``x`` and would corrupt later chunks.
+            h_eff = h_t[..., : self.in_features] if int(h_t.shape[-1]) > self.in_features else h_t
+            lead = h_eff.shape[:-1]
+            logits_flat = F.linear(
+                h_eff.reshape(-1, self.in_features).to(device=W.device, dtype=W.dtype),
+                W,
+                wb,
+            )
+            pt = logits_flat.reshape(*lead, self.out_features)
+            chunks_pt.append(pt)
+
+        if not chunks_pt:
+            raise RuntimeError("TTNNQwenOmniThinkerLmHead: chunked path produced no logits chunks")
+
+        # Sequence is the dimension immediately before vocab (same for 3D or 4D activations).
+        cat_dim = chunks_pt[0].dim() - 2
+        full_pt = torch.cat(chunks_pt, dim=cat_dim)
+        return full_pt.reshape(tuple(input_tensor_shape[:-1]) + (self.out_features,))
+
     def forward(self, hidden_states):
         x = self._maybe_all_gather_hidden(hidden_states)
         if x.layout != ttnn.TILE_LAYOUT:
@@ -123,9 +174,10 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)
         x = ttnn.reshape(x, input_shape)
-        tt_output = ttnn.linear(x, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
-        return tt_output
+        b = int(x.shape[0])
+        seq_len = int(x.shape[2])
+        h = int(x.shape[3])
+        return self._linear_chunked_along_seq(x, b=b, seq_len=seq_len, h=h, input_tensor_shape=input_tensor_shape)
 
 
 def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:

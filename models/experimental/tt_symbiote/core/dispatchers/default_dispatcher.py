@@ -861,9 +861,25 @@ def handle_sum(func, args, kwargs):
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
     ndim = len(input_tensor.shape)
-    if len(args) >= 2 and isinstance(args[1], (list, tuple)):
-        dim = list(args[1])
-        keepdim = args[2] if len(args) > 2 else False
+    kwargs = kwargs or {}
+    keepdim = bool(kwargs.get("keepdim", False))
+    # ``aten::sum.dim_IntList`` may pass dim as int, list, or tuple; ``dim`` may appear in kwargs.
+    if "dim" in kwargs:
+        dim_arg = kwargs["dim"]
+        dim = [int(dim_arg)] if isinstance(dim_arg, int) else [int(d) for d in dim_arg]
+        if "keepdim" not in kwargs and len(args) >= 3:
+            keepdim = bool(args[2])
+    elif len(args) >= 2:
+        dim_arg = args[1]
+        if isinstance(dim_arg, (list, tuple)):
+            dim = [int(d) for d in dim_arg]
+            keepdim = bool(args[2]) if len(args) > 2 else keepdim
+        elif isinstance(dim_arg, int):
+            dim = [int(dim_arg)]
+            keepdim = bool(args[2]) if len(args) > 2 else keepdim
+        else:
+            dim = list(range(ndim))
+            keepdim = False
     else:
         dim = list(range(ndim))
         keepdim = False
