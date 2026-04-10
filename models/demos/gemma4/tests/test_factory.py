@@ -37,6 +37,20 @@ def is_moe_model():
 skip_if_not_moe = pytest.mark.skipif(not is_moe_model(), reason="Model does not use MoE")
 
 
+def _needs_multi_device():
+    """Check if model is too large for single-device tests (hidden_size > 4096)."""
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    tc = getattr(config, "text_config", config)
+    return tc.hidden_size > 4096
+
+
+skip_if_needs_multi_device = pytest.mark.skipif(
+    _needs_multi_device(), reason="Model too large for single device (use -k 1x8 for multi-device tests)"
+)
+
+
 class TestFactory:
     """Common test setup for Gemma4 unit tests."""
 

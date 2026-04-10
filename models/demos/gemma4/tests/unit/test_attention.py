@@ -13,11 +13,12 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 
-from ...tests.test_factory import TestFactory, compare_tensors
+from ...tests.test_factory import TestFactory, compare_tensors, skip_if_needs_multi_device
 
 # ── Prefill PCC Test ──────────────────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", [32, 128], ids=["seq32", "seq128"])
 def test_attention_prefill(layer_idx, seq_len, device):
@@ -74,6 +75,7 @@ def test_attention_prefill(layer_idx, seq_len, device):
 # ── Decode PCC Test ───────────────────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 def test_attention_decode(layer_idx, device):
     """
@@ -329,6 +331,7 @@ def test_attention_decode_tp(layer_idx, mesh_device, device_params):
 # ── Paged Attention Tests ─────────────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 def test_attention_decode_paged(layer_idx, device):
     """

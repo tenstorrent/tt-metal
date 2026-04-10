@@ -14,7 +14,7 @@ import ttnn
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors
+from ...tests.test_factory import TestFactory, compare_tensors, skip_if_needs_multi_device
 
 # ── Config Tests ───────────────────────────────────────────────────────────
 
@@ -167,6 +167,7 @@ def _hf_model_state_to_tt_state(hf_model):
 # ── Single Layer Model PCC Test ───────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 def test_single_layer_model(device):
     """
     Test single-layer model against HF reference with PCC.
@@ -242,6 +243,7 @@ def test_single_layer_model(device):
 # ── Full Model PCC Test ─────────────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 def test_full_model(device):
     """
     Test full model (all layers, real weights) against HuggingFace reference.

@@ -8,9 +8,10 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_needs_multi_device
 
 
+@skip_if_needs_multi_device
 @parametrize_batch_seq()
 def test_shared_mlp(batch_size, seq_len, device):
     """Test SharedMLP against HF Gemma4TextMLP (GeGLU)."""

@@ -15,7 +15,7 @@ import ttnn
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_needs_multi_device
 
 # ── Config / Structure Tests ───────────────────────────────────────────────
 
@@ -120,6 +120,7 @@ def _create_gemma4_model_args(hf_text_config):
 # ── Full Layer PCC Test ───────────────────────────────────────────────────
 
 
+@skip_if_needs_multi_device
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
 def test_layer_forward(batch_size, seq_len, layer_idx, device):
@@ -198,6 +199,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, device):
 # ── Decode Layer Test (fully on device) ───────────────────────────────────
 
 
+@skip_if_needs_multi_device
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 def test_layer_forward_decode(layer_idx, device):
     """
