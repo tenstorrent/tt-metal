@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 export TT_METAL_RUNTIME_ROOT="$TT_METAL_HOME"
-export TT_METAL_SLOW_DISPATCH_MODE=1
+export TT_METAL_SLOW_DISPATCH_MODE="${TT_METAL_SLOW_DISPATCH_MODE:-1}"
 
 # Defaults
 TESTS_FILE="$SCRIPT_DIR/quasar_regression_tests.yaml"
 BUILD=false
 FILTER_CONFIG=""
 FILTER_GROUP=""
-BUILD_DIR="$TT_METAL_HOME/build_Release"
+BUILD_DIR="$TT_METAL_HOME/build"
 LOG_DIR="$SCRIPT_DIR/logs"
 DRY_RUN=false
 
@@ -43,14 +45,15 @@ EOF
     exit 0
 }
 
+need_arg() { if [[ $# -lt 2 || "$2" == --* ]]; then echo "ERROR: $1 requires an argument"; exit 1; fi; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)       BUILD=true; shift ;;
-        --config)      FILTER_CONFIG="$2"; shift 2 ;;
-        --group)       FILTER_GROUP="$2"; shift 2 ;;
-        --tests)       TESTS_FILE="$2"; shift 2 ;;
-        --build-dir)   BUILD_DIR="$2"; shift 2 ;;
-        --log-dir)     LOG_DIR="$2"; shift 2 ;;
+        --config)      need_arg "$1" "${2:-}"; FILTER_CONFIG="$2"; shift 2 ;;
+        --group)       need_arg "$1" "${2:-}"; FILTER_GROUP="$2"; shift 2 ;;
+        --tests)       need_arg "$1" "${2:-}"; TESTS_FILE="$2"; shift 2 ;;
+        --build-dir)   need_arg "$1" "${2:-}"; BUILD_DIR="$2"; shift 2 ;;
+        --log-dir)     need_arg "$1" "${2:-}"; LOG_DIR="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         -h|--help)     usage ;;
         *) echo "Unknown option: $1"; usage ;;
@@ -98,6 +101,12 @@ if ! command -v yq &>/dev/null; then
     echo "ERROR: yq is required but not found. Install from https://github.com/mikefarah/yq"
     exit 1
 fi
+if ! yq --version 2>&1 | grep -qi "mikefarah\|version v4"; then
+    echo "WARNING: This script requires Mike Farah's yq (v4+)."
+    echo "         Detected: $(yq --version 2>&1)"
+    echo "         Install from https://github.com/mikefarah/yq"
+    exit 1
+fi
 
 simulator_path_for_config() {
     local config="$1"
@@ -107,8 +116,7 @@ simulator_path_for_config() {
 # Build if requested
 if [[ "$BUILD" == true ]]; then
     echo "=== Building tests ==="
-    cd "$TT_METAL_HOME"
-    ./build_metal.sh -c --build-tests
+    (cd "$TT_METAL_HOME" && ./build_metal.sh -c --build-tests)
     echo ""
 fi
 
@@ -135,6 +143,7 @@ is_valid_config() {
     return 1
 }
 
+SEP=$'\x1f'
 declare -a test_entries=()
 while IFS=$'\t' read -r group filter config envvars; do
     [[ -z "$group" ]] && continue
@@ -143,8 +152,8 @@ while IFS=$'\t' read -r group filter config envvars; do
         echo "       Supported configs: ${VALID_CONFIGS[*]}"
         exit 1
     fi
-    test_entries+=("${group}|${filter}|${config}|${envvars}")
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join(" "))] | @tsv' "$TESTS_FILE")
+    test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("\u001f"))] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -163,6 +172,8 @@ fmt_duration() {
         printf "%ds" "$secs"
     fi
 }
+
+sanitize_name() { echo "$1" | tr -cs 'A-Za-z0-9_.-' '_' | sed 's/^_//;s/_$//'; }
 
 print_summary() {
     echo ""
@@ -183,13 +194,12 @@ print_summary() {
     echo "========================================="
 }
 
-trap 'echo ""; echo "*** Interrupted ***"; print_summary; exit 130' INT
-
 run_start=$SECONDS
+trap 'echo ""; echo "*** Interrupted ***"; print_summary; exit 130' INT
 test_num=0
 
 for entry in "${test_entries[@]}"; do
-    IFS='|' read -r group filter config envvars <<< "$entry"
+    IFS="$SEP" read -r group filter config envvars <<< "$entry"
 
     if [[ -n "$FILTER_CONFIG" && "$config" != "$FILTER_CONFIG" ]]; then
         skipped=$((skipped + 1))
@@ -224,13 +234,14 @@ for entry in "${test_entries[@]}"; do
     export TT_METAL_SIMULATOR="$sim_path/"
 
     # Apply per-test env vars
-    declare -a extra_env_keys=()
+    extra_env_keys=()
     if [[ -n "$envvars" ]]; then
-        for pair in $envvars; do
+        while IFS= read -r -d "$SEP" pair || [[ -n "$pair" ]]; do
+            [[ -z "$pair" ]] && continue
             key="${pair%%=*}"
             export "$pair"
             extra_env_keys+=("$key")
-        done
+        done <<< "$envvars"
     fi
 
     echo "  TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR"
@@ -247,11 +258,9 @@ for entry in "${test_entries[@]}"; do
         continue
     fi
 
-    # Resolve glob filter to full test name(s)
-    resolved_name="$(echo "$filter" | tr '/*' '_')"
+    resolved_name="$(sanitize_name "$filter")"
     matched_tests="$("$binary" --gtest_list_tests --gtest_filter="$filter" 2>/dev/null | grep -v -e '^\s*$' -e '^Running main' || true)"
     if [[ -n "$matched_tests" ]]; then
-        # Build "Suite.Test" from gtest_list_tests output (suite ends with '.', tests are indented)
         full_name=""
         suite=""
         while IFS= read -r line; do
@@ -266,23 +275,21 @@ for entry in "${test_entries[@]}"; do
                 fi
             fi
         done <<< "$matched_tests"
-        resolved_name="$(echo "$full_name" | tr '/.:<>' '_')"
-        label="[$config] $full_name"
+        resolved_name="$(sanitize_name "$full_name")"
     fi
 
     gtest_log_args=()
+    logger_env=()
     if [[ -n "$LOG_DIR" ]]; then
         log_base="$LOG_DIR/${config}_${group}_${resolved_name}"
         gtest_log_args+=("--gtest_output=json:${log_base}.json")
-        export TT_METAL_LOGGER_FILE="${log_base}.log"
-        echo "  TT_METAL_LOGGER_FILE=$TT_METAL_LOGGER_FILE"
+        logger_env=(env "TT_METAL_LOGGER_FILE=${log_base}.log")
+        echo "  TT_METAL_LOGGER_FILE=${log_base}.log"
     fi
 
     test_start=$SECONDS
     rc=0
-    "$binary" --gtest_filter="$filter" "${gtest_log_args[@]}" || rc=$?
-
-    unset TT_METAL_LOGGER_FILE
+    "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_log_args[@]}" || rc=$?
 
     elapsed=$((SECONDS - test_start))
     if [[ $rc -eq 0 ]]; then

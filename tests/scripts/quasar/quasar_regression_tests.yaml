@@ -30,5 +30,5 @@ unit_tests_legacy:
       TT_METAL_LOGGER_LEVEL: warning
 
 unit_tests_llk:
-  # - filter: "*Datacopy"
-  #   config: 1x3
+  - filter: "*Datacopy"
+    config: 1x3
