@@ -543,14 +543,51 @@ def test_embedding_oom(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("batch_size", [1, 4])
+@pytest.mark.parametrize("sentence_size", [8, 32])
+@pytest.mark.parametrize("hidden_embedding_dim", [64])
+@pytest.mark.parametrize("vocabulary_size", [256])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_embedding_kernel_ready_input_backward_compatible_shape(
+    device,
+    batch_size,
+    sentence_size,
+    hidden_embedding_dim,
+    vocabulary_size,
+    layout,
+):
+    """Kernel-ready logical [B,1,1,S] inputs preserve legacy output shape [B,S,D]."""
+    torch.manual_seed(1234)
+
+    input_shape = (batch_size, 1, 1, sentence_size)
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, input_shape)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    expected_torch_output = torch_output_tensor.reshape(batch_size, sentence_size, hidden_embedding_dim)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32), device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16), device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=layout)
+
+    assert tuple(output_tensor.shape) == tuple(expected_torch_output.shape)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(expected_torch_output, output_tensor)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
         (10,),  # Rank 1
         (5, 10),  # Rank 2
         (2, 3, 10),  # Rank 3
-        (1, 2, 3, 10),  # Rank 4
-        (2, 1, 1, 8),  # Rank 4 with 1s in middle (common in models)
+        (1, 2, 3, 10),  # Rank 4 (non-kernel-ready)
+        (2, 3, 4, 8),  # Rank 4 (non-kernel-ready)
     ],
 )
 @pytest.mark.parametrize("hidden_embedding_dim", [64, 128])
@@ -563,7 +600,7 @@ def test_embedding_nd_input(
     vocabulary_size,
     layout,
 ):
-    """Test embedding with N-dimensional input tensors (rank 1 through 4+)."""
+    """Test embedding with non-kernel-ready N-dimensional inputs."""
     torch.manual_seed(1234)
 
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, input_shape)
@@ -581,9 +618,9 @@ def test_embedding_nd_input(
 
     # Verify output shape: input_shape + (embedding_dim,)
     expected_output_shape = input_shape + (hidden_embedding_dim,)
-    assert tuple(output_tensor.shape) == expected_output_shape, (
-        f"Output shape mismatch: expected {expected_output_shape}, got {tuple(output_tensor.shape)}"
-    )
+    assert (
+        tuple(output_tensor.shape) == expected_output_shape
+    ), f"Output shape mismatch: expected {expected_output_shape}, got {tuple(output_tensor.shape)}"
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor)
@@ -621,9 +658,9 @@ def test_embedding_rank5_input(
 
     # Verify output shape: input_shape + (embedding_dim,)
     expected_output_shape = input_shape + (hidden_embedding_dim,)
-    assert tuple(output_tensor.shape) == expected_output_shape, (
-        f"Output shape mismatch: expected {expected_output_shape}, got {tuple(output_tensor.shape)}"
-    )
+    assert (
+        tuple(output_tensor.shape) == expected_output_shape
+    ), f"Output shape mismatch: expected {expected_output_shape}, got {tuple(output_tensor.shape)}"
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor)
