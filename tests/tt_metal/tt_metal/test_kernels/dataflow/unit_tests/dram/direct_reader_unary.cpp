@@ -48,7 +48,9 @@ void kernel_main() {
             tlocal_src_addr += dfb.get_stride_size();
         }
         dfb.finish();
-    } else {
+    }
+#ifndef ARCH_QUASAR
+    else {
         experimental::CircularBuffer cb(cb_id);
         uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
@@ -60,4 +62,5 @@ void kernel_main() {
             src_addr += ublock_size_bytes;
         }
     }
+#endif
 }

@@ -10,6 +10,11 @@
 #include <fstream>
 #include <istream>
 #include <iterator>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::jit_build {
@@ -63,9 +68,105 @@ namespace {
 
 uint64_t hash_file_content(std::istream& file) {
     tt::FNV1a hasher;
-    hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    char buf[65536];
+    for (;;) {
+        file.read(buf, sizeof(buf));
+        std::streamsize bytes_read = file.gcount();
+        if (bytes_read <= 0) {
+            break;
+        }
+        hasher.update(buf, buf + bytes_read);
+    }
     return hasher.digest();
 }
+
+struct PathHash {
+    size_t operator()(const std::filesystem::path& p) const {
+        return std::hash<std::filesystem::path::string_type>{}(p.native());
+    }
+};
+
+class FileHashCache {
+public:
+    static FileHashCache& instance() {
+        static FileHashCache cache;
+        return cache;
+    }
+
+    std::pair<uint64_t, bool> get_or_compute(const std::filesystem::path& path) {
+        std::shared_ptr<Entry> entry;
+        {
+            std::lock_guard<std::mutex> lock(map_mutex_);
+            auto [it, inserted] = cache_.try_emplace(path);
+            if (inserted) {
+                it->second = std::make_shared<Entry>();
+            }
+            entry = it->second;
+        }
+
+        auto metadata = get_metadata(path);
+        if (!metadata.has_value()) {
+            return {0, false};
+        }
+
+        std::lock_guard<std::mutex> entry_lock(entry->mutex);
+        if (entry->ready && entry->metadata == metadata) {
+            return {entry->hash, entry->valid};
+        }
+
+        std::ifstream dep_file(path, std::ios::binary);
+        if (!dep_file.is_open()) {
+            return {0, false};
+        }
+        uint64_t hash = hash_file_content(dep_file);
+        if (dep_file.fail() && !dep_file.eof()) {
+            return {0, false};
+        }
+
+        entry->hash = hash;
+        entry->valid = true;
+        entry->metadata = metadata;
+        entry->ready = true;
+        return {entry->hash, entry->valid};
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        cache_.clear();
+    }
+
+private:
+    struct Metadata {
+        std::filesystem::file_time_type mtime;
+        std::uintmax_t size;
+
+        bool operator==(const Metadata& other) const = default;
+    };
+
+    struct Entry {
+        std::mutex mutex;
+        bool ready{false};
+        uint64_t hash{0};
+        bool valid{false};
+        std::optional<Metadata> metadata;
+    };
+
+    static std::optional<Metadata> get_metadata(const std::filesystem::path& path) {
+        std::error_code ec;
+        auto size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            return std::nullopt;
+        }
+        auto mtime = std::filesystem::last_write_time(path, ec);
+        if (ec) {
+            return std::nullopt;
+        }
+        return Metadata{mtime, size};
+    }
+
+    std::mutex map_mutex_;
+    std::unordered_map<std::filesystem::path, std::shared_ptr<Entry>, PathHash> cache_;
+};
 
 }  // namespace
 
@@ -88,9 +189,8 @@ void write_dependency_hashes(
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
-        std::ifstream dep_file(dep_path, std::ios::binary);
-        auto hash = hash_file_content(dep_file);
-        if (dep_file.fail() && !dep_file.eof()) {
+        auto [hash, valid] = FileHashCache::instance().get_or_compute(dep_path);
+        if (!valid) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
             hash_file.setstate(std::ios::badbit);
             return;
@@ -138,13 +238,16 @@ bool dependencies_up_to_date(std::istream& hash_file) {
             log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
             return false;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
-        if (!dep_file.is_open()) {
+        auto [dep_hash, valid] = FileHashCache::instance().get_or_compute(dep);
+        if (!valid) {
             // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
-            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            if (!std::filesystem::exists(dep)) {
+                log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            } else {
+                log_debug(tt::LogBuildKernels, "Need to JIT build because file {} cannot be read.", dep.string());
+            }
             return false;
         }
-        auto dep_hash = hash_file_content(dep_file);
         if (dep_hash != recorded_hash) {
             log_debug(
                 tt::LogBuildKernels,
@@ -173,5 +276,7 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     }
     return dependencies_up_to_date(hash_file);
 }
+
+void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
 }  // namespace tt::jit_build
