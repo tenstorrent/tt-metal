@@ -1273,15 +1273,6 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
-        // ====================================================================
-        // RMSNorm on input core (with gamma → rmsnorm_output_cb, for DKV path)
-        // ====================================================================
-        {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-            rmsnorm(rmsnorm_args);  // pop_input=true frees input_cb
-        }
-
         if constexpr (!Core::is_input_core) {
 #if defined(COMPILE_FOR_NCRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -1299,6 +1290,31 @@ void kernel_main() {
         }
 
         if (!skip_attention) {
+            // ====================================================================
+            // RMSNorm on input core (with gamma → rmsnorm_output_cb, for DKV path)
+            // ====================================================================
+            {
+                DeviceZoneScopedN("RMSNORM");
+                deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+                rmsnorm(rmsnorm_args);  // pop_input=true frees input_cb
+            }
+
+            // ====================================================================
+            // Mcast_dkv: Send normalized data to DKV matmul cores
+            // Non-persistent, reuses mcast1 persistent state
+            // ====================================================================
+            {
+                DeviceZoneScopedN("MCAST_DKV");
+                deepseek_b1_ops::Mcast::Op<
+                    McastCTArgs,
+                    Core::is_input_core,
+                    Core::is_dkv_matmul_core,
+                    Core::is_dkv_matmul_core,
+                    true>  // pop_src=true (pop rmsnorm_output_cb)
+                    mcast_dkv;
+                mcast_dkv(mcast_dkv_args);
+            }
+
             // ====================================================================
             // Matmul operation
             // ====================================================================
@@ -1398,23 +1414,6 @@ void kernel_main() {
                     create_q_heads_receiver(create_q_heads_receiver_args);
 #endif
                 }
-            }
-
-            // ====================================================================
-            // Mcast_dkv: Send normalized data to DKV matmul cores
-            // Placed after Q-path to avoid NOC write race with Q matmul
-            // Non-persistent, reuses mcast1 persistent state
-            // ====================================================================
-            {
-                DeviceZoneScopedN("MCAST_DKV");
-                deepseek_b1_ops::Mcast::Op<
-                    McastCTArgs,
-                    Core::is_input_core,
-                    Core::is_dkv_matmul_core,
-                    Core::is_dkv_matmul_core,
-                    true>  // pop_src=true (pop rmsnorm_output_cb)
-                    mcast_dkv;
-                mcast_dkv(mcast_dkv_args);
             }
 
             // ====================================================================
