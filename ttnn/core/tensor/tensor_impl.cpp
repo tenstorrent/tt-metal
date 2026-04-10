@@ -1052,7 +1052,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     }
 
     auto source_layout = tensor.layout();
-    auto tile = tensor.tensor_spec().tile();
+    auto tile = source_layout == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
         [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
@@ -1075,7 +1075,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(target_layout, tensor.tensor_spec().tile()),
+                PageConfig(target_layout, tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
@@ -1575,11 +1575,12 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     const auto layout =
         (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
 
+    auto tile = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
-            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            tt::tt_metal::PageConfig(layout, tile),
             input_tensor.tensor_spec().memory_config(),
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
