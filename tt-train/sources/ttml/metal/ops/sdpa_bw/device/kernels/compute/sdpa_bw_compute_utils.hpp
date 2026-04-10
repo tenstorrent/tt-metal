@@ -102,13 +102,12 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 // Loads lse from cb_intermediates via column-broadcast and computes in-place using SFPU.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
-// cb_prev_srca: any BF16 CB to enable data format reconfiguration to Float32.
-void apply_softmax_statistics_on_dst(
-    const uint32_t scores_reg, const uint32_t cb_intermediates, const uint32_t cb_prev_srca) {
+void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 
-    // Reconfigure unpacker/math from BF16 (matmul operands) to Float32 (intermediates)
-    reconfig_data_format(cb_prev_srca, cb_intermediates);
+    // Reconfigure only SrcB for the B2D broadcast (Float32 intermediates).
+    // SrcA is left as-is from the preceding matmul to preserve its format.
+    reconfig_data_format_srcb(cb_intermediates);
 
     // Lightweight MOP reinit for unary_bcast<COL> with B2D path.
     // Only reprograms UNPACK and MATH MOPs — does NOT reset MATH-PACK sync or PACK dest,

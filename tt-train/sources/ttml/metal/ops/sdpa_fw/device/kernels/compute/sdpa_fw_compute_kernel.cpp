@@ -206,7 +206,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         }
 
         // Load 1/sum_exp with column broadcast to DST[block_size]
-        init_unary_bcast_col(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
+        init_unary_bcast_col(alias_cb_prev_sum_exp);
         unary_bcast<BroadcastType::COL>(alias_cb_prev_sum_exp, 0, block_size);
 
         // SFPU multiply: DST[i] = mm_out[i] * (1/sum_exp)

@@ -155,7 +155,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
             // Fused softmax: scores are still in DST at full FP32 from the matmul.
             // Apply exp(S - lse) directly on DST — no CB roundtrip, no TF32 truncation.
-            apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates, cb_query);
+            apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates);
 
             tile_regs_commit();
             tile_regs_wait();

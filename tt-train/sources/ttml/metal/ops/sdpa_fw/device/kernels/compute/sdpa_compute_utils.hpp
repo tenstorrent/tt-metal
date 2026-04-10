@@ -242,8 +242,9 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 // Lightweight init for unary_bcast<COL> with B2D datacopy path.
 // Reads column 0 from a CB tile and replicates it to all 32 columns in a DST register.
 // Only reprograms UNPACK and MATH MOPs — safe inside a tile_regs_acquire block.
-void init_unary_bcast_col(uint32_t cb_prev, uint32_t cb_col_vec) {
-    reconfig_data_format(cb_prev, cb_col_vec);
+// Uses reconfig_data_format_srcb so SrcA format register is preserved for the caller.
+void init_unary_bcast_col(uint32_t cb_col_vec) {
+    reconfig_data_format_srcb(cb_col_vec);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_col_vec)));
     MATH((llk_math_eltwise_unary_datacopy_init<B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_col_vec)));
@@ -273,7 +274,7 @@ void update_cur_mm_out(
         }
 
         // Load exp_max_diff with column broadcast to DST[block_size]
-        init_unary_bcast_col(cb_prev_mm_out, cb_exp_max_diff);
+        init_unary_bcast_col(cb_exp_max_diff);
         unary_bcast<BroadcastType::COL>(cb_exp_max_diff, 0, block_size);
 
         // SFPU element-wise multiply: DST[i] = DST[i] * DST[block_size]
@@ -308,7 +309,8 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
+    mm_init(cb_in_idx, cb_matmul_reduce, cb_in_idx, 0);
+    // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 
