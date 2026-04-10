@@ -625,8 +625,20 @@ const DeviceStorage& Tensor::device_storage() const& {
     return *device_storage;
 }
 
+DeviceStorage& Tensor::device_storage() & {
+    auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
+    return *device_storage;
+}
+
 const HostStorage& Tensor::host_storage() const& {
     const auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return *host_storage;
+}
+
+HostStorage& Tensor::host_storage() & {
+    auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
 }
@@ -637,20 +649,8 @@ const HostTensor& Tensor::host_tensor() const& {
     return host_storage->host_tensor();
 }
 
-HostTensor& Tensor::host_tensor() & {
-    auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
-    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
-    return host_storage->host_tensor();
-}
-
 const MeshTensor& Tensor::mesh_tensor() const& {
     const auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
-    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
-    return mesh_storage->get_mesh_tensor();
-}
-
-MeshTensor& Tensor::mesh_tensor() & {
-    auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
     TT_FATAL(mesh_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
     return mesh_storage->get_mesh_tensor();
 }

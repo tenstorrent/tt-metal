@@ -232,21 +232,21 @@ public:
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
     const DeviceStorage& device_storage() const&;
+    DeviceStorage& device_storage() &;
     const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
     const HostStorage& host_storage() const&;
+    HostStorage& host_storage() &;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated HostTensor.
     const HostTensor& host_tensor() const&;
-    HostTensor& host_tensor() &;
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated MeshTensor.
     const MeshTensor& mesh_tensor() const&;
-    MeshTensor& mesh_tensor() &;
     const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
