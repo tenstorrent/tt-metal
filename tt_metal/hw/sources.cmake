@@ -92,6 +92,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
+    inc/api/compute/eltwise_unary/tanh_derivative.h
     inc/api/compute/eltwise_unary/threshold.h
     inc/api/compute/eltwise_unary/trigonometry.h
     inc/api/compute/eltwise_unary/typecast.h
@@ -114,7 +115,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/reduce.h
     inc/api/compute/reduce_custom.h
     inc/api/compute/reg_api.h
-    inc/api/compute/remainder_int32.h
+    inc/api/compute/binary_remainder.h
     inc/api/compute/reshuffle.h
     inc/api/compute/sentinel/compute_kernel_sentinel.h
     inc/api/compute/sentinel/sentinel_core.h
