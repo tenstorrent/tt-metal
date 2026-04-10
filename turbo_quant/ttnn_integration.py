@@ -641,6 +641,122 @@ class TTNNTurboQuantCache:
 
         return k_dequant, v_dequant
 
+    def update_cache(
+        self,
+        k_heads: "ttnn.Tensor",
+        v_heads: "ttnn.Tensor",
+        layer_idx: int,
+        current_pos,
+    ):
+        """Quantize new K/V tokens and scatter into cache (no dequantize).
+
+        Use with fused_sdpa_decode() which reads raw indices+norms directly.
+        Identical to steps 1-2 of update_and_dequantize().
+        """
+        if isinstance(current_pos, int):
+            pos_tt = ttnn.from_torch(
+                torch.tensor([current_pos], dtype=torch.int32),
+                device=self.device,
+                dtype=ttnn.int32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _own_pos_tt = True
+        else:
+            pos_tt = current_pos
+            _own_pos_tt = False
+
+        k_idx_bf16, k_norms_new = self.quantize(k_heads)
+        v_idx_bf16, v_norms_new = self.quantize(v_heads)
+
+        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        k_idx_scatter = ttnn.permute(k_idx_bf16, (2, 0, 1, 3))
+        v_idx_scatter = ttnn.permute(v_idx_bf16, (2, 0, 1, 3))
+        ttnn.deallocate(k_idx_bf16)
+        ttnn.deallocate(v_idx_bf16)
+
+        _shard_spec_idx = ttnn.ShardSpec(_shard_grid, [32, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        _shard_mem_idx = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_idx)
+
+        k_idx_sharded = ttnn.to_memory_config(k_idx_scatter, _shard_mem_idx)
+        v_idx_sharded = ttnn.to_memory_config(v_idx_scatter, _shard_mem_idx)
+        ttnn.deallocate(k_idx_scatter)
+        ttnn.deallocate(v_idx_scatter)
+
+        ttnn.experimental.paged_update_cache(self.k_indices_dev[layer_idx], k_idx_sharded, update_idxs_tensor=pos_tt)
+        ttnn.experimental.paged_update_cache(self.v_indices_dev[layer_idx], v_idx_sharded, update_idxs_tensor=pos_tt)
+        ttnn.deallocate(k_idx_sharded)
+        ttnn.deallocate(v_idx_sharded)
+
+        k_norms_scatter = ttnn.permute(k_norms_new, (2, 0, 1, 3))
+        v_norms_scatter = ttnn.permute(v_norms_new, (2, 0, 1, 3))
+        ttnn.deallocate(k_norms_new)
+        ttnn.deallocate(v_norms_new)
+
+        _shard_spec_norms = ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        _shard_mem_norms = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_norms
+        )
+
+        k_norms_sharded = ttnn.to_memory_config(k_norms_scatter, _shard_mem_norms)
+        v_norms_sharded = ttnn.to_memory_config(v_norms_scatter, _shard_mem_norms)
+        ttnn.deallocate(k_norms_scatter)
+        ttnn.deallocate(v_norms_scatter)
+
+        ttnn.experimental.paged_update_cache(self.k_norms_dev[layer_idx], k_norms_sharded, update_idxs_tensor=pos_tt)
+        ttnn.experimental.paged_update_cache(self.v_norms_dev[layer_idx], v_norms_sharded, update_idxs_tensor=pos_tt)
+        ttnn.deallocate(k_norms_sharded)
+        ttnn.deallocate(v_norms_sharded)
+
+        if _own_pos_tt:
+            ttnn.deallocate(pos_tt)
+
+    def fused_sdpa_decode(
+        self,
+        q: "ttnn.Tensor",
+        layer_idx: int,
+        current_pos: "ttnn.Tensor",
+        scale: float,
+    ) -> "ttnn.Tensor":
+        """Run fused TQ SDPA decode directly on BFP4 index + BF16 norm caches.
+
+        Reads BFP4 indices from k/v_indices_dev, BF16 norms from k/v_norms_dev,
+        and dequantizes on-the-fly (centroid gather × norm) inside the SDPA kernel.
+
+        Args:
+            q: BF16 query [B, NQH, 1, DH] on device.
+            layer_idx: Transformer layer index.
+            current_pos: Int32 current position tensor [B] on device.
+            scale: Attention scale factor (1/sqrt(head_dim)).
+
+        Returns:
+            BF16 attention output [B, NQH, 1, DH] on device.
+        """
+        _require_ttnn()
+        centroids = self.setup.quantizer.codebook.centroids.tolist()
+
+        # Dummy page table (not used by interleaved reader)
+        page_table = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+
+        out = ttnn.experimental.turbo_quant_sdpa_decode(
+            q,
+            self.k_indices_dev[layer_idx],
+            self.k_norms_dev[layer_idx],
+            self.v_indices_dev[layer_idx],
+            self.v_norms_dev[layer_idx],
+            page_table,
+            current_pos,
+            centroids,
+            scale,
+        )
+        ttnn.deallocate(page_table)
+        return out
+
     def update_and_dequantize_rotated(
         self,
         k_heads: "ttnn.Tensor",
