@@ -22,7 +22,7 @@ on:
       max-log-bytes:
         description: "Per-run log truncation in bytes"
         type: string
-        default: "50000"
+        default: "100000"
       max-escapes:
         description: "Max bug escapes before Phase 4 stops"
         type: string
