@@ -95,7 +95,7 @@ jobs:
             ].join("\n");
 
             // Replace existing CI Status section if present, otherwise append
-            const ciStatusRegex = /### CI Status[\s\S]*?(?=\n###|\s*$)/;
+            const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;
             if (ciStatusRegex.test(body)) {
               body = body.replace(ciStatusRegex, statusSection);
             } else {
