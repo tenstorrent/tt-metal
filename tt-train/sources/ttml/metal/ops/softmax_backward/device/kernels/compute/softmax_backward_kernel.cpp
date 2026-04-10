@@ -6,7 +6,34 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+
+namespace ckernel {
+
+// When fp32_dest_acc_en is set, unpack/math must be explicitly reconfigured between ops (see FP32_DEST_ACC_EN).
+ALWI void mul_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
+#if defined(FP32_DEST_ACC_EN)
+    reconfig_data_format(icb0, icb1);
+#endif
+    mul_tiles_init(icb0, icb1);
+}
+
+ALWI void add_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
+#if defined(FP32_DEST_ACC_EN)
+    reconfig_data_format(icb0, icb1);
+#endif
+    add_tiles_init(icb0, icb1);
+}
+
+ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0, uint32_t icb1) {
+#if defined(FP32_DEST_ACC_EN)
+    reconfig_data_format(icb0, icb1);
+#endif
+    sub_bcast_cols_init_short(icb0, icb1);
+}
+
+}  // namespace ckernel
 
 constexpr uint32_t DST_REG_ID = 0;
 constexpr uint32_t ONE_TILE = 1;
@@ -15,6 +42,10 @@ constexpr uint32_t ONE_TILE = 1;
 ALWI void reduce_tile_to_cb(uint32_t icb0, uint32_t icb_ones, uint32_t ocb, uint32_t num_tiles) {
     tile_regs_acquire();
 
+#if defined(FP32_DEST_ACC_EN)
+    // Matmul reads different operand types than eltwise mul; reconfig keeps FP32 DST accumulation correct.
+    ckernel::reconfig_data_format(icb0, icb_ones);
+#endif
     // Initialize matmul - will accumulate across all tiles
     mm_init(icb0, icb_ones, ocb, /*transpose*/ 0);
 
@@ -35,7 +66,7 @@ ALWI void elementwise_multiply(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_
 
 template <>
 ALWI void elementwise_multiply<true>(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t size) {
-    mul_tiles_init(src0_cb_id, src1_cb_id);
+    ckernel::mul_tiles_init_with_dt(src0_cb_id, src1_cb_id);
     for (uint32_t i = 0; i < size; ++i) {
         tile_regs_acquire();
         mul_tiles(src0_cb_id, src1_cb_id, i, i, DST_REG_ID);
@@ -46,7 +77,7 @@ ALWI void elementwise_multiply<true>(uint32_t src0_cb_id, uint32_t src1_cb_id, u
 
 template <>
 ALWI void elementwise_multiply<false>(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t size) {
-    mul_tiles_init(src0_cb_id, src1_cb_id);
+    ckernel::mul_tiles_init_with_dt(src0_cb_id, src1_cb_id);
     tile_regs_acquire();
     for (uint32_t i = 0; i < size; ++i) {
         mul_tiles(src0_cb_id, src1_cb_id, i, i, i);
@@ -63,7 +94,7 @@ ALWI void accumulate(uint32_t accum_cb_id, uint32_t addend_cb_id) {
     cb_wait_front(addend_cb_id, ONE_TILE);
 
     // Add them together
-    add_tiles_init(accum_cb_id, addend_cb_id);
+    ckernel::add_tiles_init_with_dt(accum_cb_id, addend_cb_id);
     tile_regs_acquire();
     add_tiles(accum_cb_id, addend_cb_id, 0, 0, DST_REG_ID);
     tile_regs_commit();
@@ -89,10 +120,13 @@ ALWI void fused_sub_mul(
     tile_regs_acquire();
 
     // Step 1: Compute grad - sum(y * grad) and store in DST[0]
-    sub_bcast_cols_init_short(grad_cb_id, sum_reduce_cb_id);
+    ckernel::sub_bcast_cols_init_short_with_dt(grad_cb_id, sum_reduce_cb_id);
     sub_tiles_bcast<BROADCAST_TYPE>(grad_cb_id, sum_reduce_cb_id, grad_tile_idx, 0, DST_REG_ID);
 
     // Step 2: Multiply y * DST[0], reusing the DST register
+#if defined(FP32_DEST_ACC_EN)
+    ckernel::reconfig_data_format_srca(y_cb_id);
+#endif
     binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id, y_tile_idx, DST_REG_ID);
 

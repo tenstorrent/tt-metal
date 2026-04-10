@@ -250,7 +250,9 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("many-short-rows shape");
     constexpr SoftmaxBackwardCase test_case{
-        .name = "many_short_rows_non_streaming_5_tiles",
+        // TODO: fails with name "many_short_rows_non_streaming_5_tiles".
+        // Tracking: https://github.com/tenstorrent/tt-metal/issues/41944
+        .name = "many_short_rows_non_streaming",
         .n = 1,
         .c = 30,
         .h = 6400,
@@ -323,7 +325,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_llama8b) {
 
 constexpr std::array<DTypeParam, 2> kDTypeParams = {{
     {"bf16", ttnn::DataType::BFLOAT16, true},
-    {"fp32", ttnn::DataType::FLOAT32, false},
+    {"fp32", ttnn::DataType::FLOAT32, true},
 }};
 
 INSTANTIATE_TEST_SUITE_P(
