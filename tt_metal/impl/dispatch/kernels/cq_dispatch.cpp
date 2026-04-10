@@ -1494,7 +1494,9 @@ void kernel_main() {
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     // Initialize local state of any additional nocs used instead of the default
+#ifndef ARCH_QUASAR
     static_assert(my_noc_index != upstream_noc_index);
+#endif
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
