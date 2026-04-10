@@ -1488,10 +1488,12 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
+            const auto tile =
+                input_tensor_spec.layout() == Layout::TILE ? input_tensor_spec.tile() : tt::tt_metal::Tile();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
                 tilized_data = CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                    input_tensor_spec.physical_shape(), tile, data);
                 data = ttsl::make_const_span(tilized_data);
             }
 
@@ -1499,9 +1501,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, tile);
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, tile);
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
