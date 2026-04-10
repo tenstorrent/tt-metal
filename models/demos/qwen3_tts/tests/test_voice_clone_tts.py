@@ -17,6 +17,7 @@ Run:
     pytest models/demos/qwen3_tts/tests/test_voice_clone_tts.py -v
 """
 
+import gc
 import urllib.request
 from pathlib import Path
 
@@ -56,7 +57,38 @@ def download_ref_audio() -> str:
     return out_path
 
 
+def load_talker_block_test_weights() -> dict:
+    """Load only Talker norm + layer-0 attention weights (avoids full 1.7B dict in RAM)."""
+    from huggingface_hub import snapshot_download
+    from safetensors import safe_open
+
+    model_path = Path(snapshot_download(MODEL_ID, allow_patterns=["*.safetensors"]))
+    layer0 = "talker.model.layers.0.self_attn."
+    keys_needed = [
+        "talker.model.norm.weight",
+        f"{layer0}q_proj.weight",
+        f"{layer0}k_proj.weight",
+        f"{layer0}v_proj.weight",
+        f"{layer0}o_proj.weight",
+        f"{layer0}q_norm.weight",
+        f"{layer0}k_norm.weight",
+    ]
+    found = {}
+    for f in sorted(model_path.glob("*.safetensors")):
+        if "speech_tokenizer" in f.parts:
+            continue
+        with safe_open(f, framework="pt", device="cpu") as sf:
+            for k in keys_needed:
+                if k in sf.keys() and k not in found:
+                    found[k] = sf.get_tensor(k).float().clone()
+    missing = [k for k in keys_needed if k not in found]
+    if missing:
+        raise RuntimeError(f"load_talker_block_test_weights: missing {missing} under {model_path}")
+    return found
+
+
 def load_main_weights():
+    """Load full checkpoint in bfloat16 on host (~half the RAM of float32)."""
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
@@ -65,7 +97,13 @@ def load_main_weights():
     for f in sorted(model_path.glob("*.safetensors")):
         if "speech_tokenizer" not in str(f):
             main_dict.update(load_file(f))
-    return {k: v.float() for k, v in main_dict.items()}
+    out = {}
+    for k, v in main_dict.items():
+        if v.is_floating_point():
+            out[k] = v.to(torch.bfloat16).contiguous()
+        else:
+            out[k] = v
+    return out
 
 
 def load_decoder_weights():
@@ -88,11 +126,6 @@ def device():
     dev = ttnn.open_device(device_id=0)
     yield dev
     ttnn.close_device(dev)
-
-
-@pytest.fixture(scope="module")
-def main_weights():
-    return load_main_weights()
 
 
 @pytest.fixture(scope="module")
@@ -121,31 +154,44 @@ def hf_tokenizer():
 class TestTTNNComponents:
     """Verify individual TTNN blocks meet PCC > 0.99."""
 
-    def test_rmsnorm_pcc(self, device, main_weights):
+    @pytest.fixture(scope="class")
+    def talker_block_weights(self):
+        weights = load_talker_block_test_weights()
+        yield weights
+        del weights
+        gc.collect()
+
+    def test_rmsnorm_pcc(self, device, talker_block_weights):
         from models.demos.qwen3_tts.reference.functional import rms_norm as ref_rmsnorm
         from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
         hidden = 2048
         torch.manual_seed(0)
         x = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
-        w = main_weights["talker.model.norm.weight"].to(torch.bfloat16)
+        w = talker_block_weights["talker.model.norm.weight"].to(torch.bfloat16)
 
         ref = ref_rmsnorm(x.squeeze(1), w, eps=1e-6)
 
-        w_tt = ttnn.from_torch(w.view(1, 1, 1, hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        mini_state = {"talker.model.norm.weight": w}
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        norm = RMSNorm(device=device, weight=w_tt, eps=1e-6)
+        norm = RMSNorm(
+            device=device,
+            dim=hidden,
+            state_dict=mini_state,
+            weight_key="talker.model.norm.weight",
+            eps=1e-6,
+        )
         out_tt = ttnn.to_torch(norm(x_tt)).squeeze(0)
 
         pcc = compute_pcc(ref, out_tt)
         print(f"\nRMSNorm PCC: {pcc:.6f}")
         assert pcc > 0.99, f"RMSNorm PCC {pcc:.4f} < 0.99"
 
-    def test_attention_pcc(self, device, main_weights):
+    def test_attention_pcc(self, device, talker_block_weights):
         from models.demos.qwen3_tts.reference.functional import attention as ref_attention
         from models.demos.qwen3_tts.tt.attention import Attention
         from models.demos.qwen3_tts.tt.model_config import Qwen3TTSTalkerConfig
-        from models.demos.qwen3_tts.tt.rope import get_rope_tensors
+        from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
 
         config = Qwen3TTSTalkerConfig()
         seq_len = 64
@@ -155,18 +201,19 @@ class TestTTNNComponents:
         # Reference
         prefix = "talker.model.layers.0.self_attn."
         layer_weights = {
-            "q_proj": {"weight": main_weights[prefix + "q_proj.weight"].float()},
-            "k_proj": {"weight": main_weights[prefix + "k_proj.weight"].float()},
-            "v_proj": {"weight": main_weights[prefix + "v_proj.weight"].float()},
-            "o_proj": {"weight": main_weights[prefix + "o_proj.weight"].float()},
-            "q_norm": main_weights[prefix + "q_norm.weight"].float(),
-            "k_norm": main_weights[prefix + "k_norm.weight"].float(),
+            "q_proj": {"weight": talker_block_weights[prefix + "q_proj.weight"].float()},
+            "k_proj": {"weight": talker_block_weights[prefix + "k_proj.weight"].float()},
+            "v_proj": {"weight": talker_block_weights[prefix + "v_proj.weight"].float()},
+            "o_proj": {"weight": talker_block_weights[prefix + "o_proj.weight"].float()},
+            "q_norm": talker_block_weights[prefix + "q_norm.weight"].float(),
+            "k_norm": talker_block_weights[prefix + "k_norm.weight"].float(),
         }
         from models.demos.qwen3_tts.reference.functional import compute_rope_frequencies
 
         cos, sin = compute_rope_frequencies(config.head_dim, seq_len, config.rope_theta)
+        # Reference expects [batch, seq_len, hidden_size] — keep batch dim (do not squeeze to 2D).
         ref_out = ref_attention(
-            x.squeeze(1).squeeze(0).float(),
+            x.squeeze(1).float(),
             q_proj_weight=layer_weights["q_proj"]["weight"],
             k_proj_weight=layer_weights["k_proj"]["weight"],
             v_proj_weight=layer_weights["v_proj"]["weight"],
@@ -175,27 +222,33 @@ class TestTTNNComponents:
             k_norm_weight=layer_weights["k_norm"],
             cos=cos,
             sin=sin,
-            num_heads=config.num_heads,
-            num_kv_heads=config.num_kv_heads,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
             head_dim=config.head_dim,
             rms_norm_eps=config.rms_norm_eps,
         )
 
-        # TTNN
+        # TTNN (layer_prefix matches HF keys: talker.model.layers.0.self_attn.*)
         attn = Attention(
             device=device,
-            state_dict=main_weights,
+            hidden_size=config.hidden_size,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
+            head_dim=config.head_dim,
+            state_dict=talker_block_weights,
+            layer_prefix="talker.model.layers.0",
+            rms_norm_eps=config.rms_norm_eps,
+            weight_dtype=ttnn.bfloat16,
             weight_cache_path=None,
-            layer_num=0,
-            dtype=ttnn.bfloat16,
-            config=config,
         )
         cos_tt, sin_tt = get_rope_tensors(device, config.head_dim, seq_len, torch.arange(seq_len), config.rope_theta)
-        trans_mat = torch.eye(config.head_dim, dtype=torch.bfloat16).unsqueeze(0).unsqueeze(0)
-        trans_mat_tt = ttnn.from_torch(trans_mat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # rotary_embedding_llama requires trans_mat last dim == TILE (32); not a full head_dim×head_dim identity.
+        trans_mat_tt = get_transformation_mat(config.head_dim, device)
 
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        out_tt = ttnn.to_torch(attn(x_tt, cos_tt, sin_tt, trans_mat_tt)).squeeze(0)
+        out_ttnn, _ = attn(x_tt, cos_tt, sin_tt, trans_mat_tt)
+        # [1, 1, S, H] -> [1, S, H] to match ref_out
+        out_tt = ttnn.to_torch(out_ttnn).squeeze(1)
 
         pcc = compute_pcc(ref_out.to(torch.bfloat16), out_tt)
         print(f"\nAttention PCC: {pcc:.6f}")
@@ -244,7 +297,7 @@ class TestVoiceCloneTTS:
     """End-to-end voice cloning: ref audio → codec tokens → audio waveform."""
 
     @pytest.fixture(scope="class")
-    def tts_output_path(self, device, main_weights, decoder_weights, ref_audio_path, hf_tokenizer):
+    def tts_output_path(self, device, decoder_weights, ref_audio_path, hf_tokenizer):
         """Run full pipeline once, return output path for subsequent tests."""
         from models.demos.qwen3_tts.demo.demo_full_ttnn_tts import (
             TTSConfig,
@@ -261,14 +314,14 @@ class TestVoiceCloneTTS:
 
         config = TTSConfig(max_new_tokens=128, greedy=False)
 
-        # Encode reference audio → RVQ codes + raw audio for speaker embed
-        ref_codes, audio_data = encode_reference_audio(ref_audio_path, main_weights)
+        # Encode + trim first (cached path needs no checkpoint — avoids peak RAM with full weights)
+        ref_codes, audio_data = encode_reference_audio(ref_audio_path)
         ref_codes, audio_data = trim_reference_for_icl_conditioning(
             ref_codes, audio_data, hf_tokenizer, REF_TEXT, target_text
         )
         assert ref_codes.shape[1] == 16
 
-        # Initialize TTNN model
+        main_weights = load_main_weights()
         model = Qwen3TTS(device=device, state_dict=main_weights)
 
         # Extract speaker embedding via TTNN
@@ -288,9 +341,11 @@ class TestVoiceCloneTTS:
             main_weights=main_weights,
             language="english",
         )
+        del main_weights
+        gc.collect()
 
         # Generate codec tokens (TTNN, KV-cached autoregressive)
-        codes = generate_codes_ttnn(
+        gen_ret = generate_codes_ttnn(
             model=model,
             device=device,
             inputs_embeds_tt=inputs_embeds_tt,
@@ -300,15 +355,16 @@ class TestVoiceCloneTTS:
             config=config,
             use_kv_cache=True,
         )
-
-        assert codes is not None and len(codes) > 0, "No codec tokens generated"
+        assert gen_ret is not None, "generate_codes_ttnn returned None"
+        codes, _compile_timings = gen_ret
+        assert codes is not None and codes.numel() > 0, "No codec tokens generated"
 
         # Decode to audio (reference PyTorch)
         audio = decode_audio(codes, decoder_weights)
         audio_np = audio.squeeze().detach().cpu().float().numpy()
         sf.write(out_path, audio_np, 24000)
 
-        print(f"  Generated {len(codes)} frames → {len(audio_np)/24000:.2f}s audio → {out_path}")
+        print(f"  Generated {codes.shape[0]} frames → {len(audio_np)/24000:.2f}s audio → {out_path}")
         return out_path
 
     def test_output_file_created(self, tts_output_path):
@@ -329,7 +385,7 @@ class TestVoiceCloneTTS:
         print(f"  Audio RMS: {rms:.4f}")
         assert rms > 0.001, f"Output audio is silent (RMS={rms:.6f})"
 
-    def test_codec_token_shape(self, device, main_weights, ref_audio_path, hf_tokenizer):
+    def test_codec_token_shape(self, device, ref_audio_path, hf_tokenizer):
         """Codec tokens must have shape [N, 16] with N > 0."""
         from models.demos.qwen3_tts.demo.demo_full_ttnn_tts import (
             TTSConfig,
@@ -342,10 +398,11 @@ class TestVoiceCloneTTS:
 
         config = TTSConfig(max_new_tokens=32, greedy=True)  # greedy + short for speed
 
-        ref_codes, audio_data = encode_reference_audio(ref_audio_path, main_weights)
+        ref_codes, audio_data = encode_reference_audio(ref_audio_path)
         ref_codes, audio_data = trim_reference_for_icl_conditioning(
             ref_codes, audio_data, hf_tokenizer, REF_TEXT, "Hi."
         )
+        main_weights = load_main_weights()
         model = Qwen3TTS(device=device, state_dict=main_weights)
         speaker_embedding = model.extract_speaker_embedding(audio_data)
 
@@ -361,8 +418,10 @@ class TestVoiceCloneTTS:
             main_weights=main_weights,
             language="english",
         )
+        del main_weights
+        gc.collect()
 
-        codes = generate_codes_ttnn(
+        gen_ret = generate_codes_ttnn(
             model=model,
             device=device,
             inputs_embeds_tt=inputs_embeds_tt,
@@ -372,12 +431,11 @@ class TestVoiceCloneTTS:
             config=config,
             use_kv_cache=True,
         )
-
-        assert codes is not None, "generate_codes_ttnn returned None"
-        codes_tensor = torch.stack(codes) if isinstance(codes, list) else codes
+        assert gen_ret is not None, "generate_codes_ttnn returned None"
+        codes_tensor, _compile_timings = gen_ret
         print(f"  Codes shape: {codes_tensor.shape}")
         assert codes_tensor.shape[-1] == 16, f"Expected 16 code groups, got {codes_tensor.shape[-1]}"
-        assert len(codes_tensor) > 0, "No frames generated"
+        assert codes_tensor.shape[0] > 0, "No frames generated"
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +449,11 @@ class TestPreTransformerDebug:
 
     def test_pre_transformer_layer0_pcc(self, device, decoder_weights):
         """Single pre-transformer layer must achieve PCC > 0.99."""
-        from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig, pre_transformer_layer
+        from models.demos.qwen3_tts.reference.functional import (
+            SpeechTokenizerDecoderConfig,
+            compute_rope_frequencies,
+            pre_transformer_layer,
+        )
         from models.demos.qwen3_tts.tt.speech_tokenizer import SpeechTokenizerConfig, TtPreTransformerLayer
 
         torch.manual_seed(42)
@@ -406,7 +468,15 @@ class TestPreTransformerDebug:
             if k.startswith("pre_transformer.layers.0.")
         }
         ref_config = SpeechTokenizerDecoderConfig()
-        ref_out = pre_transformer_layer(x=x.clone(), weights=layer_weights, layer_idx=0, config=ref_config)
+        cos, sin = compute_rope_frequencies(
+            ref_config.pre_transformer_head_dim,
+            seq_len,
+            ref_config.rope_theta,
+            x.device,
+        )
+        cos = cos.to(x.dtype)
+        sin = sin.to(x.dtype)
+        ref_out = pre_transformer_layer(x.clone(), layer_weights, ref_config, cos, sin)
 
         # TTNN (known PCC 0.004 collapse - this test is expected to fail until fixed)
         st_config = SpeechTokenizerConfig()
@@ -414,16 +484,23 @@ class TestPreTransformerDebug:
 
         pad = (32 - seq_len % 32) % 32
         x_padded = torch.nn.functional.pad(x.to(torch.bfloat16), (0, 0, 0, pad))
-        # Input as 4D [batch, 1, seq, hidden] matching TTNN tensor convention
+        # TtPreTransformerLayer expects 3D [batch, seq, hidden]; it reshapes internally to 4D for rms_norm.
         x_tt = ttnn.from_torch(
-            x_padded.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-
-        cos_sin = ttnn.from_torch(
-            torch.ones(1, 1, seq_len + pad, st_config.pre_transformer_head_dim // 2, dtype=torch.bfloat16),
+            x_padded,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        sp = seq_len + pad
+        # Cos/sin are unused by TtPreTransformerAttention (SDPA path); placeholders only.
+        cos_sin = ttnn.from_torch(
+            torch.zeros(1, 1, sp, st_config.pre_transformer_head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         out_tt = ttnn.to_torch(layer(x_tt, cos_sin, cos_sin))

@@ -162,13 +162,15 @@ def load_weights():
 
 
 def encode_reference_audio(
-    audio_path: str, main_weights: dict, cache_path: str = None
+    audio_path: str, main_weights: dict = None, cache_path: str = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Encode reference audio to codes and extract speaker embedding using TTNN speaker encoder.
 
     Caches results to disk so the slow CPU MimiModel only runs once.
     Cache path defaults to <audio_path>.refcache.pt
+
+    ``main_weights`` is unused (kept for call-site compatibility); pass ``None``.
 
     Returns:
         ref_codes: [seq_len, 16] - RVQ codes
@@ -931,11 +933,13 @@ def generate_codes_ttnn(
     )
 
     # === STEP 5: Capture ALL traces (after prefill, KV cache is populated) ===
+    # Program cache must be warm before trace capture; otherwise compile uploads binaries
+    # during capture and TT_FATAL: "Writes are not supported during trace capture".
     t_trace_start = time.time()
+
     # --- 5a: Talker decode trace ---
-    print("  Capturing Talker decode trace (includes codec_head)...")
-    talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    trace_hidden_out, _ = model.talker.forward_from_hidden(
+    print("  Untraced warmup: Talker decode + codec_head (same tensors as trace)...")
+    _wu_th, _ = model.talker.forward_from_hidden(
         trace_embed_tt,
         trace_cos_tt,
         trace_sin_tt,
@@ -945,15 +949,34 @@ def generate_codes_ttnn(
         decode_attn_mask=trace_mask_tt,
         mode="decode",
     )
-    trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
-    ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
+    _ = model.talker.get_codec_logits(_wu_th)
+    ttnn.synchronize_device(device)
+
+    print("  Capturing Talker decode trace (includes codec_head)...")
+    talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        trace_hidden_out, _ = model.talker.forward_from_hidden(
+            trace_embed_tt,
+            trace_cos_tt,
+            trace_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            cur_pos_tensor=trace_cur_pos_tt,
+            decode_attn_mask=trace_mask_tt,
+            mode="decode",
+        )
+        trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
+    finally:
+        ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
     print("  Talker decode trace captured.")
 
     # --- 5b: CP prefill trace ---
-    print("  Capturing CP prefill trace (seq_len=2, includes lm_heads[0])...")
-    cp_prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
+    print("  Untraced warmup: CP prefill (same tensors as trace)...")
+    for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
+        ttnn.copy_host_to_device_tensor(k_zero, k_cache)
+        ttnn.copy_host_to_device_tensor(v_zero, v_cache)
+    _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
         cp_trace_prefill_embed_tt,
         cp_trace_prefill_cos_tt,
         cp_trace_prefill_sin_tt,
@@ -965,7 +988,25 @@ def generate_codes_ttnn(
         cp_prefill_mask=cp_trace_prefill_mask_tt,
         return_hidden_state=False,
     )
-    ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    print("  Capturing CP prefill trace (seq_len=2, includes lm_heads[0])...")
+    cp_prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
+            cp_trace_prefill_embed_tt,
+            cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt,
+            cp_trans_mat,
+            generation_step=1,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=0,
+            mode="prefill",
+            cp_prefill_mask=cp_trace_prefill_mask_tt,
+            return_hidden_state=False,
+        )
+    finally:
+        ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
     print("  CP prefill trace captured.")
 
@@ -974,8 +1015,8 @@ def generate_codes_ttnn(
     cp_decode_logits_tts = []
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
     for _step_code_idx in range(2, config.num_code_groups):
-        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        _logits_tt, _ = model.code_predictor.forward_single_step(
+        print(f"    Untraced warmup: CP decode (generation_step={_step_code_idx})...")
+        _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
             cp_trace_decode_embed_tt,
             cp_trace_decode_cos_tt,
             cp_trace_decode_sin_tt,
@@ -988,7 +1029,25 @@ def generate_codes_ttnn(
             decode_attn_mask=cp_trace_decode_mask_tt,
             return_hidden_state=False,
         )
-        ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            _logits_tt, _ = model.code_predictor.forward_single_step(
+                cp_trace_decode_embed_tt,
+                cp_trace_decode_cos_tt,
+                cp_trace_decode_sin_tt,
+                cp_trans_mat,
+                generation_step=_step_code_idx,
+                kv_caches=cp_kv_caches_persistent,
+                start_pos=_step_code_idx,
+                mode="decode",
+                cur_pos_tensor=None,
+                decode_attn_mask=cp_trace_decode_mask_tt,
+                return_hidden_state=False,
+            )
+        finally:
+            ttnn.end_trace_capture(device, _trace_id, cq_id=0)
         ttnn.synchronize_device(device)
         cp_decode_trace_ids.append(_trace_id)
         cp_decode_logits_tts.append(_logits_tt)
@@ -1602,19 +1661,21 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     # Capture CP prefill trace
     print("  Capturing CP prefill trace...")
     cp_prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
-        cp_trace_prefill_embed_tt,
-        cp_trace_prefill_cos_tt,
-        cp_trace_prefill_sin_tt,
-        cp_trans_mat,
-        generation_step=1,
-        kv_caches=cp_kv_caches_persistent,
-        start_pos=0,
-        mode="prefill",
-        cp_prefill_mask=cp_trace_prefill_mask_tt,
-        return_hidden_state=False,
-    )
-    ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
+    try:
+        cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
+            cp_trace_prefill_embed_tt,
+            cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt,
+            cp_trans_mat,
+            generation_step=1,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=0,
+            mode="prefill",
+            cp_prefill_mask=cp_trace_prefill_mask_tt,
+            return_hidden_state=False,
+        )
+    finally:
+        ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
 
     # Run dummy CP decode steps to populate KV positions 2-15 before decode trace capture
@@ -1656,8 +1717,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     cp_decode_trace_ids = []
     cp_decode_logits_tts = []
     for _step_code_idx in range(2, config.num_code_groups):
-        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        _logits_tt, _ = model.code_predictor.forward_single_step(
+        _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
             cp_trace_decode_embed_tt,
             cp_trace_decode_cos_tt,
             cp_trace_decode_sin_tt,
@@ -1670,7 +1730,25 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             decode_attn_mask=cp_trace_decode_mask_tt,
             return_hidden_state=False,
         )
-        ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            _logits_tt, _ = model.code_predictor.forward_single_step(
+                cp_trace_decode_embed_tt,
+                cp_trace_decode_cos_tt,
+                cp_trace_decode_sin_tt,
+                cp_trans_mat,
+                generation_step=_step_code_idx,
+                kv_caches=cp_kv_caches_persistent,
+                start_pos=_step_code_idx,
+                mode="decode",
+                cur_pos_tensor=None,
+                decode_attn_mask=cp_trace_decode_mask_tt,
+                return_hidden_state=False,
+            )
+        finally:
+            ttnn.end_trace_capture(device, _trace_id, cq_id=0)
         ttnn.synchronize_device(device)
         cp_decode_trace_ids.append(_trace_id)
         cp_decode_logits_tts.append(_logits_tt)
@@ -1856,9 +1934,8 @@ def run_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # === Capture Talker decode trace (once per request) ===
-        talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        trace_hidden_out, _ = model.talker.forward_from_hidden(
+        # Warm program cache before trace capture (no writes allowed during capture).
+        _wu_h, _ = model.talker.forward_from_hidden(
             trace_embed_tt,
             trace_cos_tt,
             trace_sin_tt,
@@ -1868,8 +1945,25 @@ def run_inference(
             decode_attn_mask=trace_mask_tt,
             mode="decode",
         )
-        trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
-        ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
+        _ = model.talker.get_codec_logits(_wu_h)
+        ttnn.synchronize_device(device)
+
+        # === Capture Talker decode trace (once per request) ===
+        talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            trace_hidden_out, _ = model.talker.forward_from_hidden(
+                trace_embed_tt,
+                trace_cos_tt,
+                trace_sin_tt,
+                ctx.talker_trans_mat,
+                kv_caches=talker_kv_caches,
+                cur_pos_tensor=trace_cur_pos_tt,
+                decode_attn_mask=trace_mask_tt,
+                mode="decode",
+            )
+            trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
+        finally:
+            ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
         ttnn.synchronize_device(device)
 
         # Decode mask (host-side, updated per step)
