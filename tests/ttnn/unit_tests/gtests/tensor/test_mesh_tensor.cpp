@@ -27,6 +27,7 @@ using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
+using MeshTensorTest1x2 = MeshDevice1x2Fixture;
 using MeshTensorTest2x4 = MeshDevice2x4Fixture;
 
 TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
@@ -290,6 +291,59 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     EXPECT_EQ(partial_device_storage.get_coords()[1], (distributed::MeshCoordinate{0, 2}));
     EXPECT_EQ(partial_device_storage.get_coords()[2], (distributed::MeshCoordinate{1, 0}));
     EXPECT_EQ(partial_device_storage.get_coords()[3], (distributed::MeshCoordinate{1, 2}));
+}
+
+TEST_F(MeshTensorTest1x2, CombineDeviceTensors) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    std::vector<float> host_data(shape.volume());
+    std::iota(host_data.begin(), host_data.end(), 0);
+
+    Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
+
+    Tensor device_tensor1 = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = to_device(input_host_tensor, mesh_device_.get());
+
+    auto device_tensors1 = get_device_tensors(device_tensor1);
+    auto device_tensors2 = get_device_tensors(device_tensor2);
+
+    EXPECT_THAT(device_tensors1, SizeIs(mesh_device_->num_devices()));
+    EXPECT_THAT(device_tensors2, SizeIs(mesh_device_->num_devices()));
+
+    // Try to aggregate shards from different mesh buffers.
+    EXPECT_THAT(
+        ([&]() {
+            std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors2[1]};
+            combine_device_tensors(shards_to_aggregate);
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("tensor shards must be allocated on the same mesh buffer.")));
+
+    // Try to aggregate the same shard twice.
+    EXPECT_THAT(
+        ([&]() {
+            std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors1[0]};
+            combine_device_tensors(shards_to_aggregate);
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
+
+    // Aggregate both shards in reverse order; verify coords come out sorted.
+    int shard_dim = 2;
+    auto partial_tensor =
+        combine_device_tensors(std::vector<Tensor>{device_tensors1[1], device_tensors1[0]}, shard_dim);
+
+    const auto& partial_device_storage = partial_tensor.device_storage();
+    EXPECT_NO_THROW({ partial_device_storage.get_mesh_buffer(); });
+
+    EXPECT_EQ(partial_tensor.tensor_topology().distribution_shape(), MeshShape(2));
+    EXPECT_EQ(
+        std::get<distributed::MeshMapperConfig::Shard>(partial_tensor.tensor_topology().placements()[0]).dim,
+        shard_dim);
+
+    ASSERT_THAT(partial_device_storage.get_coords(), SizeIs(2));
+    EXPECT_EQ(partial_device_storage.get_coords()[0], (distributed::MeshCoordinate{0, 0}));
+    EXPECT_EQ(partial_device_storage.get_coords()[1], (distributed::MeshCoordinate{0, 1}));
 }
 
 TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
