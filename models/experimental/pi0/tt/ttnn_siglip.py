@@ -304,9 +304,11 @@ class SigLIPAttentionTTNN:
         wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
 
         # Concatenate Q, K, V weights on device: [hidden, 3 * num_heads * padded_head_dim]
-        wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Use bfloat8_b for weight matrices — reduces bandwidth
+        _siglip_w_dtype = ttnn.bfloat8_b
+        wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         self.wqkv = ttnn.concat([wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Fused QKV biases
@@ -327,7 +329,7 @@ class SigLIPAttentionTTNN:
         wo_padded = pad_head_dim_weight_ttnn(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
-            dtype=ttnn.bfloat16,
+            dtype=_siglip_w_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -459,11 +461,12 @@ class SigLIPMLPTTNN:
         self.config = config
         self.device = device
 
-        # FC1 (input -> intermediate)
+        # FC1 (input -> intermediate) — bfloat8_b for reduced bandwidth
+        _siglip_w_dtype = ttnn.bfloat8_b
         fc1_weight = weights["mlp.fc1.weight"].T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
-            dtype=ttnn.bfloat16,
+            dtype=_siglip_w_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -478,7 +481,7 @@ class SigLIPMLPTTNN:
         fc2_weight = weights["mlp.fc2.weight"].T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
-            dtype=ttnn.bfloat16,
+            dtype=_siglip_w_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
