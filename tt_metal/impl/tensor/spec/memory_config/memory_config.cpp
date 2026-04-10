@@ -61,9 +61,18 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
         return false;
     }
     // Compare only the authoritative shard spec based on creation path.
-    // TensorSpec auto-populates the other spec (nd from legacy or legacy from nd),
+    // After creating a memory_config with an nd_shard_spec or a shard_spec,
+    // when that memory_config gets passed into TensorSpec, TensorSpec auto-populates
+    // the other spec (nd from legacy or legacy from nd shard spec), if an equivalent spec exists.
     // so the non-authoritative field can differ between a user-constructed MemoryConfig
-    // and the tensor's MemoryConfig without implying a semantic difference.
+    // and the tensor's generated MemoryConfig without there being a semantic difference.
+
+    // E.g., If you create a memory_config with an nd_shard_spec, when you pass that memory_config to create a tensor,
+    // a TensorSpec will be constructed with that memory config. If there is an equivalent shard_spec, the TensorSpec
+    // infrastructure will auto-populate the shard_spec field with the equivalent shard_spec. When you then compare
+    // the two memory_configs (the one you specified and the one the created Tensor has), they will be the same
+    // semantically, but the memory_config returned by the Tensor will have a shard_spec field, while the one you
+    // originally specified will not. The equality operator should test for semantic equality, not structural equality.
     if (config_a.created_with_nd_shard_spec() && config_b.created_with_nd_shard_spec()) {
         return config_a.nd_shard_spec() == config_b.nd_shard_spec();
     }
