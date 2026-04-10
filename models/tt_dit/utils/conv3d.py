@@ -61,6 +61,9 @@ def compute_decoder_dims(
                 T_spatial = 2 * cur_T         (all frames doubled)
     """
     vae_scale = 2**num_stages
+    # Height uses ceil because some configs don't divide evenly (e.g. 720/8/4=22.5 → 23);
+    # the hardware pads height via conv_pad_height.  Width always divides evenly for
+    # production targets and is not padded the same way, so floor division is correct.
     lat_h = math.ceil(target_height / vae_scale / h_factor)
     lat_w = target_width // vae_scale // w_factor
     stage_hw = [StageHW(lat_h * (2**s), lat_w * (2**s)) for s in range(num_stages + 1)]
