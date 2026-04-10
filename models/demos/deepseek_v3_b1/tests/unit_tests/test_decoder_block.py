@@ -482,9 +482,9 @@ def create_decoder_block_tensors(
         mesh_mapper=kv_cache_2d_mesh_mapper,
     )
     per_device_max_seq_len = max_seq_len // num_sp
-    kv_cache_bfp8_before_op = ttnn.to_torch(
-        ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-    ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
+    # kv_cache_bfp8_before_op = ttnn.to_torch(
+    #     ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    # ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
     ttnn_kv_cache_attn_ref = ttnn.from_torch(
@@ -752,7 +752,7 @@ def create_decoder_block_tensors(
             "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
             "golden_total_qnope_heads": golden_total_qnope_heads,
             "golden_total_qrope_heads": golden_total_qrope_heads,
-            "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+            "golden_kv_cache_bfp8_before_op": None,
             "num_slots": num_slots,
             "per_device_max_seq_len": per_device_max_seq_len,
             "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
