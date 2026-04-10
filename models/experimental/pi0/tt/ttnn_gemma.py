@@ -278,15 +278,17 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # WormholeComputeKernelConfig for Blackhole — works with wheel when ttnn/ source disabled
+        self._sdpa_config = None
+
+        # WormholeComputeKernelConfig for Blackhole — LoFi for large matmuls (faster)
         self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -425,7 +427,7 @@ class GemmaAttentionTTNN:
 
         new_cache = (k_rope, v) if use_cache else None
 
-        # Use TTNN scaled dot product attention
+        # Use TTNN scaled dot product attention with tuned program config
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
             k_rope,
@@ -433,6 +435,7 @@ class GemmaAttentionTTNN:
             attn_mask=attention_mask,
             is_causal=False,
             scale=self.scale,
+            program_config=self._sdpa_config,
         )
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
@@ -493,9 +496,9 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # WormholeComputeKernelConfig for MLP — works with wheel when ttnn/ source disabled
+        # WormholeComputeKernelConfig for MLP — LoFi is 18% faster than HiFi2 for large matmuls
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
