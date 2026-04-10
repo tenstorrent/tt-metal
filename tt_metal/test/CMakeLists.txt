@@ -34,3 +34,28 @@ install(
         ASanCoverage
     COMPONENT metalium-runtime
 )
+
+# Install cluster descriptor YAML files for mock device testing.
+# These are required by configure_mock_mode(), which looks for files in:
+# get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/"
+# Install the whole mock cluster descriptor examples directory (as all are fictional)
+install(
+    DIRECTORY
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples
+    COMPONENT metalium-validation
+    FILES_MATCHING
+    PATTERN
+    "*.yaml"
+)
+
+# Install SOC descriptor YAML files for mock device testing.
+# These are required by get_soc_description_file(), which looks for files in:
+# get_root_dir() + "/tt_metal/soc_descriptors/"
+# Install only the necessary (fictional) SOC descriptor file (to avoid duplication)
+install(
+    FILES
+        ${PROJECT_SOURCE_DIR}/tt_metal/soc_descriptors/quasar_32_arch.yaml
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/soc_descriptors
+    COMPONENT metalium-validation
+)
