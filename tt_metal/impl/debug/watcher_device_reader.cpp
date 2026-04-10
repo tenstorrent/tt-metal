@@ -36,6 +36,8 @@
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 using namespace tt::tt_metal;
 using std::string;
@@ -280,6 +282,8 @@ private:
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
+    void DumpTileCountersBypass() const;
+    void DumpTileCountersWithRemapper() const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -632,7 +636,7 @@ void WatcherDeviceReader::Core::Dump() const {
     }
 
     auto kernel_config = launch_msg_.kernel_config();
-    fprintf(reader_.f, "k_ids:");
+    fprintf(reader_.f, "\nk_ids:");
     auto num_processors = reader_.env.get_hal().get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         const char* separator = (i > 0) ? "|" : "";
@@ -1083,28 +1087,169 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
     const auto& hal = reader_.env.get_hal();
 
-    if (!hal.has_stream_registers()) {
-        return;
+    if (hal.has_stream_registers()) {
+        uint32_t operand_start_stream = hal.get_operand_start_stream();
+        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+
+        // Read back all of the stream state, most of it is unused
+        std::vector<uint32_t> data;
+        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+            uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+
+            uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
+            uint32_t rcvd = data[0];
+
+            uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
+            uint32_t ackd = data[0];
+
+            if (rcvd != ackd) {
+                fprintf(reader_.f, "cb[%u](rcv %u!=ack %u) ", operand, rcvd, ackd);
+            }
+        }
     }
 
-    uint32_t operand_start_stream = hal.get_operand_start_stream();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    // Reads posted/acked tile counters used in DFB synchronization
+    // Mismatch indicates a stalled producer/consumer relationship
+    if (hal.has_tile_counter_registers()) {
+        bool remapper_enabled = false;
+        if (hal.has_remapper()) {
+            auto data = reader_.env.get_cluster().read_core(
+                reader_.device_id, virtual_coord_, hal.get_remapper_global_control_addr(), sizeof(uint32_t));
+            remapper_enabled = (data[0] & 0x1) != 0;
+        }
 
-    // Read back all of the stream state, most of it is unused
-    std::vector<uint32_t> data;
-    for (uint32_t operand = 0; operand < max_cbs; operand++) {
-        uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+        if (remapper_enabled) {
+            DumpTileCountersWithRemapper();
+        } else {
+            DumpTileCountersBypass();
+        }
+    }
+}
 
-        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
-        uint32_t rcvd = data[0];
+void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
+    const auto& hal = reader_.env.get_hal();
 
-        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
-        uint32_t ackd = data[0];
+    // NEO side for reading tiles_available directly
+    // In bypass mode, producer/consumer share same TC
+    uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
+    uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
+    uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
+    uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
+    uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
-        if (rcvd != ackd) {
-            fprintf(reader_.f, "cb[%d](rcv %d!=ack %d) ", operand, rcvd, ackd);
+    for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+        uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+        uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+
+        uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
+
+        auto capacity_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
+        uint32_t buffer_capacity = capacity_data[0];
+
+        auto tiles_avail_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
+        uint32_t tiles_to_consume = tiles_avail_data[0];
+
+        // tiles_to_consume > 0 means posted != acked (consumer has unprocessed tiles)
+        // Sanity: tiles_to_consume can't exceed buffer_capacity
+        if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+            // Bypass mode: producer/consumer share same TC; producer identity not available without DFB config
+            fprintf(reader_.f, "\n  remapper:N/A NEO_%u tc_id:%u tiles_to_consume:%u", neo_id, tc_id, tiles_to_consume);
+        }
+    }
+}
+
+// Dump tile counter mismatches when remapper is enabled.
+// Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
+//   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
+//   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
+// tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
+void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
+    const auto& hal = reader_.env.get_hal();
+
+    uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
+    uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
+    uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
+    uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
+    uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+
+    auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
+        uint32_t neo_id = client_id % NEO_0;
+        uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
+        auto capacity_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
+        auto tiles_avail_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
+        return {tiles_avail_data[0], capacity_data[0]};
+    };
+
+    for (uint32_t pair_idx = 0; pair_idx < hal.get_remapper_num_pairs(); pair_idx++) {
+        uint32_t clientL_addr =
+            hal.get_remapper_client_l_config_base_addr() + pair_idx * hal.get_remapper_pair_stride();
+        uint32_t clientR_addr =
+            hal.get_remapper_client_r_config_base_addr() + pair_idx * hal.get_remapper_pair_stride();
+
+        auto clientL_data =
+            reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientL_addr, sizeof(uint32_t));
+        auto clientR_data =
+            reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientR_addr, sizeof(uint32_t));
+
+        tClientL_Config_Reg_u clientL;
+        tClientR_Config_Reg_u clientR;
+        clientL.val = clientL_data[0];
+        clientR.val = clientR_data[0];
+
+        if (clientL.f.valid == 0) {
+            continue;
+        }
+
+        uint32_t id_R[4] = {clientR.f.id_0, clientR.f.id_1, clientR.f.id_2, clientR.f.id_3};
+        uint32_t cnt_sel_R[4] = {clientR.f.cnt_sel_0, clientR.f.cnt_sel_1, clientR.f.cnt_sel_2, clientR.f.cnt_sel_3};
+        bool clientL_is_producer = clientL.f.clientl_is_producer;
+
+        if (clientL_is_producer) {
+            // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
+            uint32_t prod_id = clientL.f.id_L;
+            uint32_t prod_tc_id = clientL.f.cnt_sel_L;
+
+            for (uint32_t slot = 0; slot < 4; slot++) {
+                if (!(clientL.f.valid & (1 << slot))) {
+                    continue;
+                }
+                uint32_t cons_id = id_R[slot];
+                uint32_t cons_tc_id = cnt_sel_R[slot];
+
+                auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
+                if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+                    fprintf(reader_.f, "\n  remapper[%u] ", pair_idx);
+                    fprintClientName(reader_.f, prod_id);
+                    fprintf(reader_.f, " tc_id:%u -> ", prod_tc_id);
+                    fprintClientName(reader_.f, cons_id);
+                    fprintf(reader_.f, " tc_id:%u tiles_to_consume:%u", cons_tc_id, tiles_to_consume);
+                }
+            }
+        } else {
+            // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
+            uint32_t cons_id = clientL.f.id_L;
+            uint32_t cons_tc_id = clientL.f.cnt_sel_L;
+
+            auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
+            if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+                fprintf(reader_.f, "\n  remapper[%u] ", pair_idx);
+                for (uint32_t slot = 0; slot < 4; slot++) {
+                    if (!(clientL.f.valid & (1 << slot))) {
+                        continue;
+                    }
+                    fprintClientName(reader_.f, id_R[slot]);
+                    fprintf(reader_.f, " ");
+                }
+                fprintf(reader_.f, "-> ");
+                fprintClientName(reader_.f, cons_id);
+                fprintf(reader_.f, " tc_id:%u tiles_to_consume:%u", cons_tc_id, tiles_to_consume);
+            }
         }
     }
 }

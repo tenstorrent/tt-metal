@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 #include <cctype>
+#include <cstdio>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -22,6 +23,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 
 namespace tt::tt_metal {
 
@@ -216,5 +218,15 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
         info.enable_legend = "UPPER=enabled, lower=disabled: " + info.enable_legend;
     }
     return info;
+}
+
+// Format client name for tile counter output.
+// DM clients show paired DMs (e.g., DM0/DM4) because DM0-3 and DM4-7 share tile counter groups.
+inline void fprintClientName(FILE* f, uint32_t client_id) {
+    if (client_id < NEO_0) {
+        fprintf(f, "DM%u/DM%u", client_id, client_id + NEO_0);
+    } else {
+        fprintf(f, "NEO_%u", client_id - NEO_0);
+    }
 }
 }  // namespace tt::tt_metal
