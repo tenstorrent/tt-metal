@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <set>
+#include <span>
 #include <vector>
 #include <cctype>
 #include <fmt/core.h>
@@ -22,6 +23,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "hostdev/debug_ring_buffer_common.h"
 
 namespace tt::tt_metal {
 
@@ -217,4 +219,34 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
     }
     return info;
 }
+
+// Format ring buffer data as hex values, 8 per line
+// If thread_indices provided (MPSC), prefixes each entry with processor name like [DM0]
+inline std::string FormatRingBuffer(
+    std::span<const uint32_t> data,
+    std::span<const uint32_t> thread_indices = {},
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
+    if (data.empty()) {
+        return {};
+    }
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool is_mpsc = hal.has_mpsc_ring_buffer();
+
+    std::string result = "\n\tdebug_ring_buffer=\n\t[";
+    for (size_t i = 0; i < data.size(); i++) {
+        if (is_mpsc && !thread_indices.empty()) {
+            auto name = hal.get_processor_class_name(core_type, thread_indices[i], false);
+            result += fmt::format("[{}]0x{:08x},", name, data[i]);
+        } else {
+            result += fmt::format("0x{:08x},", data[i]);
+        }
+        if ((i + 1) % 8 == 0 && i + 1 < data.size()) {
+            result += "\n\t ";  // Newline + indent for continuation
+        }
+    }
+    result.pop_back();  // Remove trailing comma
+    result += "]";
+    return result;
+}
+
 }  // namespace tt::tt_metal

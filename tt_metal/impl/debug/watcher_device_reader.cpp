@@ -32,6 +32,7 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "api/debug/ring_buffer.h"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -276,6 +277,7 @@ private:
     void DumpPauseStatus() const;
     void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
+    void DumpMpscRingBuffer(bool to_stdout = false) const;
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
@@ -860,39 +862,112 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
-    auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
-    string out;
-    if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
-        // Latest written idx is one less than the index read out of L1.
-        out += "\n\tdebug_ring_buffer=\n\t[";
-        int curr_idx = ring_buf_data.current_ptr();
-        size_t ring_buffer_elements = ring_buf_data.data().size();
-        for (int count = 1; count <= ring_buffer_elements; count++) {
-            out += fmt::format("0x{:08x},", ring_buf_data.data()[curr_idx]);
-            if (count % 8 == 0) {
-                out += "\n\t ";
-            }
-            if (curr_idx == 0) {
-                if (ring_buf_data.wrapped() == 0) {
-                    break;  // No wrapping, so no extra data available
-                }
-                curr_idx = ring_buffer_elements - 1;  // Loop
+    const auto& hal = reader_.env.get_hal();
 
-            } else {
-                curr_idx--;
-            }
-        }
-        // Remove the last comma
-        out.pop_back();
-        out += "]";
+    if (hal.has_mpsc_ring_buffer()) {
+        DumpMpscRingBuffer(to_stdout);
+        return;
     }
 
-    // This function can either dump to stdout or the log file.
+    // SPSC ring buffer - cast byte array wrapper to impl struct
+    const auto* rb =
+        reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    if (rb->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
+        return;  // No data
+    }
+
+    // Extract newest-first: walk backwards from current_ptr, wrap at 0
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = hal.get_ring_buffer_mask();
+    uint32_t count = rb->wrapped ? capacity : static_cast<uint32_t>(rb->current_ptr + 1);
+    uint32_t curr = static_cast<uint32_t>(rb->current_ptr);
+
+    std::vector<uint32_t> data;
+    data.reserve(count);
+    for (uint32_t i = 0; i < count; i++) {
+        data.push_back(rb->data[(curr + capacity - i) & mask]);
+    }
+
+    std::string out = FormatRingBuffer(data, {}, programmable_core_type_);
     if (to_stdout) {
-        if (!out.empty()) {
-            out = string("Last ring buffer status: ") + out;
-            log_info(tt::LogMetal, "{}", out);
+        log_info(tt::LogMetal, "Last ring buffer status: {}", out);
+    } else {
+        fprintf(reader_.f, "%s", out.c_str());
+    }
+}
+
+void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
+    const auto& hal = reader_.env.get_hal();
+    const auto* rb =
+        reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = hal.get_ring_buffer_mask();
+
+    // Track position and buffer per core
+    auto& state = reader_.mpsc_ring_buf_entries_[virtual_coord_];
+    uint32_t& last_pos = state.last_pos;
+    auto& entries = state.entries;
+
+    // Collect new valid entries (oldest to newest)
+    std::vector<MpscRingBufEntry> new_entries;
+    const uint32_t start_pos = last_pos;
+    for (uint32_t i = 0; i < capacity; i++) {
+        const uint32_t pos = start_pos + i;
+        const auto& slot = rb->slots[pos & mask];
+
+        if (!debug_ring_buffer_is_slot_valid(slot.write_id, pos)) {
+            if (slot.write_id != 0) {
+                // Convert pos_idx back to actual position (pos_idx = actual_pos + 1)
+                uint32_t actual_pos =
+                    (debug_ring_buffer_get_pos_idx(slot.write_id) - 1) & DEBUG_RING_BUFFER_MPSC_POS_MASK;
+                uint32_t expected_pos = pos & DEBUG_RING_BUFFER_MPSC_POS_MASK;
+                if (actual_pos > expected_pos) {
+                    // producer Lapped consumer: resync to producer's actual position
+                    last_pos = actual_pos;
+                    log_warning(tt::LogMetal, "MPSC ring buffer overrun on {}, resyncing", core_str_);
+                }
+            }
+            // write_id == 0: empty or in-flight, wait for next poll
+            break;
         }
+        uint32_t thread_idx = debug_ring_buffer_get_thread_idx(slot.write_id);
+        TT_FATAL(
+            thread_idx < hal.get_max_processors_per_core(),
+            "Invalid thread_idx {} in MPSC ring buffer (max {})",
+            thread_idx,
+            hal.get_max_processors_per_core());
+        new_entries.push_back({slot.data, thread_idx});
+        last_pos = pos + 1;
+    }
+
+    // Insert new entries at the front (newest first)
+    if (!new_entries.empty()) {
+        // Reverse new_entries so newest is first, then prepend to existing
+        entries.insert(entries.begin(), new_entries.rbegin(), new_entries.rend());
+        // Trim to capacity
+        if (entries.size() > capacity) {
+            entries.resize(capacity);
+        }
+    }
+
+    if (entries.empty()) {
+        return;
+    }
+
+    // Extract data and thread indices for formatter
+    std::vector<uint32_t> data, thread_indices;
+    data.reserve(entries.size());
+    thread_indices.reserve(entries.size());
+    for (const auto& e : entries) {
+        data.push_back(e.data);
+        thread_indices.push_back(e.thread_idx);
+    }
+
+    std::string out = FormatRingBuffer(data, thread_indices, programmable_core_type_);
+    if (to_stdout) {
+        log_info(tt::LogMetal, "{}", out);
     } else {
         fprintf(reader_.f, "%s", out.c_str());
     }
