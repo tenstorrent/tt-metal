@@ -4,12 +4,9 @@
 """
 Gemma4 Routed Experts module.
 
-Decode (seq_len=1): on-device via sparse_matmul
-Prefill (seq_len>1): CPU fallback (sparse_matmul only supports batch=1)
+Decode (seq_len=1): on-device via sparse_matmul with top-k sparsity
+Prefill (seq_len>1): on-device via sparse_matmul with all-ones sparsity (gpt_oss pattern)
 """
-
-import torch
-import torch.nn.functional as F
 
 import ttnn
 
@@ -45,33 +42,21 @@ class Gemma4Experts:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
 
-        # Load weights to device for sparse_matmul (decode)
-        if mesh_device is not None:
-            self.weights = load_expert_weights(
-                mesh_device=mesh_device,
-                config=config,
-                state_dict=state_dict,
-                mesh_config=mesh_config,
-                weight_dtype=weight_dtype,
-                tensor_cache_path=tensor_cache_path,
-            )
-            # Cache all-ones prefill sparsity (reused for every prefill call)
-            self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)
-        else:
-            self.weights = None
-            self.prefill_sparsity = None
-
-        # Keep CPU weights for prefill fallback
-        if state_dict and "gate_up_proj" in state_dict:
-            self.gate_up_proj_cpu = state_dict["gate_up_proj"]
-            self.down_proj_cpu = state_dict["down_proj"]
-        else:
-            self.gate_up_proj_cpu = None
-            self.down_proj_cpu = None
+        # Load weights to device for sparse_matmul
+        self.weights = load_expert_weights(
+            mesh_device=mesh_device,
+            config=config,
+            state_dict=state_dict,
+            mesh_config=mesh_config,
+            weight_dtype=weight_dtype,
+            tensor_cache_path=tensor_cache_path,
+        )
+        # Cache all-ones prefill sparsity (reused for every prefill call)
+        self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)
 
     def __call__(self, hidden_states, dense_routing):
         """
-        Expert forward. Dispatches to on-device (decode) or CPU (prefill).
+        Expert forward — fully on-device.
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device
@@ -81,9 +66,6 @@ class Gemma4Experts:
             output: [1, 1, seq_len, hidden_size] on device
         """
         seq_len = hidden_states.shape[2]
-
-        if self.weights is None:
-            return self._cpu_forward(hidden_states, dense_routing)
 
         if seq_len == 1:
             return decode_forward(
@@ -96,60 +78,14 @@ class Gemma4Experts:
                 ccl_manager=self.ccl_manager,
             )
         else:
-            # Prefill: on-device via sparse_matmul with all-ones sparsity (gpt_oss pattern).
-            # All experts are computed, routing weights select active ones afterward.
-            if seq_len % 32 == 0:
-                return prefill_forward(
-                    hidden_states=hidden_states,
-                    routing_weights=dense_routing,
-                    weights=self.weights,
-                    config=self.config,
-                    prefill_sparsity=self.prefill_sparsity,
-                    mesh_config=self.mesh_config,
-                    mesh_device=self.mesh_device,
-                    ccl_manager=self.ccl_manager,
-                )
-            else:
-                return self._cpu_forward(hidden_states, dense_routing)
-
-    def _cpu_forward(self, hidden_states, dense_routing):
-        """CPU expert forward for prefill (seq_len > 1)."""
-        if self.gate_up_proj_cpu is None:
-            return hidden_states
-
-        is_mesh = hasattr(self.mesh_device, "shape")
-        h_cpu = ttnn.get_device_tensors(hidden_states)[0] if is_mesh else hidden_states
-        r_cpu = ttnn.get_device_tensors(dense_routing)[0] if is_mesh else dense_routing
-
-        x_torch = ttnn.to_torch(h_cpu).reshape(-1, self.config.hidden_size)
-        routing_torch = ttnn.to_torch(r_cpu).reshape(-1, self.config.num_experts)
-        seq_len = x_torch.shape[0]
-
-        # Convert dense routing to sparse (indices + weights)
-        top_k_weights, top_k_indices = torch.topk(routing_torch.float(), k=self.config.top_k, dim=-1)
-
-        final = torch.zeros_like(x_torch)
-        with torch.no_grad():
-            expert_mask = F.one_hot(top_k_indices.long(), num_classes=self.config.num_experts).permute(2, 1, 0)
-            expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-
-        for eidx in expert_hit:
-            eidx = eidx[0]
-            if eidx == self.config.num_experts:
-                continue
-            top_k_pos, token_idx = torch.where(expert_mask[eidx])
-            cur = x_torch[token_idx]
-            gate, up = F.linear(cur.float(), self.gate_up_proj_cpu[eidx].float()).chunk(2, dim=-1)
-            out = F.linear(F.gelu(gate, approximate="tanh") * up, self.down_proj_cpu[eidx].float())
-            out = out * top_k_weights[token_idx, top_k_pos, None]
-            final.index_add_(0, token_idx, out.to(final.dtype))
-
-        result_4d = final.reshape(1, 1, seq_len, self.config.hidden_size)
-        result_tt = ttnn.from_torch(
-            result_4d,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
-        )
-        return result_tt
+            assert seq_len % 32 == 0, f"Prefill seq_len must be a multiple of 32, got {seq_len}"
+            return prefill_forward(
+                hidden_states=hidden_states,
+                routing_weights=dense_routing,
+                weights=self.weights,
+                config=self.config,
+                prefill_sparsity=self.prefill_sparsity,
+                mesh_config=self.mesh_config,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+            )
