@@ -16,6 +16,7 @@ Sharding: HEIGHT_SHARDED on the gather core for input/output,
           HEIGHT_SHARDED on the transport core for scratch.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,36 @@ TRANSPORT_CORE = ttnn.CoreCoord(0, 1)
 
 NUM_DEVICES = 4
 TILE_W = 32
+
+ENV_NUM_LINKS = "CCL_ALL_GATHER_NUM_LINKS"
+ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_GATHER_MAX_PAYLOAD_SIZE_BYTES"
+
+
+def _parse_env_int(name: str, value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be > 0, got {parsed}")
+    return parsed
+
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return _parse_env_int(name, value)
+
+
+def _get_num_links_params(defaults: list[int]) -> list[int]:
+    value = os.getenv(ENV_NUM_LINKS)
+    if value is None or value.strip() == "":
+        return defaults
+    return [_parse_env_int(ENV_NUM_LINKS, value)]
+
+
+MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 
 @dataclass(frozen=True)
@@ -284,14 +315,14 @@ def test_ccl_all_gather_deterministic_fill(
 
 
 @pytest.mark.parametrize("output_shape", [[1, 7168]])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", _get_num_links_params([1]))
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
             "trace_region_size": 573440,
         }
     ],

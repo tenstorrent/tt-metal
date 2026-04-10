@@ -506,8 +506,6 @@ class DeepseekMinimalAllGather:
 
         gather_core = config.gather_core
         transport_core = config.transport_core
-        gather_grid = config.gather_core_set
-        transport_grid = config.transport_core_set
         combined_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(gather_core, gather_core), ttnn.CoreRange(transport_core, transport_core)]
         )
