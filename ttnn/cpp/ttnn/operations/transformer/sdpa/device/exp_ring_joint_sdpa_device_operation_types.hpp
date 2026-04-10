@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
