@@ -2,12 +2,8 @@ name: "[Tier 1] Models Unit Tests"
 
 on:
   schedule:
-    # fast-dispatch-full-regressions-and-models.yaml
-    - cron: "0 5,14,23 * * *"
-    # t3000-unit-tests.yaml
-    - cron: "0 */2 * * *"
-    # galaxy-unit-tests.yaml
-    - cron: "0 8 * * *"
+    # 6 times a day — all models, all SKUs
+    - cron: "0 0,4,8,12,16,20 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -96,23 +92,9 @@ jobs:
             echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
             exit 0
           fi
-          SCHEDULE="${{ github.event.schedule }}"
-          case "$SCHEDULE" in
-            "0 5,14,23 * * *")
-              # fast-dispatch-full-regressions-and-models.yaml — Llama 3.1-8B + Whisper unit on N150/N300
-              echo "enabled-skus=wh_n150,wh_n300" >> $GITHUB_OUTPUT
-              echo "model=all" >> $GITHUB_OUTPUT
-              ;;
-            "0 */2 * * *"|"0 8 * * *")
-              # t3000-unit-tests.yaml + galaxy-unit-tests.yaml — Galaxy tier-1 unit jobs
-              echo "enabled-skus=wh_galaxy" >> $GITHUB_OUTPUT
-              echo "model=all" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "::error::Unhandled schedule '$SCHEDULE'; update resolve-skus in models-t1-unit-tests.yaml"
-              exit 1
-              ;;
-          esac
+          # Scheduled runs: all models, all SKUs
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:

@@ -2,10 +2,8 @@ name: "[Tier 2] Models Unit Tests"
 
 on:
   schedule:
-    # fast-dispatch-full-regressions-and-models.yaml — Gemma-3-4B + Shallow UNet on wh_n150/wh_n300
-    - cron: "0 5,14,23 * * *"
-    # t3000-unit-tests.yaml — Loudbox tier-2 unit (Llama 8B t2, Mixtral, Gemma-27B, GPT-OSS 20B, Qwen2.5-VL-72B, Shallow UNet, …)
-    - cron: "0 */2 * * *"
+    # 3 times a day — all models, all SKUs
+    - cron: "0 1,9,17 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -35,6 +33,8 @@ on:
         type: choice
         options:
           - all
+          - "wh_n150 (N150)"
+          - "wh_n300 (N300)"
           - "wh_llmbox_perf (T3000)"
       platform:
         required: false
@@ -87,7 +87,7 @@ jobs:
       - name: Resolve SKU and model (scheduled runs mirror legacy pipeline scope)
         id: resolve
         run: |
-          ALL_SKUS="wh_llmbox_perf"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -100,23 +100,9 @@ jobs:
             echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
             exit 0
           fi
-          SCHEDULE="${{ github.event.schedule }}"
-          case "$SCHEDULE" in
-            "0 5,14,23 * * *")
-              # fast-dispatch — tier-2 entries on single-card SKUs (Gemma-3-4B, Shallow UNet)
-              echo "enabled-skus=wh_n150,wh_n300" >> $GITHUB_OUTPUT
-              echo "model=all" >> $GITHUB_OUTPUT
-              ;;
-            "0 */2 * * *")
-              # t3000-unit — tier-2 jobs on wh_llmbox_perf
-              echo "enabled-skus=wh_llmbox_perf" >> $GITHUB_OUTPUT
-              echo "model=all" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "::error::Unhandled schedule '$SCHEDULE'; update resolve-skus in models-t2-unit-tests.yaml"
-              exit 1
-              ;;
-          esac
+          # Scheduled runs: all models, all SKUs
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
