@@ -55,8 +55,11 @@ protected:
 
     std::optional<uint32_t> first_core_type_index(BinaryPlacement placement) const {
         for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
-            bool binary_in_config =
-                hal_.get_core_kernel_stored_in_config_buffer(hal_.get_programmable_core_type(index));
+            auto core_type = hal_.get_programmable_core_type(index);
+            if (core_type == HalProgrammableCoreType::IDLE_ETH) {
+                continue;
+            }
+            bool binary_in_config = hal_.get_core_kernel_stored_in_config_buffer(core_type);
             if ((placement == BinaryPlacement::InConfig && binary_in_config) ||
                 (placement == BinaryPlacement::FixedAddress && !binary_in_config)) {
                 return index;
