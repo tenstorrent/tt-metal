@@ -70,6 +70,19 @@ TEST(MeshTensorTest, MoveAssignment) {
     (void)other;
 }
 
+TEST(MeshTensorTest, DefaultConstructedIsNotInitialized) {
+    MeshTensor tensor;
+    EXPECT_FALSE(tensor.is_initialized());
+}
+
+TEST(MeshTensorTest, MovedFromIsNotInitialized) {
+    MeshTensor source;
+    MeshTensor dest;
+    dest = std::move(source);
+    EXPECT_FALSE(source.is_initialized());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(dest.is_initialized());
+}
+
 TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -134,6 +147,42 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(tensor.logical_shape(), Shape({1, 32}));
+}
+
+TEST_F(MeshTensorDeviceTest, ConstructedWithMeshBufferIsInitialized) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
+    ASSERT_NE(mesh_buffer, nullptr);
+    ASSERT_TRUE(mesh_buffer->is_allocated());
+
+    auto topology = TensorTopology();
+
+    MeshTensor tensor(mesh_buffer, std::move(spec), std::move(topology));
+
+    EXPECT_TRUE(tensor.is_initialized());
+}
+
+TEST_F(MeshTensorDeviceTest, IsNotInitializedAfterMoveFrom) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
+    auto topology = TensorTopology();
+
+    MeshTensor original(mesh_buffer, std::move(spec), std::move(topology));
+
+    EXPECT_TRUE(original.is_initialized());
+
+    MeshTensor moved(std::move(original));
+
+    EXPECT_FALSE(original.is_initialized());  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(moved.is_initialized());
 }
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {

@@ -1549,12 +1549,12 @@ void pytensor_module(nb::module_& mod) {
 
             mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
-            DeviceStorage device_storage(std::move(mesh_buffer), {coord});
             TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
-            return Tensor(std::move(device_storage), tensor_spec, std::move(topology));
+            DeviceStorage device_storage(MeshTensor(std::move(mesh_buffer), tensor_spec, std::move(topology)), {coord});
+            return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),
         nb::arg("mesh_device"),
