@@ -603,12 +603,13 @@ _DPT_HEAD_CACHE: dict = {}
 
 
 def dpt_head(feats_list, hw, state: dict, branch: int, device):
-    """DPT head — host-torch fallback. Module cached per (state,branch)."""
+    """DPT head — host-torch fallback in bfloat16 for speed. Module cached."""
     from reference.torch_dust3r import load_dpt_head
-    key = (id(state), branch)
+    key = (id(state), branch, "bf16")
     head = _DPT_HEAD_CACHE.get(key)
     if head is None:
-        head = load_dpt_head(state, branch=branch)
+        head = load_dpt_head(state, branch=branch).to(torch.bfloat16)
         _DPT_HEAD_CACHE[key] = head
+    feats_bf16 = [f.to(torch.bfloat16) for f in feats_list]
     with torch.no_grad():
-        return head(feats_list, hw)
+        return head(feats_bf16, hw).float()
