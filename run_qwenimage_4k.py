@@ -18,7 +18,7 @@ import ttnn
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 
 MESH_SHAPE = (2, 2)
-NUM_INFERENCE_STEPS = 50
+NUM_INFERENCE_STEPS = 20  # Fewer steps for faster iteration during optimization
 # 4096x2304: 16:9 aspect, 9.4MP (larger than 4K UHD 8.3MP)
 # Patches: 256x144 = 36864, cleanly divisible by SP=2, k_chunk=512, tile=32
 WIDTH = 4096
@@ -53,7 +53,7 @@ def main():
         use_torch_vae_decoder=False,  # TT VAE with dynamic loading
         dynamic_load_encoder=True,  # Free memory for transformer
         dynamic_load_vae=True,  # Load/unload VAE to save memory
-        is_fsdp=True,  # Reduce weight memory with FSDP
+        is_fsdp=True,  # Required — OOM without FSDP at 4K
     )
     print("Pipeline created successfully!")
 
