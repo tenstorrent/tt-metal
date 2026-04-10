@@ -578,15 +578,16 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     return out1, out2
 
 
-def dpt_head(feats_list, hw, state: dict, branch: int, device):
-    """DPT head — currently host-torch fallback (conv-heavy, ttnn.conv2d path
-    through fold has tooling issues in this build env; TODO: move to device).
+_DPT_HEAD_CACHE: dict = {}
 
-    feats_list: list of 4 (B, N, D) token tensors (enc + 3 decoder depths).
-    hw: (H, W) token grid (e.g. 32, 32 for 512 input).
-    Returns (B, 4, H_img, W_img) on host.
-    """
+
+def dpt_head(feats_list, hw, state: dict, branch: int, device):
+    """DPT head — host-torch fallback. Module is cached per (state,branch)."""
     from reference.torch_dust3r import load_dpt_head
-    head = load_dpt_head(state, branch=branch)
+    key = (id(state), branch)
+    head = _DPT_HEAD_CACHE.get(key)
+    if head is None:
+        head = load_dpt_head(state, branch=branch)
+        _DPT_HEAD_CACHE[key] = head
     with torch.no_grad():
         return head(feats_list, hw)
