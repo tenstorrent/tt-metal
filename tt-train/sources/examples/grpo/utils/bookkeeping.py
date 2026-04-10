@@ -125,6 +125,7 @@ def _setup_logging(output_dir: str, log_filename: str = "grpo_training.log"):
     console_handler.setFormatter(formatter)
 
     logger = logging.getLogger("grpo")
+    logger.propagate = False
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)

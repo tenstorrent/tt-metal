@@ -5,7 +5,9 @@
 import time
 from typing import Sequence, Iterator
 
-from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, get_training_config
+from ttml.common.config import load_config
+from ttml.common.utils import get_tt_metal_runtime_root
+
 from utils.gsm8k import extract_hash_answer, get_gsm8k
 from utils.boolq import get_boolq
 from utils.inference import generate_answers_multiple_prompts
@@ -61,6 +63,11 @@ def compare_boolq_answers(logger, completion, golden_answer) -> tuple[bool, str]
     logger.info(f"  completion={completion}")
 
     return correct, model_answer
+
+
+def get_training_config(yaml_config_path) -> dict:
+    yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
+    return yaml_config["training_config"]
 
 
 if __name__ == "__main__":

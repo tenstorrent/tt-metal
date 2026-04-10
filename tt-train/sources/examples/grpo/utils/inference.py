@@ -1,9 +1,149 @@
+import copy
+import logging
+import os
+from dataclasses import dataclass
 from typing import List
 import ttnn
 import ttml
 import numpy as np
+from transformers import AutoTokenizer
+from huggingface_hub import snapshot_download
 from ttml.common.utils import no_grad
-from .setup import InferenceCtx
+from ttml.models import RunnerType, WeightTyingType
+from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from .llama_overrides import LlamaCompositeKV
+
+
+@dataclass
+class InferenceCtx:
+    tt_model: object
+    tokenizer: object
+    transformer_config: object
+    pad_token: int
+    max_tokens_to_complete: int
+    temperature: float
+    tile_size: int = 32
+    group_size: int = 1
+    sample_seed: int = 42
+    dp_mapper: object = None
+    dp_composer: object = None
+    total_devices: int = 1
+    _kv_cache: object = None
+    _B: int | None = None
+    _N: int | None = None
+
+
+def load_checkpoint(model, checkpoint_path, dp_mapper=None):
+    from safetensors.numpy import load_file
+    import numpy as np
+    import ml_dtypes
+    import ttml
+    import ttnn
+
+    checkpoint = load_file(checkpoint_path)
+    parameters = model.parameters()
+    loaded, missing = 0, []
+
+    for name, param in parameters.items():
+        if name in checkpoint:
+            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, 1, 1, -1)
+            elif arr.ndim == 2:
+                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
+            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
+            param.assign(restored)
+            loaded += 1
+        else:
+            missing.append(name)
+
+    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
+    if missing:
+        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
+        for n in missing:
+            print(f"  - {n}")
+
+
+def setup_inference(grpo_config, transformer_config, device_config) -> InferenceCtx:
+    tokenizer = AutoTokenizer.from_pretrained(grpo_config.model_source)
+    pad_token = tokenizer.pad_token_id
+    if pad_token is None:
+        pad_token = tokenizer.eos_token_id
+
+    transformer_config = copy.deepcopy(transformer_config)
+    transformer_config.vocab_size = len(tokenizer)
+
+    rope_scaling = LlamaRopeScalingConfig(
+        scaling_factor=getattr(transformer_config, "scaling_factor", 0.0) or 0.0,
+        high_freq_factor=getattr(transformer_config, "high_freq_factor", 4.0) or 4.0,
+        low_freq_factor=getattr(transformer_config, "low_freq_factor", 1.0) or 1.0,
+        original_context_length=getattr(transformer_config, "original_context_length", 0) or 0,
+    )
+
+    runner_type = RunnerType.from_string(str(transformer_config.runner_type))
+    weight_tying = WeightTyingType.Disabled
+    if transformer_config.weight_tying:
+        weight_tying = WeightTyingType.from_string(str(transformer_config.weight_tying))
+
+    llama_cfg = LlamaConfig(
+        hidden_size=transformer_config.embedding_dim,
+        intermediate_size=transformer_config.intermediate_dim,
+        num_hidden_layers=transformer_config.num_blocks,
+        num_attention_heads=transformer_config.num_heads,
+        num_key_value_heads=transformer_config.num_groups,
+        vocab_size=len(tokenizer),
+        max_position_embeddings=transformer_config.max_sequence_length,
+        rope_theta=transformer_config.theta or 10000.0,
+        attention_dropout=transformer_config.dropout_prob,
+        mlp_dropout=transformer_config.dropout_prob,
+        runner_type=runner_type,
+        weight_tying=weight_tying,
+        rope_scaling=rope_scaling,
+    )
+
+    tt_model = LlamaCompositeKV(llama_cfg)
+
+    dp_mapper = None
+    dp_composer = None
+    total_devices = 1
+    if device_config.enable_ddp:
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False))
+        device = autograd_ctx.get_device()
+        dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+        dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+        total_devices = device_config.total_devices()
+
+    local_safetensors = os.path.isdir(grpo_config.model_source) and any(
+        f == "model.safetensors" for f in os.listdir(grpo_config.model_source)
+    )
+    if local_safetensors:
+        logging.info("Loading model from local safetensors: %s", grpo_config.model_source)
+        logging.info(f"load_checkpoint({grpo_config.model_source}/model.safetensors)")
+        load_checkpoint(tt_model, grpo_config.model_source, dp_mapper=dp_mapper)
+    else:
+        logging.info("Downloading model from HuggingFace: %s", grpo_config.model_source)
+        logging.info(f"snapshot_download({grpo_config.model_source})")
+        model_repo_path = snapshot_download(
+            repo_id=grpo_config.model_source,
+            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
+        )
+        load_from_safetensors(tt_model, model_repo_path, llama_cfg)
+
+    return InferenceCtx(
+        tt_model=tt_model,
+        tokenizer=tokenizer,
+        pad_token=pad_token,
+        temperature=grpo_config.temperature,
+        max_tokens_to_complete=grpo_config.max_tokens_to_complete,
+        transformer_config=transformer_config,
+        group_size=grpo_config.group_size,
+        tile_size=32,
+        sample_seed=42,
+        dp_mapper=dp_mapper,
+        dp_composer=dp_composer,
+        total_devices=total_devices,
+    )
 
 
 def round_up(ctx: InferenceCtx, x: int) -> int:
