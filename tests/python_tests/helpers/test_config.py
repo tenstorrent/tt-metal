@@ -540,6 +540,11 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
+        # Inject use_srcs and dest_acc into StimuliConfig
+        if self.variant_stimuli:
+            self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
+            self.variant_stimuli.set_dest_acc(self.dest_acc)
+
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
                 (

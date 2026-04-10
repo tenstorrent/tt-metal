@@ -82,11 +82,36 @@ def check_bfp4_b(operand: list) -> list:
     return operand
 
 
-def convert_nan_to_inf(operand: list) -> list:
+def convert_nan_to_inf(operand):
+    """Replace every NaN with +inf, preserving the input type.
+
+    Accepts a torch.Tensor or a plain list of floats and returns the same
+    type so that downstream code (e.g. `result.to(...)`) does not break
+    when the caller passes a tensor.
+    """
+    if isinstance(operand, torch.Tensor):
+        return torch.where(
+            torch.isnan(operand),
+            torch.full_like(operand, float("inf")),
+            operand,
+        )
     return [math.inf if math.isnan(x) else x for x in operand]
 
 
-def convert_inf_to_value(operand: list, inf_value: float) -> list:
+def convert_inf_to_value(operand, inf_value: float):
+    """Replace every +inf with *inf_value*, preserving the input type.
+
+    Accepts a torch.Tensor or a plain list of floats and returns the same
+    type so that downstream code (e.g. `result.to(...)`) does not break
+    when the caller passes a tensor.
+    """
+    if isinstance(operand, torch.Tensor):
+        return torch.where(
+            operand == math.inf,
+            torch.full_like(operand, inf_value),
+            operand,
+        )
+
     return [inf_value if x == math.inf else x for x in operand]
 
 
@@ -259,6 +284,9 @@ def quantize_mx_stimuli(
     This simulates the quantization that occurs when data is stored in MX format
     in L1 memory and then unpacked by hardware. The golden model should use
     quantized values to match what hardware actually sees.
+
+    The L1 layout (flat vs SrcS) does not affect quantization — the same
+    scales and FP8 elements are produced regardless of byte arrangement.
 
     Args:
         tensor: Input tensor (bfloat16 values)
@@ -1541,13 +1569,18 @@ class UnarySFPUGolden:
         # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
         if input_format == DataFormat.Bfp4_b:
             operand1 = _bfp4b_to_float16b(operand1)
+        if input_format.is_mx_format():
+            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
             return self.ops[operation](operand1, reduce_pool)
 
         # determine the data format for dst
-        if self.dest_acc == DestAccumulation.Yes:
+        if input_format.is_mx_format():
+            # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
+            dst_format = DataFormat.Float16_b
+        elif self.dest_acc == DestAccumulation.Yes:
             dst_format = DataFormat.Float32
         elif DataFormat.Float16 in (input_format, data_format):
             dst_format = DataFormat.Float16
@@ -1640,8 +1673,16 @@ class UnarySFPUGolden:
             ).flatten()
             result = _bfp4b_to_float16b(tilized, dimensions)
 
+        if data_format.is_mx_format():
+            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
+
         # depending on `data_format`, `inf` values may get converted when unpacked to L1.
+        # Cast to the target data_format dtype before replacing inf so that
+        # replacement values larger than float16-max (65504) don't overflow for torch tensors.
         if dst_format == DataFormat.Float16:
+            target_dtype = format_dict[data_format]
+            if isinstance(result, torch.Tensor) and result.dtype != target_dtype:
+                result = result.to(target_dtype)
             match data_format:
                 case DataFormat.Float16_b:
                     result = convert_inf_to_value(result, 130560.0)

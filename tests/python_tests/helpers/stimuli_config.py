@@ -100,13 +100,25 @@ class StimuliConfig:
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
         self.operand_res_tile_size = operand_res_tile_size
 
-        # Stimuli addresses calculation
-        # Use actual tile size based on tile_dimensions for memory-efficient allocation
+        # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
+        self.use_srcs = False
+        self._dest_acc_32b = False
+
+        self._calculate_tile_sizes()
+
+    def _calculate_tile_sizes(self):
+        """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
-            self.stimuli_A_format, self.tile_dimensions, format_tile_sizes
+            self.stimuli_A_format,
+            self.tile_dimensions,
+            format_tile_sizes,
+            use_srcs=self.use_srcs,
         )
         self.tile_size_B_bytes = calculate_tile_size_bytes(
-            self.stimuli_B_format, self.tile_dimensions, format_tile_sizes
+            self.stimuli_B_format,
+            self.tile_dimensions,
+            format_tile_sizes,
+            use_srcs=self.use_srcs,
         )
 
         self.buf_a_addr = 0
@@ -119,7 +131,10 @@ class StimuliConfig:
 
         if self.buffer_C is not None:
             self.tile_size_C_bytes = calculate_tile_size_bytes(
-                self.stimuli_C_format, self.tile_dimensions, format_tile_sizes
+                self.stimuli_C_format,
+                self.tile_dimensions,
+                format_tile_sizes,
+                use_srcs=self.use_srcs,
             )
             self.buf_c_addr = (
                 self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
@@ -136,8 +151,24 @@ class StimuliConfig:
             self.buf_res_tile_size = self.operand_res_tile_size
         else:
             self.buf_res_tile_size = calculate_tile_size_bytes(
-                stimuli_res_format, self.tile_dimensions, format_tile_sizes
+                self.stimuli_res_format,
+                self.tile_dimensions,
+                format_tile_sizes,
+                use_srcs=self.use_srcs,
+                dest_acc=self._dest_acc_32b,
             )
+
+    def set_use_srcs(self, unpack_to_srcs: bool):
+        """Enable SrcS-interleaved L1 layout. Called by TestConfig."""
+        self.use_srcs = unpack_to_srcs
+        self._calculate_tile_sizes()
+
+    def set_dest_acc(self, dest_acc):
+        """Set 32-bit dest accumulation mode. Called by TestConfig."""
+        from .llk_params import DestAccumulation
+
+        self._dest_acc_32b = dest_acc == DestAccumulation.Yes
+        self._calculate_tile_sizes()
 
     def __str__(self) -> str:
         lines = (
@@ -159,6 +190,8 @@ class StimuliConfig:
             f"  sfpu: {self.sfpu}"
             f"  write_full_tiles: {self.write_full_tiles}"
             f"  use_dense_tile_dimensions: {self.use_dense_tile_dimensions}"
+            f"  use_srcs: {self.use_srcs}"
+            f"  dest_acc_32b: {self._dest_acc_32b}"
             f"  operand_res_tile_size: {self.operand_res_tile_size}"
             f"  buf_a_addr: 0x{self.buf_a_addr:08X}"
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
@@ -242,6 +275,7 @@ class StimuliConfig:
         face_r_dim: int,
         location: str = "0,0",
         write_full_tiles: bool = False,
+        use_srcs: bool = False,
     ):
         """
         Original backward-compatible write_matrix.
@@ -259,17 +293,25 @@ class StimuliConfig:
         else:
             tile_elements = num_faces * face_r_dim * FACE_C_DIM
 
-        pack_function_lambda = lambda buffer_tile: (
-            pack_function(buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim)
-            if pack_function in [pack_bfp8_b, pack_bfp4_b, pack_mxfp8r, pack_mxfp8p]
-            else pack_function(buffer_tile)
-        )
+        def _pack_tile(buffer_tile):
+            if pack_function in (pack_mxfp8r, pack_mxfp8p):
+                return pack_function(
+                    buffer_tile,
+                    num_faces=num_faces,
+                    face_r_dim=face_r_dim,
+                    use_srcs=use_srcs,
+                )
+            if pack_function in (pack_bfp8_b, pack_bfp4_b):
+                return pack_function(
+                    buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
+                )
+            return pack_function(buffer_tile)
 
         for ind in range(tile_count):
             # Always stride at MAX_TILE_ELEMENTS (1024) for backward compatibility
             start_idx = MAX_TILE_ELEMENTS * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
-            packed_data = pack_function_lambda(tile_data)
+            packed_data = _pack_tile(tile_data)
             addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
@@ -287,6 +329,7 @@ class StimuliConfig:
         face_r_dim: int,
         tile_dimensions: list[int],
         location: str = "0,0",
+        use_srcs: bool = False,
     ):
         """
         New write_matrix for variable tile dimensions with dense L1 data.
@@ -299,16 +342,24 @@ class StimuliConfig:
         tile_r, tile_c = tile_dimensions
         tile_elements = tile_r * tile_c  # Dense: use actual tile dimensions
 
-        pack_function_lambda = lambda buffer_tile: (
-            pack_function(buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim)
-            if pack_function in [pack_bfp8_b, pack_bfp4_b, pack_mxfp8r, pack_mxfp8p]
-            else pack_function(buffer_tile)
-        )
+        def _pack_tile(buffer_tile):
+            if pack_function in (pack_mxfp8r, pack_mxfp8p):
+                return pack_function(
+                    buffer_tile,
+                    num_faces=num_faces,
+                    face_r_dim=face_r_dim,
+                    use_srcs=use_srcs,
+                )
+            if pack_function in (pack_bfp8_b, pack_bfp4_b):
+                return pack_function(
+                    buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
+                )
+            return pack_function(buffer_tile)
 
         for ind in range(tile_count):
             start_idx = tile_elements * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
-            packed_data = pack_function_lambda(tile_data)
+            packed_data = _pack_tile(tile_data)
             addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
@@ -379,6 +430,7 @@ class StimuliConfig:
             self.face_r_dim,
             location,
             self.write_full_tiles,
+            use_srcs=self.use_srcs,
         )
 
         StimuliConfig.write_matrix(
@@ -391,6 +443,7 @@ class StimuliConfig:
             self.face_r_dim,
             location,
             self.write_full_tiles,
+            use_srcs=self.use_srcs,
         )
 
         if self.buffer_C is not None:
@@ -409,6 +462,7 @@ class StimuliConfig:
                 self.face_r_dim,
                 location,
                 self.write_full_tiles,
+                use_srcs=self.use_srcs,
             )
 
     def _write_dense_tile_dimensions(self, location: str = "0,0"):
@@ -435,6 +489,7 @@ class StimuliConfig:
             self.face_r_dim,
             self.tile_dimensions,
             location,
+            use_srcs=self.use_srcs,
         )
         StimuliConfig.write_matrix_w_tile_dimensions(
             self.buffer_B,
@@ -446,6 +501,7 @@ class StimuliConfig:
             self.face_r_dim,
             self.tile_dimensions,
             location,
+            use_srcs=self.use_srcs,
         )
 
         if self.buffer_C is not None:
@@ -464,12 +520,17 @@ class StimuliConfig:
                 self.face_r_dim,
                 self.tile_dimensions,
                 location,
+                use_srcs=self.use_srcs,
             )
 
     def collect_results(self, location="0,0"):
         # Read tiles based on actual tile dimensions
         tile_size_res_bytes = calculate_tile_size_bytes(
-            self.stimuli_res_format, self.tile_dimensions, format_tile_sizes
+            self.stimuli_res_format,
+            self.tile_dimensions,
+            format_tile_sizes,
+            use_srcs=self.use_srcs,
+            dest_acc=self._dest_acc_32b,
         )
         read_bytes_cnt = tile_size_res_bytes * self.tile_count_res
 
@@ -488,11 +549,15 @@ class StimuliConfig:
             location, self.buf_res_addr, num_bytes=read_bytes_cnt
         )
 
-        # Only pass tile_stride_bytes for dense tile dimensions.
-        # For backward-compatible path (use_dense_tile_dimensions=False),
-        # let unpack_res_tiles default to format_tile_sizes which strides at
-        # full 32x32 tile size and extracts only the needed faces.
-        stride_bytes = tile_size_res_bytes if self.use_dense_tile_dimensions else None
+        # Pass explicit tile_stride_bytes when tiles are densely packed
+        # (use_dense_tile_dimensions or use_srcs).  For the backward-compatible
+        # path, pass None so unpack_res_tiles strides at the full 32×32 tile
+        # size and extracts only the needed faces.
+        stride_bytes = (
+            tile_size_res_bytes
+            if (self.use_dense_tile_dimensions or self.use_srcs)
+            else None
+        )
         res_from_L1 = unpack_res_tiles(
             read_data,
             self.stimuli_res_format,
@@ -501,6 +566,8 @@ class StimuliConfig:
             self.num_faces,
             self.face_r_dim,
             tile_stride_bytes=stride_bytes,
+            use_srcs=self.use_srcs,
+            dest_acc=self._dest_acc_32b,
         )
         return res_from_L1
 
