@@ -37,7 +37,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     const auto& page_table = args.page_table;
 
     IDevice* device = q.device();
-    auto grid = device->compute_with_storage_grid_size();
+    [[maybe_unused]] auto grid = device->compute_with_storage_grid_size();
 
     // ── Dimensions ──
     const uint32_t B = q.padded_shape()[0];
@@ -71,11 +71,10 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     uint32_t bf16_tile_size = tile_size(bf16_df);
     uint32_t im_tile_size = tile_size(im_df);
 
-    // ── Work distribution: parallelize across (batch, Q heads) ──
-    uint32_t total_work = B * NQH;
-    uint32_t num_cores_y = grid.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
-        split_work_to_cores(grid, total_work);
+    // ── Work distribution: single core for MVP (TODO: multi-core) ──
+    uint32_t num_cores = 1;
+    uint32_t num_cores_y = 1;
+    CoreRangeSet all_cores({CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))});
 
     // ── Circular Buffers ──
     // Standard SDPA CBs
@@ -310,15 +309,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         WriterDataMovementConfig(writer_ct_args));
 
     // ── Runtime args ──
-    for (uint32_t i = 0, work_done = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t work_this_core = core_group_1.contains(core) ? work_per_core_1 : work_per_core_2;
-
-        // Map work items to (batch, head) pairs
-        uint32_t batch_start = work_done / NQH;
-        uint32_t head_start = work_done % NQH;
-        uint32_t batch_end = (work_done + work_this_core - 1) / NQH + 1;
-        uint32_t head_end = NQH;  // simplified: process all heads per batch
+        // Single-core: process all (batch, head) pairs
+        uint32_t batch_start = 0;
+        uint32_t head_start = 0;
+        uint32_t batch_end = B;
+        uint32_t head_end = NQH;
 
         SetRuntimeArgs(
             program,
@@ -369,8 +366,6 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 (uint32_t)0,
                 (uint32_t)1,
             });
-
-        work_done += work_this_core;
     }
 
     return {
