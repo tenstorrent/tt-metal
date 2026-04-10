@@ -71,9 +71,15 @@ inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
 
 inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
+    int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
+#ifdef ARCH_QUASAR
+    // Quasar 1x3 and 2x3 simulation configs have few DRAM/L1 banks, so table sizes may not be 4 byte aligned.
+    // round_up_to_mult_of_4 ensures l1_to_local_mem_copy doesn't read from misaligned L1 addresses.
+    dram_to_noc_size_bytes = round_up_to_mult_of_4(dram_to_noc_size_bytes);
+    l1_to_noc_size_bytes = round_up_to_mult_of_4(l1_to_noc_size_bytes);
+#endif
     l1_to_local_mem_copy(
         (uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
-    int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
     l1_to_local_mem_copy(
         (uint*)l1_bank_to_noc_xy,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes),

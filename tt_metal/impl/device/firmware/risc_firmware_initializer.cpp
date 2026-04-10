@@ -559,8 +559,15 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
-    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    // Quasar 1x3 and 2x3 simulation configs have few DRAM/L1 banks, so table sizes may not be 4-byte aligned.
+    // l1_to_local_mem_copy on the firmware side reads 4-byte words, so misaligned offsets cause hangs. Align sizes to 4
+    // bytes to match firmware expectations.
+    if (cluster_.arch() == tt::ARCH::QUASAR) {
+        dram_to_noc_sz_in_bytes = tt::align(dram_to_noc_sz_in_bytes, 4u);
+        l1_to_noc_sz_in_bytes = tt::align(l1_to_noc_sz_in_bytes, 4u);
+    }
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
 
