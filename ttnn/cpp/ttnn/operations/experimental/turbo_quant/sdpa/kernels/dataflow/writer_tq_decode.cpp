@@ -40,10 +40,8 @@ void kernel_main() {
     // ── Generate identity/scale tile using proper helper ──
     generate_reduce_scaler(cb_identity_scale, identity_scalar_packed);
 
-    // ── Generate column identity (reduce scaler for matmul_reduce) ──
-    // Unlike standard SDPA which uses generate_bcast_col_scalar, our kernel needs
-    // matmul_reduce which requires the reduce_scaler format.
-    generate_reduce_scaler(cb_col_identity, identity_scalar_packed);
+    // ── Generate column identity (same format as standard SDPA writer) ──
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // ── Write output tiles ──
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
