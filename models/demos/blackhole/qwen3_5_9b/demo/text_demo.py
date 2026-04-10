@@ -127,16 +127,26 @@ def _get_prompt(seqlen, tokenizer):
 
 
 def _warmup_prefill(model, device, token_ids):
-    """Run prefill + one decode step to compile all programs. Discards results.
+    """Run prefill to compile all programs. Discards results.
 
     Following the Llama/tt_transformers pattern (simple_text_demo.py:1059-1068),
     this separates compilation from inference so TTFT and decode throughput
     reflect actual device compute, not program compilation.
+
+    For long sequences (> 4096), warmup uses a truncated prefix to avoid
+    L1 clashes in the non-paged concat path. The paged prefill path compiles
+    different kernels (chunked_sdpa, paged_fill_cache) that get compiled
+    during the actual prefill_paged call.
     """
     T = token_ids.shape[1]
-    logger.info(f"Warmup prefill ({T} tokens) + decode — compiling programs...")
+    # Cap warmup to 4096 tokens: the non-paged concat path hits L1 clashes
+    # at 8K+ (attn_chunk_size=4096, second chunk produces 8192-length KV).
+    # Paged prefill kernels (chunked_sdpa) are compiled during prefill_paged.
+    warmup_tokens = token_ids[:, : min(T, 4096)]
+    warmup_len = warmup_tokens.shape[1]
+    logger.info(f"Warmup prefill ({warmup_len} tokens) — compiling programs...")
     t0 = time.time()
-    logits = model.prefill(token_ids)
+    logits = model.prefill(warmup_tokens)
     ttnn.synchronize_device(device)
 
     # Decode warmup is handled by capture_decode_trace_paged() or decode_paged()

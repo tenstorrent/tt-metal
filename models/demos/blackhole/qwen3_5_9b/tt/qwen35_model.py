@@ -5,6 +5,7 @@ Assembly: tok_embeddings → 32 × Qwen35TransformerBlock → RMSNorm → LM Hea
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import glob
+import math
 
 import torch
 from loguru import logger
@@ -137,7 +138,7 @@ class Qwen35Model:
 
         return logits
 
-    def prefill_layer_chunked(self, token_ids, chunk_size=2048):
+    def prefill_layer_chunked(self, token_ids, chunk_size=2048, page_table=None):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Unlike prefill_segmented (segment through all layers), this processes
@@ -151,6 +152,9 @@ class Qwen35Model:
         Args:
             token_ids: [B, T] token IDs
             chunk_size: tokens per chunk (default 2048, matches direct prefill limit)
+            page_table: torch.Tensor [B, max_blocks] or None. When provided,
+                        uses paged prefill (paged_fill_cache + chunked_sdpa).
+                        When None, uses concat-based KV accumulation.
         """
         B, T = token_ids.shape
         self.reset_state(batch_size=B)
@@ -165,6 +169,13 @@ class Qwen35Model:
         # compilation. 4096 = 4x fewer SDPA compilations vs chunk_size=1024.
         attn_chunk_size = max(chunk_size, 4096)
 
+        # Hoist page_table device tensor outside both loops (1 H2D transfer, not 256 for 128K).
+        page_table_tt = None
+        if page_table is not None:
+            page_table_tt = ttnn.from_torch(
+                page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+
         for layer_idx, layer in enumerate(self.layers):
             layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
 
@@ -175,7 +186,30 @@ class Qwen35Model:
                 x_chunk = x[:, chunk_start:chunk_end, :]
                 x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)
 
-                if layer.is_full_attention:
+                if layer.is_full_attention and page_table is not None:
+                    # Paged prefill path
+                    cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
+                    sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
+
+                    block_size = 64
+                    chunk_blocks_end = math.ceil(chunk_end / block_size)
+                    chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
+                    chunk_page_table_tt = ttnn.from_torch(
+                        chunk_page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                    )
+
+                    x_chunk = layer.forward(
+                        x_chunk,
+                        cos=cos,
+                        sin=sin,
+                        mode="prefill",
+                        page_table=page_table_tt,
+                        chunk_page_table=chunk_page_table_tt,
+                        chunk_start_idx=chunk_start,
+                    )
+
+                elif layer.is_full_attention:
+                    # Original concat path (non-paged prefill)
                     cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
                     sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
                     x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
@@ -190,6 +224,15 @@ class Qwen35Model:
 
                 chunks_out.append(x_chunk)
 
+            # On the last layer, save the last token from the last chunk BEFORE concat.
+            # For long sequences (T > 4096), slicing x[:, -1:, :] on the full
+            # [1, T, 4096] concatenated tensor triggers an L1 clash in the slice program.
+            # Extracting from the last chunk (at most [1, 4096, 4096]) avoids this.
+            is_last_layer = layer_idx == len(self.layers) - 1
+            if is_last_layer:
+                x_last = chunks_out[-1][:, -1:, :]
+                x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+
             if len(chunks_out) == 1:
                 x_new = chunks_out[0]
             else:
@@ -201,7 +244,6 @@ class Qwen35Model:
             ttnn.deallocate(x)
             x = x_new
 
-        x_last = x[:, -1:, :]
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x_last, self.lm_head_weight)
         ttnn.deallocate(x)
@@ -654,23 +696,26 @@ class Qwen35Model:
                 attn.past_value = None
 
     def prefill_paged(self, token_ids, page_table):
-        """Prefill using existing concat-based attention, then fill paged cache.
+        """Prefill using paged attention for long sequences, concat for short.
+
+        For T > 1024: uses paged prefill (paged_fill_cache + chunked_sdpa)
+        via prefill_layer_chunked with page_table.
+        For T <= 1024: uses direct concat prefill + post-hoc paged cache fill.
 
         Args:
             token_ids: torch.Tensor [B, T] token IDs
-            page_table: ttnn.Tensor [B, max_blocks_per_seq] int32 on device
+            page_table: torch.Tensor or ttnn.Tensor [B, max_blocks_per_seq] int32
         Returns:
             logits: ttnn.Tensor [B, 1, vocab_size]
         """
         B, T = token_ids.shape
-        # Accept host torch.Tensor or device ttnn.Tensor for page_table
-        if isinstance(page_table, torch.Tensor):
-            page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        # Keep page_table as torch.Tensor for CPU slicing in prefill_layer_chunked.
+        page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         self.reset_state(batch_size=B)
 
         # Use existing prefill (concat-based K/V for SDPA)
         if T > 1024:
-            logits = self.prefill_layer_chunked(token_ids, chunk_size=1024)
+            logits = self.prefill_layer_chunked(token_ids, chunk_size=1024, page_table=page_table_torch)
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
             x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -687,8 +732,12 @@ class Qwen35Model:
             logits = ttnn.linear(x_last, self.lm_head_weight)
             ttnn.deallocate(x)
 
-        # Fill paged cache from accumulated concat K/V
-        self._fill_paged_cache_from_prefill(page_table)
+        # Defensive fallback: if paged prefill was used, past_key is None and this is a no-op.
+        # If concat path was used (T <= 1024), this copies concat KV into paged cache.
+        page_table_device = ttnn.from_torch(
+            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        self._fill_paged_cache_from_prefill(page_table_device)
 
         # Prepare DeltaNet for decode (fuse conv states)
         for layer in self.layers:

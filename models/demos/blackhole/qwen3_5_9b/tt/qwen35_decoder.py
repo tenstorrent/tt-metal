@@ -66,13 +66,30 @@ class Qwen35TransformerBlock:
 
         self.feed_forward = Qwen35MLP(args, state_dict, layer_num, device, weight_cache_path)
 
-    def forward(self, x, cos=None, sin=None, mode="decode", chunk_size=64, position_tensor=None, page_table=None):
+    def forward(
+        self,
+        x,
+        cos=None,
+        sin=None,
+        mode="decode",
+        chunk_size=64,
+        position_tensor=None,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         mc = ttnn.L1_MEMORY_CONFIG if mode == "decode" else None
         attn_input = rms_norm_ttnn(x, self.attention_norm_weight, eps=self.norm_eps, memory_config=mc)
 
         if self.is_full_attention:
             attn_output = self.attention.forward(
-                attn_input, cos, sin, position_tensor=position_tensor, page_table=page_table
+                attn_input,
+                cos,
+                sin,
+                position_tensor=position_tensor,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
             )
         else:
             deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
