@@ -23,6 +23,31 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
 
+def _build_down_grid(device):
+    """
+    Build 112-core down-proj grid, adapting to device grid size.
+
+    On 13x10: exclude 8 DRAM workers, 9 phantoms (col 12 rows 0-8), 1 mcast core (12,9).
+    On 12x10: exclude 8 DRAM workers only (col 12 doesn't exist).
+    """
+    grid = device.compute_with_storage_grid_size()
+    num_cols = grid.x
+    assert num_cols >= 12 and grid.y >= 10, f"Need at least 12x10 grid, got {num_cols}x{grid.y}"
+
+    dram_workers = {(0, 0), (0, 3), (0, 7), (0, 9), (7, 1), (7, 4), (7, 6), (7, 9)}
+    cores = []
+    max_col = min(num_cols, 13)
+    for row in range(10):
+        for col in range(max_col):
+            if col == 12:
+                continue  # phantom / mcast cores
+            if (col, row) in dram_workers:
+                continue
+            cores.append(ttnn.CoreCoord(col, row))
+    assert len(cores) == 112, f"Expected 112 down cores, got {len(cores)}"
+    return cores
+
+
 def _build_ab_grids(device):
     """
     Build A (gate) / B (up) 64-core irregular grids, adapting to device grid size.
@@ -1543,4 +1568,22 @@ def test_hybrid_expert_irregular_sram_up_grid(device):
         sram_cores_override=b_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
+    )
+
+
+@pytest.mark.requires_grid_size((12, 10))
+def test_hybrid_expert_irregular_sram_down_grid(device):
+    """256 experts, 8 active (2 SRAM + 6 DRAM), K=256, N=7168, down-proj 112-core grid."""
+    down_cores = _build_down_grid(device)
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=256,
+        sram_expert_ids=[112, 156],
+        dram_expert_ids=list(range(256)),
+        active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
+        formats_per_device=[["bfp4", "bfp2"]],
+        sram_cores_override=down_cores,
     )
