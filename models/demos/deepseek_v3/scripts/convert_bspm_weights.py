@@ -15,14 +15,14 @@ Usage
     MESH_DEVICE=TG \\
     python models/demos/deepseek_v3/scripts/convert_bspm_weights.py \\
         --model-path  /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \\
-        --output-path /localdev/mtairum/deepseek_cache/bspm_B_3.5 \\
-        --bspm-dir    /localdev/mtairum/bit_sculpt/results \\
+        --output-path /path/to/output/bspm_B_3.5 \\
+        --bspm-dir    /path/to/bit_sculpt/results \\
         --bspm-model  deepseek-r1-0528
 
     # Custom variant / budget:
         --bspm-variant A --bspm-budget 4.0
 
-    # Dry-run: preprocessing only, no device conversion (fast sanity check):
+    # Dry-run: validate BSPM files exist and are loadable (no conversion):
         --dry-run
 """
 
@@ -30,15 +30,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import torch
 from loguru import logger
-from tqdm import tqdm
 from transformers import AutoConfig
 
 # ---------------------------------------------------------------------------
@@ -47,21 +46,65 @@ from transformers import AutoConfig
 
 _TT_CODE_TO_MANT: dict[int, int | None] = {0: 7, 1: 3, 2: 1, 3: None}
 _PROJ_IDX = {"gate_proj": 0, "up_proj": 1, "down_proj": 2}
+_EXPERT_KEY_RE = re.compile(r"model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(\w+)\.weight$")
 
 
-class _OverrideStateDict:
-    """Lazy state-dict wrapper that returns per-key overrides and delegates
-    everything else to the base mapping without materialising it."""
+class _BsprnStateDict:
+    """Lazy state-dict wrapper that applies BSPM quantization on demand.
 
-    def __init__(self, base, overrides: dict):
+    Pre-computing all expert overrides for DeepSeek V3 (256 experts × 58 MoE
+    layers × 3 projections) would require ~650 GB of host RAM before conversion
+    starts.  Instead, quantization is computed on the fly inside __getitem__,
+    keeping peak memory proportional to one tensor at a time.
+
+    BSPM code arrays (~11 MB each) are cached per-layer after first access so
+    each BSPM file is read at most once.  The quantized tensors themselves are
+    never retained — they are handed directly to the caller and immediately freed.
+    """
+
+    def __init__(
+        self,
+        base,
+        hf_config,
+        bspm_dir: Path,
+        bspm_model: str,
+        variant: str,
+        budget: float,
+        bspm_root: Path,
+    ):
         self._base = base
-        self._overrides = overrides
+        self._first_k_dense = getattr(hf_config, "first_k_dense_replace", 3)
+        self._bspm_dir = bspm_dir
+        self._bspm_model = bspm_model
+        self._variant = variant
+        self._budget = budget
+        self._codes_cache: dict[int, np.ndarray | None] = {}  # layer → codes or None
+
+        sys.path.insert(0, str(bspm_root))
+        # Import once here so failures surface immediately, not mid-conversion.
+        from integration.ttnn.bspm_loader import load_bspm_for_layer
+
+        from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+
+        self._load_bspm = load_bspm_for_layer
+        self._qdq = quantize_dequantize_bfp
+
+    # ------------------------------------------------------------------
+    # Public dict-like interface (delegates to base for non-expert keys)
+    # ------------------------------------------------------------------
 
     def __getitem__(self, key):
-        return self._overrides[key] if key in self._overrides else self._base[key]
+        m = _EXPERT_KEY_RE.match(key)
+        if m:
+            layer_idx, expert_idx, proj_name = int(m.group(1)), int(m.group(2)), m.group(3)
+            if layer_idx >= self._first_k_dense and proj_name in _PROJ_IDX:
+                codes = self._codes_for_layer(layer_idx)
+                if codes is not None and expert_idx < codes.shape[0]:
+                    return self._apply_bspm(self._base[key], codes, expert_idx, proj_name)
+        return self._base[key]
 
     def __contains__(self, key):
-        return key in self._overrides or key in self._base
+        return key in self._base
 
     def __iter__(self):
         return iter(self._base)
@@ -80,116 +123,69 @@ class _OverrideStateDict:
         for k in self._base:
             yield self[k]
 
+    # ------------------------------------------------------------------
+    # Dry-run helper: validate all BSPM files without quantizing tensors
+    # ------------------------------------------------------------------
 
-def _preprocess_all_layers(
-    state_dict,
-    hf_config,
-    bspm_dir: Path,
-    bspm_model: str,
-    variant: str,
-    budget: float,
-    bspm_root: Path,
-    n_io_workers: int = 16,
-) -> _OverrideStateDict:
-    """Apply BSPM tile pre-quantization to all MoE layers in state_dict.
+    def validate_bspm_files(self, hf_config) -> int:
+        """Load and validate all per-layer BSPM files.  Returns count of missing files."""
+        missing = 0
+        for layer_idx in range(self._first_k_dense, hf_config.num_hidden_layers):
+            codes = self._codes_for_layer(layer_idx)
+            if codes is None:
+                missing += 1
+            else:
+                logger.debug(f"Layer {layer_idx}: BSPM codes shape {codes.shape} — OK")
+        return missing
 
-    Strategy: iterate by *projection* (not expert) so all 256 expert weights
-    for a given projection are loaded in parallel and processed in one batched
-    numpy call, rather than 256 sequential single-expert calls.
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-    Per layer: 3 projections × O(unique_codes) numpy calls
-    vs original: 256 experts × 3 projections × O(unique_codes) calls
+    def _codes_for_layer(self, layer_idx: int) -> np.ndarray | None:
+        if layer_idx not in self._codes_cache:
+            bspm_file = (
+                self._bspm_dir
+                / self._bspm_model
+                / f"layer_{layer_idx}"
+                / "precision_eval"
+                / f"precision_map_{self._variant}_{self._budget:.1f}.bspm"
+            )
+            if not bspm_file.exists():
+                logger.warning(f"Layer {layer_idx}: BSPM file not found, using raw weights — {bspm_file}")
+                self._codes_cache[layer_idx] = None
+            else:
+                self._codes_cache[layer_idx] = self._load_bspm(str(bspm_file))["codes"]
+        return self._codes_cache[layer_idx]
 
-    Returns an _OverrideStateDict wrapping the original (lazy) state_dict so
-    the full checkpoint is never materialised in memory.
-    """
-    sys.path.insert(0, str(bspm_root))
-    from integration.ttnn.bspm_loader import load_bspm_for_layer
+    def _apply_bspm(self, w_orig: torch.Tensor, codes: np.ndarray, expert_idx: int, proj_name: str) -> torch.Tensor:
+        """Quantize-dequantize a single expert weight tensor according to BSPM codes."""
+        proj_idx = _PROJ_IDX[proj_name]
+        w_kn = w_orig.float().numpy().T  # HF layout (N, K) → compute in (K, N)
+        K, N = w_kn.shape
+        tiles_h, tiles_w = K // 32, N // 32
 
-    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+        expert_codes = codes[expert_idx, proj_idx, : tiles_h * tiles_w].reshape(tiles_h, tiles_w)
+        unique_codes = np.unique(expert_codes)
+        non_bfp4 = unique_codes[unique_codes != 1]
 
-    first_k_dense = getattr(hf_config, "first_k_dense_replace", 3)
-    n_moe_layers = hf_config.num_hidden_layers - first_k_dense
-    overrides: dict = {}
+        if not len(non_bfp4):
+            return w_orig  # all tiles already bfp4 — no-op
 
-    layer_iter = tqdm(
-        range(first_k_dense, hf_config.num_hidden_layers),
-        desc="BSPM preprocessing layers",
-        unit="layer",
-        total=n_moe_layers,
-    )
-    for layer_idx in layer_iter:
-        bspm_file = (
-            bspm_dir
-            / bspm_model
-            / f"layer_{layer_idx}"
-            / "precision_eval"
-            / f"precision_map_{variant}_{budget:.1f}.bspm"
-        )
-        if not bspm_file.exists():
-            logger.warning(f"Layer {layer_idx}: BSPM file not found, using raw weights — {bspm_file}")
-            continue
+        # (tiles_h, 32, tiles_w, 32) → (tiles_h, tiles_w, 32, 32)
+        w_tiled = w_kn.reshape(tiles_h, 32, tiles_w, 32).transpose(0, 2, 1, 3).copy()
 
-        bspm_data = load_bspm_for_layer(str(bspm_file))
-        bspm_codes = bspm_data["codes"]  # (n_experts, 3, tiles_per_proj)
-        n_experts = min(hf_config.n_routed_experts, bspm_codes.shape[0])
+        for code in non_bfp4:
+            ri, ci = np.where(expert_codes == code)
+            mant_bits = _TT_CODE_TO_MANT.get(int(code), 3)
+            if mant_bits is None:
+                w_tiled[ri, ci] = 0.0
+            else:
+                w_tiled[ri, ci] = self._qdq(w_tiled[ri, ci], mant_bits)
 
-        t_layer = time.time()
-
-        for proj_name, proj_idx in _PROJ_IDX.items():
-            keys = [f"model.layers.{layer_idx}.mlp.experts.{e}.{proj_name}.weight" for e in range(n_experts)]
-            present = [(e, k) for e, k in enumerate(keys) if k in state_dict]
-            if not present:
-                continue
-
-            expert_indices, present_keys = zip(*present)
-
-            # ── Load all expert weights for this projection in parallel ──────
-            # I/O-bound: threads hide NFS/disk latency effectively.
-            def _load(k):
-                return state_dict[k].float()
-
-            with ThreadPoolExecutor(max_workers=n_io_workers) as pool:
-                tensors = list(pool.map(_load, present_keys))
-
-            # Stack: (n_e, N, K) → transpose to (n_e, K, N)
-            w_nk = torch.stack(tensors).numpy()  # (n_e, N, K)
-            w_kn = w_nk.transpose(0, 2, 1)  # (n_e, K, N) — view, no copy yet
-            n_e, K, N = w_kn.shape
-            tiles_h, tiles_w = K // 32, N // 32
-
-            # codes: (n_e, tiles_h, tiles_w)
-            codes_3d = bspm_codes[list(expert_indices), proj_idx, : tiles_h * tiles_w].reshape(n_e, tiles_h, tiles_w)
-
-            unique_codes = np.unique(codes_3d)
-            non_bfp4 = unique_codes[unique_codes != 1]
-            if len(non_bfp4) == 0:
-                continue  # all tiles bfp4 — no-op for all experts
-
-            # (n_e, tiles_h, tiles_w, 32, 32) — contiguous copy needed for writes
-            w_tiled = w_kn.reshape(n_e, tiles_h, 32, tiles_w, 32).transpose(0, 1, 3, 2, 4).copy()
-
-            for code in non_bfp4:
-                ei, ri, ci = np.where(codes_3d == code)
-                mant_bits = _TT_CODE_TO_MANT.get(int(code), 3)
-                if mant_bits is None:
-                    w_tiled[ei, ri, ci] = 0.0
-                else:
-                    # Single batched call across ALL experts for this code
-                    w_tiled[ei, ri, ci] = quantize_dequantize_bfp(w_tiled[ei, ri, ci], mant_bits)
-
-            # Restore (n_e, K, N) → (n_e, N, K) and store overrides
-            w_out = w_tiled.transpose(0, 1, 3, 2, 4).reshape(n_e, K, N).transpose(0, 2, 1)
-            orig_dtype = tensors[0].dtype
-            for i, key in enumerate(present_keys):
-                overrides[key] = torch.from_numpy(w_out[i].copy()).to(orig_dtype)
-
-            del tensors, w_nk, w_kn, w_tiled, w_out
-
-        logger.debug(f"Layer {layer_idx} preprocessed in {time.time() - t_layer:.1f}s")
-
-    logger.info(f"BSPM preprocessing complete: {len(overrides)} expert weight keys overridden")
-    return _OverrideStateDict(state_dict, overrides)
+        # (tiles_h, tiles_w, 32, 32) → (K, N) → (N, K) to restore HF layout
+        w_out = torch.from_numpy(w_tiled.transpose(0, 2, 1, 3).reshape(K, N).T.copy())
+        return w_out.to(w_orig.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +212,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run BSPM preprocessing only (no device / no conversion). Useful for timing and sanity checks.",
+        help="Validate BSPM files exist and are loadable (no device / no conversion).",
     )
     return parser
 
@@ -245,13 +241,13 @@ def main() -> None:
     # ── Derive bspm_root from bspm_dir ──────────────────────────────────────
     bspm_root = args.bspm_dir.parent
 
-    # ── BSPM preprocessing ──────────────────────────────────────────────────
-    t0 = time.time()
+    # ── Build lazy BSPM state dict ──────────────────────────────────────────
+    # Quantization is computed on demand in __getitem__; no preprocessing loop.
     logger.info(
-        f"Applying BSPM pre-quantization: variant={args.bspm_variant}, budget={args.bspm_budget} b/e, "
+        f"Building lazy BSPM state dict: variant={args.bspm_variant}, budget={args.bspm_budget} b/e, "
         f"layers {getattr(hf_config, 'first_k_dense_replace', 3)}–{hf_config.num_hidden_layers - 1}"
     )
-    bspm_state_dict = _preprocess_all_layers(
+    bspm_state_dict = _BsprnStateDict(
         state_dict,
         hf_config,
         args.bspm_dir,
@@ -260,10 +256,16 @@ def main() -> None:
         args.bspm_budget,
         bspm_root,
     )
-    logger.info(f"BSPM preprocessing done in {time.time() - t0:.1f}s")
 
     if args.dry_run:
-        logger.info("--dry-run: skipping device conversion. Done.")
+        logger.info("--dry-run: validating BSPM files …")
+        t0 = time.time()
+        missing = bspm_state_dict.validate_bspm_files(hf_config)
+        logger.info(
+            f"Validation complete in {time.time() - t0:.1f}s — "
+            f"{hf_config.num_hidden_layers - getattr(hf_config, 'first_k_dense_replace', 3) - missing} OK, "
+            f"{missing} missing"
+        )
         return
 
     # ── Device setup ────────────────────────────────────────────────────────

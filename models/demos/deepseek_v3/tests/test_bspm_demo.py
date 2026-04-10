@@ -27,7 +27,7 @@ Run
 ---
     MESH_DEVICE=TG \
     DEEPSEEK_V3_HF_MODEL=/proj_sw/... \
-    BSPM_RESULTS_DIR=/localdev/mtairum/bit_sculpt/results \
+    BSPM_RESULTS_DIR=/path/to/bit_sculpt/results \
     BSPM_MODEL_NAME=deepseek-r1-0528 \
     pytest models/demos/deepseek_v3/tests/test_bspm_demo.py -v
 """

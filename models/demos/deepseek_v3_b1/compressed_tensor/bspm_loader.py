@@ -44,8 +44,6 @@ except ImportError:
     # Fall back to common BitSculpt locations
     _COMMON_BITSCULPT_PATHS = [
         Path.home() / "bit_sculpt",
-        Path.home() / "mtairum" / "bit_sculpt",
-        Path("/home/models-team/mtairum/bit_sculpt"),
         Path(__file__).resolve().parent.parent.parent.parent.parent.parent / "bit_sculpt",
     ]
     _loaded = False
