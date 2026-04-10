@@ -38,14 +38,15 @@ inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tile
     // Update the DFB buffer information
     const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
 
+    local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +=
+        local_dfb_interface.stride_size_tiles;
     local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr += num_words;
-    local_dfb_interface.rd_entry_idx += (num_tiles * local_dfb_interface.stride_size_tiles);
-    if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr == local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_addr;
-        // rd_entry_idx is a global index, not per-tc for a given DFB. Only reset it when we reached the limit for the entire buffer, not just for the current tc.
-        if (local_dfb_interface.tc_idx == local_dfb_interface.num_tcs_to_rr - 1) {
-            local_dfb_interface.rd_entry_idx = 0;
-        }
+    if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr >=
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr =
+            local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_addr;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx =
+            local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_entry_idx;
     }
 
     local_dfb_interface.tc_idx = (local_dfb_interface.tc_idx + 1) % local_dfb_interface.num_tcs_to_rr;
