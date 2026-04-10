@@ -1,13 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
 import pytest
-
 import torch
-
 import ttnn
 import math
 
