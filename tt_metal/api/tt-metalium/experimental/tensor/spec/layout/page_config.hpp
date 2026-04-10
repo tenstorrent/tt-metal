@@ -18,7 +18,7 @@ namespace tt::tt_metal {
 
 class RowMajorPageConfig {
 public:
-    RowMajorPageConfig(const Tile& tile = Tile());
+    RowMajorPageConfig() = default;
 
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
@@ -38,13 +38,8 @@ public:
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile_); }
-
-private:
-    // This is currently needed for compatibility reasons.
-    // Each time tile is specified, a warning will be issued. This should be removed soon.
-    Tile tile_;
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 class TilePageConfig {

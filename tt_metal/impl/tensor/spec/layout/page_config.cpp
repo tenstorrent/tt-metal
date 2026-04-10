@@ -42,7 +42,7 @@ PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
         // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
-        config_ = RowMajorPageConfig(tile.value_or(Tile()));
+        config_ = RowMajorPageConfig();
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
     }
@@ -144,8 +144,6 @@ Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType) const 
 Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
-
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
