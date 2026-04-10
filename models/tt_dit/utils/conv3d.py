@@ -32,6 +32,14 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
+class ConvDims(NamedTuple):
+    """Target (T, H, W) dimensions for a single conv3d layer, used for blocking lookup."""
+
+    T: int = 0
+    H: int = 0
+    W: int = 0
+
+
 class StageHW(NamedTuple):
     H: int
     W: int
