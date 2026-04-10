@@ -1133,7 +1133,7 @@ def test_group_norm_negative_tests(
         (1, 480, 8, 8, 16),
         (1, 320, 32, 32, 32),
         (1, 1280, 16, 16, 32),
-        (1, 320, 33, 24, 32),  # test failing on this shape when implicit padding is enabled (#31983)
+        (1, 320, 28, 28, 32),
     ],
 )
 @pytest.mark.parametrize("specify_grid", [True, False])

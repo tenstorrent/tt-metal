@@ -13,8 +13,6 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
-TEST_PADDING_VALUE = -42
-
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if is_rmsnorm:
@@ -301,8 +299,6 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
     """
     torch.manual_seed(4402)
     inp_shape = (1, 1, 32, 128)
-    # inp_shape = (1,1,24,118) #test is passing on this non-multiple of 32 shape  with or without implicit padding (#31983)
-    # inp_shape = (1,1,24, 38) #test is failing on this non-multiple of 32 shape with or without implicit padding (#31983)
     epsilon = 1e-5
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
@@ -324,7 +320,6 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)  # (#31983)
     tt_stats = torch2tt_tensor(
         stats_tiles,
         tt_dtype=ttnn.bfloat16,
@@ -332,7 +327,6 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
-    tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)  # (#31983)
     # Valid layout for bias is (1, 1, n_sticks, 32) with n_sticks == input_width / 32; use half.
     tt_bad_beta = torch2tt_tensor(
         torch.randn(1, 1, 2, 32, dtype=torch.bfloat16),
