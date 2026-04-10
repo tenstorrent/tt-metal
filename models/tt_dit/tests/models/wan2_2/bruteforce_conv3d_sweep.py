@@ -22,6 +22,7 @@ Run via pytest:
 import json
 import math
 import pathlib
+import signal
 import statistics
 import time
 
@@ -39,6 +40,20 @@ from ....utils.test import line_params
 
 WARMUP = 2
 RUNS = 3
+# Per-combo wall-clock timeout. SIGALRM fires if ttnn.synchronize_device hangs
+# (device kernel OOM / deadlock). Saves partial results cleanly instead of
+# requiring a kill + tt-smi reset from outside.
+COMBO_TIMEOUT_S = 45
+
+
+class _ComboTimeout(Exception):
+    pass
+
+
+def _alarm_handler(signum, frame):
+    raise _ComboTimeout()
+
+
 TILE_SIZE = 2048  # bf16 tile = 32 * 32 * 2
 FP32_TILE_SIZE = 4096  # fp32 tile = 32 * 32 * 4
 TILE_HEIGHT = 32
@@ -161,7 +176,14 @@ def _t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / 4.0))  # 4 µs per M-row tilize
 
 
-def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
+def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_block=None, hw_product=None):
+    """Build sorted list of (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block) combos.
+
+    max_t_block: if set, caps T_block candidates at this value.
+                 BH 2x4 480p: use 7 (T=9+ causes device hangs on large spatial).
+    hw_product:  if set, only test combos where H_block*W_block == hw_product.
+                 BH 2x4 480p: use 32 (h*w=16/64 trigger hangs; 32 consistently wins).
+    """
     padded_cin = aligned_channels(C_in)
     padded_cout = aligned_channels(C_out)
     kT = kernel_size[0]
@@ -170,16 +192,20 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
     cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
     couts = [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out)]
 
-    # T_block candidates: divisors of T_out plus a handful of useful non-divisors.
+    # T_block candidates: divisors of T_out plus a range of useful non-divisors.
+    # Cap at 32 to cover larger T (e.g. T_out=64 for 4x32 720p cached t=16).
+    t_max = min(T_out, 32)
     t_blocks_set = {1}
     if kT > 1 and T_out > 0:
-        for t in range(2, min(T_out + 1, 32)):
+        for t in range(2, min(T_out + 1, t_max + 1)):
             if T_out % t == 0:
                 t_blocks_set.add(t)
-        for t in [3, 5, 6, 7, 9, 11, 13, 15, 21]:
-            if 1 < t <= T_out:
+        for t in [3, 5, 6, 7, 9, 11, 13, 15, 16, 21, 28, 32]:
+            if 1 < t <= T_out and t <= t_max:
                 t_blocks_set.add(t)
-        t_blocks_set = {t for t in t_blocks_set if t <= min(T_out, 21)}
+        t_blocks_set = {t for t in t_blocks_set if t <= t_max}
+    if max_t_block is not None:
+        t_blocks_set = {t for t in t_blocks_set if t <= max_t_block}
     t_blocks = sorted(t_blocks_set)
 
     # Spatial (H_block, W_block) candidates.
@@ -209,6 +235,8 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
                 continue
             for t_blk in t_blocks:
                 for h, w in hw:
+                    if hw_product is not None and h * w != hw_product:
+                        continue
                     if estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in) > L1_BUDGET:
                         skipped_l1 += 1
                         continue
@@ -240,23 +268,29 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
 
 
 def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc):
-    t0 = time.perf_counter()
-    o = ttnn.experimental.conv3d(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
-        config=cfg,
-        output_channels=C_out,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode="zeros",
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=ckc,
-    )
-    ttnn.synchronize_device(device)
-    us = (time.perf_counter() - t0) * 1e6
-    ttnn.deallocate(o)
+    old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.alarm(COMBO_TIMEOUT_S)
+    try:
+        t0 = time.perf_counter()
+        o = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            bias_tensor=tt_bias,
+            config=cfg,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=ckc,
+        )
+        ttnn.synchronize_device(device)
+        us = (time.perf_counter() - t0) * 1e6
+        ttnn.deallocate(o)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
     return us
 
 
@@ -285,13 +319,21 @@ def run_sweep(
     h_factor=1,
     w_factor=1,
     grid_size=None,
+    max_combos=500,
+    max_t_block=None,
+    hw_product=None,
 ):
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
     if grid_size is None:
         grid_size = device.compute_with_storage_grid_size()
 
-    combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores)
+    combos = build_all_blockings(
+        C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, max_t_block=max_t_block, hw_product=hw_product
+    )
+    if max_combos and len(combos) > max_combos:
+        print(f"Capping combos from {len(combos)} to {max_combos}")
+        combos = combos[:max_combos]
     print(f"Shape: C_in={C_in} C_out={C_out} kernel={kernel_size} T={T} H={H} W={W}")
     print(f"stride={stride} padding={padding} h_factor={h_factor} w_factor={w_factor}")
     print(f"Total valid combos: {len(combos)}")
@@ -435,6 +477,14 @@ def run_sweep(
                     flush=True,
                 )
 
+        except _ComboTimeout:
+            print(
+                f"  TIMEOUT ({cin},{cout},{t_blk},{h_blk},{w_blk}): device hung >{COMBO_TIMEOUT_S}s — stopping sweep",
+                flush=True,
+            )
+            results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": None, "status": "timeout"})
+            break  # device is in a bad state; save what we have and exit
+
         except Exception as e:
             fail_count += 1
             print(f"  FAIL ({cin},{cout},{t_blk},{h_blk},{w_blk}): {e}", flush=True)
@@ -541,4 +591,88 @@ def test_bruteforce_sweep_h2w4_480p_t7(
         padding=padding,
         h_factor=h_factor,
         w_factor=w_factor,
+        max_combos=500,
+        # BH 2x4 480p hang mitigations: T=9+ and h*w≠32 trigger device hangs
+        # on large-spatial temporal layers. Keep these as fixture-specific params
+        # so other sweeps (e.g. 4x32) can use the full search space.
+        max_t_block=7,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 6U 4x32, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
+# ---------------------------------------------------------------------------
+# Mesh: h_factor=4, w_factor=32.  Per-device spatial (unpadded):
+#   lat(23,5)  mid(46,10)  hi(92,20)  full(184,40)
+#
+# Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   lat(25,7)  mid(48,12)  hi(94,22)  full(186,42)
+# (3,1,1) kernels use no spatial padding: lat(23,5) mid(46,10)
+#
+# Cached T from compute_decoder_dims(720, 1280, 4, 32, 16, cached=True):
+#   stage 0 (cur_T=16): T_res=18, T_tconv=18, T_spatial=32
+#   stage 1 (cur_T=32): T_res=34, T_tconv=34, T_spatial=64
+#   stage 2 (cur_T=64): T_res=66, T_spatial=64  (no temporal upsample)
+#   stage 3 (cur_T=64): T_res=66
+#
+# Layers ordered most-to-least compute (T × H × W volume) so the biggest
+# wins are captured first and inform later heuristic tuning.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W32_720P_T16 = [
+    # (name,           C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
+    # --- stage 3 / 2 (largest spatial, cur_T=64) ---
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 42, 4, 32),  # T=66
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 42, 4, 32),  # T=66
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 186, 42, 4, 32),  # T=64
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 94, 22, 4, 32),  # T=66
+    # --- stage 1 (cur_T=32) ---
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 94, 22, 4, 32),  # T=64
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 12, 4, 32),  # T=34
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 12, 4, 32),  # T=34
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 34, 46, 10, 4, 32),  # T=34
+    # --- stage 0 (cur_T=16, small spatial) ---
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 32, 48, 12, 4, 32),  # T=32
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 7, 4, 32),  # T=18
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 7, 4, 32),  # T=18
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 18, 23, 5, 4, 32),  # T=18
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x32_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W32_720P_T16,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W32_720P_T16],
+)
+def test_bruteforce_sweep_h4w32_720p_t16(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w32_720p_t16/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        # BH hardware hang mitigations: h*w≠32 hangs (confirmed on all shapes).
+        # T=5+ hangs intermittently (large-C_in L1 pressure). T≤4 is safe.
+        # Sweet spot for 4x32 720p is T=3-4.
+        max_t_block=4,
+        hw_product=32,
     )
