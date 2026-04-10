@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -55,6 +57,15 @@ from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     shared_down_torch_for_cache,
     shuffle_dram_tiles,
 )
+
+# BSPM mixed-precision integration (optional — requires compressed_tensor package)
+try:
+    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+    HAS_BSPM_SUPPORT = True
+except ImportError:
+    HAS_BSPM_SUPPORT = False
 
 # MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
@@ -126,10 +137,36 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
     """Experts must be contiguous in DRAM; see MoERoutedExpertWeights.validate_contiguous_dram."""
     if len(tensors) < 2:
         return
-    if not ttnn.is_tensor_storage_on_device(tensors[0]):
+
+    # CompressedTensor wraps a ttnn.Tensor in .data — unwrap for device check.
+    first = tensors[0]
+    check_tensor = first.data if hasattr(first, "data") and isinstance(first.data, ttnn.Tensor) else first
+    if not ttnn.is_tensor_storage_on_device(check_tensor):
         return
-    stride = _moe_routed_expert_stride_bytes(tensors[0])
-    base = tensors[0].buffer_address()
+
+    if hasattr(first, "data") and isinstance(first.data, ttnn.Tensor):
+        # CompressedTensor path: stride is variable-size (packed bytes), not tile-formula.
+        # Deduce expected stride from the gap between first two experts.
+        addrs = [t.buffer_address() for t in tensors]
+        stride = addrs[1] - addrs[0]
+        if stride <= 0:
+            raise AssertionError(
+                f"{name} expert DRAM addresses not strictly increasing: addrs={addrs}. "
+                "Experts may overlap or be placed out-of-order."
+            )
+        for i in range(len(tensors)):
+            expected = addrs[0] + i * stride
+            actual = addrs[i]
+            if actual != expected:
+                raise AssertionError(
+                    f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
+                    f"expected buffer_address {expected}, got {actual} (deduced stride {stride} bytes per expert). "
+                    "Allocate all experts of one projection in one batch before the next projection."
+                )
+        return
+
+    stride = _moe_routed_expert_stride_bytes(first)
+    base = first.buffer_address()
     for i, t in enumerate(tensors):
         expected = base + i * stride
         actual = t.buffer_address()
@@ -965,6 +1002,130 @@ def prepare_shared_expert_weights(
     )
 
 
+def _shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
+    """Apply the same tile permutation as shuffle_dram_tiles to a BSPM assignment."""
+    tiles_h, tiles_w = assignment.shape
+    per_N_tiles = tiles_w // num_banks
+    K_tiles = tiles_h
+    num_tiles_per_shard = K_tiles * per_N_tiles
+
+    i = np.arange(num_tiles_per_shard)
+    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+
+    result = np.empty_like(assignment)
+    for b in range(num_banks):
+        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].ravel()
+        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(K_tiles, per_N_tiles)
+    return result
+
+
+def _compute_bspm_max_shard_bytes(
+    assignments: list[np.ndarray],
+    K: int,
+    N_padded: int,
+    num_banks: int,
+    tile_w: int = 32,
+) -> int:
+    """Return the maximum DRAM shard size (bytes) across a list of BSPM assignments.
+
+    Enforces uniform expert sizes so DRAMStreamingMatmul's fixed-stride expert
+    indexing (base_addr + expert_idx * stride_bytes) addresses correctly.
+
+    Tile byte sizes: 0=bfp8: 1088 B, 1=bfp4: 576 B, 2=bfp2: 320 B, 3=bfp0: 0 B
+    """
+    tile_bytes = np.array([1088, 576, 320, 0], dtype=np.int64)
+    tiles_per_bank_col = (N_padded // tile_w) // num_banks
+
+    max_shard = 0
+    for assignment in assignments:
+        tile_sizes = tile_bytes[assignment]
+        for b in range(num_banks):
+            col_start = b * tiles_per_bank_col
+            col_end = (b + 1) * tiles_per_bank_col
+            shard_bytes = int(tile_sizes[:, col_start:col_end].sum())
+            if shard_bytes > max_shard:
+                max_shard = shard_bytes
+
+    dram_align = ttnn._ttnn.bfp_utils.get_dram_alignment()
+    return ((max_shard + dram_align - 1) // dram_align) * dram_align
+
+
+def _prepare_moe_routed_experts_bspm(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    num_routed_experts: int,
+    num_banks: int,
+    bspm_data: dict,
+    *,
+    move_to_device: bool,
+) -> MoERoutedExpertWeights:
+    """Upload MoE routed experts as BSPM-encoded CompressedTensor objects."""
+    tile_w = 32
+    device_for_torch = device if move_to_device else None
+
+    proj_keys = [
+        [_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight") for e in range(num_routed_experts)],
+        [_key(layer_idx, f"mlp.experts.{e}.up_proj.weight") for e in range(num_routed_experts)],
+        [_key(layer_idx, f"mlp.experts.{e}.down_proj.weight") for e in range(num_routed_experts)],
+    ]
+
+    results: list[list] = [[], [], []]
+    for proj_idx, keys in enumerate(proj_keys):
+        sample_w = state_dict[keys[0]]
+        K, N = sample_w.shape[1], sample_w.shape[0]
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        per_core_N = N_padded // num_banks
+
+        dram_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                )
+            }
+        )
+        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+        tiles_h = K // tile_w
+        tiles_w_count = N_padded // tile_w
+        all_assignments = [
+            bspm_data["codes"][e, proj_idx].reshape(tiles_h, tiles_w_count) for e in range(num_routed_experts)
+        ]
+        min_shard_bytes = _compute_bspm_max_shard_bytes(all_assignments, K, N_padded, num_banks, tile_w)
+        logger.debug("  proj_idx={}: uniform DRAM shard = {} B", proj_idx, min_shard_bytes)
+
+        for e, key in enumerate(keys):
+            w = state_dict[key].T.contiguous()
+            if N_padded != N:
+                w = torch.nn.functional.pad(w, (0, N_padded - N))
+
+            w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks).squeeze(0)
+            assignment = _shuffle_dram_assignment(all_assignments[e], num_banks)
+
+            ct = CompressedTensor.from_bspm(
+                w_shuffled.float(),
+                assignment,
+                device=device_for_torch,
+                memory_config=mem_config,
+                min_shard_bytes=min_shard_bytes,
+            )
+            results[proj_idx].append(ct)
+
+            if (e + 1) % 32 == 0:
+                logger.info("  proj_idx={}: uploaded {}/{} experts (BSPM)", proj_idx, e + 1, num_routed_experts)
+
+    routed = MoERoutedExpertWeights(
+        routed_gate_proj=results[0],
+        routed_up_proj=results[1],
+        routed_down_proj=results[2],
+    )
+    if move_to_device:
+        routed.validate_contiguous_dram()
+    return routed
+
+
 def prepare_routed_expert_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -974,13 +1135,53 @@ def prepare_routed_expert_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    bspm_dir: Path | None = None,
+    bspm_model_name: str | None = None,
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
-    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts)."""
+    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
+
+    When ``bspm_dir`` is provided and a BSPM file exists for this layer, routed MoE experts
+    are encoded as mixed-precision CompressedTensor objects instead of uniform bfloat4_b.
+    Falls back to uniform bfloat4_b if the file is not found or BSPM support is unavailable.
+
+    Note: BSPM experts bypass the TensorCache (disk caching not yet supported for CompressedTensor).
+    """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
+        # --- BSPM path ---
+        bspm_data = None
+        if HAS_BSPM_SUPPORT and bspm_dir is not None and bspm_model_name is not None:
+            bspm_path = (
+                Path(bspm_dir)
+                / bspm_model_name
+                / f"layer_{layer_idx}"
+                / "precision_eval"
+                / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
+            )
+            if bspm_path.exists():
+                logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+                bspm_data = load_bspm_for_layer(str(bspm_path))
+                logger.info("  BSPM mixed-precision compression for {} experts", bspm_data["n_experts"])
+            else:
+                logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
+
+        if bspm_data is not None:
+            return _prepare_moe_routed_experts_bspm(
+                device=device,
+                state_dict=state_dict,
+                layer_idx=layer_idx,
+                num_routed_experts=num_routed_experts,
+                num_banks=num_banks,
+                bspm_data=bspm_data,
+                move_to_device=move_to_device,
+            )
+
+        # --- Uniform bfloat4_b path (TensorCache-backed) ---
         tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
@@ -1175,6 +1376,10 @@ def prepare_moe_layer_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    bspm_dir: Path | None = None,
+    bspm_model_name: str | None = None,
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
@@ -1198,6 +1403,10 @@ def prepare_moe_layer_weights(
         num_routed_experts=num_routed_experts,
         move_to_device=move_to_device,
         cache_config=cache_config,
+        bspm_dir=bspm_dir,
+        bspm_model_name=bspm_model_name,
+        bspm_variant=bspm_variant,
+        bspm_budget=bspm_budget,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None

@@ -181,6 +181,36 @@ def _create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip warm; only run the double-load check (use on an already-populated cache-root).",
     )
+    parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "BitSculpt results directory containing BSPM files (e.g. /path/to/bit_sculpt/results). "
+            "When provided, routed MoE expert weights use BSPM-driven mixed-precision "
+            "CompressedTensor instead of uniform bfloat4_b.  Falls back to bfloat4_b for "
+            "layers whose BSPM file is not found."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-variant",
+        default="B",
+        help="BitSculpt allocation variant letter (default: B)",
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert (default: 3.5)",
+    )
+    parser.add_argument(
+        "--bspm-model",
+        default=None,
+        help=(
+            "BitSculpt model subdirectory name inside --bspm-dir "
+            "(e.g. deepseek-r1-0528). Required when --bspm-dir is set."
+        ),
+    )
     return parser
 
 
@@ -284,6 +314,10 @@ def _warm(
                         num_routed_experts=NUM_ROUTED_EXPERTS,
                         move_to_device=True,
                         cache_config=cfg,
+                        bspm_dir=args.bspm_dir,
+                        bspm_model_name=args.bspm_model,
+                        bspm_variant=args.bspm_variant,
+                        bspm_budget=args.bspm_budget,
                     )
                     logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - t0)
             elif mode == "embedding":
