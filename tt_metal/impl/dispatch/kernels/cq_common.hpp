@@ -33,8 +33,10 @@ struct CQWriteInterface {
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
-FORCE_INLINE
-uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) { return (v + (pow2_size - 1)) & ~(pow2_size - 1); }
+template <typename T>
+FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
+    return (v + (pow2_size - 1)) & ~static_cast<T>(pow2_size - 1);
+}
 
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
@@ -190,12 +192,12 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
 #if defined(ARCH_BLACKHOLE)
     noc_async_writes_flushed();  // ensure inline_l1_src_addr is not overwritten
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     *inline_l1_src_addr_ptr = val;
     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
-        inline_l1_src_addr, dst_addr, 4);
+        static_cast<uint32_t>(inline_l1_src_addr), dst_addr, 4);
 #else
     if constexpr (wait) {
         WAYPOINT("NISW");
@@ -221,7 +223,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 #if defined(ARCH_BLACKHOLE)
     // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
     // See comment in `noc_inline_dw_write` for more details
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
@@ -398,7 +400,7 @@ public:
 
     // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
-    uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
 protected:
     FORCE_INLINE void init() {
@@ -436,7 +438,7 @@ protected:
         }
 
         // Set a fence to limit how much is processed at once
-        uint32_t limit = (block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size;
+        uint32_t limit = static_cast<uint32_t>((block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size);
         uint32_t available = upstream_count_ - local_count_;
         uint32_t usable = (available > limit) ? limit : available;
 
@@ -447,9 +449,9 @@ protected:
     }
 
     // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
-    uint32_t cb_fence_{0};
+    uintptr_t cb_fence_{0};
     // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
-    uint32_t block_next_start_addr_[cb_blocks]{};
+    uintptr_t block_next_start_addr_[cb_blocks]{};
     // Current read block index within the circular buffer.
     uint32_t rd_block_idx_{0};
 
@@ -484,7 +486,7 @@ public:
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
-    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
+    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -505,7 +507,7 @@ public:
     // cmd_ptr is set to the base address after on_boundary is called).
     // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
     template <typename OnBoundaryFn>
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uintptr_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
             const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
             on_boundary(will_wrap);
@@ -518,10 +520,10 @@ public:
         return this->acquire_pages();
     }
 
-    FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
+    FORCE_INLINE void release_all_pages(uintptr_t curr_ptr) {
         release_block_pages();
-        uint32_t pages_to_release =
-            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size);
+        uint32_t pages_to_release = static_cast<uint32_t>(
+            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size));
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
@@ -569,7 +571,7 @@ public:
 
     // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
     // pages to writer.
-    FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
+    FORCE_INLINE uint32_t get_cb_page(uintptr_t& cmd_ptr) {
         // Strided past the data that has arrived, get the next page
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
             if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -583,7 +585,7 @@ public:
     }
 
     // Returns how much data is available. Will block until data is available.
-    FORCE_INLINE uint32_t wait_for_available_data(uint32_t& cmd_ptr) {
+    FORCE_INLINE uint32_t wait_for_available_data(uintptr_t& cmd_ptr) {
         if (this->available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
@@ -591,11 +593,11 @@ public:
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
-    FORCE_INLINE void consumed_data(uint32_t& cmd_ptr, uint32_t length) {
+    FORCE_INLINE void consumed_data(uintptr_t& cmd_ptr, uint32_t length) {
         // This is ugly: get_cb_page code can wrap and this can wrap
         // They peacefully coexist because we won't wrap there and here at once
         if (cmd_ptr + length >= cb_end) {
-            length -= cb_end - cmd_ptr;
+            length -= static_cast<uint32_t>(cb_end - cmd_ptr);
             cmd_ptr = cb_base;
             if (this->cb_fence_ == cb_end) {
                 // We hit the nail on the head, wrap the fence

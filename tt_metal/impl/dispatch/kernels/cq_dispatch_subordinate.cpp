@@ -24,12 +24,12 @@
 // Reads cannot be issued by dispatch_s.
 constexpr uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
 constexpr uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
-constexpr uint32_t cb_base = CB_BASE;
+constexpr uintptr_t cb_base = CB_BASE;
 constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
-constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
+constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher =
@@ -50,10 +50,10 @@ constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
-constexpr uint32_t cb_end = cb_base + cb_size;
+constexpr uintptr_t cb_end = cb_base + cb_size;
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
-static uint32_t cmd_ptr;
+static uintptr_t cmd_ptr;
 
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
@@ -140,8 +140,8 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
-    volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
     while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
     WAYPOINT("WCD");
@@ -237,7 +237,9 @@ void process_go_signal_mcast_cmd() {
         aligned_go_signal_storage[storage_offset] = go_signal_value;
 
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
+            dst_noc_addr_multicast,
+            sizeof(uint32_t));
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
@@ -271,7 +273,8 @@ void process_go_signal_mcast_cmd() {
 
     for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
-        noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
+        noc_async_write_one_packet(
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
 
     update_worker_completion_count_on_dispatch_d();
@@ -288,8 +291,8 @@ void process_dispatch_s_wait_cmd() {
         distributed_dispatcher);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
-    volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
@@ -322,7 +325,7 @@ void set_go_signal_noc_data() {
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 void kernel_main() {
@@ -365,7 +368,7 @@ void kernel_main() {
                 ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
-        ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
+        ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.
