@@ -47,6 +47,7 @@ class Attention(Module):
         sdpa_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
         sdpa_exp_approx_mode: bool = False,
         sdpa_fp32_dest_acc_en: bool = False,
+        linear_math_fidelity=None,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -68,7 +69,12 @@ class Attention(Module):
         # FSDP: shard weights on sequence parallel axis to reduce memory
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis)
+        common_args = dict(
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            math_fidelity=linear_math_fidelity,
+        )
 
         self.sdpa_worker_grid = (
             self.mesh_device.compute_with_storage_grid_size().x,

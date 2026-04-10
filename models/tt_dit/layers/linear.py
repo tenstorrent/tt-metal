@@ -12,7 +12,7 @@ from ..utils.matmul import get_matmul_config
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.LoFi,
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
@@ -22,7 +22,16 @@ class Linear(Module):
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation_fn=None,
+        dtype=ttnn.bfloat16,
+        mesh_device=None,
+        math_fidelity=None,
+    ):
         super().__init__()
 
         self.in_features = in_features
@@ -37,13 +46,9 @@ class Linear(Module):
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         self.mesh_device = mesh_device
 
-        """
-        NOTE: This is the special config which attains good correctness
-        HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
-        """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=math_fidelity or MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -111,6 +116,7 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        math_fidelity=None,
     ):
         super().__init__()
 
@@ -136,7 +142,7 @@ class ColParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=math_fidelity or MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -242,6 +248,7 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        math_fidelity=None,
     ):
         super().__init__()
 
@@ -257,7 +264,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=math_fidelity or MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

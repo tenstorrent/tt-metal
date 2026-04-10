@@ -45,6 +45,7 @@ class TransformerBlock(Module):
         sdpa_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
         sdpa_exp_approx_mode: bool = False,
         sdpa_fp32_dest_acc_en: bool = False,
+        linear_math_fidelity=None,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -73,6 +74,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            math_fidelity=linear_math_fidelity,
         )
 
         self.norm1_norm = DistributedLayerNorm(
@@ -94,6 +96,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            math_fidelity=linear_math_fidelity,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -123,6 +126,7 @@ class TransformerBlock(Module):
             sdpa_math_fidelity=sdpa_math_fidelity,
             sdpa_exp_approx_mode=sdpa_exp_approx_mode,
             sdpa_fp32_dest_acc_en=sdpa_fp32_dest_acc_en,
+            linear_math_fidelity=linear_math_fidelity,
             is_fsdp=is_fsdp,
         )
 
@@ -144,6 +148,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            math_fidelity=linear_math_fidelity,
         )
 
         self.norm2_context = None
@@ -167,6 +172,7 @@ class TransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
+                math_fidelity=linear_math_fidelity,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
