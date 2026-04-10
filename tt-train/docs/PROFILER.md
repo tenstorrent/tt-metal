@@ -1,6 +1,7 @@
 # TT‑Metal Profiler Guide
 
 > **Quick start:**
+>
 > 1. Build with `build_metal.sh`
 > 2. Run `tt-train/run_profiler.sh` with the appropriate binary
 > 3. Open `tt-train/notebooks/profiler_results.ipynb` notebook and run using the generated `ops_perf_results_<timestamp>.csv`
@@ -13,11 +14,17 @@
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Prerequisites](#prerequisites)
-  - [Build \& Install](#build--install)
+  - [Build  Install](#build--install)
   - [Running the Profiler](#running-the-profiler)
     - [What do those variables mean?](#what-do-those-variables-mean)
   - [Output Artifacts](#output-artifacts)
   - [Analysing Results](#analysing-results)
+  - [Profiler Markers](#profiler-markers)
+    - [API](#api)
+    - [Naming convention](#naming-convention)
+    - [Insertion patterns](#insertion-patterns)
+    - [Quick reference](#quick-reference)
+    - [Avoiding common pitfalls](#avoiding-common-pitfalls)
   - [Problems](#problems)
 
 ---
@@ -33,12 +40,14 @@
 
 ## Prerequisites
 
-| Requirement  | Version    | Notes                                             |
-| ------------ | ---------- | ------------------------------------------------- |
-| Ubuntu / WSL | 20.04 +    | Tested on 22.04 as well                           |
+
+| Requirement  | Version    | Notes                                                |
+| ------------ | ---------- | ---------------------------------------------------- |
+| Ubuntu / WSL | 20.04 +    | Tested on 22.04 as well                              |
 | Python       | 3.9 +      | `./create_venv.sh && source python_env/bin/activate` |
-| CMake        | ≥ 3.20     |                                                   |
-| Ninja        | (optional) | Faster parallel builds                            |
+| CMake        | ≥ 3.20     |                                                      |
+| Ninja        | (optional) | Faster parallel builds                               |
+
 
 > **Tip:** GPU drivers / SDK versions follow the standard TT‑Metal requirements—see the main project README.
 
@@ -52,11 +61,13 @@
 
 The flags do the following:
 
-| Flag               | Purpose                                                   |
-| ------------------ | --------------------------------------------------------- |
-| `-b Release`       | Compile with full optimisation.                           |
+
+| Flag                   | Purpose                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| `-b Release`           | Compile with full optimisation.                                                        |
 | ~~`--enable-profile`~~ | *(No longer needed)* Injects profiler hooks into every kernel, now enabled by default. |
-| `--build-tt-train` | Builds the `tt-train` helper used by the NanoGPT example. |
+| `--build-tt-train`     | Builds the `tt-train` helper used by the NanoGPT example.                              |
+
 
 After completion the relevant binaries live under `${TT_METAL_HOME}/build/tt-train/`.
 
@@ -87,13 +98,15 @@ Alternatively you can use this script, passing your full training command (binar
 
 ### What do those variables mean?
 
+
 | Variable                                 | Default | Description                                                                         |
 | ---------------------------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `TT_METAL_DPRINT_CORES`                  | `0,0`   | DPRINT and profiler cannot be enabled at the same time. |
+| `TT_METAL_DPRINT_CORES`                  | `0,0`   | DPRINT and profiler cannot be enabled at the same time.                             |
 | `TT_METAL_WATCHER_NOINLINE`              | `0`     | Forces watchdog helpers to stay **out‑of‑line** for clearer flame graphs.           |
 | `TT_METAL_WATCHER_DEBUG_DELAY`           | `0` ms  | Extra delay (ms) after each kernel for debugger attachment.                         |
 | `TT_METAL_READ/WRITE_DEBUG_DELAY_CORES`  | `"0,0"` | Comma‑separated *(x,y)* coordinates of cores for which to inject read/write delays. |
 | `TT_METAL_READ/WRITE_DEBUG_DELAY_RISCVS` | `BR`    | RISC‑V side delays. Use `BR` for **B**oot & **R**untime, `B`, `R`, or leave empty.  |
+
 
 > **Can I omit some options?** Yes—only set what you actually need; unset variables fallback to defaults.
 
@@ -105,17 +118,20 @@ After the run finishes, all profiler outputs are stored under:
 `${TT_METAL_HOME}/generated/profiler/reports/<timestamp>/`
 
 The directory contains the following files:
-| File | Description |
-|------|--------------|
+
+
+| File                               | Description                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `ops_perf_results_<timestamp>.csv` | The file contains one row per kernel launch with timestamps, core coordinates, cycle counts etc. |
-| `profile_log_device.csv` | Device-side profiling data captured during execution. |
-| `tracy_profile_log_host.tracy` | Host-side Tracy profiler log, which can be opened with the Tracy GUI.|
+| `profile_log_device.csv`           | Device-side profiling data captured during execution.                                            |
+| `tracy_profile_log_host.tracy`     | Host-side Tracy profiler log, which can be opened with the Tracy GUI.                            |
+
 
 Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my_custom_marker")`
 
 ---
 
-## Analysing Results
+##  Analysing Results
 
 Install pandas, matplotlib and ipywidgets to use companion jupyter notebook. Open the companion notebook and point it to your freshly‑generated CSV:
 
@@ -129,6 +145,176 @@ The notebook walks you through:
 2. Analyzing anomalies inside metrics per operation
 
 Feel free to fork / extend the notebook for your own workflows.
+
+---
+
+## Profiler Markers
+
+Profiler markers let you annotate regions of your model with `[START]`/`[END]` tags
+that appear as noop device ops in the CSV trace. The companion notebook uses these
+to build a hierarchical flamegraph of your training step.
+
+### API
+
+```python
+from ttml.common.profiler_utils import profiler_marker
+```
+
+`**profiler_marker(x, name, dump_results=False)**`
+
+
+| Argument       | Description                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| `x`            | Autograd tensor to pass through, or `None` for a forward-only marker.                            |
+| `name`         | Marker name. Automatically prefixed with `[FWD]` or `[BWD]`.                                     |
+| `dump_results` | If `True`, flush device profiling data to disk. Expensive — use sparingly (e.g. once per block). |
+
+
+Returns a **new autograd tensor** wrapping the same device data. The caller
+**must use the returned value** — discarding it drops the backward node.
+
+- **Forward:** immediately fires a device noop tagged `[FWD] <name>`.
+- **Backward:** fires `[BWD] <name>` when gradients reach this node.
+- `**x=None`:** forward-only marker (no backward node). Use for training-loop
+events like `profiler_marker(None, "forward_pass_done")`.
+
+### Naming convention
+
+Use `[START]` / `[END]` prefixes so the notebook can pair them into zones:
+
+```python
+x = profiler_marker(x, "[START] [MyModule] SomeSection")
+x = some_computation(x)
+x = profiler_marker(x, "[END] [MyModule] SomeSection")
+```
+
+Zones with the same name are accumulated — you don't need per-layer indices for
+inner components. The outermost loop can use indices if needed:
+
+```python
+for i, block in enumerate(self.blocks):
+    x = profiler_marker(x, "[START] [Model] Block")
+    x = block(x, mask)
+    x = profiler_mark er(x, "[END] [Model] Block")
+```
+
+### Insertion patterns
+
+#### Sequential pipeline (single consumer)
+
+When a tensor flows through one operation at a time, chaining on `x` is safe:
+
+```python
+h = profiler_marker(h, "[START] [Block] Attn")
+h = self.attn(h, mask)
+h = profiler_marker(h, "[END] [Block] Attn")
+```
+
+Forward trace: `[FWD] START → attn ops → [FWD] END`
+Backward trace: `[BWD] END → attn backward → [BWD] START`
+
+#### Parallel branches (multiple consumers of one input)
+
+When the same input feeds multiple independent paths, each `[START]` marker must
+**branch from the original tensor** into a separate variable. Do **not** chain
+`x = profiler_marker(x, ...)` repeatedly — that builds a linear autograd chain
+and backward markers will fire in the wrong zones.
+
+```python
+# CORRECT — independent branches from x_in:
+x_in = profiler_marker(x, "[START] [MoE]")
+
+x_r = profiler_marker(x_in, "[START] [MoE] Routing")
+logits = self.gate(x_r)
+scores = profiler_marker(scores, "[END] [MoE] Routing")
+
+x_e = profiler_marker(x_in, "[START] [MoE] Experts")
+# ... expert loop ...
+output = profiler_marker(output, "[END] [MoE] Experts")
+
+x_s = profiler_marker(x_in, "[START] [MoE] SharedExp")
+shared = self.shared_experts(x_s)
+shared = profiler_marker(shared, "[END] [MoE] SharedExp")
+```
+
+```python
+# WRONG — linear chain corrupts backward zone boundaries:
+x = profiler_marker(x, "[START] [MoE] Routing")
+x = profiler_marker(x, "[START] [MoE] Experts")
+x = profiler_marker(x, "[START] [MoE] SharedExp")
+```
+
+Why: each `profiler_marker(x, ...)` wraps `x` with a new autograd node. Chaining
+means backward for SharedExp must flow through Experts and Routing backward nodes
+first, causing their `[BWD]` markers to fire inside the wrong zone.
+
+#### Loop over the same input (fan-out)
+
+When a loop runs N computations on the same input, each per-iteration `[START]`
+must branch from a single parent — **not** chain through `x`:
+
+```python
+# CORRECT — all experts branch from x_e:
+x_e = profiler_marker(x_in, "[START] [MoE] Experts")
+for i in range(num_experts):
+    x_exp = profiler_marker(x_e, "[START] [MoE] Expert")
+    out = self.experts[i](x_exp)
+    out = profiler_marker(out, "[END] [MoE] Expert")
+    # ... accumulate ...
+output = profiler_marker(output, "[END] [MoE] Experts")
+```
+
+```python
+# WRONG — chains x through every iteration:
+for i in range(num_experts):
+    x = profiler_marker(x, "[START] [MoE] Expert")
+    out = self.experts[i](x)
+    out = profiler_marker(out, "[END] [MoE] Expert")
+```
+
+Why: the wrong version builds `x_e → exp0 → exp1 → ... → expN`. Any later
+consumer of `x` (e.g. shared experts) would drag all N expert backward nodes
+into its backward path.
+
+#### Forward-only markers (training loop)
+
+For markers outside the model's autograd graph, pass `None`:
+
+```python
+profiler_marker(None, "dataloader_step_done")
+loss = model(tokens, mask)
+profiler_marker(None, "forward_pass_done")
+loss.backward()
+profiler_marker(None, "backward_pass_done")
+optimizer.step()
+profiler_marker(None, "optimizer_step_done")
+```
+
+These are unprefixed (no `[FWD]`/`[BWD]`) and define the top-level training
+phases in the flamegraph.
+
+### Quick reference
+
+
+| Situation                     | Pattern                                | Variable          |
+| ----------------------------- | -------------------------------------- | ----------------- |
+| Single pipeline               | `x = profiler_marker(x, ...)`          | Reuse `x`         |
+| Multiple paths from one input | `x_a = profiler_marker(x, ...)`        | Separate vars     |
+| Loop over same input          | `x_i = profiler_marker(x_parent, ...)` | Per-iteration var |
+| Training loop event           | `profiler_marker(None, ...)`           | No tensor         |
+
+
+### Avoiding common pitfalls
+
+- **Shared modules in multiple contexts:** if the same module (e.g. `DeepSeekMLP`)
+is called from both a dense FFN path and as a shared expert inside MoE, do not
+put markers inside the shared module. The same marker name would fire in
+different nesting contexts, and the visualization cannot place them correctly.
+Instead, put markers at each call site.
+- `**dump_results=True`:** flushes profiler data to disk. Use at most once per
+block to prevent device memory overflow, typically on the outermost END marker.
+- **Integer tensors:** markers on non-float tensors (e.g. token IDs) are
+forward-only — the function detects integer dtypes and skips the backward node.
 
 ---
 
