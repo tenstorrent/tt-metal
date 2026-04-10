@@ -116,7 +116,7 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
         kernel_path,
         core_ranges,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = math_approx_mode,
             .compile_args = compile_time_args});
