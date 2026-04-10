@@ -23,6 +23,10 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
+namespace CaDiCaL {
+class Solver;
+}
+
 namespace tt::tt_fabric {
 
 /**
@@ -861,6 +865,44 @@ bool topology_sat_search(
     ConnectionValidationMode validation_mode,
     bool quiet_mode,
     TopologySearchState& state);
+
+/**
+ * @brief Bookkeeping for hard CNF encoding of topology subgraph isomorphism constraints (SAT backend).
+ *
+ * Encodes: domain (required + forbidden via ConstraintIndexData::is_valid_mapping), global degree ≥ target
+ * degree (matching DFS hard checks), injective use of global nodes, target-edge → global-edge preservation,
+ * same-rank target-group → matching global rank labels, and cardinality (at-least-k over allowed pair literals).
+ * In ConnectionValidationMode::STRICT, per-edge channel capacity (parallel links) is enforced in the adjacency
+ * literals alongside graph adjacency. Residual channel / warning behavior in RELAXED remains with MappingValidator.
+ */
+struct TopologySatHardEncoding {
+    bool trivial_unsat = false;
+    std::string trivial_reason;
+    /// For each target index, parallel entries: global index and CaDiCaL positive literal (var = true ⇒ pick).
+    std::vector<std::vector<size_t>> allowed_global_idx;
+    std::vector<std::vector<int>> assign_lit;
+};
+
+/**
+ * @brief Push hard clauses onto `solver` and fill `enc` with variable layout for decode.
+ * @return false if trivially UNSAT (empty domain for some target); true if clauses were added (or nothing to do).
+ */
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_hard_constraints(
+    CaDiCaL::Solver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+
+/**
+ * @brief Read a satisfying CaDiCaL model into `mapping_out` (mapping[target_idx] = global_idx, or -1).
+ * @pre solver.solve() returned SATISFIABLE and encode succeeded with the same `enc`.
+ * @note Non-const solver: CaDiCaL::Solver::val is not const-qualified.
+ */
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_decode_hard_solution(
+    CaDiCaL::Solver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
