@@ -278,11 +278,17 @@ def test_attention_decode_tp(layer_idx, mesh_device):
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
     # TT cache — each device has local_kv_heads. Fill each device's cache separately.
+    # When kv_replicated (num_kv_heads < TP), each device has ALL KV heads.
     k_cache_tt, v_cache_tt = tt_attn.kv_cache
-    local_kv = config.num_key_value_heads // mesh_config.tp
+    kv_replicated = config.num_key_value_heads < mesh_config.tp
+    local_kv = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // mesh_config.tp
     for dev_idx in range(mesh_config.tp):
-        k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
-        v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+        if kv_replicated:
+            k_local = k_data.to(torch.bfloat16)
+            v_local = v_data.to(torch.bfloat16)
+        else:
+            k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+            v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
         dev_k_cache = ttnn.get_device_tensors(k_cache_tt)[dev_idx]
         dev_v_cache = ttnn.get_device_tensors(v_cache_tt)[dev_idx]
         k_fill = ttnn.from_torch(k_local, device=dev_k_cache.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
