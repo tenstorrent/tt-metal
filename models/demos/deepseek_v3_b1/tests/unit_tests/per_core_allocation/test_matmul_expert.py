@@ -15,7 +15,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import ExpertKernel, create_dram_expert_tensors_multi_device
+from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
+    ExpertKernel,
+    create_dram_expert_tensors_multi_device,
+    create_expert_selection_meta,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
 
@@ -481,7 +485,7 @@ def _build_dram_experts(
     Kt,
     tile_w,
 ):
-    """Build DRAM CompressedTensors and dram_device_data for the kernel."""
+    """Build DRAM CompressedTensors and dram_meta_tensors for the kernel."""
     dram_grid_size = mesh_device.dram_grid_size()
     dram_grid = ttnn.CoreRangeSet(
         [
@@ -512,17 +516,17 @@ def _build_dram_experts(
         logger.info(f"  DRAM expert {eidx} uploaded (packed idx {len(dram_cts) - 1})")
 
     num_subblocks_k = Kt // subblock_k
-    dram_device_data = create_dram_expert_tensors_multi_device(
+    dram_meta_tensors = create_dram_expert_tensors_multi_device(
         mesh_device,
         dram_cts,
         subblock_k,
         num_subblocks_k,
         dram_per_core_N,
-        cores_per_bank=cores_per_dram_bank,
+        cores_per_dram_bank=cores_per_dram_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
     )
-    return dram_cts, dram_device_data
+    return dram_cts, dram_meta_tensors
 
 
 def _compute_dram_matmul_params(
@@ -614,6 +618,43 @@ def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_c
     )
 
 
+def _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags):
+    """Build per-device expert selection metadata (is_dram + table_idx) for expert dispatch."""
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+    a_per_device = ttnn.get_device_tensors(a_tensor)
+    expert_selection_meta = {}
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            coord = ttnn.MeshCoordinate(row, col)
+            dev_idx = row * mesh_cols + col
+            core_grid = a_per_device[dev_idx].memory_config().shard_spec.grid
+            all_cores_dev = ttnn.corerange_to_cores(core_grid)
+            expert_selection_meta[coord] = create_expert_selection_meta(
+                mesh_device,
+                all_cores_dev,
+                is_dram_flags,
+                len(is_dram_flags),
+                device_coord=coord,
+            )
+    return expert_selection_meta
+
+
+def _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, sram_k_per_core, sram_per_core_n, Kt):
+    """Build SRAM format tensors and K-offset core values."""
+    from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors
+
+    num_tiles = sram_k_per_core * sram_per_core_n
+    sram_fmt_tensors = create_expert_fmt_tensors(sram_cts, mesh_device, sram_core_grid, num_tiles)
+
+    sram_k_offsets = None
+    if sram_k_per_core < Kt:
+        sram_cores = ttnn.corerange_to_cores(sram_core_grid)
+        n_parallel = len(sram_cores) * sram_k_per_core // Kt
+        sram_k_offsets = [(sram_cores[i], (i // n_parallel) * sram_k_per_core) for i in range(len(sram_cores))]
+
+    return sram_fmt_tensors, sram_k_offsets
+
+
 # ---------------------------------------------------------------------------
 # Variant runners — each does common setup, builds SRAM CTs + output, runs
 # the kernel, and validates.
@@ -680,7 +721,7 @@ def _run_standard(
         num_devices,
     )
     dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
-    dram_cts, dram_device_data = _build_dram_experts(
+    dram_cts, dram_meta_tensors = _build_dram_experts(
         dram_expert_ids,
         torch_b_all,
         assigner,
@@ -754,6 +795,10 @@ def _run_standard(
         dram_core_grid,
         tile_w,
     )
+    expert_selection_meta = _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags)
+    sram_fmt_tensors, sram_k_offsets = (
+        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt) if has_sram else ({}, None)
+    )
     result = ExpertKernel.op(
         a_tensor,
         sram_cts,
@@ -763,14 +808,17 @@ def _run_standard(
         is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
-        sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
-        dram_device_data=dram_device_data,
-        cores_per_bank=cores_per_dram_bank,
-        accum_experts=False,
-        sram_per_core_n=sram_per_core_N,
+        dram_meta_tensors=dram_meta_tensors,
         dram_per_core_n=dram_per_core_N,
-        sram_k_per_core=0,
+        expert_selection_meta=expert_selection_meta,
+        has_sram=has_sram,
+        sram_core_grid=sram_core_grid,
+        sram_fmt_tensors=sram_fmt_tensors,
+        sram_k_offsets=sram_k_offsets,
+        cores_per_dram_bank=cores_per_dram_bank,
+        sram_per_core_n=sram_per_core_N,
+        sram_k_per_core=Kt,
         sram_output_tensor=sram_out_tensor,
         dram_fuse_silu=dram_fuse_silu,
     )
@@ -859,7 +907,7 @@ def _run_accum(
         num_devices,
     )
     dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
-    dram_cts, dram_device_data = _build_dram_experts(
+    dram_cts, dram_meta_tensors = _build_dram_experts(
         dram_expert_ids,
         torch_b_all,
         assigner,
@@ -930,6 +978,10 @@ def _run_accum(
         dram_core_grid,
         tile_w,
     )
+    expert_selection_meta = _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags)
+    sram_fmt_tensors, sram_k_offsets = (
+        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt) if has_sram else ({}, None)
+    )
     result = ExpertKernel.op(
         a_tensor,
         sram_cts,
@@ -939,16 +991,19 @@ def _run_accum(
         is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
-        sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
-        dram_device_data=dram_device_data,
-        cores_per_bank=cores_per_dram_bank,
+        dram_meta_tensors=dram_meta_tensors,
+        dram_per_core_n=dram_per_core_N,
+        expert_selection_meta=expert_selection_meta,
+        has_sram=has_sram,
+        sram_core_grid=sram_core_grid,
+        sram_fmt_tensors=sram_fmt_tensors,
+        sram_k_offsets=sram_k_offsets,
+        cores_per_dram_bank=cores_per_dram_bank,
         accum_experts=True,
         sram_per_core_n=sram_per_core_N,
-        dram_per_core_n=dram_per_core_N,
-        sram_k_per_core=0,
+        sram_k_per_core=Kt,
         sram_output_tensor=sram_out_tensor,
-        dram_fuse_silu=False,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1034,7 +1089,7 @@ def _run_slice_k(
         num_devices,
     )
     dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
-    dram_cts, dram_device_data = _build_dram_experts(
+    dram_cts, dram_meta_tensors = _build_dram_experts(
         dram_expert_ids,
         torch_b_all,
         assigner,
@@ -1100,6 +1155,15 @@ def _run_slice_k(
         dram_core_grid,
         tile_w,
     )
+    expert_selection_meta = _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags)
+    sram_fmt_tensors, sram_k_offsets = _build_sram_fmt_data(
+        sram_cts,
+        mesh_device,
+        sram_core_grid,
+        sram_k_per_core,
+        sram_per_core_N,
+        Kt,
+    )
     result = ExpertKernel.op(
         a_tensor,
         sram_cts,
@@ -1109,13 +1173,16 @@ def _run_slice_k(
         is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
-        sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
-        dram_device_data=dram_device_data,
-        cores_per_bank=cores_per_dram_bank,
-        accum_experts=False,
-        sram_per_core_n=sram_per_core_N,
+        dram_meta_tensors=dram_meta_tensors,
         dram_per_core_n=dram_per_core_N,
+        expert_selection_meta=expert_selection_meta,
+        has_sram=has_sram,
+        sram_core_grid=sram_core_grid,
+        sram_fmt_tensors=sram_fmt_tensors,
+        sram_k_offsets=sram_k_offsets,
+        cores_per_dram_bank=cores_per_dram_bank,
+        sram_per_core_n=sram_per_core_N,
         sram_k_per_core=sram_k_per_core,
         sram_output_tensor=sram_out_tensor,
         dram_fuse_silu=dram_fuse_silu,

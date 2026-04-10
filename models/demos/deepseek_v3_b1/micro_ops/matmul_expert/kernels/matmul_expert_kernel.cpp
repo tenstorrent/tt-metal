@@ -63,12 +63,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("pipeline_sem_id"),
         get_named_compile_time_arg_val("next_core_noc_x"),
         get_named_compile_time_arg_val("next_core_noc_y"),
-        get_named_compile_time_arg_val("cores_per_bank"),
+        get_named_compile_time_arg_val("cores_per_dram_bank"),
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
-        get_named_compile_time_arg_val("cb_fmt"),
+        get_named_compile_time_arg_val("cb_fmt_dram"),
         get_named_compile_time_arg_val("fmt_dram_addr"),
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
         get_named_compile_time_arg_val("fmt_per_core_bytes"),
@@ -112,7 +112,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
-        get_named_compile_time_arg_val("cb_fmt"),
+        get_named_compile_time_arg_val("cb_fmt_dram"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("dram_fuse_silu")>;
 #endif
