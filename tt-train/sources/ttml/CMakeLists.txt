@@ -128,6 +128,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # Gather Logit (target-logit scalar gather for distributed cross-entropy)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gather_logit/gather_logit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gather_logit/device/gather_logit_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gather_logit/device/gather_logit_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp

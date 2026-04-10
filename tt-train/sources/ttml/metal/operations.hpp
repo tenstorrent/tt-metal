@@ -6,6 +6,7 @@
 
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
+#include "ops/gather_logit/gather_logit.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
 #include "ops/polynorm_fw/polynorm_fw.hpp"
