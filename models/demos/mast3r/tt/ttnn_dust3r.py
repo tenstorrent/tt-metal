@@ -327,17 +327,42 @@ def full_decoder(
     f1 = _ttnn_linear(feat1, emb_w, emb_b, device)
     f2 = _ttnn_linear(feat2, emb_w, emb_b, device)
 
+    taps1: list[torch.Tensor] = []
+    taps2: list[torch.Tensor] = []
+    tap_layers = (0, 6, 11)
     for i in range(depth):
         w1 = _dec_block_weights(state, i, 1)
         w2 = _dec_block_weights(state, i, 2)
         nf1 = decoder_block(f1, f2, pos, pos, w1, device)
         nf2 = decoder_block(f2, f1, pos, pos, w2, device)
         f1, f2 = nf1, nf2
+        if i in tap_layers:
+            taps1.append(f1)
+            taps2.append(f2)
 
     g = state["dec_norm.weight"]
     b = state["dec_norm.bias"]
     out1 = _ttnn_layer_norm(f1, g, b, device)
     out2 = _ttnn_layer_norm(f2, g, b, device)
+    return out1, out2, taps1, taps2
+
+
+def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
+    """Full end-to-end DUSt3R forward on TT (with host DPT fallback)."""
+    enc1 = full_encoder(img1, state, device)
+    enc2 = full_encoder(img2, state, device)
+    B, C, H, W = img1.shape
+    hp, wp = H // 16, W // 16
+    ys = torch.arange(hp)
+    xs = torch.arange(wp)
+    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
+    pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
+
+    _, _, taps1, taps2 = full_decoder(enc1, enc2, pos, state, device)
+    feats1 = [enc1.float(), taps1[0].float(), taps1[1].float(), taps1[2].float()]
+    feats2 = [enc2.float(), taps2[0].float(), taps2[1].float(), taps2[2].float()]
+    out1 = dpt_head(feats1, (hp, wp), state, 1, device)
+    out2 = dpt_head(feats2, (hp, wp), state, 2, device)
     return out1, out2
 
 

@@ -428,14 +428,50 @@ class Decoder(nn.Module):
         self.blocks2 = nn.ModuleList([DecoderBlock(dec_dim, heads) for _ in range(depth)])
         self.norm = nn.LayerNorm(dec_dim, eps=1e-6)
 
-    def forward(self, feat1, feat2, pos):
+    def forward(self, feat1, feat2, pos, tap_layers=(0, 6, 11)):
         f1 = self.embed(feat1)
         f2 = self.embed(feat2)
-        for b1, b2 in zip(self.blocks1, self.blocks2):
+        taps1 = []
+        taps2 = []
+        for i, (b1, b2) in enumerate(zip(self.blocks1, self.blocks2)):
             new_f1 = b1(f1, f2, pos, pos)
             new_f2 = b2(f2, f1, pos, pos)
             f1, f2 = new_f1, new_f2
-        return self.norm(f1), self.norm(f2)
+            if i in tap_layers:
+                taps1.append(f1)
+                taps2.append(f2)
+        return self.norm(f1), self.norm(f2), taps1, taps2
+
+
+class DUSt3R(nn.Module):
+    """Minimal end-to-end DUSt3R: encoder + decoder + 2 DPT heads."""
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        self.head1 = DPTHead()
+        self.head2 = DPTHead()
+
+    def forward(self, img1, img2):
+        enc1, pos, hw = self.encoder(img1)
+        enc2, _, _ = self.encoder(img2)
+        dec1_final, dec2_final, taps1, taps2 = self.decoder(enc1, enc2, pos)
+        # 4 feats for each head: enc + 3 tapped decoder layers.
+        feats1 = [enc1, taps1[0], taps1[1], taps1[2]]
+        feats2 = [enc2, taps2[0], taps2[1], taps2[2]]
+        out1 = self.head1(feats1, hw)
+        out2 = self.head2(feats2, hw)
+        return out1, out2
+
+
+def load_dust3r(state: dict) -> DUSt3R:
+    model = DUSt3R()
+    model.encoder = load_encoder(state)
+    model.decoder = load_decoder(state)
+    model.head1 = load_dpt_head(state, branch=1)
+    model.head2 = load_dpt_head(state, branch=2)
+    return model.eval()
 
 
 def load_decoder(state: dict) -> Decoder:
