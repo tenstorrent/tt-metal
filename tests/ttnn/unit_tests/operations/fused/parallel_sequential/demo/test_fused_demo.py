@@ -1511,6 +1511,7 @@ class TestPerfDemos:
         )
 
     @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.skip(reason="SFPI 7.40.0 bump increased kernel size past 70KB config buffer limit")
     def test_asymmetric_branches_ln_slice_rms_ln_fused(self, device, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
