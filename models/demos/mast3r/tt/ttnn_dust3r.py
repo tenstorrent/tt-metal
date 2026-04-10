@@ -289,3 +289,53 @@ def decoder_block(
     h = ttnn.to_torch(tt_h)
     m = _ttnn_linear(h, weights["mlp.fc2.weight"], weights["mlp.fc2.bias"], device)
     return x + m
+
+
+def _dec_block_weights(state: dict, idx: int, branch: int) -> dict:
+    prefix = "dec_blocks." if branch == 1 else "dec_blocks2."
+    keys = [
+        "norm1.weight", "norm1.bias", "norm2.weight", "norm2.bias",
+        "norm3.weight", "norm3.bias", "norm_y.weight", "norm_y.bias",
+        "attn.qkv.weight", "attn.qkv.bias",
+        "attn.proj.weight", "attn.proj.bias",
+        "cross_attn.projq.weight", "cross_attn.projq.bias",
+        "cross_attn.projk.weight", "cross_attn.projk.bias",
+        "cross_attn.projv.weight", "cross_attn.projv.bias",
+        "cross_attn.proj.weight", "cross_attn.proj.bias",
+        "mlp.fc1.weight", "mlp.fc1.bias",
+        "mlp.fc2.weight", "mlp.fc2.bias",
+    ]
+    return {k: state[f"{prefix}{idx}.{k}"] for k in keys}
+
+
+def full_decoder(
+    feat1: torch.Tensor,
+    feat2: torch.Tensor,
+    pos: torch.Tensor,
+    state: dict,
+    device,
+    depth: int = 12,
+):
+    """Dual-branch DUSt3R decoder on TT.
+
+    feat1, feat2: (B, N, 1024) encoder outputs.  pos: (B, N, 2).
+    Returns (out1, out2) each (B, N, 768).
+    """
+    # Project to decoder dim via ttnn linear.
+    emb_w = state["decoder_embed.weight"]
+    emb_b = state["decoder_embed.bias"]
+    f1 = _ttnn_linear(feat1, emb_w, emb_b, device)
+    f2 = _ttnn_linear(feat2, emb_w, emb_b, device)
+
+    for i in range(depth):
+        w1 = _dec_block_weights(state, i, 1)
+        w2 = _dec_block_weights(state, i, 2)
+        nf1 = decoder_block(f1, f2, pos, pos, w1, device)
+        nf2 = decoder_block(f2, f1, pos, pos, w2, device)
+        f1, f2 = nf1, nf2
+
+    g = state["dec_norm.weight"]
+    b = state["dec_norm.bias"]
+    out1 = _ttnn_layer_norm(f1, g, b, device)
+    out2 = _ttnn_layer_norm(f2, g, b, device)
+    return out1, out2

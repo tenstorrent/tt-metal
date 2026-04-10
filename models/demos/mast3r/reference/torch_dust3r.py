@@ -298,3 +298,34 @@ def load_decoder_block(state: dict, idx: int, branch: int = 1) -> DecoderBlock:
     prefix = "dec_blocks." if branch == 1 else "dec_blocks2."
     blk.load_state_dict(_prefix(state, f"{prefix}{idx}."), strict=True)
     return blk.eval()
+
+
+class Decoder(nn.Module):
+    """Dual-branch decoder: 12 blocks × 2 branches + final dec_norm."""
+
+    def __init__(self, enc_dim: int = 1024, dec_dim: int = 768, depth: int = 12, heads: int = 12):
+        super().__init__()
+        self.embed = nn.Linear(enc_dim, dec_dim, bias=True)
+        self.blocks1 = nn.ModuleList([DecoderBlock(dec_dim, heads) for _ in range(depth)])
+        self.blocks2 = nn.ModuleList([DecoderBlock(dec_dim, heads) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dec_dim, eps=1e-6)
+
+    def forward(self, feat1, feat2, pos):
+        f1 = self.embed(feat1)
+        f2 = self.embed(feat2)
+        for b1, b2 in zip(self.blocks1, self.blocks2):
+            new_f1 = b1(f1, f2, pos, pos)
+            new_f2 = b2(f2, f1, pos, pos)
+            f1, f2 = new_f1, new_f2
+        return self.norm(f1), self.norm(f2)
+
+
+def load_decoder(state: dict) -> Decoder:
+    dec = Decoder()
+    dec.embed.load_state_dict(_prefix(state, "decoder_embed."), strict=True)
+    for i, blk in enumerate(dec.blocks1):
+        blk.load_state_dict(_prefix(state, f"dec_blocks.{i}."), strict=True)
+    for i, blk in enumerate(dec.blocks2):
+        blk.load_state_dict(_prefix(state, f"dec_blocks2.{i}."), strict=True)
+    dec.norm.load_state_dict(_prefix(state, "dec_norm."), strict=True)
+    return dec.eval()
