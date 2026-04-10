@@ -6,7 +6,6 @@ import re
 
 import pytest
 import torch
-from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
@@ -99,20 +98,10 @@ def _build_reference_weights(peft_sd):
     reason="test_lora_fusion runs only on n150/p150",
 )
 @torch.no_grad()
-def test_lora_fusion_pcc(mesh_device, sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env, lora_path):
-    torch_pipeline = DiffusionPipeline.from_pretrained(
-        sdxl_base_pipeline_location,
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_v2_env or is_ci_env,
-    )
+def test_lora_fusion_pcc(mesh_device, load_sdxl_base_pipeline, lora_path):
+    torch_pipeline = load_sdxl_base_pipeline()
 
-    torch_pipeline_for_tt = DiffusionPipeline.from_pretrained(
-        sdxl_base_pipeline_location,
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_v2_env or is_ci_env,
-    )
+    torch_pipeline_for_tt = load_sdxl_base_pipeline()
 
     pipeline_config = TtSDXLPipelineConfig(num_inference_steps=50, guidance_scale=5.0, is_galaxy=is_galaxy())
 

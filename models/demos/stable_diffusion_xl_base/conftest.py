@@ -139,6 +139,33 @@ def sdxl_base_tokenizer_2_location(model_location_generator, is_ci_v2_env):
         return "stabilityai/stable-diffusion-xl-base-1.0"
 
 
+# --- Pipeline Loading ---
+
+
+@pytest.fixture(scope="function")
+def load_sdxl_base_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env):
+    """
+    Returns a callable that loads a DiffusionPipeline from the resolved SDXL base model location.
+    Handles CIv2 (large file cache), CIv1 (MLPerf/HF cache), and local (HF download) transparently.
+
+    Usage in tests::
+
+        pipeline = load_sdxl_base_pipeline()
+    """
+    import torch
+    from diffusers import DiffusionPipeline
+
+    def _load():
+        return DiffusionPipeline.from_pretrained(
+            sdxl_base_pipeline_location,
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            local_files_only=is_ci_v2_env or is_ci_env,
+        )
+
+    return _load
+
+
 # --- Inpainting Model Locations ---
 
 

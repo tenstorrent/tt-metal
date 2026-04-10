@@ -5,7 +5,6 @@ import gc
 
 import pytest
 import torch
-from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
@@ -14,16 +13,6 @@ from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import T
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env):
-    pipeline = DiffusionPipeline.from_pretrained(
-        sdxl_base_pipeline_location,
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_v2_env or is_ci_env,
-    )
-    return pipeline
 
 
 def prepare_ttnn_tensors(
@@ -90,17 +79,16 @@ def run_unet_model(
     time_ids_shape,
     pcc,
     debug_mode,
-    sdxl_base_pipeline_location,
-    is_ci_env,
+    load_sdxl_base_pipeline,
     is_ci_v2_env,
     lora_path,
     iterations=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
-    pipeline = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
+    pipeline = load_sdxl_base_pipeline()
     pipeline.unet.eval()
 
-    pipeline_for_tt = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
+    pipeline_for_tt = load_sdxl_base_pipeline()
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
@@ -220,8 +208,7 @@ def test_unet(
     time_ids_shape,
     pcc,
     debug_mode,
-    sdxl_base_pipeline_location,
-    is_ci_env,
+    load_sdxl_base_pipeline,
     is_ci_v2_env,
     reset_seeds,
     lora_path,
@@ -239,8 +226,7 @@ def test_unet(
         time_ids_shape,
         pcc,
         debug_mode,
-        sdxl_base_pipeline_location,
-        is_ci_env,
+        load_sdxl_base_pipeline,
         is_ci_v2_env,
         lora_path,
     )

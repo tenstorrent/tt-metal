@@ -8,8 +8,6 @@ os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = "15000"
 import gc
 
 import pytest
-import torch
-from diffusers import DiffusionPipeline
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
@@ -21,17 +19,10 @@ from models.perf.device_perf_utils import run_model_device_perf_test
 
 def test_lora_fuse(
     device,
-    sdxl_base_pipeline_location,
-    is_ci_env,
-    is_ci_v2_env,
+    load_sdxl_base_pipeline,
     lora_path,
 ):
-    pipeline_for_tt = DiffusionPipeline.from_pretrained(
-        sdxl_base_pipeline_location,
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_v2_env or is_ci_env,
-    )
+    pipeline_for_tt = load_sdxl_base_pipeline()
     pipeline_for_tt.unet.eval()
     state_dict = pipeline_for_tt.unet.state_dict()
 

@@ -7,7 +7,6 @@ from functools import reduce
 
 import pytest
 import torch
-from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
@@ -16,16 +15,6 @@ from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import T
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env):
-    pipeline = DiffusionPipeline.from_pretrained(
-        sdxl_base_pipeline_location,
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_v2_env or is_ci_env,
-    )
-    return pipeline
 
 
 @pytest.mark.parametrize(
@@ -43,18 +32,16 @@ def test_geglu(
     input_shape,
     module_path,
     pcc,
-    is_ci_env,
-    is_ci_v2_env,
-    sdxl_base_pipeline_location,
+    load_sdxl_base_pipeline,
     reset_seeds,
     lora_path,
 ):
     if image_resolution == (512, 512) and is_blackhole():
         pytest.skip("512x512 resolution not supported on Blackhole")
-    pipeline = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
+    pipeline = load_sdxl_base_pipeline()
     pipeline.unet.eval()
 
-    pipeline_for_tt = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
+    pipeline_for_tt = load_sdxl_base_pipeline()
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
