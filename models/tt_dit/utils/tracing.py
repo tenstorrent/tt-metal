@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 _OMITTED = object()
 """Sentinel for omitted positional args — distinct from ``None``, which is a valid scalar input."""
 
+
 class Tracer:
     """Wrapper for capturing and executing a trace of a given function.
 
