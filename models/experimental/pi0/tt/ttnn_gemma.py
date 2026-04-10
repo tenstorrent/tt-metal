@@ -105,9 +105,8 @@ def adarms_norm_ttnn(
     )
 
     # Split into scale, shift, gate — each (B, 1, hidden_dim)
-    scale = ttnn.slice(modulation, [0, 0, 0], [batch_size, 1, hidden_dim])
-    shift = ttnn.slice(modulation, [0, 0, hidden_dim], [batch_size, 1, hidden_dim * 2])
-    gate = ttnn.slice(modulation, [0, 0, hidden_dim * 2], [batch_size, 1, hidden_dim * 3])
+    # Single chunk op replaces 3 separate slices
+    scale, shift, gate = ttnn.chunk(modulation, 3, dim=-1)
     ttnn.deallocate(modulation)
 
     # FUSED: rms_norm with dynamic weight=scale and bias=shift
@@ -506,6 +505,24 @@ class GemmaMLPTTNN:
         # With auto-sharding across 64 cores = ~64KB per core (fits L1)
         self.chunk_size = 256
 
+    def forward_pre_down(self, x) -> ttnn.Tensor:
+        """Fast path only: return hidden_out (pre-down-projection) for external fusion."""
+        mlp_ckc = self.compute_kernel_config_hifi2
+        if self.fused_gate_up is not None:
+            gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+            gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
+            up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
+            ttnn.deallocate(gate_up)
+        else:
+            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+        gate_activated = ttnn.gelu(gate)
+        ttnn.deallocate(gate)
+        hidden_out = ttnn.multiply(gate_activated, up)
+        ttnn.deallocate(gate_activated)
+        ttnn.deallocate(up)
+        return hidden_out
+
     def forward(self, x) -> ttnn.Tensor:
         """
         Forward pass with fast path for small sequences and chunked for large.
@@ -777,13 +794,32 @@ class GemmaBlockTTNN:
             )
             mlp_gate = None
 
-        # MLP with gated residual
-        mlp_output = self.mlp.forward(normed)
-        ttnn.deallocate(normed)
-        hidden_states = gated_residual_ttnn(hidden_states, mlp_output, mlp_gate)
-        ttnn.deallocate(mlp_output)
+        # MLP with gated residual — fuse down_proj + gated residual when gate is present
         if mlp_gate is not None:
+            # Fused: hidden_states = hidden_states + 1.0 * linear(hidden_out, down_proj) * gate
+            # All tensors must match weight dtype (bfloat8_b) for the fused kernel
+            hidden_out = self.mlp.forward_pre_down(normed)
+            ttnn.deallocate(normed)
+            hs_8b = ttnn.typecast(hidden_states, ttnn.bfloat8_b)
+            gate_8b = ttnn.typecast(mlp_gate, ttnn.bfloat8_b)
+            hidden_states = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                matmul_input_tensor=hidden_out,
+                matmul_weight_tensor=self.mlp.down_proj,
+                scalar=1.0,
+                addcmul_input_tensor1=hs_8b,
+                addcmul_input_tensor2=gate_8b,
+            )
+            ttnn.deallocate(hidden_out)
+            ttnn.deallocate(hs_8b)
+            ttnn.deallocate(gate_8b)
             ttnn.deallocate(mlp_gate)
+            # Cast back to bfloat16 for subsequent layers
+            hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
+        else:
+            mlp_output = self.mlp.forward(normed)
+            ttnn.deallocate(normed)
+            hidden_states = ttnn.add(hidden_states, mlp_output)
+            ttnn.deallocate(mlp_output)
         # ReadDeviceProfiler removed for performance
 
         return hidden_states, new_cache
