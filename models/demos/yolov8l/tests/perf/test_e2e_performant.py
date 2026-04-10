@@ -71,7 +71,6 @@ def run_yolov8l(
     [
         {
             "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
-            # "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
             "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
@@ -128,18 +127,17 @@ def test_run_yolov8l_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "resolution",
     [
-        (640, 640),
-        # (1280, 1280)
+        # (640, 640),
+        (1280, 1280)
     ],
     ids=[
-        "640",
-        # "1280",
+        # "640",
+        "1280",
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # (2, 2),
         (1, 8),
     ],
     indirect=True,
