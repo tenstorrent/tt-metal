@@ -24,6 +24,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
     Qwen3OmniMoeVisionMLP,
+    Qwen3OmniMoeVisionPatchMerger,
     Qwen3OmniMoeVisionAttention,
     Qwen3OmniMoeVisionRotaryEmbedding,
     Qwen3OmniMoeTalkerCodePredictorAttention,
@@ -49,6 +50,7 @@ from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
     TTNNQwenOmniThinkerLmHead,
     replace_thinker_lm_head_with_ttnn,
 )
+from models.experimental.tt_symbiote.modules.qwen_omni_vision_patch import TTNNQwen3OmniVisionPatchMerger
 from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
     TTNNQwen3OmniMoeRotaryEmbedding,
     TTNNQwen3OmniMoeTalkerRotaryEmbedding,
@@ -69,6 +71,7 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
+    Qwen3OmniMoeVisionPatchMerger: TTNNQwen3OmniVisionPatchMerger,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
     Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
@@ -736,6 +739,15 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             block.mlp, TTNNQwen3OmniVisionMLP
         ), f"thinker.visual.blocks[{i}].mlp expected TTNNQwen3OmniVisionMLP, got {type(block.mlp)}"
 
+    assert isinstance(
+        model.thinker.visual.merger, TTNNQwen3OmniVisionPatchMerger
+    ), f"thinker.visual.merger expected TTNNQwen3OmniVisionPatchMerger, got {type(model.thinker.visual.merger)}"
+    n_deepstack = len(model.thinker.visual.merger_list)
+    for i, deep_merger in enumerate(model.thinker.visual.merger_list):
+        assert isinstance(
+            deep_merger, TTNNQwen3OmniVisionPatchMerger
+        ), f"thinker.visual.merger_list[{i}] expected TTNNQwen3OmniVisionPatchMerger, got {type(deep_merger)}"
+
     for i in talker_moe_layer_indices:
         assert isinstance(
             model.talker.model.layers[i].mlp, TTNNQwen3TalkerMoE
@@ -773,7 +785,8 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             ), f"code2wav.pre_transformer.layers[{i}].self_attn expected TTNNQwen3OmniMoeCode2WavAttention, got {type(layer.self_attn)}"
 
     print(
-        f"Replacements OK: thinker {n_thinker} (MoE+attn), vision {n_vision} (TTNN attn), talker MoE+attn "
+        f"Replacements OK: thinker {n_thinker} (MoE+attn), vision {n_vision} (TTNN attn+MLP), "
+        f"patch merger + {n_deepstack} deepstack merger(s), talker MoE+attn "
         f"(mesh {mesh_device.get_num_devices()} device(s)); "
         f"audio_tower {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN self_attn), talker {n_talker} layers"
     )
