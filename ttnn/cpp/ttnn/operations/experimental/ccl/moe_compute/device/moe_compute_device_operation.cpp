@@ -165,11 +165,11 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
     // re-percieve tilize output tensor as RM for output
-    const auto& output_storage = tilize_output_tensor.device_storage();
-    const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor matmul_output_tensor(output_storage, output_spec, output_topology);
-
+    const auto matmul_output_tensor =
+        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+    TT_FATAL(
+        matmul_output_tensor.tensor_spec() == output_specs[4],
+        "Reinterpreted tensor spec does not match expected output_specs[4]");
     const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
         create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
 
