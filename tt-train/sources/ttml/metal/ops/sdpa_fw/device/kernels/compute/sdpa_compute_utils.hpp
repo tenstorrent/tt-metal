@@ -263,8 +263,13 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_matmul_reduce);  // reconfig data format to precise
     tile_regs_acquire();
 
-    mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
-    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
+    ckernel::MatmulOpConfig reduce_cfg{};
+    reduce_cfg.in0_cb_id = cb_in_idx;
+    reduce_cfg.in1_cb_id = cb_matmul_reduce;
+    reduce_cfg.out_cb_id = cb_identity_scaler;
+    ckernel::TileMatmulOp mm_reduce(reduce_cfg);
+    mm_reduce.init();
+    mm_reduce.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);
