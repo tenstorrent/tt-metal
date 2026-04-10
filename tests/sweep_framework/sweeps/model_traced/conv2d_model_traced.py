@@ -46,12 +46,10 @@ def mesh_device_fixture():
     """
     Override default device fixture.
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    Conv2d requires l1_small_size to avoid circular buffer clashes with L1 buffers.
     """
     mesh_shape = get_mesh_shape()
 
     if mesh_shape:
-        # Create mesh device based on env var
         try:
             device = ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
@@ -68,7 +66,6 @@ def mesh_device_fixture():
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        # Single device (default)
         device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
@@ -88,6 +85,7 @@ def run(
     **kwargs,
 ) -> list:
     # Build input_specs from flat kwargs when not provided directly
+    full_padding = None
     if input_specs is None:
         batch_size = kwargs.get("batch_size")
         out_channels = kwargs.get("out_channels")
@@ -101,10 +99,34 @@ def run(
         groups = kwargs.get("groups")
         # Check if we have enough params to construct input_specs
         if batch_size is not None and out_channels is not None and in_channels is not None:
-            kh = kw = kernel_size if isinstance(kernel_size, int) else (kernel_size[0] if kernel_size else 1)
-            sh = sw = stride if isinstance(stride, int) else (stride[0] if stride else 1)
-            ph = pw = padding if isinstance(padding, int) else (padding[0] if padding else 0)
-            dh = dw = dilation if isinstance(dilation, int) else (dilation[0] if dilation else 1)
+            if isinstance(kernel_size, (list, tuple)) and len(kernel_size) >= 2:
+                kh, kw = kernel_size[0], kernel_size[1]
+            elif isinstance(kernel_size, int):
+                kh = kw = kernel_size
+            else:
+                kh = kw = kernel_size[0] if kernel_size else 1
+            if isinstance(stride, (list, tuple)) and len(stride) >= 2:
+                sh, sw = stride[0], stride[1]
+            elif isinstance(stride, int):
+                sh = sw = stride
+            else:
+                sh = sw = stride[0] if stride else 1
+            full_padding = None
+            if isinstance(padding, (list, tuple)) and len(padding) == 4:
+                ph, pw = 0, 0
+                full_padding = tuple(padding)
+            elif isinstance(padding, (list, tuple)) and len(padding) >= 2:
+                ph, pw = padding[0], padding[1]
+            elif isinstance(padding, int):
+                ph = pw = padding
+            else:
+                ph = pw = padding[0] if padding else 0
+            if isinstance(dilation, (list, tuple)) and len(dilation) >= 2:
+                dh, dw = dilation[0], dilation[1]
+            elif isinstance(dilation, int):
+                dh = dw = dilation
+            else:
+                dh = dw = dilation[0] if dilation else 1
             ih = input_height or 4
             iw = input_width or 4
             g = groups or 1
@@ -149,8 +171,16 @@ def run(
             parsed_dtype = parse_dict_value("dtype", dtype)
         else:
             dtype_map = {
+                "DataType.BFLOAT16": ttnn.bfloat16,
+                "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+                "DataType.BFLOAT4_B": ttnn.bfloat4_b,
+                "DataType.FLOAT32": ttnn.float32,
+                "DataType.UINT16": ttnn.uint16,
+                "DataType.UINT32": ttnn.uint32,
+                "DataType.INT32": ttnn.int32,
                 "bfloat16": ttnn.bfloat16,
                 "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat4_b": ttnn.bfloat4_b,
                 "float32": ttnn.float32,
                 "uint16": ttnn.uint16,
                 "uint32": ttnn.uint32,
@@ -267,6 +297,38 @@ def run(
                     value = int(value)
                 setattr(conv_config, attr, value)
 
+    # Parse slice_config from traced args.
+    # Only pass non-default DRAM slice configs. When slice_config is L1_FULL/0
+    # (the default), leave as None so conv2d can auto-determine DRAM slicing
+    # when the input tensor is in DRAM (sweep tests create inputs in DRAM,
+    # unlike models where inputs are already in L1 from previous ops).
+    parsed_slice_config = None
+    traced_slice_config = kwargs.get("slice_config")
+    if (
+        traced_slice_config
+        and isinstance(traced_slice_config, dict)
+        and traced_slice_config.get("type") == "Op2DSliceConfig"
+    ):
+        import re
+
+        sc_value_str = traced_slice_config.get("value", "")
+        slice_type_map = {
+            "L1_FULL": ttnn.Op2DSliceConfig.SliceTypeEnum.L1Full,
+            "DRAM_SLICE_HEIGHT": ttnn.Op2DSliceConfig.SliceTypeEnum.DRAMSliceHeight,
+            "DRAM_SLICE_WIDTH": ttnn.Op2DSliceConfig.SliceTypeEnum.DRAMSliceWidth,
+        }
+        st_m = re.search(r"slice_type=SliceType::(\w+)", sc_value_str)
+        ns_m = re.search(r"num_slices=(\d+)", sc_value_str)
+        if st_m:
+            st_val = slice_type_map.get(st_m.group(1))
+            if st_val is not None:
+                num_slices = int(ns_m.group(1)) if ns_m else 0
+                if st_val != ttnn.Op2DSliceConfig.SliceTypeEnum.L1Full or num_slices > 0:
+                    sc_kwargs = {"slice_type": st_val}
+                    if num_slices > 0:
+                        sc_kwargs["num_slices"] = num_slices
+                    parsed_slice_config = ttnn.Op2DSliceConfig(**sc_kwargs)
+
     # Parse tensor dtypes from traced args
     dtype_str_map = {
         "DataType.BFLOAT16": ttnn.bfloat16,
@@ -280,6 +342,13 @@ def run(
     parsed_input_dtype = dtype_str_map.get(kwargs.get("input_tensor_dtype"))
     parsed_weight_dtype = dtype_str_map.get(kwargs.get("weight_tensor_dtype"))
     parsed_bias_dtype = dtype_str_map.get(kwargs.get("bias_tensor_dtype"))
+
+    # Parse input_tensor_layout from traced args
+    layout_str_map = {
+        "Layout.ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+        "Layout.TILE": ttnn.TILE_LAYOUT,
+    }
+    parsed_input_layout = layout_str_map.get(kwargs.get("input_tensor_layout"))
 
     # Call the short sweep function with parsed ttnn objects
     if is_conv1d:
@@ -295,6 +364,9 @@ def run(
             input_dtype=parsed_input_dtype,
             weight_dtype=parsed_weight_dtype,
             bias_dtype=parsed_bias_dtype,
+            slice_config=parsed_slice_config,
+            input_layout=parsed_input_layout,
+            padding_override=full_padding,
         )
 
     # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]
