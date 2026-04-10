@@ -20,6 +20,7 @@ class TinyLinearConfig:
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: object | None = None
     activation: object | None = None
+    max_seq_len: int | None = None
 
 
 class TinyLinear(LightweightModule):
@@ -103,7 +104,9 @@ def _resolve_tiny_linear_config(config: TinyLinearConfig) -> TinyLinearConfig:
         raise ValueError("Unable to resolve target device for TinyLinear")
 
     if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = bge_m3_matmul_compute_kernel_config(mesh_device)
+        to_set["compute_kernel_config"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=config.max_seq_len
+        )
 
     dtype = to_set.get("dtype", config.dtype)
     memory_config = to_set.get("memory_config", config.memory_config)
