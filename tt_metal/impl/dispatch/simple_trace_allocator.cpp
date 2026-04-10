@@ -192,12 +192,18 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             ProgramConfig& program_config = node.program->get_program_config(index);
             bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
 
-            // When binaries are stored in the config buffer, the non-binary region covers only
-            // the data before the kernel text (RTAs, CBs, semaphores). The binary gets its own
-            // separately-cached region. When binaries are NOT in the config buffer (they go to a
-            // fixed L1 address from the ELF), the full config size is non-binary.
-            uint32_t non_binary_size =
-                binary_in_config ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
+            // Only Tensix has a dedicated binary write offset in the dispatcher, so only Tensix
+            // can place its binary at a separately-allocated address. For other core types the
+            // dispatcher writes the binary at a fixed offset from the non-binary base, so the
+            // entire config (non-binary + binary) must be allocated as one contiguous region.
+            bool has_separate_binary_offset = (core_type == HalProgrammableCoreType::TENSIX);
+
+            uint32_t non_binary_size;
+            if (has_separate_binary_offset && binary_in_config) {
+                non_binary_size = program_config.kernel_text_offset;
+            } else {
+                non_binary_size = node.program->get_program_config_sizes()[index];
+            }
             uint32_t binary_size = program_config.kernel_text_size;
             auto& allocator = region_allocators_[index];
 
@@ -208,9 +214,10 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             uint32_t binary_addr = 0;
 
-            if (binary_in_config && binary_size > 0) {
-                // Binary is stored in the config buffer; allocate separately so it can be cached
-                // across invocations of the same program.
+            if (has_separate_binary_offset && binary_in_config && binary_size > 0) {
+                // Binary is stored in the config buffer and the dispatcher has a dedicated write
+                // offset for this core type; allocate separately so it can be cached across
+                // invocations of the same program.
                 if (auto mem_addr = allocator.get_region(ExtraData::kBinary, pid)) {
                     binary_addr = *mem_addr;
                     allocator.update_region_trace_idx(*mem_addr, i);
@@ -240,13 +247,15 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             } else if (!binary_in_config && !node.program->get_kernel_groups(index).empty()) {
                 // Binary goes to a fixed L1 address (not in the config buffer). Must sync with the
                 // previous program that used this fixed address before overwriting it.
-                // Note: binary_size (kernel_text_size) may be 0 here since the binary isn't tracked
-                // in the config buffer, so we check for kernel groups instead.
                 all_binaries_cached = false;
                 if (last_fixed_addr_sync_idx[index].has_value()) {
                     binary_sync_idx = merge_syncs(binary_sync_idx, last_fixed_addr_sync_idx[index]);
                 }
                 last_fixed_addr_sync_idx[index] = i;
+            } else if (!has_separate_binary_offset && !node.program->get_kernel_groups(index).empty()) {
+                // Binary is included in the non-binary allocation (no separate binary write offset
+                // for this core type). The binary is always re-sent as part of the full config.
+                all_binaries_cached = false;
             }
 
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
