@@ -6,8 +6,6 @@ import os
 os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = "15000"
 
 import gc
-import subprocess
-from pathlib import Path
 
 import pytest
 import torch
@@ -20,56 +18,20 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs import ModelOptimisa
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.perf.device_perf_utils import run_model_device_perf_test
 
-SDXL_COMPONENTS = ["unet", "vae", "text_encoder", "text_encoder_2", "tokenizer", "tokenizer_2", "scheduler"]
-
-
-def _download_model_index(pipeline_dir):
-    model_index_path = pipeline_dir / "model_index.json"
-    if model_index_path.exists():
-        return
-    endpoint = "http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface/stable-diffusion-xl-base-1.0/model_index.json"
-    subprocess.run(
-        ["wget", "-q", "-O", str(model_index_path), endpoint],
-        check=True,
-        timeout=30,
-    )
-
-
-def _get_diffusers_pipeline(model_location_generator, is_ci_env, is_ci_v2_env):
-    if is_ci_v2_env:
-        pipeline_dir = None
-        for component in SDXL_COMPONENTS:
-            loc = model_location_generator(
-                f"stable-diffusion-xl-base-1.0/{component}",
-                download_if_ci_v2=True,
-                ci_v2_timeout_in_s=1800,
-            )
-            if pipeline_dir is None:
-                pipeline_dir = Path(loc).parent
-
-        _download_model_index(pipeline_dir)
-        model_location = pipeline_dir
-    else:
-        model_location = "stabilityai/stable-diffusion-xl-base-1.0"
-
-    pipeline = DiffusionPipeline.from_pretrained(
-        str(model_location),
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-
-    return pipeline
-
 
 def test_lora_fuse(
     device,
-    model_location_generator,
+    sdxl_base_pipeline_location,
     is_ci_env,
     is_ci_v2_env,
     lora_path,
 ):
-    pipeline_for_tt = _get_diffusers_pipeline(model_location_generator, is_ci_env, is_ci_v2_env)
+    pipeline_for_tt = DiffusionPipeline.from_pretrained(
+        sdxl_base_pipeline_location,
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_v2_env or is_ci_env,
+    )
     pipeline_for_tt.unet.eval()
     state_dict = pipeline_for_tt.unet.state_dict()
 

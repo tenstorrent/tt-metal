@@ -95,21 +95,23 @@ def _build_reference_weights(peft_sd):
     indirect=True,
 )
 @pytest.mark.skipif(
-    get_device_name() != "n150",
-    reason="test_lora_fusion runs only on n150",
+    get_device_name() not in ("n150", "p150"),
+    reason="test_lora_fusion runs only on n150/p150",
 )
 @torch.no_grad()
-def test_lora_fusion_pcc(mesh_device, lora_path):
+def test_lora_fusion_pcc(mesh_device, sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env, lora_path):
     torch_pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     torch_pipeline_for_tt = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     pipeline_config = TtSDXLPipelineConfig(num_inference_steps=50, guidance_scale=5.0, is_galaxy=is_galaxy())

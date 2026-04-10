@@ -17,12 +17,12 @@ from models.demos.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasic
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def _get_diffusers_pipeline(is_ci_env):
+def _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env):
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
     return pipeline
 
@@ -52,15 +52,17 @@ def test_transformerblock(
     out_dim,
     pcc,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
     reset_seeds,
     lora_path,
 ):
     if image_resolution == (512, 512) and is_blackhole():
         pytest.skip("512x512 resolution not supported on Blackhole")
-    pipeline = _get_diffusers_pipeline(is_ci_env)
+    pipeline = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
     pipeline.unet.eval()
 
-    pipeline_for_tt = _get_diffusers_pipeline(is_ci_env)
+    pipeline_for_tt = _get_diffusers_pipeline(sdxl_base_pipeline_location, is_ci_env, is_ci_v2_env)
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
