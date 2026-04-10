@@ -272,6 +272,7 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_nv = GDN_Nv
         self.gdn_dv = GDN_Dv
         self.gdn_conv_kernel_size = GDN_CONV_KERNEL_SIZE
+        self.gdn_chunk_size = 64  # Chunkwise prefill chunk size (must be power of 2, >= 32)
 
         # TP-derived dimensions
         self.gdn_nk_tp = GDN_Nk // tp
