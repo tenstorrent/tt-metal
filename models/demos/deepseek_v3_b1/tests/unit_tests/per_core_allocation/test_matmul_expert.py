@@ -518,7 +518,7 @@ def _build_dram_experts(
         subblock_k,
         num_subblocks_k,
         dram_per_core_N,
-        cores_per_dram_bank=cores_per_dram_bank,
+        cores_per_bank=cores_per_dram_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
     )
@@ -766,7 +766,7 @@ def _run_standard(
         sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
         dram_device_data=dram_device_data,
-        cores_per_dram_bank=cores_per_dram_bank,
+        cores_per_bank=cores_per_dram_bank,
         accum_experts=False,
         sram_per_core_n=sram_per_core_N,
         dram_per_core_n=dram_per_core_N,
@@ -942,7 +942,7 @@ def _run_accum(
         sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
         dram_device_data=dram_device_data,
-        cores_per_dram_bank=cores_per_dram_bank,
+        cores_per_bank=cores_per_dram_bank,
         accum_experts=True,
         sram_per_core_n=sram_per_core_N,
         dram_per_core_n=dram_per_core_N,
@@ -1112,7 +1112,7 @@ def _run_slice_k(
         sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
         dram_device_data=dram_device_data,
-        cores_per_dram_bank=cores_per_dram_bank,
+        cores_per_bank=cores_per_dram_bank,
         accum_experts=False,
         sram_per_core_n=sram_per_core_N,
         dram_per_core_n=dram_per_core_N,
@@ -1170,6 +1170,7 @@ def _run_hybrid_expert_multi_device(
     dram_fuse_silu=False,
 ):
     """Dispatcher: delegate to the appropriate variant."""
+    assert dram_expert_ids, "DRAM expert path is always required"
     slice_k = sram_k_parallel > 1
     if slice_k:
         _run_slice_k(
@@ -1227,6 +1228,12 @@ def _run_hybrid_expert_multi_device(
             pcc_threshold,
             dram_fuse_silu,
         )
+
+
+# ---------------------------------------------------------------------------
+# Hybrid expert test variants — each exercises different SRAM/DRAM
+# configurations, formats, and router selections.
+# ---------------------------------------------------------------------------
 
 
 def test_hybrid_expert_1sram_1dram(device):
