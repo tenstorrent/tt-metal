@@ -209,7 +209,11 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+const Tile& RowMajorPageConfig::get_tile() const {
+    TT_THROW(
+        "get_tile() called on RowMajorPageConfig — tile is not a property of row-major layout. "
+        "This indicates tile-smuggling via RowMajorPageConfig that needs to be removed.");
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 
