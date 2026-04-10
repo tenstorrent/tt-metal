@@ -224,7 +224,9 @@ class GroupNorm1D:
             x = pad_to_alignment(x)
             out = self._internal_call_(x)
             if out.shape[1] != sequence_length:
-                out = ttnn.slice(out, (0, 0, 0), (batch_size, sequence_length, num_channels))
+                out = ttnn.slice(
+                    out, (0, 0, 0), (batch_size, sequence_length, num_channels), memory_config=ttnn.L1_MEMORY_CONFIG
+                )
             return out
 
         # slicing
