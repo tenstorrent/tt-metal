@@ -394,8 +394,7 @@ def create_routed_expert_tensors(
                 is_moe=True,
                 num_routed_experts=num_experts,
                 move_to_device=True,
-                bspm_dir=bspm_dir_path,
-                bspm_model_name="deepseek-r1-0528" if bspm_dir_path is not None else None,
+                bspm_dir=bspm_dir_path / "deepseek-r1-0528" if bspm_dir_path is not None else None,
             )
             gate_proj_expert_tensors = routed_weights.routed_gate_proj
             up_proj_expert_tensors = routed_weights.routed_up_proj
