@@ -18,7 +18,19 @@ from models.common.utility_functions import is_blackhole, is_watcher_enabled, ru
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
 def run_group_norm_DRAM(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask, perf_test_mode=False
+    device,
+    N,
+    C,
+    H,
+    W,
+    num_groups,
+    num_out_blocks,
+    cores_y,
+    cores_x,
+    welford_mode,
+    use_input_mask,
+    perf_test_mode=False,
+    specify_grid=True,
 ):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -95,7 +107,7 @@ def run_group_norm_DRAM(
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_layout=ttnn.TILE_LAYOUT,
-            core_grid=grid_size,
+            core_grid=grid_size if specify_grid else None,
             inplace=False,
             num_out_blocks=num_out_blocks,
             use_welford=use_welford,
@@ -173,9 +185,12 @@ def run_group_norm_DRAM(
     ],
 )
 @pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
+@pytest.mark.parametrize("specify_grid", [True, False])
 def test_group_norm_DRAM(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, perf_test_mode=False
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid, perf_test_mode=False
 ):
+    if not specify_grid and welford_mode != "welford_reciprocal":
+        pytest.skip("Auto-grid without reciprocals is a separate issue (issue #2)")
     run_group_norm_DRAM(
         device,
         N,
@@ -189,6 +204,7 @@ def test_group_norm_DRAM(
         welford_mode,
         use_input_mask=True,
         perf_test_mode=perf_test_mode,
+        specify_grid=specify_grid,
     )
 
 
@@ -202,9 +218,25 @@ def test_group_norm_DRAM(
     ],
 )
 @pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-def test_group_norm_no_input_mask_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_no_input_mask_DRAM(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+):
+    if not specify_grid and welford_mode != "welford_reciprocal":
+        pytest.skip("Auto-grid without reciprocals is a separate issue (issue #2)")
     run_group_norm_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask=False
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=False,
+        specify_grid=specify_grid,
     )
 
 
