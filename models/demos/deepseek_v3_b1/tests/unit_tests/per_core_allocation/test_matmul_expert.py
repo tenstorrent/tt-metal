@@ -82,724 +82,315 @@ def _scale_tiles_random_formats(b_torch, formats):
             # bfp4: keep randn as-is
 
 
-def _make_index_tensor(expert_idx: int, core_grid, mesh_device) -> ttnn.Tensor:
-    """Create a HEIGHT_SHARDED uint16 index tensor, same format as DRAMStreamingExpertsMatmul.
-
-    Each core on each device gets a [1, 16] shard with expert_idx in element 0.
-    """
-    num_cores = core_grid.num_cores()
-    index_torch = torch.zeros(num_cores, 16, dtype=torch.int32)
-    index_torch[:, 0] = expert_idx
-    index_torch = index_torch.to(torch.uint16)
-    index_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    return ttnn.from_torch(
-        index_torch,
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=index_mem_config,
-        tile=ttnn.Tile([1, 16]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-
-def _run_multi_device(mesh_device, M, K, N, formats_per_device, core_grid, pcc_threshold=0.98):
-    """
-    Each device gets B[:,i*N_dev:(i+1)*N_dev], independently compressed with its own formats.
-    N is the per-core shard width; total N per device = N × num_cores.
-
-    B is reshaped to [mesh_rows, mesh_cols, K, N_per_device] and distributed via
-    PlacementShard(0)/PlacementShard(1) so device (r,c) gets full K but its own N slice.
-    A is replicated across cores and devices. Output is sharded along N across all devices.
-    """
-    num_devices = mesh_device.get_num_devices()
-    assert len(formats_per_device) == num_devices
-
-    num_cores = core_grid.num_cores()
-    mesh_rows = mesh_device.shape[0]
-    mesh_cols = mesh_device.shape[1]
-    N_per_device = N * num_cores
-    N_total = N_per_device * num_devices
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-
-    torch_b_slices = []
-    for dev_idx, formats in enumerate(formats_per_device):
-        torch.manual_seed(dev_idx * 42)
-        b_slice = torch.randn((K, N_per_device)).float()
-        _scale_tiles_random_formats(b_slice, formats)
-        torch_b_slices.append(b_slice)
-
-    # Stack per-device slices into [mesh_rows, mesh_cols, K, N_per_device].
-    # PlacementShard(0)/PlacementShard(1) gives device (r,c) full K, unique N slice.
-    torch_b_4d = torch.stack(torch_b_slices).reshape(mesh_rows, mesh_cols, K, N_per_device)
-
-    all_formats = list({fmt for fmts in formats_per_device for fmt in fmts})
-    bfp0_mae = 1e-3 if "bfp0" in all_formats else 0.01
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
-
-    b_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [K, N], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    logger.info(f"Uploading expert tensor: shape={list(torch_b_4d.shape)}, {num_cores} core(s)")
-    ct = CompressedTensor.from_torch(
-        torch_b_4d,
-        assigner,
-        device=mesh_device,
-        memory_config=b_mem_config,
-        per_core_allocation=True,
-        mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-    )
-    logger.info("Expert tensor uploaded")
-
-    a_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    a_mesh = ttnn.from_torch(
-        torch_a.repeat(num_cores, 1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=a_mem_config,
-        tile=ttnn.Tile([M, 32]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    out_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [M, N], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    out_mesh = ttnn.from_torch(
-        torch.zeros((M, N_total), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=out_mem_config,
-        tile=ttnn.Tile([M, 32]),
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-    )
-
-    logger.info("Running ExpertKernel.op")
-    index_tensor = _make_index_tensor(0, core_grid, mesh_device)
-    result_mesh = ExpertKernel.op(
-        a_mesh,
-        [ct],
-        [],
-        out_mesh,
-        index_tensor,
-        is_dram_flags=[0],
-        num_active_experts=1,
-        sram_core_grid=core_grid,
-    )
-
-    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result_mesh)):
-        output_torch = ttnn.to_torch(out_dev)
-        torch_expected = (torch_a.float() @ torch_b_slices[dev_idx]).bfloat16()
-        passing, msg = comp_pcc(torch_expected, output_torch, pcc_threshold)
-        logger.info(f"Device {dev_idx} ({formats_per_device[dev_idx]}) PCC: {msg}")
-        assert passing, f"Device {dev_idx} ({formats_per_device[dev_idx]}) failed: {msg}"
-
-
-def _run_multi_device_multi_expert(
-    mesh_device, M, K, N, formats_per_device, core_grid, num_experts, selected_expert_idx, pcc_threshold=0.97
-):
-    """
-    Multi-expert variant: each device holds num_experts separate CompressedTensors.
-    N is the per-core shard width; total N per device = N × num_cores.
-
-    Experts on the same device may have different formats. At runtime, selected_expert_idx
-    picks which expert to compute, verified against the corresponding torch reference.
-
-    The fmt table is [num_experts, num_tiles] packed entries per core; the kernel
-    offsets by expert_idx * num_tiles to select the right row — no offset arithmetic
-    needed since addresses are stored explicitly per expert.
-    """
-    num_devices = mesh_device.get_num_devices()
-    assert len(formats_per_device) == num_devices
-
-    num_cores = core_grid.num_cores()
-    mesh_rows = mesh_device.shape[0]
-    mesh_cols = mesh_device.shape[1]
-    N_per_device = N * num_cores
-    N_total = N_per_device * num_devices
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-
-    # Build per-device, per-expert weight tensors and CompressedTensors.
-    # Expert e on device d uses formats_per_device[d] (same formats for all experts on a device).
-    torch_b_experts = []  # [num_experts][num_devices] = torch tensor (K, N_per_device)
-    cts = []  # [num_experts] = CompressedTensor
-
-    b_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [K, N], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-    all_formats = list({fmt for fmts in formats_per_device for fmt in fmts})
-    print(f"All formats used across devices: {all_formats}")
-    bfp0_mae = 1e-3 if "bfp0" in all_formats else 0.01
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
-
-    for expert_idx in range(num_experts):
-        expert_slices = []
-        for dev_idx, formats in enumerate(formats_per_device):
-            torch.manual_seed(expert_idx * 1000 + dev_idx * 42)
-            b_slice = torch.randn((K, N_per_device)).float()
-            _scale_tiles_random_formats(b_slice, all_formats)
-            expert_slices.append(b_slice)
-        torch_b_experts.append(expert_slices)
-
-        torch_b_4d = torch.stack(expert_slices).reshape(mesh_rows, mesh_cols, K, N_per_device)
-        logger.info(f"Uploading expert {expert_idx}/{num_experts}: shape={list(torch_b_4d.shape)}, {num_cores} core(s)")
-        ct = CompressedTensor.from_torch(
-            torch_b_4d,
-            assigner,
-            device=mesh_device,
-            memory_config=b_mem_config,
-            per_core_allocation=True,
-            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-        )
-        logger.info(f"Expert {expert_idx} uploaded")
-        cts.append(ct)
-
-    a_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    a_mesh = ttnn.from_torch(
-        torch_a.repeat(num_cores, 1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=a_mem_config,
-        tile=ttnn.Tile([M, 32]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    out_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, [M, N], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    out_mesh = ttnn.from_torch(
-        torch.zeros((M, N_total), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=out_mem_config,
-        tile=ttnn.Tile([M, 32]),
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-    )
-
-    logger.info(f"Running ExpertKernel.op with expert_idx={selected_expert_idx}")
-    index_tensor = _make_index_tensor(selected_expert_idx, core_grid, mesh_device)
-    result_mesh = ExpertKernel.op(
-        a_mesh,
-        cts,
-        [],
-        out_mesh,
-        index_tensor,
-        is_dram_flags=[0] * num_experts,
-        num_active_experts=1,
-        sram_core_grid=core_grid,
-    )
-
-    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result_mesh)):
-        output_torch = ttnn.to_torch(out_dev)
-        torch_expected = (torch_a.float() @ torch_b_experts[selected_expert_idx][dev_idx]).bfloat16()
-        passing, msg = comp_pcc(torch_expected, output_torch, pcc_threshold)
-        logger.info(f"Device {dev_idx} expert {selected_expert_idx} ({formats_per_device[dev_idx]}) PCC: {msg}")
-        assert passing, f"Device {dev_idx} expert {selected_expert_idx} failed: {msg}"
-
-
-# ---------------------------------------------------------------------------
-# Multi-device, multi-core tests (4×2 mesh, 8 devices)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                }
-            ),
-            id="N32_4cores",
-        ),
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                }
-            ),
-            id="N32_6cores",
-        ),
-        pytest.param(
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N128_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_device_same_formats(bh_2d_mesh_device, N, core_grid):
-    """All 8 devices use bfp8+bfp4, B sharded along N across cores and devices."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    _run_multi_device(mesh, M=1, K=7168, N=N, formats_per_device=[["bfp8", "bfp4"]] * 8, core_grid=core_grid)
-
-
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                }
-            ),
-            id="N32_4cores",
-        ),
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                }
-            ),
-            id="N32_6cores",
-        ),
-        pytest.param(
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N128_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_device_different_formats(bh_2d_mesh_device, N, core_grid):
-    """Each device gets its own compressed format: alternating bfp8+bfp4 and bfp8+bfp2."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    formats = [["bfp8", "bfp4"], ["bfp8", "bfp2"]] * 4
-    _run_multi_device(mesh, M=1, K=7168, N=N, formats_per_device=formats, core_grid=core_grid)
-
-
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                }
-            ),
-            id="N32_4cores",
-        ),
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                }
-            ),
-            id="N32_6cores",
-        ),
-        pytest.param(
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N128_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_device_asymmetric_formats(bh_2d_mesh_device, N, core_grid):
-    """Mixed: some devices bfp8 only, others all four formats."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    formats = [["bfp8"], ["bfp8", "bfp4"], ["bfp8", "bfp2"], ["bfp8", "bfp4", "bfp2", "bfp0"]] * 2
-    _run_multi_device(mesh, M=1, K=7168, N=N, formats_per_device=formats, core_grid=core_grid)
-
-
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
-                }
-            ),
-            id="N32_8cores",
-        ),
-        pytest.param(
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N128_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_device_wide(bh_2d_mesh_device, N, core_grid):
-    """Wider N output, alternating formats across 8 devices."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    formats = [["bfp8", "bfp4"], ["bfp8", "bfp2"]] * 4
-    _run_multi_device(mesh, M=1, K=7168, N=N, formats_per_device=formats, core_grid=core_grid)
-
-
-# ---------------------------------------------------------------------------
-# Multi-expert, multi-core tests (4×2 mesh, 8 experts per device)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("selected_expert_idx", [4])
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N64_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_expert(bh_2d_mesh_device, selected_expert_idx, N, core_grid):
-    """8 experts per device, same formats, verify first/middle/last expert selection."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    _run_multi_device_multi_expert(
-        mesh,
-        M=1,
-        K=7168,
-        N=N,
-        formats_per_device=[["bfp4", "bfp0"]] * 8,
-        core_grid=core_grid,
-        num_experts=8,
-        selected_expert_idx=selected_expert_idx,
-    )
-
-
-@pytest.mark.parametrize("selected_expert_idx", [3])
-@pytest.mark.parametrize(
-    "N, core_grid",
-    [
-        pytest.param(
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            id="N64_9cores",
-        ),
-    ],
-)
-def test_expert_kernel_multi_expert_mixed_formats(bh_2d_mesh_device, selected_expert_idx, N, core_grid):
-    """8 experts per device with mixed formats per device, verify selection correctness."""
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
-        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
-    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
-    formats = [
-        ["bfp4", "bfp2"],
-        ["bfp4"],
-        ["bfp4", "bfp2", "bfp0"],
-        ["bfp4", "bfp0"],
-        ["bfp2", "bfp0"],
-        ["bfp4", "bfp2"],
-        ["bfp4"],
-        ["bfp2"],
-    ]
-    _run_multi_device_multi_expert(
-        mesh,
-        M=1,
-        K=7168,
-        N=N,
-        formats_per_device=formats,
-        core_grid=core_grid,
-        num_experts=8,
-        selected_expert_idx=selected_expert_idx,
-    )
-
-
-# ---------------------------------------------------------------------------
-# DRAM expert path helpers and tests
-# ---------------------------------------------------------------------------
-
-
 def _pad_to_dram_banks(n, tile_w, lcm):
     remainder = n % lcm
     return n if remainder == 0 else n + (lcm - remainder)
 
 
-def _run_dram_expert_multi_device(
+# ---------------------------------------------------------------------------
+# Build helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_sram_cts_standard(
+    sram_expert_ids,
+    torch_b_all,
+    assigner,
     mesh_device,
-    M,
+    sram_core_grid,
     K,
-    N,
-    formats_per_device,
-    num_experts,
-    selected_expert_idx,
-    subblock_k=None,
-    cores_per_bank=1,
-    pcc_threshold=0.97,
+    N_sram_per_device,
+    sram_per_core_N,
+    num_devices,
+    mesh_rows,
+    mesh_cols,
+    tile_w,
 ):
-    """
-    Multi-device DRAM expert: each device streams its own N-slice from DRAM.
-    B is [K, N_per_device] per device, distributed via PlacementShard.
-    A is replicated, output is sharded along N across devices.
-    """
-    tile_w = 32
-    num_devices = mesh_device.get_num_devices()
-    mesh_rows = mesh_device.shape[0]
-    mesh_cols = mesh_device.shape[1]
-    assert len(formats_per_device) == num_devices
-
-    dev0 = ttnn.get_device_tensors(
-        ttnn.from_torch(
-            torch.zeros(num_devices, 1, dtype=torch.uint8),
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        )
-    )[0].device()
-    primary_cores_list = dev0.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-    num_banks = len(primary_cores_list)
-    num_cores = num_banks * cores_per_bank
-
-    n_padded = _pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_bank)
-    per_core_N = n_padded // (num_banks * cores_per_bank)  # elements per compute core
-    N_per_device = n_padded
-    N_total = N_per_device * num_devices
-
-    Kt = K // tile_w
-    if subblock_k is None:
-        subblock_k = Kt // 4 if Kt > 8 else Kt
-    if subblock_k % 2 != 0:
-        subblock_k = max(2, subblock_k - 1)
-    assert Kt % subblock_k == 0
-    num_subblocks_k = Kt // subblock_k
-
-    compute_core_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(c.x + offset, c.y), ttnn.CoreCoord(c.x + offset, c.y))
-            for c in primary_cores_list
-            for offset in range(cores_per_bank)
-        ]
+    """WIDTH_SHARDED SRAM CTs — each core holds full K, N/num_cores columns."""
+    sram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sram_core_grid, [K, sram_per_core_N * tile_w], ttnn.ShardOrientation.ROW_MAJOR),
     )
-
-    logger.info(
-        f"DRAM expert multi-device: M={M}, K={K}, N_per_device={N_per_device}, "
-        f"num_experts={num_experts}, selected={selected_expert_idx}, "
-        f"num_devices={num_devices}, num_banks={num_banks}"
-    )
-
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-
-    all_formats = list({fmt for fmts in formats_per_device for fmt in fmts})
-    bfp0_mae = 1e-3 if "bfp0" in all_formats else 0.01
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
-
-    # DRAM memory config (same for all devices — PlacementShard distributes per-device data)
-    dram_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dev0.dram_grid_size().x - 1, dev0.dram_grid_size().y - 1))]
-    )
-    total_N_per_bank = per_core_N * cores_per_bank
-    b_shard_spec = ttnn.ShardSpec(dram_grid, [K, total_N_per_bank], ttnn.ShardOrientation.ROW_MAJOR)
-    b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, b_shard_spec)
-
-    logger.info(f"Creating {num_experts} expert CTs in DRAM ({num_devices} devices)...")
-    torch_b_experts = {}
-    cts = []
-    for eidx in range(num_experts):
-        expert_slices = []
-        for dev_idx in range(num_devices):
-            torch.manual_seed(eidx * 1000 + dev_idx * 137)
-            b_raw = torch.randn((K, N_per_device)).float()
-            _scale_tiles_random_formats(b_raw, formats_per_device[dev_idx])
-            expert_slices.append(b_raw)
-            coord = ttnn.MeshCoordinate(dev_idx // mesh_cols, dev_idx % mesh_cols)
-            if coord not in torch_b_experts:
-                torch_b_experts[coord] = []
-            torch_b_experts[coord].append(b_raw)
-
-        # Shuffle each device's slice for column-major DRAM layout
-        slices_shuffled = [shuffle_tensor_tiles(s, tile_w, num_banks) for s in expert_slices]
-        torch_b_4d = torch.stack(slices_shuffled).reshape(mesh_rows, mesh_cols, K, N_per_device)
-
+    sram_cts = []
+    for eidx in sram_expert_ids:
+        b_4d = torch.stack(torch_b_all[eidx]).reshape(mesh_rows, mesh_cols, K, N_sram_per_device)
         ct = CompressedTensor.from_torch(
-            torch_b_4d,
+            b_4d,
             assigner,
             device=mesh_device,
-            memory_config=b_mem_config,
-            per_core_allocation=False,
+            memory_config=sram_b_mem,
+            per_core_allocation=True,
             mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
         )
-        cts.append(ct)
-        logger.info(f"  CT {eidx}/{num_experts} uploaded")
+        sram_cts.append(ct)
+        logger.info(f"  SRAM expert {eidx} uploaded (packed idx {len(sram_cts) - 1})")
+    return sram_cts
 
-    logger.info("Creating A, output, index mesh tensors...")
-    # A: HEIGHT_SHARDED, replicated across devices
-    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
-    a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec)
-    a_mesh = ttnn.from_torch(
-        torch_a.repeat(num_cores, 1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=a_mem_config,
-        tile=ttnn.Tile([M, tile_w]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+
+def _build_sram_cts_slice_k(
+    sram_expert_ids,
+    torch_b_all,
+    assigner,
+    mesh_device,
+    sram_core_grid,
+    sram_k_per_core,
+    sram_n_parallel,
+    num_sram_cores,
+    num_devices,
+    mesh_rows,
+    mesh_cols,
+    tile_w,
+):
+    """HEIGHT_SHARDED SRAM CTs with K-slicing — each core holds (k_per_core*32, 32)."""
+    sram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sram_core_grid, [sram_k_per_core * tile_w, tile_w], ttnn.ShardOrientation.ROW_MAJOR),
     )
+    sram_cts = []
+    for eidx in sram_expert_ids:
+        per_dev_shards = []
+        for dev_idx in range(num_devices):
+            b_full = torch_b_all[eidx][dev_idx]
+            shards = []
+            for i in range(num_sram_cores):
+                k_idx = i // sram_n_parallel
+                n_idx = i % sram_n_parallel
+                k_start = k_idx * sram_k_per_core * tile_w
+                k_end = k_start + sram_k_per_core * tile_w
+                n_start = n_idx * tile_w
+                n_end = n_start + tile_w
+                shards.append(b_full[k_start:k_end, n_start:n_end])
+            per_dev_shards.append(torch.cat(shards, dim=0))
+        b_4d = torch.stack(per_dev_shards).reshape(
+            mesh_rows, mesh_cols, num_sram_cores * sram_k_per_core * tile_w, tile_w
+        )
+        ct = CompressedTensor.from_torch(
+            b_4d,
+            assigner,
+            device=mesh_device,
+            memory_config=sram_b_mem,
+            per_core_allocation=True,
+            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+        )
+        sram_cts.append(ct)
+        logger.info(f"  SRAM expert {eidx} uploaded K-sliced (packed idx {len(sram_cts) - 1})")
+    return sram_cts
 
-    # Output: WIDTH_SHARDED per device, ShardTensorToMesh across devices
-    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
-    out_mesh = ttnn.from_torch(
-        torch.zeros((M, N_total), dtype=torch.bfloat16),
+
+def _build_sram_output(
+    mesh_device,
+    M,
+    sram_per_core_N,
+    num_active_sram,
+    num_sram_cores,
+    num_devices,
+    sram_core_grid,
+    tile_w,
+):
+    """SRAM output tensor on sram_core_grid."""
+    sram_out_per_core = sram_per_core_N * tile_w * num_active_sram
+    sram_out_total = sram_out_per_core * num_sram_cores * num_devices
+    sram_out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sram_core_grid, [M, sram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        torch.zeros((M, sram_out_total), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        memory_config=out_mem_config,
+        memory_config=sram_out_mem,
         tile=ttnn.Tile([M, tile_w]),
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
-    # Index: HEIGHT_SHARDED, replicated
-    index_torch = torch.zeros(num_cores, 16, dtype=torch.int32)
-    index_torch[:, 0] = selected_expert_idx
-    index_torch = index_torch.to(torch.uint16)
-    index_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+
+def _build_dram_output(
+    mesh_device,
+    M,
+    dram_per_core_N,
+    num_active_dram,
+    num_dram_cores_active,
+    num_devices,
+    dram_core_grid,
+    tile_w,
+):
+    """DRAM output tensor on dram_core_grid."""
+    dram_out_per_core = dram_per_core_N * tile_w * num_active_dram
+    dram_out_total = dram_out_per_core * num_dram_cores_active * num_devices
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(compute_core_grid, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(dram_core_grid, [M, dram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    index_mesh = ttnn.from_torch(
-        index_torch,
-        dtype=ttnn.uint16,
+    return ttnn.from_torch(
+        torch.zeros((M, dram_out_total), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        memory_config=index_mem_config,
-        tile=ttnn.Tile([1, 16]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=out_mem,
+        tile=ttnn.Tile([M, tile_w]),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
-
-    logger.info("Creating DRAM expert device tensors (in1_backing + metadata)...")
-    device_data = create_dram_expert_tensors_multi_device(
-        mesh_device, cts, subblock_k, num_subblocks_k, per_core_N // tile_w, cores_per_bank=cores_per_bank
-    )
-
-    logger.info("Running ExpertKernel.op (DRAM)...")
-    result_mesh = ExpertKernel.op(
-        a_mesh,
-        [],
-        cts,
-        out_mesh,
-        index_mesh,
-        is_dram_flags=[1] * num_experts,
-        num_active_experts=1,
-        subblock_k=subblock_k,
-        dram_core_grid=compute_core_grid,
-        dram_device_data=device_data,
-        cores_per_bank=cores_per_bank,
-    )
-
-    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result_mesh)):
-        output_torch = ttnn.to_torch(out_dev)
-        coord = ttnn.MeshCoordinate(dev_idx // mesh_cols, dev_idx % mesh_cols)
-        torch_expected = (torch_a.float() @ torch_b_experts[coord][selected_expert_idx].float()).bfloat16()
-        passing, msg = comp_pcc(torch_expected, output_torch, pcc_threshold)
-        logger.info(f"Device {dev_idx} expert {selected_expert_idx} PCC: {msg}")
-        assert passing, f"Device {dev_idx} failed: {msg}"
 
 
 # ---------------------------------------------------------------------------
-# DRAM expert tests — all use _run_dram_expert_multi_device (single device = 1×1 mesh)
+# Validate helpers
 # ---------------------------------------------------------------------------
 
 
-def test_dram_expert_single_bfp8(device):
-    """Single expert, bfp8 only — baseline sanity check."""
-    _run_dram_expert_multi_device(
-        device, M=1, K=128, N=256, formats_per_device=[["bfp8"]], num_experts=1, selected_expert_idx=0, subblock_k=2
-    )
+def _validate_sram_output(
+    sram_out_tensor,
+    torch_a,
+    torch_b_all,
+    active_sram,
+    sram_per_core_N,
+    num_sram_cores_active,
+    num_active_sram,
+    pcc_threshold,
+    tile_w,
+):
+    """Validate SRAM expert output from separate sram_out_tensor (no K-reduction)."""
+    sram_core_width = sram_per_core_N * tile_w
+    sram_out_shard = sram_core_width * num_active_sram
+
+    for dev_idx, sram_dev in enumerate(ttnn.get_device_tensors(sram_out_tensor)):
+        sram_output_dev = ttnn.to_torch(sram_dev)
+        for exp_offset, eidx in enumerate(active_sram):
+            slices = []
+            for ci in range(num_sram_cores_active):
+                start = ci * sram_out_shard + exp_offset * sram_core_width
+                slices.append(sram_output_dev[..., start : start + sram_core_width])
+            expert_output = torch.cat(slices, dim=-1)
+            torch_expected = (torch_a.float() @ torch_b_all[eidx][dev_idx].float()).bfloat16()
+            passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
+            logger.info(f"Device {dev_idx} expert {eidx} (SRAM) PCC: {msg}")
+            assert passing, f"Device {dev_idx} expert {eidx} (SRAM) failed: {msg}"
 
 
-def test_dram_expert_multi_expert_mixed_formats(device):
-    """4 experts, mixed bfp4+bfp2+bfp0."""
-    _run_dram_expert_multi_device(
-        device, M=1, K=7168, N=2048, formats_per_device=[["bfp4", "bfp2", "bfp0"]], num_experts=4, selected_expert_idx=2
-    )
+def _validate_sram_output_accum(
+    sram_out_tensor,
+    torch_a,
+    torch_b_all,
+    active_sram,
+    sram_per_core_N,
+    num_sram_cores_active,
+    pcc_threshold,
+    tile_w,
+):
+    """Validate accumulated SRAM expert output from separate sram_out_tensor."""
+    sram_core_width = sram_per_core_N * tile_w
+
+    for dev_idx, sram_dev in enumerate(ttnn.get_device_tensors(sram_out_tensor)):
+        sram_output_dev = ttnn.to_torch(sram_dev)
+        slices = []
+        for ci in range(num_sram_cores_active):
+            start = ci * sram_core_width
+            slices.append(sram_output_dev[..., start : start + sram_core_width])
+        accum_output = torch.cat(slices, dim=-1)
+        torch_expected = sum(torch_a.float() @ torch_b_all[eidx][dev_idx].float() for eidx in active_sram).bfloat16()
+        passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
+        logger.info(f"Device {dev_idx} accum (SRAM) PCC: {msg}")
+        assert passing, f"Device {dev_idx} accum (SRAM) failed: {msg}"
 
 
-def test_dram_expert_2cores_per_bank(device):
-    """2 cores per bank, 4 experts."""
-    _run_dram_expert_multi_device(
-        device,
-        M=1,
-        K=7168,
-        N=2048,
-        formats_per_device=[["bfp4", "bfp2"]],
-        num_experts=4,
-        selected_expert_idx=1,
-        cores_per_bank=2,
-    )
+def _validate_dram_output(
+    result,
+    torch_a,
+    torch_b_all,
+    active_dram,
+    dram_per_core_N,
+    num_dram_cores_active,
+    pcc_threshold,
+    dram_fuse_silu,
+    tile_w,
+):
+    """Validate per-expert DRAM output from dram_core_grid output tensor."""
+    dram_core_width = dram_per_core_N * tile_w
+    num_active_dram = len(active_dram)
+
+    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
+        output_dev = ttnn.to_torch(out_dev)
+        for exp_offset, eidx in enumerate(active_dram):
+            slices = []
+            for ci in range(num_dram_cores_active):
+                start = ci * dram_core_width * num_active_dram + exp_offset * dram_core_width
+                slices.append(output_dev[..., start : start + dram_core_width])
+            expert_output = torch.cat(slices, dim=-1)
+            mm_result = torch_a.float() @ torch_b_all[eidx][dev_idx].float()
+            if dram_fuse_silu:
+                mm_result = torch.nn.functional.silu(mm_result)
+            torch_expected = mm_result.bfloat16()
+            passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
+            logger.info(f"Device {dev_idx} expert {eidx} (DRAM) PCC: {msg}")
+            assert passing, f"Device {dev_idx} expert {eidx} (DRAM) failed: {msg}"
+
+
+def _validate_dram_output_accum(
+    result,
+    torch_a,
+    torch_b_all,
+    active_dram,
+    dram_per_core_N,
+    num_dram_cores_active,
+    pcc_threshold,
+    tile_w,
+):
+    """Validate accumulated DRAM output from dram_core_grid output tensor."""
+    dram_core_width = dram_per_core_N * tile_w
+
+    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
+        output_dev = ttnn.to_torch(out_dev)
+        slices = []
+        for ci in range(num_dram_cores_active):
+            start = ci * dram_core_width
+            slices.append(output_dev[..., start : start + dram_core_width])
+        accum_output = torch.cat(slices, dim=-1)
+        torch_expected = sum(torch_a.float() @ torch_b_all[eidx][dev_idx].float() for eidx in active_dram).bfloat16()
+        passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
+        logger.info(f"Device {dev_idx} accum (DRAM) PCC: {msg}")
+        assert passing, f"Device {dev_idx} accum (DRAM) failed: {msg}"
+
+
+def _validate_sram_output_slice_k(
+    sram_out_tensor,
+    torch_a,
+    torch_b_all,
+    active_sram,
+    sram_per_core_N,
+    num_active_sram,
+    sram_cores_list,
+    sram_k_parallel,
+    sram_n_parallel,
+    M,
+    N_sram_per_device,
+    pcc_threshold,
+    tile_w,
+):
+    """K-sliced SRAM verification — reduce K-partials from separate sram_out_tensor."""
+    for dev_idx, sram_dev in enumerate(ttnn.get_device_tensors(sram_out_tensor)):
+        sram_output_dev = ttnn.to_torch(sram_dev)
+        sram_out_shard = sram_per_core_N * tile_w * num_active_sram
+        for exp_offset, eidx in enumerate(active_sram):
+            partials = {}
+            for si, core in enumerate(sram_cores_list):
+                k_idx = si // sram_n_parallel
+                n_idx = si % sram_n_parallel
+                start = si * sram_out_shard + exp_offset * sram_per_core_N * tile_w
+                partials.setdefault((k_idx, n_idx), []).append(
+                    sram_output_dev[..., start : start + sram_per_core_N * tile_w]
+                )
+            reduced = torch.zeros((M, N_sram_per_device), dtype=sram_output_dev.dtype)
+            for n_idx in range(sram_n_parallel):
+                col_sum = sum(partials[(k_idx, n_idx)][0] for k_idx in range(sram_k_parallel))
+                reduced[..., n_idx * tile_w : (n_idx + 1) * tile_w] = col_sum
+            torch_expected = (torch_a.float() @ torch_b_all[eidx][dev_idx].float()).bfloat16()
+            passing, msg = comp_pcc(torch_expected, reduced, pcc_threshold)
+            logger.info(f"Device {dev_idx} expert {eidx} (SRAM-Ksliced) PCC: {msg}")
+            assert passing, f"Device {dev_idx} expert {eidx} (SRAM-Ksliced) failed: {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -807,78 +398,30 @@ def test_dram_expert_2cores_per_bank(device):
 # ---------------------------------------------------------------------------
 
 
-def _run_hybrid_expert_multi_device(
-    mesh_device,
-    M,
-    K,
-    N,
-    num_experts,
-    sram_expert_ids,
-    dram_expert_ids,
-    active_expert_ids,
-    formats_per_device,
-    num_sram_cores=4,
-    subblock_k=None,
-    cores_per_bank=1,
-    pcc_threshold=0.97,
-    accum_experts=False,
-    sram_cores_list_override=None,
-    sram_k_parallel=0,
-    sram_n_parallel=0,
-    dram_fuse_silu=False,
-):
+def _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cores_override, has_sram):
+    """Build SRAM / DRAM / compute core grids from device topology.
+
+    DRAM cores are always included. SRAM cores are included only when has_sram is True.
     """
-    Hybrid expert test for single-device (1×1 mesh) and multi-device meshes.
-    Each device holds its own N-slice of both SRAM and DRAM experts; devices may
-    use different compressed formats (formats_per_device[dev_idx]).
-    SRAM CTs distributed via PlacementShard; DRAM CTs likewise.
-    A is replicated; output is sharded along N across devices.
-
-    If sram_cores_list_override is provided, those cores are used for SRAM
-    (allowing overlap with DRAM bank cores).
-
-    If sram_k_parallel > 0, SRAM weights use HEIGHT_SHARDED (k_per_core*32, 32)
-    with K-sliced matmul: each core offsets into the full activation by k_offset
-    tiles. Verification sums k_parallel partial results per N column.
-    """
-    tile_w = 32
-    num_active_experts = len(active_expert_ids)
-    sram_id_set = set(sram_expert_ids)
-
-    num_devices = mesh_device.get_num_devices()
-    mesh_rows = mesh_device.shape[0]
-    mesh_cols = mesh_device.shape[1]
-
-    # Get device topology from device 0.
-    dummy = ttnn.from_torch(
-        torch.zeros(num_devices, 1, dtype=torch.uint8),
-        dtype=ttnn.uint8,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-    dev0 = ttnn.get_device_tensors(dummy)[0].device()
-
-    primary_cores_list = dev0.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-    num_banks = len(primary_cores_list)
+    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     dram_cores_list = []
     for pc in primary_cores_list:
-        for offset in range(cores_per_bank):
+        for offset in range(cores_per_dram_bank):
             dram_cores_list.append(ttnn.CoreCoord(pc.x + offset, pc.y))
     dram_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in dram_cores_list]
     )
 
     dram_core_set = set((c.x, c.y) for c in dram_cores_list)
-    compute_grid = dev0.compute_with_storage_grid_size()
+    compute_grid = mesh_device.compute_with_storage_grid_size()
     available_cores = [
         ttnn.CoreCoord(x, y)
         for y in range(compute_grid.y)
         for x in range(compute_grid.x)
         if (x, y) not in dram_core_set
     ]
-    if sram_cores_list_override is not None:
-        sram_cores_list = list(sram_cores_list_override)
+    if sram_cores_override is not None:
+        sram_cores_list = list(sram_cores_override)
         num_sram_cores = len(sram_cores_list)
         num_overlap = sum(1 for c in sram_cores_list if (c.x, c.y) in dram_core_set)
         logger.info(
@@ -894,20 +437,12 @@ def _run_hybrid_expert_multi_device(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in sram_cores_list]
     )
 
-    all_cores_list = []
-    num_sram_cores_active = 0
-    num_dram_cores_active = 0
-    if sram_expert_ids:
-        all_cores_list.extend(sram_cores_list)
-        num_sram_cores_active = len(sram_cores_list)
+    # Combine SRAM + DRAM, deduplicate (may overlap with sram_cores_override).
+    all_cores_list = list(dram_cores_list)
+    if has_sram:
+        all_cores_list = list(sram_cores_list) + all_cores_list
     else:
         sram_core_grid = None
-    if dram_expert_ids:
-        all_cores_list.extend(dram_cores_list)
-        num_dram_cores_active = len(dram_cores_list)
-    else:
-        dram_core_grid = None
-    # Deduplicate cores (SRAM and DRAM may overlap when using sram_cores_list_override).
     seen = set()
     unique_cores_list = []
     for c in all_cores_list:
@@ -915,60 +450,110 @@ def _run_hybrid_expert_multi_device(
         if key not in seen:
             seen.add(key)
             unique_cores_list.append(c)
-    all_cores_list = unique_cores_list
-    num_cores = len(all_cores_list)
     compute_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in all_cores_list]
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in unique_cores_list]
     )
 
+    return dict(
+        sram_cores_list=sram_cores_list,
+        sram_core_grid=sram_core_grid,
+        dram_cores_list=dram_cores_list,
+        dram_core_grid=dram_core_grid,
+        compute_core_grid=compute_core_grid,
+    )
+
+
+def _build_dram_experts(
+    dram_expert_ids,
+    torch_b_all,
+    assigner,
+    mesh_device,
+    K,
+    dram_per_core_N,
+    N_dram_per_device,
+    num_banks,
+    cores_per_dram_bank,
+    num_experts,
+    dram_meta_flags,
+    mesh_rows,
+    mesh_cols,
+    subblock_k,
+    Kt,
+    tile_w,
+):
+    """Build DRAM CompressedTensors and dram_device_data for the kernel."""
+    dram_grid_size = mesh_device.dram_grid_size()
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        ]
+    )
+    dram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, dram_per_core_N * tile_w * cores_per_dram_bank], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    dram_cts = []
+    for eidx in dram_expert_ids:
+        slices_shuffled = [shuffle_tensor_tiles(b, tile_w, num_banks) for b in torch_b_all[eidx]]
+        b_4d = torch.stack(slices_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
+        ct = CompressedTensor.from_torch(
+            b_4d,
+            assigner,
+            device=mesh_device,
+            memory_config=dram_b_mem,
+            per_core_allocation=False,
+            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+        )
+        dram_cts.append(ct)
+        logger.info(f"  DRAM expert {eidx} uploaded (packed idx {len(dram_cts) - 1})")
+
+    num_subblocks_k = Kt // subblock_k
+    dram_device_data = create_dram_expert_tensors_multi_device(
+        mesh_device,
+        dram_cts,
+        subblock_k,
+        num_subblocks_k,
+        dram_per_core_N,
+        cores_per_dram_bank=cores_per_dram_bank,
+        num_total_experts=num_experts,
+        is_dram_flags=dram_meta_flags,
+    )
+    return dram_cts, dram_device_data
+
+
+def _compute_dram_matmul_params(
+    K, N, tile_w, num_banks, num_dram_cores, num_dram_cores_active, cores_per_dram_bank, subblock_k
+):
+    """Compute DRAM per-core tiling and subblock_k."""
     Kt = K // tile_w
-    num_dram_cores = len(dram_cores_list)
-
-    # Compute per-core N tiles separately for each path.
-    dram_per_core_N = 0
-    sram_per_core_N = 0
-    if dram_expert_ids:
-        n_dram_padded = _pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_bank)
-        dram_per_core_N = n_dram_padded // num_dram_cores // tile_w
-    sram_k_per_core = 0
-    if sram_expert_ids and sram_k_parallel > 0:
-        assert sram_n_parallel > 0
-        assert num_sram_cores == sram_k_parallel * sram_n_parallel
-        sram_k_per_core = Kt // sram_k_parallel
-        sram_per_core_N = N // sram_n_parallel // tile_w
-    elif sram_expert_ids:
-        sram_per_core_N = N // num_sram_cores // tile_w
-
+    n_dram_padded = _pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_dram_bank)
+    dram_per_core_N = n_dram_padded // num_dram_cores // tile_w
     if subblock_k is None:
         subblock_k = Kt // 4 if Kt > 8 else Kt
     if subblock_k % 2 != 0:
         subblock_k = max(2, subblock_k - 1)
     assert Kt % subblock_k == 0
-
-    N_sram_per_device = N
     N_dram_per_device = dram_per_core_N * tile_w * num_dram_cores_active
+    return Kt, dram_per_core_N, subblock_k, N_dram_per_device
 
-    logger.info(
-        f"Hybrid multi-device: M={M}, K={K}, sram_per_core_N={sram_per_core_N}, "
-        f"dram_per_core_N={dram_per_core_N}, "
-        f"num_sram_cores={num_sram_cores_active}, num_dram_cores={num_dram_cores_active}, "
-        f"num_devices={num_devices}, sram_ids={sram_expert_ids}, dram_ids={dram_expert_ids}, "
-        f"active={active_expert_ids}"
-    )
 
-    assert len(formats_per_device) == num_devices
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-
+def _build_assigner(formats_per_device):
+    """Create CompressedTensorAssigner from per-device format lists."""
     all_formats = list({fmt for fmts in formats_per_device for fmt in fmts})
     bfp0_mae = 1e-3 if "bfp0" in all_formats else 0.01
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
+    return CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
 
-    # Build per-expert, per-device B tensors (each device scaled with its own formats).
-    torch_b_all = {}  # torch_b_all[eidx][dev_idx] = torch tensor
+
+def _build_weight_tensors(num_experts, K, N, N_dram_per_device, sram_id_set, formats_per_device, num_devices):
+    """Build per-expert, per-device random B weight tensors."""
+    torch_b_all = {}
     for eidx in range(num_experts):
         torch.manual_seed(eidx * 1000 + 42)
-        N_per_dev = N_sram_per_device if eidx in sram_id_set else N_dram_per_device
+        N_per_dev = N if eidx in sram_id_set else N_dram_per_device
         per_dev = []
         for dev_idx in range(num_devices):
             b = torch.randn((K, N_per_dev)).float()
@@ -976,109 +561,28 @@ def _run_hybrid_expert_multi_device(
             per_dev.append(b)
         torch_b_all[eidx] = per_dev
         logger.info(f"  torch_b expert {eidx}/{num_experts} created")
+    return torch_b_all
 
-    # SRAM CTs via PlacementShard.
-    sram_cts = []
-    if sram_expert_ids and sram_k_parallel > 0:
-        # K-sliced: HEIGHT_SHARDED (k_per_core*32, 32) per core.
-        # Slice each (K, N) weight into k_parallel*n_parallel shards, concatenate along dim=0.
-        sram_b_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(sram_core_grid, [sram_k_per_core * tile_w, tile_w], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        for eidx in sram_expert_ids:
-            per_dev_shards = []
-            for dev_idx in range(num_devices):
-                b_full = torch_b_all[eidx][dev_idx]  # (K, N_sram_per_device)
-                shards = []
-                for i in range(num_sram_cores):
-                    k_idx = i // sram_n_parallel
-                    n_idx = i % sram_n_parallel
-                    k_start = k_idx * sram_k_per_core * tile_w
-                    k_end = k_start + sram_k_per_core * tile_w
-                    n_start = n_idx * tile_w
-                    n_end = n_start + tile_w
-                    shards.append(b_full[k_start:k_end, n_start:n_end])
-                per_dev_shards.append(torch.cat(shards, dim=0))
-            b_4d = torch.stack(per_dev_shards).reshape(
-                mesh_rows, mesh_cols, num_sram_cores * sram_k_per_core * tile_w, tile_w
-            )
-            ct = CompressedTensor.from_torch(
-                b_4d,
-                assigner,
-                device=mesh_device,
-                memory_config=sram_b_mem,
-                per_core_allocation=True,
-                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-            )
-            sram_cts.append(ct)
-            logger.info(f"  SRAM expert {eidx} uploaded K-sliced (packed idx {len(sram_cts) - 1})")
-    elif sram_expert_ids:
-        sram_b_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(sram_core_grid, [K, sram_per_core_N * tile_w], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        for eidx in sram_expert_ids:
-            b_4d = torch.stack(torch_b_all[eidx]).reshape(mesh_rows, mesh_cols, K, N_sram_per_device)
-            ct = CompressedTensor.from_torch(
-                b_4d,
-                assigner,
-                device=mesh_device,
-                memory_config=sram_b_mem,
-                per_core_allocation=True,
-                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-            )
-            sram_cts.append(ct)
-            logger.info(f"  SRAM expert {eidx} uploaded (packed idx {len(sram_cts) - 1})")
 
-    # DRAM CTs via PlacementShard (column-major shuffled per device).
-    dram_cts = []
-    if dram_expert_ids:
-        dram_grid = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(dev0.dram_grid_size().x - 1, dev0.dram_grid_size().y - 1),
-                )
-            ]
-        )
-        dram_b_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_grid, [K, dram_per_core_N * tile_w * cores_per_bank], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        for eidx in dram_expert_ids:
-            slices_shuffled = [shuffle_tensor_tiles(b, tile_w, num_banks) for b in torch_b_all[eidx]]
-            b_4d = torch.stack(slices_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
-            ct = CompressedTensor.from_torch(
-                b_4d,
-                assigner,
-                device=mesh_device,
-                memory_config=dram_b_mem,
-                per_core_allocation=False,
-                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-            )
-            dram_cts.append(ct)
-            logger.info(f"  DRAM expert {eidx} uploaded (packed idx {len(dram_cts) - 1})")
-
-    # Build-time flags: all DRAM experts get metadata entries (including SRAM-cached ones).
+def _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids):
+    """Build dram_meta_flags (build-time) and is_dram_flags (run-time)."""
     dram_meta_flags = [0] * num_experts
     for eidx in dram_expert_ids:
         dram_meta_flags[eidx] = 1
-    # Run-time flags: SRAM-cached experts are routed to SRAM path.
     is_dram_flags = list(dram_meta_flags)
     for eidx in sram_expert_ids:
         is_dram_flags[eidx] = 0
+    return dram_meta_flags, is_dram_flags
 
-    # A tensor: HEIGHT_SHARDED, replicated across devices.
+
+def _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w):
+    """Create HEIGHT_SHARDED A tensor, replicated across devices."""
     a_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    a_tensor = ttnn.from_torch(
+    return ttnn.from_torch(
         torch_a.repeat(num_cores, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -1088,69 +592,9 @@ def _run_hybrid_expert_multi_device(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # Output tensors.
-    num_active_sram = sum(1 for eid in active_expert_ids if eid in sram_id_set)
-    num_active_dram = num_active_experts - num_active_sram
 
-    sram_out_tensor = None
-    if sram_k_parallel > 0 and sram_expert_ids:
-        # Separate SRAM output on sram_core_grid.
-        sram_out_per_core = sram_per_core_N * tile_w * num_active_sram
-        sram_out_total = sram_out_per_core * num_sram_cores * num_devices
-        sram_out_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(sram_core_grid, [M, sram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        sram_out_tensor = ttnn.from_torch(
-            torch.zeros((M, sram_out_total), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=sram_out_mem,
-            tile=ttnn.Tile([M, tile_w]),
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
-        # DRAM output on dram_core_grid (or compute_core_grid if no separate SRAM output).
-        dram_out_per_core = dram_per_core_N * tile_w * num_active_dram
-        dram_out_total = dram_out_per_core * num_dram_cores_active * num_devices
-        out_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(dram_core_grid, [M, dram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        out_tensor = ttnn.from_torch(
-            torch.zeros((M, dram_out_total), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=out_mem,
-            tile=ttnn.Tile([M, tile_w]),
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
-    else:
-        max_per_core_N = max(sram_per_core_N, dram_per_core_N)
-        if accum_experts:
-            out_per_core_width = max_per_core_N * tile_w
-        else:
-            out_per_core_width = max_per_core_N * tile_w * num_active_experts
-        out_total_px = out_per_core_width * num_cores * num_devices
-        out_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(compute_core_grid, [M, out_per_core_width], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        out_tensor = ttnn.from_torch(
-            torch.zeros((M, out_total_px), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=out_mem,
-            tile=ttnn.Tile([M, tile_w]),
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
-
-    # Index tensor: HEIGHT_SHARDED, replicated.
+def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores):
+    """Create HEIGHT_SHARDED uint16 index tensor, replicated across devices."""
     index_torch = torch.zeros(num_cores, 16, dtype=torch.int32)
     for i, expert_id in enumerate(active_expert_ids):
         index_torch[:, i] = expert_id
@@ -1159,7 +603,7 @@ def _run_hybrid_expert_multi_device(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(compute_core_grid, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    index_tensor = ttnn.from_torch(
+    return ttnn.from_torch(
         index_torch.to(torch.uint16),
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
@@ -1169,20 +613,147 @@ def _run_hybrid_expert_multi_device(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    dram_device_data = None
-    if dram_expert_ids:
-        num_subblocks_k = Kt // subblock_k
-        dram_device_data = create_dram_expert_tensors_multi_device(
-            mesh_device,
-            dram_cts,
-            subblock_k,
-            num_subblocks_k,
-            dram_per_core_N,
-            cores_per_bank=cores_per_bank,
-            num_total_experts=num_experts,
-            is_dram_flags=dram_meta_flags,
-        )
 
+# ---------------------------------------------------------------------------
+# Variant runners — each does common setup, builds SRAM CTs + output, runs
+# the kernel, and validates.
+# ---------------------------------------------------------------------------
+
+
+def _run_standard(
+    mesh_device,
+    M,
+    K,
+    N,
+    num_experts,
+    sram_expert_ids,
+    dram_expert_ids,
+    active_expert_ids,
+    formats_per_device,
+    subblock_k,
+    cores_per_dram_bank,
+    sram_cores_override,
+    sram_k_parallel,
+    sram_n_parallel,
+    pcc_threshold,
+    dram_fuse_silu,
+):
+    """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
+    tile_w = 32
+    sram_id_set = set(sram_expert_ids)
+    has_sram = bool(sram_expert_ids)
+    num_sram_cores = sram_k_parallel * sram_n_parallel
+
+    grids = _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cores_override, has_sram)
+    sram_cores_list = grids["sram_cores_list"]
+    sram_core_grid = grids["sram_core_grid"]
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(grids["dram_cores_list"])
+
+    num_devices = mesh_device.get_num_devices()
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+        K,
+        N,
+        tile_w,
+        num_banks,
+        num_dram_cores,
+        num_dram_cores,
+        cores_per_dram_bank,
+        subblock_k,
+    )
+
+    assert len(formats_per_device) == num_devices
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    assigner = _build_assigner(formats_per_device)
+    torch_b_all = _build_weight_tensors(
+        num_experts,
+        K,
+        N,
+        N_dram_per_device,
+        sram_id_set,
+        formats_per_device,
+        num_devices,
+    )
+    dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
+    dram_cts, dram_device_data = _build_dram_experts(
+        dram_expert_ids,
+        torch_b_all,
+        assigner,
+        mesh_device,
+        K,
+        dram_per_core_N,
+        N_dram_per_device,
+        num_banks,
+        cores_per_dram_bank,
+        num_experts,
+        dram_meta_flags,
+        mesh_device.shape[0],
+        mesh_device.shape[1],
+        subblock_k,
+        Kt,
+        tile_w,
+    )
+    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+
+    active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
+    active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
+    num_active_experts = len(active_sram) + len(active_dram)
+    num_sram_cores_active = len(sram_cores_list) if sram_expert_ids else 0
+    num_cores = compute_core_grid.num_cores()
+    sram_per_core_N = N // num_sram_cores_active // tile_w if num_sram_cores_active else 0
+
+    sram_cts = (
+        _build_sram_cts_standard(
+            sram_expert_ids,
+            torch_b_all,
+            assigner,
+            mesh_device,
+            sram_core_grid,
+            K,
+            N,
+            sram_per_core_N,
+            num_devices,
+            mesh_device.shape[0],
+            mesh_device.shape[1],
+            tile_w,
+        )
+        if has_sram
+        else []
+    )
+
+    num_active_sram = len(active_sram)
+    num_active_dram = len(active_dram)
+
+    sram_out_tensor = (
+        _build_sram_output(
+            mesh_device,
+            M,
+            sram_per_core_N,
+            num_active_sram,
+            num_sram_cores_active,
+            num_devices,
+            sram_core_grid,
+            tile_w,
+        )
+        if has_sram
+        else None
+    )
+    out_tensor = _build_dram_output(
+        mesh_device,
+        M,
+        dram_per_core_N,
+        num_active_dram,
+        num_dram_cores,
+        num_devices,
+        dram_core_grid,
+        tile_w,
+    )
     result = ExpertKernel.op(
         a_tensor,
         sram_cts,
@@ -1195,129 +766,467 @@ def _run_hybrid_expert_multi_device(
         sram_core_grid=sram_core_grid,
         dram_core_grid=dram_core_grid,
         dram_device_data=dram_device_data,
-        cores_per_bank=cores_per_bank,
-        accum_experts=accum_experts,
+        cores_per_dram_bank=cores_per_dram_bank,
+        accum_experts=False,
+        sram_per_core_n=sram_per_core_N,
+        dram_per_core_n=dram_per_core_N,
+        sram_k_per_core=0,
+        sram_output_tensor=sram_out_tensor,
+        dram_fuse_silu=dram_fuse_silu,
+    )
+    if active_sram:
+        _validate_sram_output(
+            sram_out_tensor,
+            torch_a,
+            torch_b_all,
+            active_sram,
+            sram_per_core_N,
+            num_sram_cores_active,
+            num_active_sram,
+            pcc_threshold,
+            tile_w,
+        )
+    if active_dram:
+        _validate_dram_output(
+            result,
+            torch_a,
+            torch_b_all,
+            active_dram,
+            dram_per_core_N,
+            num_dram_cores,
+            pcc_threshold,
+            dram_fuse_silu,
+            tile_w,
+        )
+
+
+def _run_accum(
+    mesh_device,
+    M,
+    K,
+    N,
+    num_experts,
+    sram_expert_ids,
+    dram_expert_ids,
+    active_expert_ids,
+    formats_per_device,
+    subblock_k,
+    cores_per_dram_bank,
+    sram_cores_override,
+    sram_k_parallel,
+    sram_n_parallel,
+    pcc_threshold,
+):
+    """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
+    tile_w = 32
+    sram_id_set = set(sram_expert_ids)
+    has_sram = bool(sram_expert_ids)
+    num_sram_cores = sram_k_parallel * sram_n_parallel
+
+    grids = _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cores_override, has_sram)
+    sram_cores_list = grids["sram_cores_list"]
+    sram_core_grid = grids["sram_core_grid"]
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(grids["dram_cores_list"])
+
+    num_devices = mesh_device.get_num_devices()
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+        K,
+        N,
+        tile_w,
+        num_banks,
+        num_dram_cores,
+        num_dram_cores,
+        cores_per_dram_bank,
+        subblock_k,
+    )
+
+    assert len(formats_per_device) == num_devices
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    assigner = _build_assigner(formats_per_device)
+    torch_b_all = _build_weight_tensors(
+        num_experts,
+        K,
+        N,
+        N_dram_per_device,
+        sram_id_set,
+        formats_per_device,
+        num_devices,
+    )
+    dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
+    dram_cts, dram_device_data = _build_dram_experts(
+        dram_expert_ids,
+        torch_b_all,
+        assigner,
+        mesh_device,
+        K,
+        dram_per_core_N,
+        N_dram_per_device,
+        num_banks,
+        cores_per_dram_bank,
+        num_experts,
+        dram_meta_flags,
+        mesh_device.shape[0],
+        mesh_device.shape[1],
+        subblock_k,
+        Kt,
+        tile_w,
+    )
+    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+
+    active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
+    active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
+    num_active_experts = len(active_sram) + len(active_dram)
+    num_sram_cores_active = len(sram_cores_list) if sram_expert_ids else 0
+    num_cores = compute_core_grid.num_cores()
+    sram_per_core_N = N // num_sram_cores_active // tile_w if num_sram_cores_active else 0
+
+    sram_cts = (
+        _build_sram_cts_standard(
+            sram_expert_ids,
+            torch_b_all,
+            assigner,
+            mesh_device,
+            sram_core_grid,
+            K,
+            N,
+            sram_per_core_N,
+            num_devices,
+            mesh_device.shape[0],
+            mesh_device.shape[1],
+            tile_w,
+        )
+        if has_sram
+        else []
+    )
+
+    sram_out_tensor = (
+        _build_sram_output(
+            mesh_device,
+            M,
+            sram_per_core_N,
+            1,
+            num_sram_cores_active,
+            num_devices,
+            sram_core_grid,
+            tile_w,
+        )
+        if has_sram
+        else None
+    )
+    out_tensor = _build_dram_output(
+        mesh_device,
+        M,
+        dram_per_core_N,
+        1,
+        num_dram_cores,
+        num_devices,
+        dram_core_grid,
+        tile_w,
+    )
+    result = ExpertKernel.op(
+        a_tensor,
+        sram_cts,
+        dram_cts,
+        out_tensor,
+        index_tensor,
+        is_dram_flags,
+        num_active_experts=num_active_experts,
+        subblock_k=subblock_k,
+        sram_core_grid=sram_core_grid,
+        dram_core_grid=dram_core_grid,
+        dram_device_data=dram_device_data,
+        cores_per_dram_bank=cores_per_dram_bank,
+        accum_experts=True,
+        sram_per_core_n=sram_per_core_N,
+        dram_per_core_n=dram_per_core_N,
+        sram_k_per_core=0,
+        sram_output_tensor=sram_out_tensor,
+        dram_fuse_silu=False,
+    )
+    if active_sram:
+        _validate_sram_output_accum(
+            sram_out_tensor,
+            torch_a,
+            torch_b_all,
+            active_sram,
+            sram_per_core_N,
+            num_sram_cores_active,
+            pcc_threshold,
+            tile_w,
+        )
+    if active_dram:
+        _validate_dram_output_accum(
+            result,
+            torch_a,
+            torch_b_all,
+            active_dram,
+            dram_per_core_N,
+            num_dram_cores,
+            pcc_threshold,
+            tile_w,
+        )
+
+
+def _run_slice_k(
+    mesh_device,
+    M,
+    K,
+    N,
+    num_experts,
+    sram_expert_ids,
+    dram_expert_ids,
+    active_expert_ids,
+    formats_per_device,
+    subblock_k,
+    cores_per_dram_bank,
+    sram_cores_override,
+    sram_k_parallel,
+    sram_n_parallel,
+    pcc_threshold,
+    dram_fuse_silu,
+):
+    """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
+    tile_w = 32
+    sram_id_set = set(sram_expert_ids)
+    has_sram = bool(sram_expert_ids)
+    num_sram_cores = sram_k_parallel * sram_n_parallel
+
+    grids = _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cores_override, has_sram)
+    sram_cores_list = grids["sram_cores_list"]
+    sram_core_grid = grids["sram_core_grid"]
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(grids["dram_cores_list"])
+
+    num_devices = mesh_device.get_num_devices()
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+        K,
+        N,
+        tile_w,
+        num_banks,
+        num_dram_cores,
+        num_dram_cores,
+        cores_per_dram_bank,
+        subblock_k,
+    )
+
+    assert len(formats_per_device) == num_devices
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    assigner = _build_assigner(formats_per_device)
+    torch_b_all = _build_weight_tensors(
+        num_experts,
+        K,
+        N,
+        N_dram_per_device,
+        sram_id_set,
+        formats_per_device,
+        num_devices,
+    )
+    dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
+    dram_cts, dram_device_data = _build_dram_experts(
+        dram_expert_ids,
+        torch_b_all,
+        assigner,
+        mesh_device,
+        K,
+        dram_per_core_N,
+        N_dram_per_device,
+        num_banks,
+        cores_per_dram_bank,
+        num_experts,
+        dram_meta_flags,
+        mesh_device.shape[0],
+        mesh_device.shape[1],
+        subblock_k,
+        Kt,
+        tile_w,
+    )
+    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+
+    active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
+    active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
+    num_active_experts = len(active_sram) + len(active_dram)
+    num_sram_cores_active = len(sram_cores_list)
+    num_active_sram = len(active_sram)
+    num_active_dram = len(active_dram)
+
+    sram_k_per_core = Kt // sram_k_parallel
+    sram_per_core_N = N // sram_n_parallel // tile_w
+
+    sram_cts = _build_sram_cts_slice_k(
+        sram_expert_ids,
+        torch_b_all,
+        assigner,
+        mesh_device,
+        sram_core_grid,
+        sram_k_per_core,
+        sram_n_parallel,
+        num_sram_cores_active,
+        num_devices,
+        mesh_device.shape[0],
+        mesh_device.shape[1],
+        tile_w,
+    )
+
+    sram_out_tensor = _build_sram_output(
+        mesh_device,
+        M,
+        sram_per_core_N,
+        num_active_sram,
+        num_sram_cores_active,
+        num_devices,
+        sram_core_grid,
+        tile_w,
+    )
+    out_tensor = _build_dram_output(
+        mesh_device,
+        M,
+        dram_per_core_N,
+        num_active_dram,
+        num_dram_cores,
+        num_devices,
+        dram_core_grid,
+        tile_w,
+    )
+    result = ExpertKernel.op(
+        a_tensor,
+        sram_cts,
+        dram_cts,
+        out_tensor,
+        index_tensor,
+        is_dram_flags,
+        num_active_experts=num_active_experts,
+        subblock_k=subblock_k,
+        sram_core_grid=sram_core_grid,
+        dram_core_grid=dram_core_grid,
+        dram_device_data=dram_device_data,
+        cores_per_dram_bank=cores_per_dram_bank,
+        accum_experts=False,
         sram_per_core_n=sram_per_core_N,
         dram_per_core_n=dram_per_core_N,
         sram_k_per_core=sram_k_per_core,
         sram_output_tensor=sram_out_tensor,
         dram_fuse_silu=dram_fuse_silu,
     )
+    if active_sram:
+        _validate_sram_output_slice_k(
+            sram_out_tensor,
+            torch_a,
+            torch_b_all,
+            active_sram,
+            sram_per_core_N,
+            num_active_sram,
+            sram_cores_list,
+            sram_k_parallel,
+            sram_n_parallel,
+            M,
+            N,
+            pcc_threshold,
+            tile_w,
+        )
+    if active_dram:
+        _validate_dram_output(
+            result,
+            torch_a,
+            torch_b_all,
+            active_dram,
+            dram_per_core_N,
+            num_dram_cores,
+            pcc_threshold,
+            dram_fuse_silu,
+            tile_w,
+        )
 
-    # Verify per device.
-    out_shard_width = max(sram_per_core_N, dram_per_core_N) * tile_w
-    sram_core_width = sram_per_core_N * tile_w
-    dram_core_width = dram_per_core_N * tile_w
-    active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
-    active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
 
-    if accum_experts:
-        # Accumulated output: one set of output tiles per path, summed across experts.
-        for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
-            output_dev = ttnn.to_torch(out_dev)
-
-            def _verify_accum(expert_ids, label, core_offset, num_path_cores, path_width, _dev_idx=dev_idx):
-                slices = []
-                for ci in range(num_path_cores):
-                    start = (core_offset + ci) * out_shard_width
-                    slices.append(output_dev[..., start : start + path_width])
-                accum_output = torch.cat(slices, dim=-1)
-                torch_expected = sum(
-                    torch_a.float() @ torch_b_all[eidx][_dev_idx].float() for eidx in expert_ids
-                ).bfloat16()
-                passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
-                logger.info(f"Device {_dev_idx} accum ({label}) PCC: {msg}")
-                assert passing, f"Device {_dev_idx} accum ({label}) failed: {msg}"
-
-            if active_sram:
-                _verify_accum(active_sram, "SRAM", 0, num_sram_cores_active, sram_core_width)
-            if active_dram:
-                _verify_accum(active_dram, "DRAM", num_sram_cores_active, num_dram_cores_active, dram_core_width)
+def _run_hybrid_expert_multi_device(
+    mesh_device,
+    M,
+    K,
+    N,
+    num_experts,
+    sram_expert_ids,
+    dram_expert_ids,
+    active_expert_ids,
+    formats_per_device,
+    subblock_k=None,
+    cores_per_dram_bank=1,
+    pcc_threshold=0.97,
+    accum_experts=False,
+    sram_cores_override=None,
+    sram_k_parallel=1,
+    sram_n_parallel=1,
+    dram_fuse_silu=False,
+):
+    """Dispatcher: delegate to the appropriate variant."""
+    slice_k = sram_k_parallel > 1
+    if slice_k:
+        _run_slice_k(
+            mesh_device,
+            M,
+            K,
+            N,
+            num_experts,
+            sram_expert_ids,
+            dram_expert_ids,
+            active_expert_ids,
+            formats_per_device,
+            subblock_k,
+            cores_per_dram_bank,
+            sram_cores_override,
+            sram_k_parallel,
+            sram_n_parallel,
+            pcc_threshold,
+            dram_fuse_silu,
+        )
+    elif accum_experts:
+        _run_accum(
+            mesh_device,
+            M,
+            K,
+            N,
+            num_experts,
+            sram_expert_ids,
+            dram_expert_ids,
+            active_expert_ids,
+            formats_per_device,
+            subblock_k,
+            cores_per_dram_bank,
+            sram_cores_override,
+            sram_k_parallel,
+            sram_n_parallel,
+            pcc_threshold,
+        )
     else:
-        for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
-            output_dev = ttnn.to_torch(out_dev)
-
-            def _verify(expert_ids, label, core_offset, num_path_cores, path_width, apply_silu=False, _dev_idx=dev_idx):
-                for exp_offset, eidx in enumerate(expert_ids):
-                    slices = []
-                    for ci in range(num_path_cores):
-                        start = (core_offset + ci) * out_shard_width + exp_offset * path_width
-                        slices.append(output_dev[..., start : start + path_width])
-                    expert_output = torch.cat(slices, dim=-1)
-                    mm_result = torch_a.float() @ torch_b_all[eidx][_dev_idx].float()
-                    if apply_silu:
-                        mm_result = torch.nn.functional.silu(mm_result)
-                    torch_expected = mm_result.bfloat16()
-                    passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
-                    logger.info(f"Device {_dev_idx} expert {eidx} ({label}) PCC: {msg}")
-                    assert passing, f"Device {_dev_idx} expert {eidx} ({label}) failed: {msg}"
-
-            if active_sram and sram_k_parallel > 0:
-                # SRAM output is on separate tensor — read from it directly.
-                sram_out_dev = ttnn.get_device_tensors(sram_out_tensor)[dev_idx]
-                sram_output_dev = ttnn.to_torch(sram_out_dev)
-                sram_out_shard = sram_per_core_N * tile_w * num_active_sram
-                for exp_offset, eidx in enumerate(active_sram):
-                    partials = {}
-                    for si, core in enumerate(sram_cores_list):
-                        k_idx = si // sram_n_parallel
-                        n_idx = si % sram_n_parallel
-                        start = si * sram_out_shard + exp_offset * sram_per_core_N * tile_w
-                        partials.setdefault((k_idx, n_idx), []).append(
-                            sram_output_dev[..., start : start + sram_per_core_N * tile_w]
-                        )
-                    reduced = torch.zeros((M, N_sram_per_device), dtype=sram_output_dev.dtype)
-                    for n_idx in range(sram_n_parallel):
-                        col_sum = sum(partials[(k_idx, n_idx)][0] for k_idx in range(sram_k_parallel))
-                        reduced[..., n_idx * tile_w : (n_idx + 1) * tile_w] = col_sum
-                    torch_expected = (torch_a.float() @ torch_b_all[eidx][dev_idx].float()).bfloat16()
-                    passing, msg = comp_pcc(torch_expected, reduced, pcc_threshold)
-                    logger.info(f"Device {dev_idx} expert {eidx} (SRAM-Ksliced) PCC: {msg}")
-                    assert passing, f"Device {dev_idx} expert {eidx} (SRAM-Ksliced) failed: {msg}"
-            elif active_sram:
-                _verify(active_sram, "SRAM", 0, num_sram_cores_active, sram_core_width)
-
-            if active_dram and sram_k_parallel > 0:
-                # DRAM output is on its own tensor (dram_core_grid only).
-                for exp_offset, eidx in enumerate(active_dram):
-                    slices = []
-                    for ci in range(num_dram_cores_active):
-                        start = ci * dram_core_width * num_active_dram + exp_offset * dram_core_width
-                        slices.append(output_dev[..., start : start + dram_core_width])
-                    expert_output = torch.cat(slices, dim=-1)
-                    mm_result = torch_a.float() @ torch_b_all[eidx][dev_idx].float()
-                    if dram_fuse_silu:
-                        mm_result = torch.nn.functional.silu(mm_result)
-                    torch_expected = mm_result.bfloat16()
-                    passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
-                    logger.info(f"Device {dev_idx} expert {eidx} (DRAM) PCC: {msg}")
-                    assert passing, f"Device {dev_idx} expert {eidx} (DRAM) failed: {msg}"
-            elif active_dram:
-                _verify(
-                    active_dram,
-                    "DRAM",
-                    num_sram_cores_active,
-                    num_dram_cores_active,
-                    dram_core_width,
-                    apply_silu=dram_fuse_silu,
-                )
-
-
-def test_hybrid_expert_1sram_0dram(device):
-    """1 SRAM expert + 0 DRAM, bfp8 only."""
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=128,
-        N=256,
-        num_experts=1,
-        sram_expert_ids=[0],
-        dram_expert_ids=[],
-        active_expert_ids=[0],
-        formats_per_device=[["bfp8"]],
-        num_sram_cores=4,
-        subblock_k=2,
-    )
+        _run_standard(
+            mesh_device,
+            M,
+            K,
+            N,
+            num_experts,
+            sram_expert_ids,
+            dram_expert_ids,
+            active_expert_ids,
+            formats_per_device,
+            subblock_k,
+            cores_per_dram_bank,
+            sram_cores_override,
+            sram_k_parallel,
+            sram_n_parallel,
+            pcc_threshold,
+            dram_fuse_silu,
+        )
 
 
 def test_hybrid_expert_1sram_1dram(device):
@@ -1332,24 +1241,7 @@ def test_hybrid_expert_1sram_1dram(device):
         dram_expert_ids=[1],
         active_expert_ids=[0, 1],
         formats_per_device=[["bfp8"]],
-        num_sram_cores=4,
-        subblock_k=2,
-    )
-
-
-def test_hybrid_expert_2sram_0dram(device):
-    """2 SRAM experts + 0 DRAM, bfp8 only."""
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=128,
-        N=256,
-        num_experts=2,
-        sram_expert_ids=[0, 1],
-        dram_expert_ids=[],
-        active_expert_ids=[0, 1],
-        formats_per_device=[["bfp8"]],
-        num_sram_cores=4,
+        sram_n_parallel=4,
         subblock_k=2,
     )
 
@@ -1366,7 +1258,7 @@ def test_hybrid_expert_0sram_2dram(device):
         dram_expert_ids=[0, 1],
         active_expert_ids=[0, 1],
         formats_per_device=[["bfp8"]],
-        num_sram_cores=4,
+        sram_n_parallel=4,
         subblock_k=2,
     )
 
@@ -1383,7 +1275,7 @@ def test_hybrid_expert_2sram_2dram_mixed(device):
         dram_expert_ids=[1, 3],
         active_expert_ids=[0, 1, 2, 3],
         formats_per_device=[["bfp8", "bfp4"]],
-        num_sram_cores=8,
+        sram_n_parallel=8,
     )
 
 
@@ -1399,7 +1291,7 @@ def test_hybrid_expert_sparse_activation(device):
         dram_expert_ids=[0, 2, 3, 5, 7],
         active_expert_ids=[0, 1, 4, 7],
         formats_per_device=[["bfp8", "bfp4"]],
-        num_sram_cores=8,
+        sram_n_parallel=8,
     )
 
 
@@ -1418,7 +1310,7 @@ def test_hybrid_expert_multi_device_2sram_2dram(bh_2d_mesh_device):
         dram_expert_ids=[1, 3],
         active_expert_ids=[0, 1, 2, 3],
         formats_per_device=[["bfp8", "bfp4"], ["bfp8", "bfp2"]] * 4,
-        num_sram_cores=8,
+        sram_n_parallel=8,
     )
 
 
@@ -1446,7 +1338,7 @@ def test_hybrid_expert_multi_device_sparse(bh_2d_mesh_device):
             ["bfp4"],
             ["bfp2"],
         ],
-        num_sram_cores=8,
+        sram_n_parallel=8,
     )
 
 
@@ -1474,8 +1366,8 @@ def test_hybrid_expert_multi_device_sparse_2cores_per_bank(bh_2d_mesh_device):
             ["bfp4"],
             ["bfp2"],
         ],
-        num_sram_cores=8,
-        cores_per_bank=2,
+        sram_n_parallel=8,
+        cores_per_dram_bank=2,
     )
 
 
@@ -1498,7 +1390,7 @@ def test_hybrid_expert_single_device_sparse_accum_experts(device):
         formats_per_device=[
             ["bfp4", "bfp2", "bfp0"],
         ],
-        num_sram_cores=56,
+        sram_n_parallel=56,
         subblock_k=8,  # Kt=8, num_subblocks_k=1
         accum_experts=True,
     )
@@ -1528,7 +1420,7 @@ def test_hybrid_expert_multi_device_sparse_accum_experts(bh_2d_mesh_device):
             ["bfp4"],
             ["bfp2"],
         ],
-        num_sram_cores=56,
+        sram_n_parallel=56,
         subblock_k=8,  # Kt=8, num_subblocks_k=1
         accum_experts=True,
     )
@@ -1553,7 +1445,7 @@ def test_hybrid_expert_irregular_sram_gate_grid(device):
         dram_expert_ids=list(range(256)),
         active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
         formats_per_device=[["bfp4", "bfp2"]],
-        sram_cores_list_override=a_cores,
+        sram_cores_override=a_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
         dram_fuse_silu=True,
@@ -1574,7 +1466,7 @@ def test_hybrid_expert_irregular_sram_up_grid(device):
         dram_expert_ids=list(range(256)),
         active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
         formats_per_device=[["bfp4", "bfp2"]],
-        sram_cores_list_override=b_cores,
+        sram_cores_override=b_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
     )
