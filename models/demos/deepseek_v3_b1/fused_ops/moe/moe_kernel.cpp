@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused MoE kernel: Routed Expert + Shared Expert
@@ -52,6 +52,9 @@
 #endif
 #include "../../unified_kernels/rmsnorm.hpp"
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
+#ifdef BSPM_COMPRESSED
+#include "../../unified_kernels/dram_streaming_matmul_compressed.hpp"
+#endif
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
@@ -143,6 +146,7 @@ void kernel_main() {
 #endif  // ENABLE_ROUTING
 
             // gate_proj DRAM Streaming Matmul (reader)
+#ifndef BSPM_COMPRESSED
             using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
                 get_named_compile_time_arg_val("gate_proj_cb_out"),
@@ -160,8 +164,35 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_cb_index"),
                 get_named_compile_time_arg_val("gate_proj_index_offset"),
                 get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#else
+            // Compressed path: variable-size tiles from DRAM; meta_l1_addr holds per-subblock
+            // byte counts; expert offset baked into in1_tensor_addr by host.
+            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ReaderCTArgs<
+                get_named_compile_time_arg_val("gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("gate_proj_bank_id"),
+                get_named_compile_time_arg_val("gate_proj_vc"),
+                get_named_compile_time_arg_val("gate_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("gate_proj_noc_max_page_size"),
+                0,  // dram_start_offset — always 0
+                0,  // core_in_bank_idx  — always 0 (cores_per_bank=1)
+                0,  // pipeline_sem_id   — unused (cores_per_bank=1)
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
+                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("gate_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#endif
 
             // up_proj DRAM Streaming Matmul (reader) — shares CB with gate_proj
+#ifndef BSPM_COMPRESSED
             using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
                 get_named_compile_time_arg_val("up_proj_cb_in1"),
                 get_named_compile_time_arg_val("up_proj_cb_mm_out"),
@@ -179,6 +210,30 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_cb_index"),
                 get_named_compile_time_arg_val("up_proj_index_offset"),
                 get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#else
+            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ReaderCTArgs<
+                get_named_compile_time_arg_val("up_proj_cb_in1"),
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("up_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("up_proj_bank_id"),
+                get_named_compile_time_arg_val("up_proj_vc"),
+                get_named_compile_time_arg_val("up_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("up_proj_noc_max_page_size"),
+                0,  // dram_start_offset
+                0,  // core_in_bank_idx
+                0,  // pipeline_sem_id
+                get_named_compile_time_arg_val("up_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
+                get_named_compile_time_arg_val("up_proj_cb_index"),
+                get_named_compile_time_arg_val("up_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#endif
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -197,6 +252,7 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::DMArgs down_proj_mcast_args{.sender = {}, .receiver = {}};
 
             // down_proj DRAM Streaming Matmul (reader)
+#ifndef BSPM_COMPRESSED
             using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
                 get_named_compile_time_arg_val("down_proj_cb_out"),
@@ -214,6 +270,30 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_cb_index"),
                 get_named_compile_time_arg_val("down_proj_index_offset"),
                 get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#else
+            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ReaderCTArgs<
+                get_named_compile_time_arg_val("down_proj_cb_in1"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("down_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("down_proj_bank_id"),
+                get_named_compile_time_arg_val("down_proj_vc"),
+                get_named_compile_time_arg_val("down_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_noc_max_page_size"),
+                0,
+                0,
+                0,  // dram_start_offset, core_in_bank_idx, pipeline_sem_id
+                get_named_compile_time_arg_val("down_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
+                get_named_compile_time_arg_val("down_proj_cb_index"),
+                get_named_compile_time_arg_val("down_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+#endif
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -746,6 +826,7 @@ void kernel_main() {
 #endif  // ENABLE_ROUTING
 
             // gate_proj DRAM Streaming Matmul (compute)
+#ifndef BSPM_COMPRESSED
             using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
@@ -757,8 +838,20 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_tile_r_dim"),
                 get_named_compile_time_arg_val("gate_proj_fuse_silu"),
                 get_named_compile_time_arg_val("gate_proj_fp32_dest_acc_en")>;
+#else
+            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ComputeCTArgs<
+                get_named_compile_time_arg_val("gate_proj_cb_in0"),
+                get_named_compile_time_arg_val("gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("gate_proj_fmt_l1_addr"),
+                1>;  // fuse_silu=1
+#endif
 
             // up_proj DRAM Streaming Matmul (compute) — shares CB with gate_proj
+#ifndef BSPM_COMPRESSED
             using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
                 get_named_compile_time_arg_val("up_proj_cb_in0"),
                 get_named_compile_time_arg_val("up_proj_cb_in1"),
@@ -770,6 +863,17 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_tile_r_dim"),
                 get_named_compile_time_arg_val("up_proj_fuse_silu"),
                 get_named_compile_time_arg_val("up_proj_fp32_dest_acc_en")>;
+#else
+            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ComputeCTArgs<
+                get_named_compile_time_arg_val("up_proj_cb_in0"),
+                get_named_compile_time_arg_val("up_proj_cb_in1"),
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("up_proj_fmt_l1_addr"),
+                0>;  // fuse_silu=0
+#endif
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -792,6 +896,7 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
 
             // down_proj DRAM Streaming Matmul (compute)
+#ifndef BSPM_COMPRESSED
             using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
                 get_named_compile_time_arg_val("down_proj_cb_in0"),
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
@@ -803,6 +908,17 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_tile_r_dim"),
                 get_named_compile_time_arg_val("down_proj_fuse_silu"),
                 get_named_compile_time_arg_val("down_proj_fp32_dest_acc_en")>;
+#else
+            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ComputeCTArgs<
+                get_named_compile_time_arg_val("down_proj_cb_in0"),
+                get_named_compile_time_arg_val("down_proj_cb_in1"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("down_proj_fmt_l1_addr"),
+                0>;  // fuse_silu=0
+#endif
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
@@ -1176,19 +1292,36 @@ void kernel_main() {
         {
             DeviceZoneScopedN("GATE_PROJ");
             constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+#ifndef BSPM_COMPRESSED
             deepseek_b1_ops::DRAMStreamingMatmul::
                 Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
                     gate_proj_mm;
+#else
+            deepseek_b1_ops::DRAMStreamingMatmulCompressed::Op<
+                Moe::Routed::GateProjCTArgs,
+                Core::Routed::is_gate_proj_core,
+                false,
+                false,
+                false,
+                gate_proj_cb_in1_addr>
+                gate_proj_mm;
+#endif
             gate_proj_mm();
         }
 
-        // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, ResetCBIn1=true, WaitForOutput=true)
+        // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, WaitForOutput=true)
         {
             DeviceZoneScopedN("UP_PROJ");
             constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+#ifndef BSPM_COMPRESSED
             deepseek_b1_ops::DRAMStreamingMatmul::
                 Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr>
                     up_proj;
+#else
+            deepseek_b1_ops::DRAMStreamingMatmulCompressed::
+                Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, false, true, cb_in1_addr>
+                    up_proj;
+#endif
             up_proj();
         }
 
@@ -1199,7 +1332,54 @@ void kernel_main() {
             mul_op();
         }
 
-        // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
+        // 9. down_proj Gather: Gather fused output from gate_proj cores to sender core
+        {
+            DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
+                down_proj_gather;
+            down_proj_gather(moe.routed.down_proj_gather_args);
+        }
+
+        // 10. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
+        {
+            DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Moe::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Routed::is_gate_proj_core,
+                true>  // pop_src
+                down_proj_mcast;
+            down_proj_mcast(moe.routed.down_proj_mcast_args);
+        }
+
+        // 11. down_proj: DRAM Streaming Matmul (PopIndex=true: last consumer of expert index CB)
+        {
+            DeviceZoneScopedN("DOWN_PROJ");
+            constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+#ifndef BSPM_COMPRESSED
+            deepseek_b1_ops::DRAMStreamingMatmul::Op<
+                Moe::Routed::DownProjCTArgs,
+                Core::Routed::is_gate_proj_core,
+                true,
+                true,
+                down_proj_cb_in1_addr,
+                true>
+                down_proj;
+#else
+            deepseek_b1_ops::DRAMStreamingMatmulCompressed::Op<
+                Moe::Routed::DownProjCTArgs,
+                Core::Routed::is_gate_proj_core,
+                true,
+                true,
+                false,
+                down_proj_cb_in1_addr>
+                down_proj;
+#endif
+            down_proj();
+        }
+
+        // 11b. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
         {
             DeviceZoneScopedN("SHARED_DOWN_MCAST");

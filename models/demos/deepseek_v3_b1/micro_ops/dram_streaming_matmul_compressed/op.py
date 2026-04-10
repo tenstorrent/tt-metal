@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -49,6 +49,7 @@ def _compute_subblock_metadata(
     cb_in1_base_shifted: int,
     max_subblock_bytes_shifted: int,
     num_buffers: int,
+    start_iteration: int = 0,
 ) -> tuple[list[int], list[int]]:
     """Compute per-subblock NOC read metadata and per-tile format metadata.
 
@@ -57,6 +58,14 @@ def _compute_subblock_metadata(
 
     Uses absolute addressing: each tile's address is precomputed using the
     known CB base address and deterministic triple-buffer slot rotation.
+
+    Args:
+        start_iteration: global iteration offset for the slot rotation.
+            Use 0 for single-expert or for the first expert in a multi-expert
+            call.  For subsequent experts, pass the cumulative iteration count
+            of all preceding experts so that the slot addresses match the CB
+            write-pointer position that get_write_ptr() returns at the start
+            of each expert's DMA loop.
 
     Returns:
         block_sizes: list of uint32, one per subblock (block_size_bytes).
@@ -72,7 +81,7 @@ def _compute_subblock_metadata(
     block_sizes = []
     tile_infos = []
 
-    iteration = 0  # global iteration index for slot rotation
+    iteration = start_iteration  # global iteration index for slot rotation
     tile_idx = 0
     for _n in range(per_core_n):
         for sb_k in range(num_subblocks_k):

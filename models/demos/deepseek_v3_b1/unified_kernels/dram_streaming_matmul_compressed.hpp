@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -19,6 +19,10 @@
 #include "api/compute/pack.h"
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_common.h"
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
+#endif
 #endif
 
 namespace deepseek_b1_ops {
@@ -63,7 +67,11 @@ struct DRAMStreamingMatmulCompressed {
         uint32_t core_in_bank_idx_,
         uint32_t pipeline_sem_id_,
         uint32_t next_core_noc_x_,
-        uint32_t next_core_noc_y_>
+        uint32_t next_core_noc_y_,
+        uint32_t enable_indexing_ = 0,
+        uint32_t cb_index_ = 0,
+        uint32_t index_offset_ = 0,
+        uint32_t use_hardcoded_expert_index_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
@@ -82,6 +90,11 @@ struct DRAMStreamingMatmulCompressed {
         static constexpr uint32_t pipeline_sem_id = pipeline_sem_id_;
         static constexpr uint32_t next_core_noc_x = next_core_noc_x_;
         static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
+        // Expert indexing (CB wait/pop for pipeline synchronization)
+        static constexpr bool enable_indexing = enable_indexing_ == 1;
+        static constexpr uint32_t cb_index = cb_index_;
+        static constexpr uint32_t index_offset = index_offset_;
+        static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;
     };
 
     // Writer CTArgs (BRISC) - no-op
@@ -95,7 +108,8 @@ struct DRAMStreamingMatmulCompressed {
         uint32_t subblock_k_,
         uint32_t per_core_n_,
         uint32_t num_subblocks_k_,
-        uint32_t fmt_l1_addr_>
+        uint32_t fmt_l1_addr_,
+        uint32_t fuse_silu_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -104,12 +118,24 @@ struct DRAMStreamingMatmulCompressed {
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
+        static constexpr bool fuse_silu = fuse_silu_ == 1;
     };
 
     // ========================================================================
     // Op - the actual operation
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopIn0 = true>
+    // PopIn0: pop cb_in0 after compute. False to keep in0 for a subsequent projection.
+    // PopIndex: pop cb_index after last DMA. Set true on the last consumer (e.g., down_proj).
+    // WaitForOutput: after DMA, wait for TRISC to push out_num_tiles to cb_out.
+    // CBIn1BaseAddr: when non-zero, force cb_in1 write address to this value at start.
+    //   Required when reusing a CB across gate→up→down projections (prevents write-ptr drift).
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool PopIn0 = true,
+        bool PopIndex = false,
+        bool WaitForOutput = false,
+        uint32_t CBIn1BaseAddr = 0>
     class Op {
     public:
         void operator()() {
@@ -154,6 +180,14 @@ struct DRAMStreamingMatmulCompressed {
             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
+
+            // Expert index CB: wait for synchronization signal.
+            // The expert byte offset is pre-baked into in1_tensor_addr by the host;
+            // we only need the CB wait here to serialize against BRISC index broadcast.
+            if constexpr (CTArgs::enable_indexing) {
+                cb_wait_front(CTArgs::cb_index, 1);
+            }
+
             uint32_t l1_write_addr_in1;
             uint32_t dram_read_offset = CTArgs::dram_start_offset;
 
@@ -166,6 +200,13 @@ struct DRAMStreamingMatmulCompressed {
             // Reserve initial space
             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
             l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
+            // When reusing a CB across projections, force write addr to the true CB base.
+            // get_write_ptr() returns a non-base offset when a previous projection left
+            // the fifo_wr_ptr mid-buffer; CBIn1BaseAddr overrides it back to the start.
+            if constexpr (CBIn1BaseAddr != 0) {
+                l1_write_addr_in1 = CBIn1BaseAddr;
+            }
 
             uint32_t cb_in1_base = l1_write_addr_in1;
             uint32_t cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
@@ -195,9 +236,15 @@ struct DRAMStreamingMatmulCompressed {
 
                     l1_write_addr_in1 = slot_start + max_subblock_bytes;
 
-                    // Signal next core after last read in batch, before barrier
-                    if (b == batch_size - 1) {
-                        noc_semaphore_inc(next_sem_noc_addr, 1);
+                    // Signal next core after last read in batch, before barrier.
+                    // Only meaningful when cores_per_bank > 1 (pipeline_sem_id != 0).
+                    // For cores_per_bank=1 (pipeline_sem_id=0, core_in_bank_idx=0) the
+                    // signal would target self and the matching wait below is a no-op;
+                    // skip both to avoid the self-signal/self-wait race on BH Galaxy.
+                    if constexpr (CTArgs::pipeline_sem_id != 0) {
+                        if (b == batch_size - 1) {
+                            noc_semaphore_inc(next_sem_noc_addr, 1);
+                        }
                     }
 
                     if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
@@ -218,10 +265,13 @@ struct DRAMStreamingMatmulCompressed {
                     iter++;
                 }
 
-                // Wait for our turn again before next batch
-                if (iter < num_iterations) {
-                    noc_semaphore_wait(sem_ptr, 1);
-                    noc_semaphore_set(sem_ptr, 0);
+                // Wait for our turn again before next batch.
+                // Only needed when cores_per_bank > 1 (see signal guard above).
+                if constexpr (CTArgs::pipeline_sem_id != 0) {
+                    if (iter < num_iterations) {
+                        noc_semaphore_wait(sem_ptr, 1);
+                        noc_semaphore_set(sem_ptr, 0);
+                    }
                 }
             }
 
@@ -232,6 +282,17 @@ struct DRAMStreamingMatmulCompressed {
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
             noc_async_atomic_barrier();
+
+            // Release the expert index CB once all DMA is done (last consumer only).
+            if constexpr (PopIndex && CTArgs::enable_indexing) {
+                cb_pop_front(CTArgs::cb_index, 1);
+            }
+
+            // Optionally stall until TRISC has produced all output tiles.
+            // Used by up_proj to ensure gate CB can be safely reused next.
+            if constexpr (WaitForOutput) {
+                cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
+            }
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
@@ -246,6 +307,10 @@ struct DRAMStreamingMatmulCompressed {
             pack_reconfig_data_format<true>(CTArgs::cb_out);
             compressed::custom_mm_compressed_block_init_short<true, 1, split_acc, dense_packing>(
                 CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+
+            if constexpr (CTArgs::fuse_silu) {
+                PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            }
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
@@ -295,6 +360,10 @@ struct DRAMStreamingMatmulCompressed {
 
                 tile_regs_commit();
                 tile_regs_wait();
+                if constexpr (CTArgs::fuse_silu) {
+                    PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 8>(0, (int)VectorMode::R)));
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                }
                 pack_tile(0, CTArgs::cb_out, 0);
                 tile_regs_release();
                 cb_push_back(CTArgs::cb_out, 1);
