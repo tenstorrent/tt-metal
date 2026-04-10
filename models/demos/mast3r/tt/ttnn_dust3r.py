@@ -191,3 +191,101 @@ def full_encoder(
     b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
     tt_x = ttnn.layer_norm(tt_x, weight=g, bias=b, epsilon=1e-6)
     return ttnn.to_torch(tt_x)
+
+
+# ---------- Decoder block ----------
+
+def _ttnn_linear(t_host: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device) -> torch.Tensor:
+    """Simple device-side linear: host in/out (for use as building block)."""
+    tt_in = _t2d(t_host, device)
+    tt_w = _t2d(weight.t().contiguous(), device)
+    tt_b = _t2d(bias.reshape(1, 1, -1), device)
+    tt_out = ttnn.matmul(tt_in, tt_w)
+    tt_out = ttnn.add(tt_out, tt_b)
+    return ttnn.to_torch(tt_out)
+
+
+def _ttnn_layer_norm(t_host: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device) -> torch.Tensor:
+    tt_in = _t2d(t_host, device)
+    g = _t2d(weight.reshape(1, 1, -1), device)
+    b = _t2d(bias.reshape(1, 1, -1), device)
+    return ttnn.to_torch(ttnn.layer_norm(tt_in, weight=g, bias=b, epsilon=1e-6))
+
+
+def _ttnn_attn_core(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, device) -> torch.Tensor:
+    """Attention on device: (B*H, N, dh) x (B*H, dh, M) -> softmax -> @v."""
+    dh = q.shape[-1]
+    tt_q = _t2d(q, device)
+    tt_k = _t2d(k, device)
+    tt_v = _t2d(v, device)
+    scores = ttnn.matmul(tt_q, tt_k)
+    scores = ttnn.multiply(scores, 1.0 / math.sqrt(dh))
+    attn = ttnn.softmax(scores, dim=-1)
+    ctx = ttnn.matmul(attn, tt_v)
+    return ttnn.to_torch(ctx)
+
+
+def decoder_block(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    pos_x: torch.Tensor,
+    pos_y: torch.Tensor,
+    weights: dict,
+    device,
+    heads: int = 12,
+) -> torch.Tensor:
+    """One DUSt3R decoder block on TT.
+
+    x, y: (B, N, 768) torch           pos_x, pos_y: (B, N, 2) torch
+    weights: keys norm1/2/3/norm_y.{w,b}, attn.qkv/proj.{w,b},
+             cross_attn.projq/projk/projv/proj.{w,b}, mlp.fc1/fc2.{w,b}
+    """
+    B, N, D = x.shape
+    dh = D // heads
+
+    # --- self-attention over x ---
+    x_n = _ttnn_layer_norm(x, weights["norm1.weight"], weights["norm1.bias"], device)
+    qkv = _ttnn_linear(x_n, weights["attn.qkv.weight"], weights["attn.qkv.bias"], device)
+    qkv = qkv.reshape(B, N, 3, heads, dh).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv[0], qkv[1], qkv[2]
+    q = _rope_apply(q, pos_x)
+    k = _rope_apply(k, pos_x)
+    ctx = _ttnn_attn_core(
+        q.reshape(B * heads, N, dh),
+        k.transpose(-2, -1).reshape(B * heads, dh, N).contiguous(),
+        v.reshape(B * heads, N, dh),
+        device,
+    )
+    ctx = ctx.reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    proj = _ttnn_linear(ctx, weights["attn.proj.weight"], weights["attn.proj.bias"], device)
+    x = x + proj
+
+    # --- cross-attention: q from x, k/v from y ---
+    x_n2 = _ttnn_layer_norm(x, weights["norm2.weight"], weights["norm2.bias"], device)
+    y_n = _ttnn_layer_norm(y, weights["norm_y.weight"], weights["norm_y.bias"], device)
+    q = _ttnn_linear(x_n2, weights["cross_attn.projq.weight"], weights["cross_attn.projq.bias"], device)
+    k = _ttnn_linear(y_n, weights["cross_attn.projk.weight"], weights["cross_attn.projk.bias"], device)
+    v = _ttnn_linear(y_n, weights["cross_attn.projv.weight"], weights["cross_attn.projv.bias"], device)
+    q = q.reshape(B, N, heads, dh).transpose(1, 2)
+    k = k.reshape(B, y.shape[1], heads, dh).transpose(1, 2)
+    v = v.reshape(B, y.shape[1], heads, dh).transpose(1, 2)
+    q = _rope_apply(q, pos_x)
+    k = _rope_apply(k, pos_y)
+    ctx = _ttnn_attn_core(
+        q.reshape(B * heads, N, dh),
+        k.transpose(-2, -1).reshape(B * heads, dh, y.shape[1]).contiguous(),
+        v.reshape(B * heads, y.shape[1], dh),
+        device,
+    )
+    ctx = ctx.reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
+    proj = _ttnn_linear(ctx, weights["cross_attn.proj.weight"], weights["cross_attn.proj.bias"], device)
+    x = x + proj
+
+    # --- MLP ---
+    x_n3 = _ttnn_layer_norm(x, weights["norm3.weight"], weights["norm3.bias"], device)
+    h = _ttnn_linear(x_n3, weights["mlp.fc1.weight"], weights["mlp.fc1.bias"], device)
+    tt_h = _t2d(h, device)
+    tt_h = ttnn.gelu(tt_h)
+    h = ttnn.to_torch(tt_h)
+    m = _ttnn_linear(h, weights["mlp.fc2.weight"], weights["mlp.fc2.bias"], device)
+    return x + m
