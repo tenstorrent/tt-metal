@@ -173,8 +173,6 @@ def main():
     prompts = [
         "A cartoon white llama with sunglasses on a colorful rainbow background, playful, fun, 4K ultra HD",
         "A cyberpunk cityscape at night with neon lights and rain-slick streets, cinematic, photorealistic, 4K",
-        "A serene Japanese zen garden with cherry blossoms, koi pond, wooden bridge, ultra HD, 4K",
-        "An astronaut riding a horse on Mars, Earth visible in the sky, photorealistic, 4K cinematic",
     ]
 
     # Warmup
