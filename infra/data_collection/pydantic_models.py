@@ -629,3 +629,9 @@ class JobFailureCluster(BaseModel):
     oldest_job_commit_hash: str = Field(
         description="Commit hash of the oldest run that had the same error as the currently failing run."
     )
+
+    # Auto-triage run mapping
+    auto_triage_run_id: Optional[int] = Field(
+        None,
+        description="GitHub run ID of the auto-triage workflow that analyzed this job failure.",
+    )
