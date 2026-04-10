@@ -192,7 +192,9 @@ class BgeM3Attention(LightweightModule):
 
         batch_size, _, seq_len, _ = hidden_states.shape
 
-        assert seq_len % 128 == 0 and seq_len > 0, "seq_len must be divisible by 128"
+        assert seq_len > 0, "seq_len must be positive"
+        if seq_len > 128:
+            assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
 
         cfg = self.config
 

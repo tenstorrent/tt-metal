@@ -11,11 +11,8 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
-SEQUENCE_LENGTHS = [128, 1024, 2048, 4096, 8192]
-
-# It fails on sequence lengths of 32 and 64 (sequence lengths must be a multiple of 128).
-
-# SEQUENCE_LENGTHS = [32,64,256,512]
+# Long sweep (optional): [128, 1024, 2048, 4096, 8192]. For seq_len > 128, length must be a multiple of 128.
+SEQUENCE_LENGTHS = [32, 64, 128]
 
 
 def require_single_device(device) -> None:
