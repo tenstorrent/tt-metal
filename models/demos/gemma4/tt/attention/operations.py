@@ -30,10 +30,10 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     """
     Split fused QKV into separate head tensors for decode mode.
     When TP > 1, uses local head counts (global / tp).
-    When kv_replicated, KV heads are not split (used when num_kv_heads < TP).
+    When kv_replicated (num_kv_heads < TP), each device has 1 KV head (GQA-assigned).
     """
     num_local_heads = config.num_attention_heads // tp
-    num_local_kv_heads = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // tp
+    num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
     return ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
@@ -46,10 +46,10 @@ def split_qkv_heads_prefill(xqkv_fused, config, is_global: bool, tp: int = 1, kv
     """
     Split fused QKV into separate head tensors for prefill mode.
     When TP > 1, uses local head counts (global / tp).
-    When kv_replicated, KV heads are not split (used when num_kv_heads < TP).
+    When kv_replicated (num_kv_heads < TP), each device has 1 KV head (GQA-assigned).
     """
     num_local_heads = config.num_attention_heads // tp
-    num_local_kv_heads = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // tp
+    num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
     return ttnn.experimental.nlp_create_qkv_heads(
         xqkv_fused,
         num_heads=num_local_heads,

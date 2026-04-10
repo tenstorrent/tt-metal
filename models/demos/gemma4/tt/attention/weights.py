@@ -53,7 +53,8 @@ def load_attention_weights(
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
 
-    # When KV heads < TP, replicate KV to all devices instead of splitting
+    # When KV heads < TP, each device gets the KV head(s) its Q heads map to via GQA.
+    # E.g. 16 Q / 2 KV / 8 TP: devices 0-3 get KV head 0, devices 4-7 get KV head 1.
     kv_replicated = config.num_key_value_heads < tp
 
     # Compute o_proj padding for tile-aligned CCL
@@ -74,12 +75,19 @@ def load_attention_weights(
         if tp > 1:
             # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
             # When kv_replicated, keep full K/V on each device instead of chunking
+            num_q_heads = config.num_attention_heads
+            num_kv_heads = config.num_key_value_heads
+            head_dim = config.head_dim
+            q_per_device = num_q_heads // tp
+
             qkv_list = []
             for i in range(tp):
                 wq_chunk = torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)
                 if kv_replicated:
-                    wk_chunk = k_w.transpose(-2, -1)
-                    wv_chunk = v_w.transpose(-2, -1)
+                    # GQA-aware KV assignment: each device gets the KV head its Q heads map to
+                    kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
+                    wk_chunk = k_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
+                    wv_chunk = v_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
                 else:
                     wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
                     wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)

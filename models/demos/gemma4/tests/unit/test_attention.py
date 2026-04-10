@@ -278,15 +278,18 @@ def test_attention_decode_tp(layer_idx, mesh_device):
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
     # TT cache — each device has local_kv_heads. Fill each device's cache separately.
-    # When kv_replicated (num_kv_heads < TP), each device has ALL KV heads.
+    # When kv_replicated (num_kv_heads < TP), each device has 1 GQA-assigned KV head.
     k_cache_tt, v_cache_tt = tt_attn.kv_cache
     kv_replicated = config.num_key_value_heads < mesh_config.tp
-    local_kv = config.num_key_value_heads if kv_replicated else config.num_key_value_heads // mesh_config.tp
+    q_per_device = config.num_attention_heads // mesh_config.tp
     for dev_idx in range(mesh_config.tp):
         if kv_replicated:
-            k_local = k_data.to(torch.bfloat16)
-            v_local = v_data.to(torch.bfloat16)
+            # GQA-assigned: device d gets KV head that its Q heads map to
+            kv_idx = (dev_idx * q_per_device) * config.num_key_value_heads // config.num_attention_heads
+            k_local = k_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
+            v_local = v_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
         else:
+            local_kv = config.num_key_value_heads // mesh_config.tp
             k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
             v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
         dev_k_cache = ttnn.get_device_tensors(k_cache_tt)[dev_idx]
