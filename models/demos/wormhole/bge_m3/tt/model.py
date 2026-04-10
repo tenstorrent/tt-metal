@@ -67,6 +67,7 @@ class BgeM3Model(LightweightModule):
                     bias=colbert_linear_weights.bias,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    max_seq_len=args.max_seq_len,
                 )
             )
 
@@ -79,6 +80,7 @@ class BgeM3Model(LightweightModule):
                     bias=sparse_linear_weights.bias,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    max_seq_len=args.max_seq_len,
                 )
             )
 
