@@ -284,7 +284,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         for (const auto cb_index :
              {input_tensor_cb,
@@ -295,7 +295,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
               weight_tensor_cb,
               temp_1_cb,
               bias_tensor_cb}) {
-            unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
 

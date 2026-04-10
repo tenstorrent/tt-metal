@@ -194,7 +194,7 @@ moreh_softmax_backward(
         strategy,
         memory_config.value_or(output_tensor.memory_config()),
         init_device_compute_kernel_config(
-            output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+            output_grad_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

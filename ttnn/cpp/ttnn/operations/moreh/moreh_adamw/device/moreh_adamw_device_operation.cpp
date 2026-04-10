@@ -172,7 +172,7 @@ ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_v
             .amsgrad = amsgrad.value_or(false),
             .memory_config = memory_config.value_or(param_in.memory_config()),
             .compute_kernel_config = init_device_compute_kernel_config(
-                param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+                param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)},
         OperationType::tensor_args_t{
             .param_in = param_in,
             .grad = grad,

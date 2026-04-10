@@ -42,6 +42,6 @@ ttnn::experimental::prim::PrefixScanDeviceOperation::tensor_return_value_t prefi
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> dtype = std::nullopt,
-    std::optional<MathFidelity> math_fidelity = std::nullopt);
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::prim
