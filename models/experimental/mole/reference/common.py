@@ -5,24 +5,6 @@ import torch
 from torch import nn
 
 
-HEAD_DROPOUT_LOGIT_FLOOR = -1e20
-
-
-class HeadDropout(nn.Module):
-    def __init__(self, p: float = 0.5):
-        super().__init__()
-        if p < 0 or p > 1:
-            raise ValueError(f"Dropout probability has to be between 0 and 1, but got {p}")
-        self.p = p
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.training:
-            return x
-
-        binary_mask = (torch.rand_like(x) > self.p).float()
-        return x * binary_mask + (1 - binary_mask) * HEAD_DROPOUT_LOGIT_FLOOR
-
-
 class RevIN(nn.Module):
     def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = True):
         super().__init__()
@@ -67,7 +49,7 @@ class RevIN(nn.Module):
         mean, stdev = self._require_cached_stats()
         if self.affine:
             x = x - self.affine_bias
-            # Keep denominator behavior aligned with upstream reference implementation.
+            # Keep denominator behavior aligned with reference implementation.
             x = x / (self.affine_weight + self.eps * self.eps)
         x = x * stdev
         x = x + mean

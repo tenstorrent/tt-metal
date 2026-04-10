@@ -10,16 +10,13 @@ import torch
 import ttnn
 
 
-DEFAULT_DTYPE = ttnn.float32
-LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
-    math_approx_mode=False,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
-class _TraceReleaseHookTable:
-    """Weakref hooks keyed by ``id(device)`` — avoids a module-level dict literal."""
+_tensor_upload_generations: dict[int, int] = {}
 
+
+DEFAULT_DTYPE = ttnn.float32
+
+
+class _TraceReleaseHookTable:
     __slots__ = ("_by_device_id",)
 
     def __init__(self) -> None:
@@ -67,44 +64,6 @@ class TtRuntimeOptions:
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG
     activation_memory_config: ttnn.MemoryConfig | None = None
     dtype: ttnn.DataType = DEFAULT_DTYPE
-
-
-def timeseries_input_to_device(
-    torch_input: torch.Tensor,
-    *,
-    device: Any,
-    dtype: ttnn.DataType = DEFAULT_DTYPE,
-    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    if torch_input.ndim != 3:
-        raise ValueError(f"expected [batch, seq_len, channels], got {tuple(torch_input.shape)}")
-
-    return ttnn.from_torch(
-        torch_input.unsqueeze(0),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
-    )
-
-
-def time_marks_input_to_device(
-    torch_input: torch.Tensor,
-    *,
-    device: Any,
-    dtype: ttnn.DataType = DEFAULT_DTYPE,
-    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    if torch_input.ndim != 3:
-        raise ValueError(f"expected [batch, seq_len, features], got {tuple(torch_input.shape)}")
-
-    return ttnn.from_torch(
-        torch_input.unsqueeze(0),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
-    )
 
 
 def upload_timeseries_and_marks_to_device(
@@ -165,8 +124,6 @@ def upload_timeseries_and_marks_to_device(
 
     if cached is None:
         try:
-            # Active traces can make subsequent buffer allocations unsafe; release
-            # trace caches before allocating new device input buffers.
             release_active_traces_for_device(device=device)
             cached = (
                 ttnn.allocate_tensor_on_device(host_input.spec, device),
@@ -174,17 +131,23 @@ def upload_timeseries_and_marks_to_device(
             )
             cache[cache_key] = cached
         except Exception:
+            if torch_input.ndim != 3:
+                raise ValueError(f"expected [batch, seq_len, channels], got {tuple(torch_input.shape)}")
+            if torch_input_mark.ndim != 3:
+                raise ValueError(f"expected [batch, seq_len, features], got {tuple(torch_input_mark.shape)}")
             return (
-                timeseries_input_to_device(
-                    torch_input,
+                ttnn.from_torch(
+                    torch_input.unsqueeze(0),
                     device=device,
                     dtype=model.dtype,
+                    layout=ttnn.TILE_LAYOUT,
                     memory_config=memory_config,
                 ),
-                time_marks_input_to_device(
-                    torch_input_mark,
+                ttnn.from_torch(
+                    torch_input_mark.unsqueeze(0),
                     device=device,
                     dtype=model.dtype,
+                    layout=ttnn.TILE_LAYOUT,
                     memory_config=memory_config,
                 ),
             )
@@ -193,6 +156,10 @@ def upload_timeseries_and_marks_to_device(
     ttnn.copy_host_to_device_tensor(host_input, tt_input)
     ttnn.copy_host_to_device_tensor(host_marks, tt_marks)
     signature_cache[cache_key] = input_signature
+    gen = getattr(model, "_upload_generation", 0) + 1
+    setattr(model, "_upload_generation", gen)
+    _tensor_upload_generations[id(tt_input)] = gen
+    _tensor_upload_generations[id(tt_marks)] = gen
     return tt_input, tt_marks
 
 
@@ -297,9 +264,21 @@ def upload_vector(
     )
 
 
-def default_activation_memory_config() -> ttnn.MemoryConfig:
-    # Keep intermediates in L1 even when parameters are in DRAM.
-    return ttnn.L1_MEMORY_CONFIG
+def ttnn_revin_normalize(
+    input_tensor: ttnn.Tensor,
+    *,
+    seq_len: int,
+    eps: float,
+    memory_config: ttnn.MemoryConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Shared RevIN normalization: mean, stdev, normalized = (x - mean) / stdev."""
+    mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / seq_len, memory_config=memory_config)
+    centered = ttnn.subtract(input_tensor, mean, memory_config=memory_config)
+    variance = ttnn.multiply(centered, centered, memory_config=memory_config)
+    variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / seq_len, memory_config=memory_config)
+    stdev = ttnn.sqrt(ttnn.add(variance, eps, memory_config=memory_config))
+    normalized = ttnn.div(centered, stdev, memory_config=memory_config)
+    return normalized, mean, stdev
 
 
 def moving_average_projection_matrix(*, seq_len: int, kernel_size: int) -> torch.Tensor:
@@ -418,41 +397,6 @@ def project_individual_channels(
     return ttnn.concat(outputs, dim=1, memory_config=memory_config)
 
 
-def moving_average_1d(
-    input_tensor: ttnn.Tensor, kernel_size: int, *, memory_config=ttnn.L1_MEMORY_CONFIG
-) -> ttnn.Tensor:
-    batch_size = input_tensor.shape[1]
-    seq_len = input_tensor.shape[2]
-    channels = input_tensor.shape[3]
-    pad = (kernel_size - 1) // 2
-
-    if pad > 0:
-        left = ttnn.slice(input_tensor, (0, 0, 0, 0), (1, batch_size, 1, channels))
-        left = ttnn.repeat(left, ttnn.Shape((1, 1, pad, 1)))
-        right = ttnn.slice(input_tensor, (0, 0, seq_len - 1, 0), (1, batch_size, seq_len, channels))
-        right = ttnn.repeat(right, ttnn.Shape((1, 1, pad, 1)))
-        padded = ttnn.concat([left, input_tensor, right], dim=2, memory_config=memory_config)
-    else:
-        padded = input_tensor
-
-    # Build moving-window sums with a prefix sum to avoid O(kernel_size) slice/add TMs.
-    prefix = ttnn.cumsum(padded, dim=2)
-
-    zero_prefix = ttnn.slice(prefix, (0, 0, 0, 0), (1, batch_size, 1, channels))
-    zero_prefix = ttnn.multiply(zero_prefix, 0.0, memory_config=memory_config)
-    prefix_with_zero = ttnn.concat([zero_prefix, prefix], dim=2, memory_config=memory_config)
-
-    window_end = ttnn.slice(
-        prefix_with_zero,
-        (0, 0, kernel_size, 0),
-        (1, batch_size, kernel_size + seq_len, channels),
-    )
-    window_start = ttnn.slice(prefix_with_zero, (0, 0, 0, 0), (1, batch_size, seq_len, channels))
-    running_sum = ttnn.subtract(window_end, window_start, memory_config=memory_config)
-
-    return ttnn.multiply(running_sum, 1.0 / kernel_size, memory_config=memory_config)
-
-
 def temporal_gating(
     logits: ttnn.Tensor,
     *,
@@ -471,22 +415,6 @@ def temporal_gating(
     return gating_flat, gating_weights
 
 
-def _reduce_weighted_heads_core(
-    projected: ttnn.Tensor,
-    gating_flat: ttnn.Tensor,
-    *,
-    batch_size: int,
-    channels: int,
-    pred_len: int,
-    memory_config=ttnn.L1_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """Shared tail: matmul against column gating then reshape back to NTC layout."""
-    gating_column = ttnn.permute(gating_flat, (0, 1, 3, 2))
-    reduced = ttnn.matmul(projected, gating_column, memory_config=memory_config)
-    reduced = ttnn.reshape(reduced, (1, batch_size, channels, pred_len))
-    return ttnn.permute(reduced, (0, 1, 3, 2))
-
-
 def reduce_weighted_heads_batch_major(
     projected: ttnn.Tensor,
     gating_flat: ttnn.Tensor,
@@ -498,21 +426,17 @@ def reduce_weighted_heads_batch_major(
     memory_config=ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     projected = ttnn.reshape(projected, (1, batch_size * channels, pred_len, num_predictions))
-    return _reduce_weighted_heads_core(
-        projected,
-        gating_flat,
-        batch_size=batch_size,
-        channels=channels,
-        pred_len=pred_len,
-        memory_config=memory_config,
-    )
+    gating_column = ttnn.permute(gating_flat, (0, 1, 3, 2))
+    reduced = ttnn.matmul(projected, gating_column, memory_config=memory_config)
+    reduced = ttnn.reshape(reduced, (1, batch_size, channels, pred_len))
+    return ttnn.permute(reduced, (0, 1, 3, 2))
 
 
 @dataclass
 class _ExpertPredictionTraceState:
     trace_id: int
     prediction: ttnn.Tensor
-    input_ids: tuple[int, int]
+    upload_generation: int
     device: Any
 
 
@@ -529,9 +453,7 @@ class TtExpertBase:
         self.reference_model = reference_model
         self.parameter_memory_config = options.memory_config
         self.activation_memory_config = (
-            default_activation_memory_config()
-            if options.activation_memory_config is None
-            else options.activation_memory_config
+            ttnn.L1_MEMORY_CONFIG if options.activation_memory_config is None else options.activation_memory_config
         )
         self.memory_config = self.activation_memory_config
         self.dtype = options.dtype
@@ -557,9 +479,12 @@ class TtExpertBase:
             return self.forward(input_tensor, input_marks)
 
         state = self._prediction_trace_state
-        current_ids = (id(input_tensor), id(input_marks))
+        current_gen = (
+            _tensor_upload_generations.get(id(input_tensor)),
+            _tensor_upload_generations.get(id(input_marks)),
+        )
 
-        if state is None or state.input_ids != current_ids or state.device is not device:
+        if state is None or state.upload_generation != current_gen or state.device is not device:
             self._release_prediction_trace()
             prediction = self.forward(input_tensor, input_marks)
             ttnn.synchronize_device(device)
@@ -580,7 +505,7 @@ class TtExpertBase:
             self._prediction_trace_state = _ExpertPredictionTraceState(
                 trace_id=trace_id,
                 prediction=prediction,
-                input_ids=current_ids,
+                upload_generation=current_gen,
                 device=device,
             )
 

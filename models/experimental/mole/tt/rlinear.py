@@ -10,6 +10,7 @@ from models.experimental.mole.tt.common import (
     apply_two_layer_mlp,
     project_individual_channels,
     register_trace_release_hook,
+    ttnn_revin_normalize,
     upload_linear,
     upload_vector,
     validate_timeseries_input,
@@ -17,10 +18,16 @@ from models.experimental.mole.tt.common import (
 
 
 class TtRLinearExpert(TtExpertBase):
-    def __init__(self, config, *, reference_model=None, runtime_options=None):
-        ref = reference_model if reference_model is not None else RLinearExpert(config).eval()
+    def __init__(self, config, *, reference_model=None, checkpoint_state_dict=None, runtime_options=None):
+        ref = reference_model if reference_model is not None else None
+        if ref is None and checkpoint_state_dict is None:
+            ref = RLinearExpert(config).eval()
         self._init_base(config, ref, runtime_options)
-        self._has_temporal_mlp = hasattr(ref, "temporal") and ref.temporal is not None
+        self._checkpoint_state_dict = checkpoint_state_dict
+        if checkpoint_state_dict is not None:
+            self._has_temporal_mlp = "temporal.0.weight" in checkpoint_state_dict
+        else:
+            self._has_temporal_mlp = hasattr(ref, "temporal") and ref.temporal is not None
 
     def _ensure_parameters(self, device) -> None:
         if self._cached_device is device and self._tt_parameters is not None:
@@ -28,36 +35,83 @@ class TtRLinearExpert(TtExpertBase):
 
         up = lambda mod: upload_linear(mod, device=device, dtype=self.dtype, memory_config=self.parameter_memory_config)
 
-        if self.config.individual:
-            projection = [up(layer) for layer in self.reference_model.projection]
+        if self._checkpoint_state_dict is not None:
+            if self.config.individual:
+                projection = [
+                    upload_linear(
+                        self._checkpoint_state_dict[f"Linear.{index}.weight"].detach(),
+                        self._checkpoint_state_dict[f"Linear.{index}.bias"].detach(),
+                        device=device,
+                        dtype=self.dtype,
+                        memory_config=self.parameter_memory_config,
+                    )
+                    for index in range(self.config.input_dim)
+                ]
+            else:
+                projection = upload_linear(
+                    self._checkpoint_state_dict["Linear.weight"].detach(),
+                    self._checkpoint_state_dict["Linear.bias"].detach(),
+                    device=device,
+                    dtype=self.dtype,
+                    memory_config=self.parameter_memory_config,
+                )
         else:
-            projection = up(self.reference_model.projection)
+            if self.reference_model is None:
+                raise RuntimeError("reference_model or checkpoint_state_dict is required")
+            if self.config.individual:
+                projection = [up(layer) for layer in self.reference_model.projection]
+            else:
+                projection = up(self.reference_model.projection)
 
         params = {
             "projection": projection,
         }
         if self._has_temporal_mlp:
-            params["temporal"] = {
-                "linear_1": up(self.reference_model.temporal[0]),
-                "linear_2": up(self.reference_model.temporal[2]),
-            }
+            if self._checkpoint_state_dict is not None:
+                params["temporal"] = {
+                    "linear_1": upload_linear(
+                        self._checkpoint_state_dict["temporal.0.weight"].detach(),
+                        self._checkpoint_state_dict["temporal.0.bias"].detach(),
+                        device=device,
+                        dtype=self.dtype,
+                        memory_config=self.parameter_memory_config,
+                    ),
+                    "linear_2": upload_linear(
+                        self._checkpoint_state_dict["temporal.2.weight"].detach(),
+                        self._checkpoint_state_dict["temporal.2.bias"].detach(),
+                        device=device,
+                        dtype=self.dtype,
+                        memory_config=self.parameter_memory_config,
+                    ),
+                }
+            else:
+                params["temporal"] = {
+                    "linear_1": up(self.reference_model.temporal[0]),
+                    "linear_2": up(self.reference_model.temporal[2]),
+                }
         uv = lambda v: upload_vector(v, device=device, dtype=self.dtype, memory_config=self.parameter_memory_config)
-        params["rev"] = {
-            "affine_weight": uv(self.reference_model.rev.affine_weight),
-            "affine_bias": uv(self.reference_model.rev.affine_bias),
-        }
+        if self._checkpoint_state_dict is not None:
+            params["rev"] = {
+                "affine_weight": uv(self._checkpoint_state_dict["rev.affine_weight"].detach()),
+                "affine_bias": uv(self._checkpoint_state_dict["rev.affine_bias"].detach()),
+            }
+        else:
+            params["rev"] = {
+                "affine_weight": uv(self.reference_model.rev.affine_weight),
+                "affine_bias": uv(self.reference_model.rev.affine_bias),
+            }
         self._tt_parameters = params
         self._cached_device = device
         register_trace_release_hook(device=device, hook=self._release_prediction_trace)
 
     def _normalize(self, input_tensor):
         mc = self.activation_memory_config
-        mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
-        variance = ttnn.multiply(centered, centered, memory_config=mc)
-        variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        stdev = ttnn.sqrt(ttnn.add(variance, self.config.revin_eps, memory_config=mc))
-        normalized = ttnn.div(centered, stdev, memory_config=mc)
+        normalized, mean, stdev = ttnn_revin_normalize(
+            input_tensor,
+            seq_len=self.config.seq_len,
+            eps=self.config.revin_eps,
+            memory_config=mc,
+        )
 
         if "rev" in self._tt_parameters:
             normalized = ttnn.multiply(normalized, self._tt_parameters["rev"]["affine_weight"], memory_config=mc)
@@ -78,7 +132,6 @@ class TtRLinearExpert(TtExpertBase):
                 self._tt_parameters["projection"],
                 memory_config=mc,
             )
-            # project_individual_channels returns [1, channels, batch, pred_len]; map to [1, batch, pred_len, channels].
             return ttnn.permute(projected, (0, 2, 3, 1))
         projected = apply_linear(
             ttnn.permute(normalized, (0, 1, 3, 2)),

@@ -13,17 +13,17 @@ import ttnn
 from models.experimental.mole.reference.config import MoLEConfig, replace_num_experts
 from models.experimental.mole.reference.mole import MixtureOfLinearExperts
 from models.experimental.mole.tt.common import (
-    LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG,
     TtRuntimeOptions,
     apply_linear,
     apply_two_layer_mlp,
-    default_activation_memory_config,
     extract_initial_marks,
     moving_average_projection_matrix,
     permute_temporal_router_mlp_to_channel_major,
+    router_time_major_to_channel_major_permutation,
     register_trace_release_hook,
     reduce_weighted_heads_batch_major,
     temporal_gating,
+    ttnn_revin_normalize,
     upload_linear,
     upload_timeseries_and_marks_to_device,
     validate_time_marks,
@@ -62,14 +62,14 @@ class _PackedRmlpParams:
 class _MoLEPredictionTraceState:
     trace_id: int
     prediction: ttnn.Tensor
-    input_ids: tuple[int, int]
+    upload_generation: int
 
 
 @dataclass
 class _MoLEForwardTraceState:
     trace_id: int
     output: tuple[ttnn.Tensor, ttnn.Tensor]
-    input_ids: tuple[int, int]
+    upload_generation: int
 
 
 class TtMoLE:
@@ -77,7 +77,8 @@ class TtMoLE:
         self,
         config: MoLEConfig,
         *,
-        reference_model: MixtureOfLinearExperts,
+        reference_model: MixtureOfLinearExperts | None = None,
+        checkpoint_state_dict: dict[str, torch.Tensor] | None = None,
         device,
         runtime_options: TtRuntimeOptions | None = None,
     ):
@@ -86,9 +87,7 @@ class TtMoLE:
         self.device = device
         self.parameter_memory_config = options.memory_config
         self.activation_memory_config = (
-            default_activation_memory_config()
-            if options.activation_memory_config is None
-            else options.activation_memory_config
+            ttnn.L1_MEMORY_CONFIG if options.activation_memory_config is None else options.activation_memory_config
         )
         self.memory_config = self.activation_memory_config
         self.dtype = options.dtype
@@ -101,11 +100,18 @@ class TtMoLE:
         self._packed_dlinear_parameters = None
         self._packed_rlinear_parameters = None
         self._packed_rmlp_parameters = None
+        self._checkpoint_state_dict = checkpoint_state_dict
+
+        if reference_model is None and checkpoint_state_dict is None:
+            raise ValueError("TtMoLE requires either reference_model or checkpoint_state_dict")
+        if reference_model is None and not self._uses_packed_expert_path():
+            raise ValueError("checkpoint_state_dict-only construction currently supports packed expert paths only")
+
         self.experts = self._build_individual_experts_if_needed(
             reference_model, single_expert_config, expert_runtime_options
         )
-        self._reference_experts = reference_model.experts
-        self._reference_router = reference_model.router
+        self._reference_experts = reference_model.experts if reference_model is not None else None
+        self._reference_router = reference_model.router if reference_model is not None else None
         self._tt_router_parameters = None
         self._prediction_trace_state = None
         self._forward_trace_state = None
@@ -114,18 +120,22 @@ class TtMoLE:
 
     def _uses_packed_expert_path(self) -> bool:
         c = self.config
-        return c.base_model_type == "dlinear" or (
-            c.base_model_type == "rlinear" and not c.individual
-        ) or (c.base_model_type == "rmlp" and not c.individual)
+        return (
+            c.base_model_type == "dlinear"
+            or (c.base_model_type == "rlinear" and not c.individual)
+            or (c.base_model_type == "rmlp" and not c.individual)
+        )
 
     def _build_individual_experts_if_needed(
         self,
-        reference_model: MixtureOfLinearExperts,
+        reference_model: MixtureOfLinearExperts | None,
         single_expert_config: MoLEConfig,
         expert_runtime_options: TtRuntimeOptions,
     ):
         if self._uses_packed_expert_path():
             return None
+        if reference_model is None:
+            raise ValueError("individual expert path requires reference_model")
         base = self.config.base_model_type
         if base == "rlinear":
             expert_class = TtRLinearExpert
@@ -169,11 +179,29 @@ class TtMoLE:
     def _ensure_router_parameters(self) -> None:
         if self._tt_router_parameters is not None:
             return
-        router_parameters = permute_temporal_router_mlp_to_channel_major(
-            self._reference_router,
-            channels=self.config.input_dim,
-            num_predictions=self.config.num_experts,
-        )
+        if self._checkpoint_state_dict is not None:
+            linear_1_weight = self._checkpoint_state_dict["router.0.weight"].detach()
+            linear_1_bias = self._checkpoint_state_dict["router.0.bias"].detach()
+            linear_2_weight = self._checkpoint_state_dict["router.2.weight"].detach()
+            linear_2_bias = self._checkpoint_state_dict["router.2.bias"].detach()
+            permutation = router_time_major_to_channel_major_permutation(
+                channels=self.config.input_dim,
+                num_predictions=self.config.num_experts,
+            ).to(linear_1_weight.device)
+            router_parameters = {
+                "linear_1_weight": linear_1_weight.index_select(0, permutation),
+                "linear_1_bias": linear_1_bias.index_select(0, permutation),
+                "linear_2_weight": linear_2_weight.index_select(0, permutation).index_select(1, permutation),
+                "linear_2_bias": linear_2_bias.index_select(0, permutation),
+            }
+        else:
+            if self._reference_router is None:
+                raise RuntimeError("router parameters are unavailable")
+            router_parameters = permute_temporal_router_mlp_to_channel_major(
+                self._reference_router,
+                channels=self.config.input_dim,
+                num_predictions=self.config.num_experts,
+            )
         up = lambda weight, bias: upload_linear(
             weight,
             bias,
@@ -189,15 +217,48 @@ class TtMoLE:
     def _ensure_packed_dlinear_parameters(self) -> None:
         if self._packed_dlinear_parameters is not None:
             return
-
-        seasonal_weight = torch.cat(
-            [expert.seasonal_projection.weight.detach() for expert in self._reference_experts], dim=0
-        )
-        seasonal_bias = torch.cat(
-            [expert.seasonal_projection.bias.detach() for expert in self._reference_experts], dim=0
-        )
-        trend_weight = torch.cat([expert.trend_projection.weight.detach() for expert in self._reference_experts], dim=0)
-        trend_bias = torch.cat([expert.trend_projection.bias.detach() for expert in self._reference_experts], dim=0)
+        if self._checkpoint_state_dict is not None:
+            seasonal_weight = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear_Seasonal.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            seasonal_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear_Seasonal.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            trend_weight = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear_Trend.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            trend_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear_Trend.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+        else:
+            if self._reference_experts is None:
+                raise RuntimeError("reference experts are unavailable")
+            seasonal_weight = torch.cat(
+                [expert.seasonal_projection.weight.detach() for expert in self._reference_experts], dim=0
+            )
+            seasonal_bias = torch.cat(
+                [expert.seasonal_projection.bias.detach() for expert in self._reference_experts], dim=0
+            )
+            trend_weight = torch.cat(
+                [expert.trend_projection.weight.detach() for expert in self._reference_experts], dim=0
+            )
+            trend_bias = torch.cat([expert.trend_projection.bias.detach() for expert in self._reference_experts], dim=0)
         moving_average_weight = moving_average_projection_matrix(
             seq_len=self.config.seq_len,
             kernel_size=self.config.moving_average_kernel_size,
@@ -257,21 +318,43 @@ class TtMoLE:
     def _ensure_packed_rlinear_parameters(self) -> None:
         if self._packed_rlinear_parameters is not None:
             return
-
-        projection_weight = torch.cat([expert.projection.weight.detach() for expert in self._reference_experts], dim=0)
+        if self._checkpoint_state_dict is not None:
+            projection_weight = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+        else:
+            if self._reference_experts is None:
+                raise RuntimeError("reference experts are unavailable")
+            projection_weight = torch.cat(
+                [expert.projection.weight.detach() for expert in self._reference_experts], dim=0
+            )
         zero_bias = torch.zeros(
             projection_weight.shape[0], dtype=projection_weight.dtype, device=projection_weight.device
         )
 
         scales = []
         constants = []
-        for expert in self._reference_experts:
-            projection_bias = expert.projection.bias.detach()
-            affine_weight = expert.rev.affine_weight.detach()
-            affine_bias = expert.rev.affine_bias.detach()
+        for expert_index in range(self.config.num_experts):
+            if self._checkpoint_state_dict is not None:
+                projection_bias = self._checkpoint_state_dict[f"experts.{expert_index}.Linear.bias"].detach()
+                affine_weight = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_weight"].detach()
+                affine_bias = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_bias"].detach()
+                expert_projection_weight = self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
+            else:
+                if self._reference_experts is None:
+                    raise RuntimeError("reference experts are unavailable")
+                expert = self._reference_experts[expert_index]
+                projection_bias = expert.projection.bias.detach()
+                affine_weight = expert.rev.affine_weight.detach()
+                affine_bias = expert.rev.affine_bias.detach()
+                expert_projection_weight = expert.projection.weight.detach()
             denom = affine_weight + (self.config.revin_eps**2)
             scale = affine_weight / denom
-            row_sum = expert.projection.weight.detach().sum(dim=1, keepdim=True)
+            row_sum = expert_projection_weight.sum(dim=1, keepdim=True)
             constant = (
                 row_sum * affine_bias.unsqueeze(0) + projection_bias.unsqueeze(1) - affine_bias.unsqueeze(0)
             ) / denom.unsqueeze(0)
@@ -315,19 +398,18 @@ class TtMoLE:
         mc = self.activation_memory_config
         batch_size = input_tensor.shape[1]
 
-        mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
-        variance = ttnn.multiply(centered, centered, memory_config=mc)
-        variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        stdev = ttnn.sqrt(ttnn.add(variance, self.config.revin_eps, memory_config=mc))
-        normalized = ttnn.div(centered, stdev, memory_config=mc)
+        normalized, mean, stdev = ttnn_revin_normalize(
+            input_tensor,
+            seq_len=self.config.seq_len,
+            eps=self.config.revin_eps,
+            memory_config=mc,
+        )
 
         pr = self._packed_rlinear_parameters
         projected = apply_linear(
             ttnn.permute(normalized, (0, 1, 3, 2)),
             pr.projection,
             memory_config=mc,
-            compute_kernel_config=LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG,
         )
         projected = ttnn.reshape(
             projected,
@@ -345,7 +427,10 @@ class TtMoLE:
     def _ensure_packed_rmlp_parameters(self) -> None:
         if self._packed_rmlp_parameters is not None:
             return
-        packed_parameter_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if self.config.base_model_type == "rmlp" and self.config.num_experts > 8:
+            packed_parameter_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            packed_parameter_memory_config = self.parameter_memory_config
 
         def block_diagonal_weights(modules) -> torch.Tensor:
             return torch.block_diag(*[module.weight.detach() for module in modules])
@@ -353,16 +438,59 @@ class TtMoLE:
         def concatenated_biases(modules) -> torch.Tensor:
             return torch.cat([module.bias.detach() for module in modules], dim=0)
 
-        temporal_1_modules = [expert.temporal[0] for expert in self._reference_experts]
-        temporal_2_modules = [expert.temporal[2] for expert in self._reference_experts]
-        projection_modules = [expert.projection for expert in self._reference_experts]
+        if self._checkpoint_state_dict is not None:
+            temporal_1_weight = torch.block_diag(
+                *[
+                    self._checkpoint_state_dict[f"experts.{expert_index}.temporal.0.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ]
+            )
+            temporal_1_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.temporal.0.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            temporal_2_weight = torch.block_diag(
+                *[
+                    self._checkpoint_state_dict[f"experts.{expert_index}.temporal.2.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ]
+            )
+            temporal_2_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.temporal.2.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            projection_weight = torch.block_diag(
+                *[
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ]
+            )
+            projection_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+        else:
+            if self._reference_experts is None:
+                raise RuntimeError("reference experts are unavailable")
+            temporal_1_modules = [expert.temporal[0] for expert in self._reference_experts]
+            temporal_2_modules = [expert.temporal[2] for expert in self._reference_experts]
+            projection_modules = [expert.projection for expert in self._reference_experts]
 
-        temporal_1_weight = block_diagonal_weights(temporal_1_modules)
-        temporal_1_bias = concatenated_biases(temporal_1_modules)
-        temporal_2_weight = block_diagonal_weights(temporal_2_modules)
-        temporal_2_bias = concatenated_biases(temporal_2_modules)
-        projection_weight = block_diagonal_weights(projection_modules)
-        projection_bias = concatenated_biases(projection_modules)
+            temporal_1_weight = block_diagonal_weights(temporal_1_modules)
+            temporal_1_bias = concatenated_biases(temporal_1_modules)
+            temporal_2_weight = block_diagonal_weights(temporal_2_modules)
+            temporal_2_bias = concatenated_biases(temporal_2_modules)
+            projection_weight = block_diagonal_weights(projection_modules)
+            projection_bias = concatenated_biases(projection_modules)
 
         affine_weight_blocks = []
         affine_bias_blocks = []
@@ -370,9 +498,16 @@ class TtMoLE:
         output_denom_blocks = []
         seq_len = self.config.seq_len
         pred_len = self.config.pred_len
-        for expert in self._reference_experts:
-            affine_weight = expert.rev.affine_weight.detach()
-            affine_bias = expert.rev.affine_bias.detach()
+        for expert_index in range(self.config.num_experts):
+            if self._checkpoint_state_dict is not None:
+                affine_weight = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_weight"].detach()
+                affine_bias = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_bias"].detach()
+            else:
+                if self._reference_experts is None:
+                    raise RuntimeError("reference experts are unavailable")
+                expert = self._reference_experts[expert_index]
+                affine_weight = expert.rev.affine_weight.detach()
+                affine_bias = expert.rev.affine_bias.detach()
             output_bias = affine_bias
             output_denom = affine_weight + (self.config.revin_eps**2)
 
@@ -497,13 +632,12 @@ class TtMoLE:
         input_tensor: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
         mc = self.activation_memory_config
-        mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
-        variance = ttnn.multiply(centered, centered, memory_config=mc)
-        variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
-        stdev = ttnn.sqrt(ttnn.add(variance, self.config.revin_eps, memory_config=mc))
-        normalized = ttnn.div(centered, stdev, memory_config=mc)
-        return normalized, mean, stdev
+        return ttnn_revin_normalize(
+            input_tensor,
+            seq_len=self.config.seq_len,
+            eps=self.config.revin_eps,
+            memory_config=mc,
+        )
 
     def _reduce_prediction_heads(
         self, projected: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
@@ -530,11 +664,15 @@ class TtMoLE:
         prediction = ttnn.multiply(prediction, stdev, memory_config=mc)
         return ttnn.add(prediction, mean, memory_config=mc)
 
-    def _predict_packed_dlinear(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
+    def _predict_packed_dlinear(
+        self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
+    ) -> ttnn.Tensor:
         projected = self._compute_dlinear_expert_projection(input_tensor)
         return self._reduce_prediction_heads(projected, gating_flat, batch_size)
 
-    def _predict_packed_rlinear(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
+    def _predict_packed_rlinear(
+        self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
+    ) -> ttnn.Tensor:
         projected, mean, stdev = self._compute_rlinear_expert_projection(input_tensor)
         prediction = self._reduce_prediction_heads(projected, gating_flat, batch_size)
         return self._denormalize_prediction_if_needed(prediction, mean, stdev)
@@ -631,9 +769,7 @@ class TtMoLE:
         else:
             if gating_weights is None:
                 raise RuntimeError("individual expert path requires channel-wise gating weights")
-            prediction = self._predict_individual_experts(
-                input_tensor, input_marks, gating_weights, batch_size
-            )
+            prediction = self._predict_individual_experts(input_tensor, input_marks, gating_weights, batch_size)
         return prediction, gating_weights
 
     def forward_prediction_no_trace(self, input_tensor: ttnn.Tensor, input_marks: ttnn.Tensor) -> ttnn.Tensor:
@@ -649,9 +785,9 @@ class TtMoLE:
             return self.forward_prediction_no_trace(input_tensor, input_marks)
 
         state = self._prediction_trace_state
-        current_ids = (id(input_tensor), id(input_marks))
+        current_gen = getattr(self, "_upload_generation", 0)
 
-        if state is None or state.input_ids != current_ids:
+        if state is None or state.upload_generation != current_gen:
             self._release_prediction_trace()
             self._release_forward_trace()
 
@@ -674,7 +810,7 @@ class TtMoLE:
             self._prediction_trace_state = _MoLEPredictionTraceState(
                 trace_id=trace_id,
                 prediction=prediction,
-                input_ids=current_ids,
+                upload_generation=current_gen,
             )
 
         pst = self._prediction_trace_state
@@ -696,9 +832,9 @@ class TtMoLE:
             return self.forward_no_trace(input_tensor, input_marks)
 
         state = self._forward_trace_state
-        current_ids = (id(input_tensor), id(input_marks))
+        current_gen = getattr(self, "_upload_generation", 0)
 
-        if state is None or state.input_ids != current_ids:
+        if state is None or state.upload_generation != current_gen:
             self._release_forward_trace()
             self._release_prediction_trace()
 
@@ -721,7 +857,7 @@ class TtMoLE:
             self._forward_trace_state = _MoLEForwardTraceState(
                 trace_id=trace_id,
                 output=output,
-                input_ids=current_ids,
+                upload_generation=current_gen,
             )
 
         fst = self._forward_trace_state

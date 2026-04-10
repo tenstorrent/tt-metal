@@ -17,9 +17,7 @@ class MoLEConfig:
     revin_eps: float = 1e-5
     individual: bool = False
     freq: str = "h"
-    drop: float = 0.1
     d_model: int = 512
-    head_dropout: float = 0.0
 
     def __post_init__(self) -> None:
         resolved_num_experts = self.num_experts
@@ -28,7 +26,6 @@ class MoLEConfig:
         if self.num_experts is not None and self.t_dim is not None and self.num_experts != self.t_dim:
             raise ValueError(f"num_experts ({self.num_experts}) and t_dim ({self.t_dim}) must match")
         object.__setattr__(self, "num_experts", resolved_num_experts)
-        # Keep t_dim as a compatibility alias for older call sites.
         object.__setattr__(self, "t_dim", resolved_num_experts)
 
     @property

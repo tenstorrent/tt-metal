@@ -27,9 +27,12 @@ class _TtDLinearUploaded:
 
 
 class TtDLinearExpert(TtExpertBase):
-    def __init__(self, config, *, reference_model=None, runtime_options=None):
-        ref = reference_model if reference_model is not None else DLinearExpert(config).eval()
+    def __init__(self, config, *, reference_model=None, checkpoint_state_dict=None, runtime_options=None):
+        ref = reference_model if reference_model is not None else None
+        if ref is None and checkpoint_state_dict is None:
+            ref = DLinearExpert(config).eval()
         self._init_base(config, ref, runtime_options)
+        self._checkpoint_state_dict = checkpoint_state_dict
 
     def _ensure_parameters(self, device) -> None:
         if self._cached_device is device and self._tt_parameters is not None:
@@ -39,7 +42,32 @@ class TtDLinearExpert(TtExpertBase):
             seq_len=self.config.seq_len,
             kernel_size=self.config.moving_average_kernel_size,
         )
-        moving_average_bias = self.reference_model.seasonal_projection.bias.detach().new_zeros(self.config.seq_len)
+        if self._checkpoint_state_dict is not None:
+            seasonal_weight = self._checkpoint_state_dict["Linear_Seasonal.weight"].detach()
+            seasonal_bias = self._checkpoint_state_dict["Linear_Seasonal.bias"].detach()
+            trend_weight = self._checkpoint_state_dict["Linear_Trend.weight"].detach()
+            trend_bias = self._checkpoint_state_dict["Linear_Trend.bias"].detach()
+            moving_average_bias = seasonal_bias.new_zeros(self.config.seq_len)
+            seasonal = upload_linear(
+                seasonal_weight,
+                seasonal_bias,
+                device=device,
+                dtype=self.dtype,
+                memory_config=self.parameter_memory_config,
+            )
+            trend = upload_linear(
+                trend_weight,
+                trend_bias,
+                device=device,
+                dtype=self.dtype,
+                memory_config=self.parameter_memory_config,
+            )
+        else:
+            if self.reference_model is None:
+                raise RuntimeError("reference_model or checkpoint_state_dict is required")
+            moving_average_bias = self.reference_model.seasonal_projection.bias.detach().new_zeros(self.config.seq_len)
+            seasonal = up(self.reference_model.seasonal_projection)
+            trend = up(self.reference_model.trend_projection)
         self._tt_parameters = _TtDLinearUploaded(
             moving_average=upload_linear(
                 moving_average_weight,
@@ -48,8 +76,8 @@ class TtDLinearExpert(TtExpertBase):
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
-            seasonal=up(self.reference_model.seasonal_projection),
-            trend=up(self.reference_model.trend_projection),
+            seasonal=seasonal,
+            trend=trend,
         )
         self._cached_device = device
         register_trace_release_hook(device=device, hook=self._release_prediction_trace)
@@ -59,7 +87,6 @@ class TtDLinearExpert(TtExpertBase):
         self._ensure_parameters(input_tensor.device())
 
         mc = self.activation_memory_config
-        # Match reference: moving average and seq_len projections run on [batch, channels, seq_len].
         input_channels_first = ttnn.permute(input_tensor, (0, 1, 3, 2))
         tp = self._tt_parameters
         trend = apply_linear(input_channels_first, tp.moving_average, memory_config=mc)
