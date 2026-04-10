@@ -140,44 +140,13 @@ from ttnn._ttnn.operations.trace import (
     MeshTraceId,
     begin_trace_capture,
     end_trace_capture,
-    execute_trace as _ttnn_execute_trace,
+    execute_trace,
     release_trace,
-    suppress_unsafe_allocation_warning as _suppress_unsafe_allocation_warning,
-    unsuppress_unsafe_allocation_warning as _unsuppress_unsafe_allocation_warning,
 )
 
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
-
-_TRACE_ALLOC_TRACKING = (
-    os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") is not None
-    or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") is not None
-)
-
-
-@contextlib.contextmanager
-def corruptible_allocation_scope(mesh_device):
-    """
-    Suppress unsafe-allocation tracking for allocations made in this scope.
-    Use for tensors that intentionally persist across replays (e.g. input buffers
-    for a second trace that are overwritten before use).
-    """
-    _suppress_unsafe_allocation_warning(mesh_device)
-    try:
-        yield
-    finally:
-        _unsuppress_unsafe_allocation_warning(mesh_device)
-
-
-def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
-    """Execute a captured trace, with automatic safety verification when tracking is enabled."""
-    if _TRACE_ALLOC_TRACKING:
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
-
-        UnsafeAllocationTracker(device).verify_before_replay()
-    return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
-
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,

@@ -96,21 +96,26 @@ void AllocatorImpl::init_one_bank_per_l1() {
     }
 }
 
-static thread_local std::vector<size_t> pending_traceback_ids;
-
 void AllocatorImpl::verify_safe_allocation() const {
-    if (!allocations_unsafe_) {
-        return;
-    }
-    if (suppress_unsafe_warning_depth_ > 0) {
-        return;
-    }
+    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
+    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
+    // have a lifetime that ends before the trace is executed.
+    // Print the warning once per device, to ensure that user output is not clobbered.
     thread_local static bool warning_generated = false;
-    if (!tracking_enabled_ && !warning_generated) {
+    if (allocations_unsafe_) {
+        const char* throw_on_unsafe_alloc = std::getenv("TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION");
+        if (throw_on_unsafe_alloc != nullptr && throw_on_unsafe_alloc[0] == '1') {
+            TT_THROW(
+                "Unsafe device buffer allocation attempted while a trace is active. "
+                "This may corrupt buffers on trace replay. "
+                "Unset TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION to downgrade this to a warning.");
+        }
+    }
+    if (allocations_unsafe_ and not warning_generated) {
         log_warning(
             tt::LogMetal,
-            "Allocating device buffers while a trace is active. "
-            "Enable the unsafe allocation tracker for safety checks.");
+            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
+            "corrupted once a trace is executed.");
         warning_generated = true;
     }
 }
@@ -194,12 +199,6 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (allocations_unsafe_ && tracking_enabled_ && suppress_unsafe_warning_depth_ == 0) {
-        unsafe_tracked_ids_.insert(buffer->unique_id());
-        if (traceback_capture_enabled_) {
-            pending_traceback_ids.push_back(buffer->unique_id());
-        }
-    }
     return address;
 }
 
@@ -230,9 +229,6 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
-    if (tracking_enabled_) {
-        unsafe_tracked_ids_.erase(buffer->unique_id());
-    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -455,16 +451,6 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
 void AllocatorImpl::mark_allocations_unsafe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
-
-    static const bool env_tracking = std::getenv("TT_METAL_TRACE_ALLOC_TRACKING") != nullptr ||
-                                     std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
-    static const bool env_tracebacks = std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
-    if (env_tracking) {
-        tracking_enabled_ = true;
-    }
-    if (env_tracebacks) {
-        traceback_capture_enabled_ = true;
-    }
 }
 
 void AllocatorImpl::mark_allocations_safe() {
@@ -475,48 +461,6 @@ void AllocatorImpl::mark_allocations_safe() {
 bool AllocatorImpl::allocations_unsafe() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocations_unsafe_;
-}
-
-void AllocatorImpl::suppress_unsafe_allocation_warning() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    suppress_unsafe_warning_depth_++;
-}
-
-void AllocatorImpl::unsuppress_unsafe_allocation_warning() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    TT_ASSERT(suppress_unsafe_warning_depth_ > 0, "unsuppress called without matching suppress");
-    suppress_unsafe_warning_depth_--;
-}
-
-std::unordered_set<size_t> AllocatorImpl::get_unsafe_tracked_ids() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return unsafe_tracked_ids_;
-}
-
-std::unordered_map<size_t, long> AllocatorImpl::get_unsafe_buffer_refcounts() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::unordered_map<size_t, long> result;
-    for (Buffer* buf : allocated_buffers_) {
-        if (unsafe_tracked_ids_.count(buf->unique_id())) {
-            try {
-                result[buf->unique_id()] = buf->shared_from_this().use_count() - 1;
-            } catch (...) {
-                result[buf->unique_id()] = -1;
-            }
-        }
-    }
-    return result;
-}
-
-void AllocatorImpl::clear_unsafe_tracked_ids() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    unsafe_tracked_ids_.clear();
-}
-
-std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
-    std::vector<size_t> result;
-    result.swap(pending_traceback_ids);
-    return result;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {
