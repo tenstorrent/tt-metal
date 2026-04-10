@@ -6,6 +6,7 @@
 Uses HuggingFace Gemma4 classes as reference for PCC comparison.
 """
 
+import pytest
 import torch
 from loguru import logger
 
@@ -117,13 +118,29 @@ def _create_hf_model(hf_text_config):
             # Tied lm_head
             self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        def forward(self, input_ids, position_embeddings, attention_mask=None):
+        def forward(self, input_ids, attention_mask=None):
+            from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
             x = self.embed_tokens(input_ids)
+            seq_len = x.shape[1]
             pli_size = getattr(self.config, "hidden_size_per_layer_input", 0) or 0
-            pli = torch.randn(1, x.shape[1], pli_size) if pli_size else None
-            for layer in self.layers:
+            pli = torch.randn(1, seq_len, pli_size) if pli_size else None
+
+            # Create RoPE per layer type (sliding vs global have different head_dim)
+            rope = Gemma4TextRotaryEmbedding(self.config)
+            pos_ids = torch.arange(seq_len).unsqueeze(0)
+            x_dummy = torch.randn(1, seq_len, self.config.hidden_size)
+            rope_cache = {}
+            for layer_type in set(self.config.layer_types[: self.config.num_hidden_layers]):
+                rope_cache[layer_type] = rope(x_dummy, pos_ids, layer_type=layer_type)
+
+            for i, layer in enumerate(self.layers):
+                layer_type = self.config.layer_types[i]
                 x = layer(
-                    x, per_layer_input=pli, position_embeddings=position_embeddings, attention_mask=attention_mask
+                    x,
+                    per_layer_input=pli,
+                    position_embeddings=rope_cache[layer_type],
+                    attention_mask=attention_mask,
                 )
             x = self.norm(x)
             logits = self.lm_head(x)
@@ -210,16 +227,9 @@ def test_single_layer_model(device):
     tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
 
     # HF reference forward
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
-    hf_rope = Gemma4TextRotaryEmbedding(hf_text_config)
-    pos_ids = torch.arange(seq_len).unsqueeze(0)
-    layer_type = hf_text_config.layer_types[0]
-    cos, sin = hf_rope(torch.randn(1, seq_len, model_args.hidden_size), pos_ids, layer_type=layer_type)
-
     causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
     with torch.no_grad():
-        hf_logits = hf_model(tokens, position_embeddings=(cos, sin), attention_mask=causal_mask)
+        hf_logits = hf_model(tokens, attention_mask=causal_mask)
     logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
 
     # TT forward
@@ -371,17 +381,17 @@ def test_full_model(device):
 
 
 @parametrize_mesh_with_fabric()
-def test_single_layer_model_tp(mesh_device):
-    """Single-layer model with TP on multi-device mesh, PCC vs HF reference.
+@pytest.mark.parametrize("num_layers", [1, 5, 6], ids=["1layer", "5layers", "6layers"])
+def test_single_layer_model_tp(mesh_device, num_layers):
+    """Single/few-layer model with TP on multi-device mesh, PCC vs HF reference.
 
-    Filter: pytest -k "1x2" or pytest -k "1x8"
+    1 layer = sliding only, 5 layers = all sliding, 6 layers = includes first global layer.
+    Filter: pytest -k "1x8" or pytest -k "6layers"
     """
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
 
-    base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
+    base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
@@ -407,13 +417,9 @@ def test_single_layer_model_tp(mesh_device):
     tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
 
     # HF reference
-    hf_rope = Gemma4TextRotaryEmbedding(hf_text_config)
-    pos_ids = torch.arange(seq_len).unsqueeze(0)
-    layer_type = hf_text_config.layer_types[0]
-    cos, sin = hf_rope(torch.randn(1, seq_len, model_args.hidden_size), pos_ids, layer_type=layer_type)
     causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
     with torch.no_grad():
-        hf_logits = hf_model(tokens, position_embeddings=(cos, sin), attention_mask=causal_mask)
+        hf_logits = hf_model(tokens, attention_mask=causal_mask)
 
     # TT forward
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
