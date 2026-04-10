@@ -59,58 +59,74 @@ bool tt::is_integer_format(DataFormat format) {
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
-bool tt::is_supported_for_gen1(DataFormat format) {
+// Translation unit-local implementation details.
+// We can remove the anonymous namespace after the tt_backend_api_types.hpp header is moved to the tt_metal namespace.
+namespace {
+
+// TT-1.x (Wormhole / Blackhole) host-side enumeration.
+bool is_supported_wormhole_blackhole(tt::DataFormat format, bool is_blackhole) {
     switch (format) {
-        case DataFormat::Float32:
-        case DataFormat::Float16:
-        case DataFormat::Bfp8:
-        case DataFormat::Bfp4:
-        case DataFormat::Bfp2:
-        case DataFormat::Float16_b:
-        case DataFormat::Bfp8_b:
-        case DataFormat::Bfp4_b:
-        case DataFormat::Bfp2_b:
-        case DataFormat::Lf8:
-        case DataFormat::Fp8_e4m3:
-        case DataFormat::Int8:
-        case DataFormat::Tf32:
-        case DataFormat::UInt8:
-        case DataFormat::UInt16:
-        case DataFormat::Int32:
-        case DataFormat::UInt32:
-        case DataFormat::RawUInt8:
-        case DataFormat::RawUInt16:
-        case DataFormat::RawUInt32: return true;
-        case DataFormat::Invalid:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::UInt32:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32: return true;
+        case tt::DataFormat::Fp8_e4m3: return is_blackhole;
+        case tt::DataFormat::Invalid:
         default: return false;
     }
 }
 
-bool tt::is_supported_for_gen2(DataFormat format) {
+// TT-2.x (Quasar) host-side enumeration.
+bool is_supported_quasar(tt::DataFormat format) {
     switch (format) {
-        // Matches Quasar `DataFormat` encodings for Float32, Tf32, Float16, Float16_b, Int8, Int32; plus
-        // host-side raw tile buffers (opaque bytes; not a Tensix enum wire format).
-        case DataFormat::Float32:
-        case DataFormat::Tf32:
-        case DataFormat::Float16:
-        case DataFormat::Float16_b:
-        case DataFormat::Int8:
-        case DataFormat::Int32:
-        case DataFormat::RawUInt8:
-        case DataFormat::RawUInt16:
-        case DataFormat::RawUInt32: return true;
-        case DataFormat::Bfp8:
-        case DataFormat::Bfp4:
-        case DataFormat::Bfp2:
-        case DataFormat::Bfp8_b:
-        case DataFormat::Bfp4_b:
-        case DataFormat::Bfp2_b:
-        case DataFormat::Lf8:
-        case DataFormat::Fp8_e4m3:
-        case DataFormat::UInt8:
-        case DataFormat::UInt16:
-        case DataFormat::UInt32:
-        case DataFormat::Invalid:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32: return true;
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::Fp8_e4m3:
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::UInt32:
+        case tt::DataFormat::Invalid:
+        default: return false;
+    }
+}
+
+}  // namespace
+
+bool tt::is_data_format_supported(DataFormat format, ARCH arch) {
+    switch (arch) {
+        case ARCH::WORMHOLE_B0: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/false);
+        case ARCH::BLACKHOLE: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/true);
+        case ARCH::QUASAR: return is_supported_quasar(format);
+        case ARCH::Invalid:
         default: return false;
     }
 }

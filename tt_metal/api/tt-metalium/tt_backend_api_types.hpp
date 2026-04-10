@@ -11,6 +11,8 @@
 
 #include <fmt/base.h>
 
+#include <umd/device/types/arch.hpp>
+
 namespace tt {
 
 /**
@@ -50,17 +52,9 @@ enum class DataFormat : uint8_t {
 bool is_integer_format(DataFormat format);
 
 /**
- * @brief True if the format is supported by Gen1 Tensix hardware (Wormhole and Blackhole).
- * @details Source of truth: `tt_metal/hw/inc/internal/tt-1xx/wormhole/.../tensix_types.h` and
- *          `tt_metal/hw/inc/internal/tt-1xx/blackhole/tensix_types.h`.
+ * @brief Whether the data format is supported by the Tensix compute engine of a given architecture.
  */
-bool is_supported_for_gen1(DataFormat format);
-
-/**
- * @brief True if the format is supported by Gen2 Tensix hardware (Quasar and derivatives).
- * @details Source of truth: `tt_metal/hw/inc/internal/tt-2xx/quasar/tensix_types.h`.
- */
-bool is_supported_for_gen2(DataFormat format);
+bool is_data_format_supported(DataFormat format, ARCH arch);
 
 std::ostream& operator<<(std::ostream& os, const DataFormat& format);
 

@@ -498,8 +498,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBF
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-// Data format legality: ValidateProgramSpec currently targets Quasar only, so is_supported_for_gen2 applies.
-TEST_F(ProgramSpecTestQuasar, DFBDataFormatNotSupportedOnTargetArchitectureFails) {
+TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -509,7 +508,7 @@ TEST_F(ProgramSpecTestQuasar, DFBDataFormatNotSupportedOnTargetArchitectureFails
     auto consumer = MakeMinimalComputeKernel("consumer", node);
     auto dfb = MakeMinimalDFB("dfb", node);
 
-    // Legacy Gen1 block-float format; is_supported_for_gen2(Bfp8) is false.
+    // Legacy block-float format; not supported on Quasar.
     dfb.data_format_metadata = tt::DataFormat::Bfp8;
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);

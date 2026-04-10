@@ -9,6 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
@@ -423,17 +424,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Data format must be valid for the architecture
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
-            if (is_gen2_arch()) {
-                TT_FATAL(
-                    tt::is_supported_for_gen2(dfb.data_format_metadata.value()),
-                    "DFB '{}' has a data format that is not supported on Gen2 architectures",
-                    dfb.unique_id);
-            } else if (is_gen1_arch()) {
-                TT_FATAL(
-                    tt::is_supported_for_gen1(dfb.data_format_metadata.value()),
-                    "DFB '{}' has a data format that is not supported on Gen1 architectures",
-                    dfb.unique_id);
-            }
+            const tt::ARCH arch = get_arch();
+            TT_FATAL(
+                tt::is_data_format_supported(dfb.data_format_metadata.value(), arch),
+                "DFB '{}' has data format '{}' which is not supported on architecture {}",
+                dfb.unique_id,
+                dfb.data_format_metadata.value(),
+                arch);
         }
     }
 
