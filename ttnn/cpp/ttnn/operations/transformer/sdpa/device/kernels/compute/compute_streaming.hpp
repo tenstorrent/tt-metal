@@ -93,18 +93,22 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t inner_dim,
     uint32_t matmul_stride,
     bool trigger_reduce = false) {
-    tile_regs_acquire();
-    uint32_t in0_index = in0_index_start;
-    uint32_t in1_index = in1_index_start;
-    for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+    ckernel::MatmulOpConfig bm_cfg{};
+    bm_cfg.in0_cb_id = in0_cb;
+    bm_cfg.in1_cb_id = in1_cb;
+    bm_cfg.out_cb_id = out_cb;
+    bm_cfg.ct_dim = subblock_w;
+    bm_cfg.rt_dim = subblock_h;
+    bm_cfg.kt_dim = matmul_stride;
+    bm_cfg.transpose = transpose;
+    ckernel::BlockMatmulOp bm(bm_cfg);
+
+    bm.begin_subblock();
 #ifdef ARCH_BLACKHOLE
-        matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, 0, transpose, subblock_w, subblock_h, matmul_stride);
+    bm.accumulate_no_mop(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
 #else
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, 0, transpose, subblock_w, subblock_h, matmul_stride);
+    bm.accumulate(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
 #endif
-        in0_index++;
-        in1_index += in1_stride;
-    }
     tile_regs_commit();
 
     tile_regs_wait();
@@ -508,7 +512,7 @@ void normalize_row_streaming(
 
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
-            norm_mm.accumulate(0, 0, 0, 1, 0, 0, 0);
+            norm_mm.matmul_one_tile(0, 0, 0);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0, (int)VectorMode::C)));

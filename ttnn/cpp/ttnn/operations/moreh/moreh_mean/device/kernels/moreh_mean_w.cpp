@@ -47,19 +47,13 @@ void kernel_main() {
             if (!is_w_single_tile) {
                 tile_regs_acquire();
 
-                for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    cb_wait_front(cb_input, onetile);
-#if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_input, cb_scaler);
-#endif
+                {
                     ckernel::MatmulOpConfig mm_cfg{};
                     mm_cfg.in0_cb_id = cb_input;
                     mm_cfg.in1_cb_id = cb_scaler;
                     mm_cfg.out_cb_id = cb_out;
                     ckernel::TileMatmulOp mm(mm_cfg);
-                    mm.init_short();
-                    mm.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
-                    cb_pop_front(cb_input, onetile);
+                    mm.reduce_w_tiles_with_init(Wt - 1, reduce_dst_idx);
                 }
                 tile_regs_commit();
 
@@ -112,7 +106,7 @@ void kernel_main() {
             mm_cfg2.out_cb_id = cb_out;
             ckernel::TileMatmulOp mm2(mm_cfg2);
             mm2.init_short();
-            mm2.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
+            mm2.matmul_one_tile(0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);
