@@ -6,7 +6,6 @@
 Uses HuggingFace Gemma4 classes as reference for PCC comparison.
 """
 
-import pytest
 import torch
 from loguru import logger
 
@@ -14,7 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, skip_if_needs_multi_device
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric, skip_if_needs_multi_device
 
 # ── Config Tests ───────────────────────────────────────────────────────────
 
@@ -368,13 +367,15 @@ def test_full_model(device):
     assert passing, f"Full model PCC too low: {pcc_msg}"
 
 
-# ── N300 (TP=2) Tests ──────────────────────────────────────────────────
+# ── Multi-device (TP) Tests ──────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_single_layer_model_n300(mesh_device):
-    """Single-layer model with TP=2 on N300, PCC vs HF reference."""
+@parametrize_mesh_with_fabric()
+def test_single_layer_model_tp(mesh_device):
+    """Single-layer model with TP on multi-device mesh, PCC vs HF reference.
+
+    Filter: pytest -k "1x2" or pytest -k "1x8"
+    """
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -413,7 +414,6 @@ def test_single_layer_model_n300(mesh_device):
     causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
     with torch.no_grad():
         hf_logits = hf_model(tokens, position_embeddings=(cos, sin), attention_mask=causal_mask)
-    logger.info(f"HF logits shape: {hf_logits.shape}")
 
     # TT forward
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -440,5 +440,119 @@ def test_single_layer_model_n300(mesh_device):
     tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).squeeze(0).float()
 
     passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.90)
-    logger.info(f"N300 single-layer PCC: {pcc_msg}")
-    assert passing, f"N300 single-layer model PCC too low: {pcc_msg}"
+    logger.info(f"TP={mesh_device.shape[1]} single-layer PCC: {pcc_msg}")
+    assert passing, f"TP={mesh_device.shape[1]} single-layer model PCC too low: {pcc_msg}"
+
+
+@parametrize_mesh_with_fabric()
+def test_full_model_tp(mesh_device):
+    """Full model (all layers, real weights) with TP on multi-device mesh.
+
+    Loads the real checkpoint, runs a short prefill on both HF and TT,
+    and compares logits PCC.
+
+    Filter: pytest -k "1x2" or pytest -k "1x8"
+    """
+    import os
+
+    import torch.nn.functional as F
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from models.demos.gemma4.tt.common import create_tt_model
+
+    model_path = os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+
+    # ── HF reference ─────────────────────────────────────────────────
+    logger.info(f"Loading HF reference model from {model_path}...")
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+    prompt = "The capital of France is"
+    input_ids = tokenizer.encode(prompt, return_tensors="pt")  # [1, seq_len]
+    seq_len = input_ids.shape[1]
+    padded_len = ((seq_len + 31) // 32) * 32
+    if padded_len > seq_len:
+        input_ids_padded = F.pad(input_ids, (0, padded_len - seq_len), value=0)
+    else:
+        input_ids_padded = input_ids
+
+    logger.info(f"Prompt: '{prompt}' -> {seq_len} tokens (padded to {padded_len})")
+
+    with torch.no_grad():
+        hf_out = hf_model(input_ids_padded)
+        hf_logits = hf_out.logits.float()  # [1, padded_len, vocab_size]
+
+    logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
+
+    del hf_model
+    import gc
+
+    gc.collect()
+
+    # ── TT model ─────────────────────────────────────────────────────
+    logger.info(f"Creating TT model with all layers (TP={mesh_device.shape[1]})...")
+    model_args, tt_model, tt_kv_cache, state_dict = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=1,
+        max_seq_len=max(padded_len, 128),
+        model_path=model_path,
+        create_kv_cache=True,
+    )
+
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    tokens_tt = ttnn.from_torch(
+        input_ids_padded.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
+    embeds = tt_model.embed_tokens(tokens_tt)
+    embeds = ttnn.reshape(embeds, (1, 1, padded_len, model_args.hidden_size))
+    embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+
+    # CPU tensors for per-layer input (E2B/E4B models)
+    embed_key = "model.language_model.embed_tokens.weight"
+    if embed_key not in state_dict:
+        embed_key = "model.embed_tokens.weight"
+    embeds_torch = (
+        F.embedding(input_ids_padded.long(), state_dict.get(embed_key, torch.zeros(1))) * tt_model.embed_scale
+    ).float()
+
+    tt_logits = tt_model.ttnn_prefill_forward(
+        embeds,
+        page_table=None,
+        kv_cache=tt_kv_cache,
+        input_ids_torch=input_ids_padded,
+        embeds_torch=embeds_torch,
+    )
+
+    tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
+    tt_logits.deallocate(True)
+
+    # Reshape TT output to match HF: TT is [1, 1, padded_len, vocab] -> [1, padded_len, vocab]
+    if tt_logits_torch.dim() == 4:
+        tt_logits_torch = tt_logits_torch.squeeze(1)
+
+    logger.info(
+        f"TT logits shape: {tt_logits_torch.shape}, range: [{tt_logits_torch.min():.4f}, {tt_logits_torch.max():.4f}]"
+    )
+
+    # Compare only up to the real (unpadded) sequence length
+    hf_compare = hf_logits[:, :seq_len, :]
+    tt_compare = tt_logits_torch[:, :seq_len, :]
+
+    passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=0.90)
+    logger.info(f"Full model TP={mesh_device.shape[1]} PCC (seq_len={seq_len}): {pcc_msg}")
+
+    # Also check that argmax tokens match for the last position
+    hf_last_tok = hf_compare[0, -1, :].argmax().item()
+    tt_last_tok = tt_compare[0, -1, :].argmax().item()
+    logger.info(
+        f"Last-position argmax: HF={hf_last_tok} ('{tokenizer.decode([hf_last_tok])}'), "
+        f"TT={tt_last_tok} ('{tokenizer.decode([tt_last_tok])}')"
+    )
+
+    assert passing, f"Full model TP={mesh_device.shape[1]} PCC too low: {pcc_msg}"
