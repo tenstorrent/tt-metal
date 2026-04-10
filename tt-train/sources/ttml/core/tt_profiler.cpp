@@ -24,6 +24,7 @@ namespace ttml::core {
 void TTProfiler::read_results(
     ttnn::distributed::MeshDevice* device,
     const std::string& noop_identifier,
+    bool dump_results,
     const size_t number_of_noops,
     tt::tt_metal::ProfilerReadState read_state) const {
     assert(device);
@@ -40,7 +41,9 @@ void TTProfiler::read_results(
     }
 
     call_device_noop(device, number_of_noops, noop_identifier);
-    tt::tt_metal::ReadMeshDeviceProfilerResults(*device, read_state);
+    if (dump_results) {
+        tt::tt_metal::ReadMeshDeviceProfilerResults(*device, read_state);
+    }
     call_device_noop(device, number_of_noops, noop_identifier);
 }
 
