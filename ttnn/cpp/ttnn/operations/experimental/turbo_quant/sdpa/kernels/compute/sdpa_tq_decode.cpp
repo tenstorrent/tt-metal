@@ -214,60 +214,25 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    // ── Main loop: batch × head ──
-    // SIMPLIFIED: bypass-copy ALL K/V index tiles to cb_k_in/cb_v_in,
-    // then call sdpa_standard which handles the full SDPA math correctly.
-    // This requires CB capacity = full cache. For MVP/debugging only.
+    // ── Reader pushes BF16 K (transposed) and V directly to cb_k_in/cb_v_in ──
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            // ── Pre-fill: copy ALL K/V index tiles ──
-            for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                // Copy K idx tiles
-                for (uint32_t t = 0; t < k_chunk_tiles; t++) {
-                    cb_wait_front(cb_k_idx, 1);
-                    cb_reserve_back(cb_k_in, 1);
-                    tile_regs_acquire();
-                    copy_tile_to_dst_init_short(cb_k_idx);
-                    copy_tile(cb_k_idx, 0, 0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_k_in);
-                    pack_tile(0, cb_k_in);
-                    tile_regs_release();
-                    cb_pop_front(cb_k_idx, 1);
-                    cb_push_back(cb_k_in, 1);
-                }
-                // Discard K norms
-                for (uint32_t t = 0; t < Sk_chunk_t; t++) {
-                    cb_wait_front(cb_k_norms, 1);
-                    cb_pop_front(cb_k_norms, 1);
-                }
-                // Copy V idx tiles
-                for (uint32_t t = 0; t < v_chunk_tiles; t++) {
-                    cb_wait_front(cb_v_idx, 1);
-                    cb_reserve_back(cb_v_in, 1);
-                    tile_regs_acquire();
-                    copy_tile_to_dst_init_short(cb_v_idx);
-                    copy_tile(cb_v_idx, 0, 0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_v_in);
-                    pack_tile(0, cb_v_in);
-                    tile_regs_release();
-                    cb_pop_front(cb_v_idx, 1);
-                    cb_push_back(cb_v_in, 1);
-                }
-                // Discard V norms
-                for (uint32_t t = 0; t < Sk_chunk_t; t++) {
-                    cb_wait_front(cb_v_norms, 1);
-                    cb_pop_front(cb_v_norms, 1);
-                }
-            }
-
-            // ── Run standard SDPA on the pre-filled K/V CBs ──
             mm_init(cb_q_in, cb_k_in, cb_out);
-            cb_wait_front(cb_identity_scale_in, 1);
-            sdpa_standard<cb_qk_im, cb_identity_scale_in, (uint32_t)tt::CBIndex::c_4, 0>(
+            sdpa_standard<
+                cb_qk_im,
+                cb_identity_scale_in,
+                (uint32_t)tt::CBIndex::c_4,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                false /*use_attention_sink*/,
+                false /*is_causal*/,
+                false /*use_provided_mask*/,
+                false /*use_padded_mask*/,
+                false /*is_chunked*/,
+                scale_fp32,
+                (uint32_t)0 /*sliding_window*/>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,

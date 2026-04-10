@@ -34,7 +34,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     const auto& k_norms = args.k_norms;
     const auto& v_idx = args.v_indices;
     const auto& v_norms = args.v_norms;
-    const auto& page_table = args.page_table;
+    [[maybe_unused]] const auto& page_table = args.page_table;
 
     IDevice* device = q.device();
     [[maybe_unused]] auto grid = device->compute_with_storage_grid_size();
@@ -66,8 +66,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     auto im_df = tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tile_size(q_df);
-    uint32_t k_idx_tile_size = tile_size(k_idx_df);
-    uint32_t k_norms_tile_size = tile_size(k_norms_df);
+    [[maybe_unused]] uint32_t k_idx_tile_size = tile_size(k_idx_df);
+    [[maybe_unused]] uint32_t k_norms_tile_size = tile_size(k_norms_df);
     uint32_t bf16_tile_size = tile_size(bf16_df);
     uint32_t im_tile_size = tile_size(im_df);
 
@@ -84,16 +84,17 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(q_chunk_tiles * q_tile_size, {{CBIndex::c_0, q_df}})
             .set_page_size(CBIndex::c_0, q_tile_size));
 
+    // K/V CBs: double-buffered to match standard SDPA factory
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(k_chunk_tiles * k_num_chunks * bf16_tile_size, {{CBIndex::c_1, bf16_df}})
+        CircularBufferConfig(k_chunk_tiles * 2 * bf16_tile_size, {{CBIndex::c_1, bf16_df}})
             .set_page_size(CBIndex::c_1, bf16_tile_size));
 
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(v_chunk_tiles * k_num_chunks * bf16_tile_size, {{CBIndex::c_2, bf16_df}})
+        CircularBufferConfig(v_chunk_tiles * 2 * bf16_tile_size, {{CBIndex::c_2, bf16_df}})
             .set_page_size(CBIndex::c_2, bf16_tile_size));
 
     // Scale + column identity
@@ -110,44 +111,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(scalar_tile_size, {{CBIndex::c_7, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_7, scalar_tile_size));
 
-    // Page table
-    uint32_t page_table_stick_size = page_table.padded_shape()[-1] * sizeof(uint32_t);
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(page_table_stick_size, {{CBIndex::c_6, tt::DataFormat::Int32}})
-            .set_page_size(CBIndex::c_6, page_table_stick_size));
-
-    // TurboQuant raw index + norm CBs
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(k_chunk_tiles * k_idx_tile_size, {{CBIndex::c_10, k_idx_df}})
-            .set_page_size(CBIndex::c_10, k_idx_tile_size));
-
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(Sk_chunk_t * k_norms_tile_size, {{CBIndex::c_11, k_norms_df}})
-            .set_page_size(CBIndex::c_11, k_norms_tile_size));
-
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(v_chunk_tiles * k_idx_tile_size, {{CBIndex::c_12, k_idx_df}})
-            .set_page_size(CBIndex::c_12, k_idx_tile_size));
-
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(Sk_chunk_t * k_norms_tile_size, {{CBIndex::c_13, k_norms_df}})
-            .set_page_size(CBIndex::c_13, k_norms_tile_size));
-
-    // Dequantize temp (1 tile BF16)
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(bf16_tile_size, {{CBIndex::c_14, bf16_df}}).set_page_size(CBIndex::c_14, bf16_tile_size));
+    // NOTE: TQ CBs (c_10-c_14) removed for BF16 direct mode debugging.
+    // Reader pushes K/V directly to c_1/c_2.
 
     // SDPA intermediates
     CreateCircularBuffer(
@@ -275,15 +240,12 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         Sk_chunk_t,
         k_num_chunks,
         num_cores,
-        Sk_chunk_t,  // block_size_t (simplified: block = chunk)
-        page_table_stick_size,
     };
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_idx.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_norms.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_idx.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_norms.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*page_table.buffer()).append_to(reader_ct_args);
 
     KernelHandle reader_kernel = CreateKernel(
         program,
@@ -333,7 +295,6 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 k_norms.buffer()->address(),
                 v_idx.buffer()->address(),
                 v_norms.buffer()->address(),
-                page_table.buffer()->address(),
                 i,  // core_id
                 batch_start,
                 std::min(batch_end, B),
@@ -401,7 +362,6 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
         reader_args[2] = args.k_norms.buffer()->address();
         reader_args[3] = args.v_indices.buffer()->address();
         reader_args[4] = args.v_norms.buffer()->address();
-        reader_args[5] = args.page_table.buffer()->address();
 
         auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
         writer_args[0] = output.buffer()->address();
