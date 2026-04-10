@@ -120,7 +120,9 @@ void bind_fill_cache(nb::module_& mod) {
     )doc";
 
     ttnn::bind_function<"fill_cache">(
-        mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
+        mod, doc, &ttnn::fill_cache,
+        nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"),
+        nb::arg("update_idx") = 0);
 }
 
 void bind_zero_cache_range(nb::module_& mod) {

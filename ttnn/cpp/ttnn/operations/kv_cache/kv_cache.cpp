@@ -41,8 +41,8 @@ ttnn::Tensor update_cache(
 }
 
 ttnn::Tensor fill_cache(
-    const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, const uint32_t batch_idx) {
-    ttnn::prim::update_cache(cache_tensor, input_tensor, batch_idx, 0, 0, ttnn::prim::UpdateCacheOpType::FILL);
+    const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
+    ttnn::prim::update_cache(cache_tensor, input_tensor, batch_idx, update_idx, 0, ttnn::prim::UpdateCacheOpType::FILL);
     return cache_tensor;
 }
 
