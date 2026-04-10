@@ -1093,11 +1093,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     }
 
     // Track which devices are NEW (not already tracked)
-    std::unordered_set<const IDevice*> new_devices;
+    std::vector<const IDevice*> new_devices;
     for (const IDevice* dev : devices_to_track) {
         auto [iter, inserted] = this->cb_devices_.insert(dev);
         if (inserted) {
-            new_devices.insert(dev);
+            new_devices.push_back(dev);
         }
     }
 
