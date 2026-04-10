@@ -74,9 +74,7 @@ def main():
         pos_embeds_torch = tt_model.position_embeds(position_ids)
         combined_torch = (inputs_embeds_torch + pos_embeds_torch).float()
 
-        tt_hidden = ttnn.from_torch(
-            combined_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        tt_hidden = ttnn.from_torch(combined_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         print(f"TT combined hidden shape: {tt_hidden.shape}")
 
         tt_hidden_torch = ttnn.to_torch(tt_hidden)
@@ -104,9 +102,7 @@ def main():
             print(f"  Layer {i:2d} PCC: {layer_pcc:.6f}  TT shape: {tt_hidden.shape}")
 
         # Final LN + LM head
-        tt_hidden_ln = ttnn.layer_norm(
-            tt_hidden, epsilon=1e-5, weight=tt_model.ln_f_weight, bias=tt_model.ln_f_bias
-        )
+        tt_hidden_ln = ttnn.layer_norm(tt_hidden, epsilon=1e-5, weight=tt_model.ln_f_weight, bias=tt_model.ln_f_bias)
         tt_logits = ttnn.linear(
             tt_hidden_ln,
             tt_model.lm_head_weight,
