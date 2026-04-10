@@ -788,6 +788,7 @@ def create_fabric_router_config(max_payload_size):
         ((3, 0), 70, 7, 0.9, 0.6),
         ((3, 1), 5, 39, 0.5, 0.05),
     ],
+    ids = ["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):

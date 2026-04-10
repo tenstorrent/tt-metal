@@ -207,6 +207,7 @@ void softmax_sub_exp_bcast_cols() {
         }
     }
     cb_pop_front(in0_cb, rows * cols);
+    cb_pop_front(in1_cb, rows);
 }
 
 template <
@@ -235,7 +236,6 @@ void softmax_reduce_c() {
         DPRINT << "softmax_reduce_c scale[" << i << "]: " << BF16(scale_ptr[i]) << ENDL();
     }
 #endif
-    cb_reserve_back(out_cb, rows);
     constexpr uint32_t reduce_dst_idx = 0;
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
@@ -359,7 +359,6 @@ inline void softmax_mul_block_bcast_cols(
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-            cb_pop_front(in0_cb, 1);
             cb_reserve_back(out_cb, 1);
             pack_reconfig_data_format(out_cb);
             pack_tile(0, out_cb);
