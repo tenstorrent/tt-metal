@@ -89,6 +89,13 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device) { return ttnn::operations::trace::get_unsafe_tracked_ids(device); },
         nb::arg("mesh_device"));
     mod.def(
+        "remove_unsafe_tracked_id",
+        [](MeshDevice* device, size_t buffer_unique_id) {
+            ttnn::operations::trace::remove_unsafe_tracked_id(device, buffer_unique_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("buffer_unique_id"));
+    mod.def(
         "clear_unsafe_tracked_ids",
         [](MeshDevice* device) { ttnn::operations::trace::clear_unsafe_tracked_ids(device); },
         nb::arg("mesh_device"));
