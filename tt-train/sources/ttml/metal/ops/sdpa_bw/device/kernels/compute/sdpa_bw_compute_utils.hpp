@@ -16,11 +16,13 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
-#include "api/compute/matmul_op.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+
+using namespace compute_kernel_lib;
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
@@ -165,14 +167,10 @@ void compute_u_scalar_row(
     cb_wait_front(cb_u_scalar_row, onetile);
     reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
 
-    ckernel::MatmulOpConfig u_reduce_cfg{};
-    u_reduce_cfg.in0_cb_id = cb_u_scalar_row;
-    u_reduce_cfg.in1_cb_id = cb_mat_mul_reduction;
-    u_reduce_cfg.out_cb_id = 0;
-    ckernel::TileMatmulOp mm_u_reduce(u_reduce_cfg);
-    mm_u_reduce.begin_subblock();
-    mm_u_reduce.init_short();
-    mm_u_reduce.matmul_one_tile(0, 0, accum_register);
+    auto u_reduce_cfg = MatmulConfig::tile(cb_u_scalar_row, cb_mat_mul_reduction, 0);
+    tile_regs_acquire();
+    matmul_init_short<TILE>(u_reduce_cfg);
+    matmul_tile<TILE>(u_reduce_cfg, 0, 0, accum_register);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -194,15 +192,10 @@ void compute_grad_attn_weights(
     const uint32_t cb_grad_attn_weights,
     const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
-    ckernel::MatmulOpConfig grad_attn_cfg{};
-    grad_attn_cfg.in0_cb_id = cb_grad_output;
-    grad_attn_cfg.in1_cb_id = cb_value;
-    grad_attn_cfg.out_cb_id = cb_grad_attn_weights;
-    grad_attn_cfg.transpose = true;
-    ckernel::TileMatmulOp mm_grad_attn(grad_attn_cfg);
-    mm_grad_attn.init_short();
-    mm_grad_attn.begin_subblock();
-    mm_grad_attn.accumulate(0, 0, 0, tiles_per_row, 1, 1, 0);
+    auto grad_attn_cfg = MatmulConfig::tile(cb_grad_output, cb_value, cb_grad_attn_weights, /*trans=*/true);
+    matmul_init_short<TILE>(grad_attn_cfg);
+    tile_regs_acquire();
+    matmul_accumulate<TILE>(grad_attn_cfg, 0, 0, 0, tiles_per_row, 1, 1, 0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -289,16 +282,12 @@ void update_grad_query(
         pack_reconfig_l1_acc(true);
     }
 
-    ckernel::MatmulOpConfig grad_q_cfg{};
-    grad_q_cfg.in0_cb_id = cb_grad_scores;
-    grad_q_cfg.in1_cb_id = cb_key;
-    grad_q_cfg.out_cb_id = cb_grad_query_accum;
-    ckernel::TileMatmulOp mm_grad_q(grad_q_cfg);
+    auto grad_q_cfg = MatmulConfig::tile(cb_grad_scores, cb_key, cb_grad_query_accum);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        mm_grad_q.begin_subblock();
-        mm_grad_q.init_short_with_dt(cb_grad_query_accum);
-        mm_grad_q.accumulate(0, tile_idx, 0, block_size, 0, 1, 1);
+        tile_regs_acquire();
+        matmul_init_short_with_dt<TILE>(grad_q_cfg, cb_grad_query_accum);
+        matmul_accumulate<TILE>(grad_q_cfg, 0, tile_idx, 0, block_size, 0, 1, 1);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -342,16 +331,12 @@ void update_grad_value(
         pack_reconfig_l1_acc(true);
     }
 
-    ckernel::MatmulOpConfig grad_v_cfg{};
-    grad_v_cfg.in0_cb_id = cb_transpose_wh;
-    grad_v_cfg.in1_cb_id = cb_grad_output;
-    grad_v_cfg.out_cb_id = cb_grad_value_accum;
-    ckernel::TileMatmulOp mm_grad_v(grad_v_cfg);
+    auto grad_v_cfg = MatmulConfig::tile(cb_transpose_wh, cb_grad_output, cb_grad_value_accum);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        mm_grad_v.begin_subblock();
-        mm_grad_v.init_short_with_dt(cb_grad_value_accum);
-        mm_grad_v.accumulate(0, tile_idx, 0, block_size, 0, 1, 1);
+        tile_regs_acquire();
+        matmul_init_short_with_dt<TILE>(grad_v_cfg, cb_grad_value_accum);
+        matmul_accumulate<TILE>(grad_v_cfg, 0, tile_idx, 0, block_size, 0, 1, 1);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -393,16 +378,12 @@ void update_grad_key(
         pack_reconfig_l1_acc(true);
     }
 
-    ckernel::MatmulOpConfig grad_k_cfg{};
-    grad_k_cfg.in0_cb_id = cb_transpose_wh;
-    grad_k_cfg.in1_cb_id = cb_query;
-    grad_k_cfg.out_cb_id = cb_grad_key_accum;
-    ckernel::TileMatmulOp mm_grad_k(grad_k_cfg);
+    auto grad_k_cfg = MatmulConfig::tile(cb_transpose_wh, cb_query, cb_grad_key_accum);
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        mm_grad_k.begin_subblock();
-        mm_grad_k.init_short_with_dt(cb_grad_key_accum);
-        mm_grad_k.accumulate(0, tile_idx, 0, block_size, 0, 1, 1);
+        tile_regs_acquire();
+        matmul_init_short_with_dt<TILE>(grad_k_cfg, cb_grad_key_accum);
+        matmul_accumulate<TILE>(grad_k_cfg, 0, tile_idx, 0, block_size, 0, 1, 1);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {

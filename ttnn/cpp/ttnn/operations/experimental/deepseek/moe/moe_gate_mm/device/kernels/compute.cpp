@@ -7,9 +7,11 @@
 #include "api/compute/bcast.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/matmul_op.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
+
+using namespace compute_kernel_lib;
 
 #include "bias_bcast_sfpu.h"
 #include "top2_sum_sfpu.h"
@@ -95,15 +97,8 @@ void kernel_main() {
 
     if (is_send_core) {
         // Initialize matmul: input @ weight -> output
-        ckernel::MatmulOpConfig send_cfg{};
-        send_cfg.in0_cb_id = cb_s2c_in;
-        send_cfg.in1_cb_id = cb_r2c_w;
-        send_cfg.out_cb_id = cb_s2c_out;
-        send_cfg.ct_dim = 2;
-        send_cfg.rt_dim = 1;
-        send_cfg.kt_dim = 1;
-        ckernel::BlockMatmulOp mm(send_cfg);
-        mm.init();
+        auto send_cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w, cb_s2c_out, 2, 1, 1);
+        matmul_init<BLOCK>(send_cfg);
 
         //-------------------------------------------------------------------------
         // Compute: input @ 2 weights -> 2 outputs
@@ -114,14 +109,14 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            mm.accumulate(tile_index, 0, 0, w_tiles_per_block / 2, 1, 2, 0);
+            matmul_accumulate<BLOCK>(send_cfg, tile_index, 0, 0, w_tiles_per_block / 2, 1, 2, 0);
             tile_index += w_tiles_per_block / 2;
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }
 
         // Last block
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
-        mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last / 2, 1, 2, 0);
+        matmul_accumulate<BLOCK>(send_cfg, tile_index, 0, 0, w_tiles_per_block_last / 2, 1, 2, 0);
         tile_index += w_tiles_per_block_last / 2;
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
 
@@ -148,15 +143,8 @@ void kernel_main() {
     // -------------------------------------------------------------------------
 
     // Initialize matmul: input @ weight -> output
-    ckernel::MatmulOpConfig compute_cfg{};
-    compute_cfg.in0_cb_id = cb_s2c_in;
-    compute_cfg.in1_cb_id = cb_r2c_w;
-    compute_cfg.out_cb_id = cb_s2c_out;
-    compute_cfg.ct_dim = 1;
-    compute_cfg.rt_dim = 1;
-    compute_cfg.kt_dim = 1;
-    ckernel::BlockMatmulOp mm(compute_cfg);
-    mm.init();
+    auto compute_cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w, cb_s2c_out, 1, 1, 1);
+    matmul_init<BLOCK>(compute_cfg);
 
     //-------------------------------------------------------------------------
     // Compute: input @ weight -> output
@@ -167,14 +155,14 @@ void kernel_main() {
     for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-        mm.accumulate(tile_index, 0, 0, w_tiles_per_block, 1, 1, 0);
+        matmul_accumulate<BLOCK>(compute_cfg, tile_index, 0, 0, w_tiles_per_block, 1, 1, 0);
         tile_index += w_tiles_per_block;
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
 
     // Last block
     cb_wait_front(cb_r2c_w, w_tiles_per_block);
-    mm.accumulate(tile_index, 0, 0, w_tiles_per_block_last, 1, 1, 0);
+    matmul_accumulate<BLOCK>(compute_cfg, tile_index, 0, 0, w_tiles_per_block_last, 1, 1, 0);
     tile_index += w_tiles_per_block_last;
 
     binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);

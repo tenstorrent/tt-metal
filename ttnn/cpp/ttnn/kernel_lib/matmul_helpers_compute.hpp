@@ -1,0 +1,509 @@
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+// Ensure ALWI is available for forward declarations even when this header
+// is the first include in a kernel file (before common_globals.h).
+#ifndef ALWI
+#define ALWI inline __attribute__((always_inline))
+#endif
+
+/**
+ * @file matmul_helpers_compute.hpp
+ * @brief Unified matmul compute helpers for tile and block mode operations
+ *
+ * Replaces the MatmulOp<IsBlockMode> class with free functions following the
+ * compute_kernel_lib conventions (namespace, .hpp/.inl split, config structs,
+ * validation, DEST management).
+ *
+ * ## Architecture
+ *
+ * Functions are organized in layers of increasing abstraction:
+ *
+ * | Layer | Functions                                   | What it does                              |
+ * |-------|---------------------------------------------|-------------------------------------------|
+ * | 0     | matmul_init, matmul_init_short, ..._with_dt | Hardware init / reinit                    |
+ * | 1     | matmul_tile                                 | Single matmul_tiles or matmul_block call  |
+ * | 2     | matmul_accumulate, ..._subblock, ..._no_mop | Strided accumulation loops                |
+ * | 3     | matmul_pack_to_cb, ..._to_partials, reload  | DEST commit + pack + CB management        |
+ * | 4     | matmul_accumulate_and_pack, ..._inner_block | Compound acquire+accumulate+pack patterns |
+ * | 5     | matmul_reduce_w, ..._attn                   | Specialized op-specific patterns          |
+ * | 6     | matmul                                      | Full blocked matmul with automation       |
+ *
+ * ## MatmulMode
+ *
+ * Template parameter controlling the underlying LLK function:
+ * - TILE: calls matmul_tiles (per-tile, 5 args) — for simple/streaming kernels
+ * - BLOCK: calls matmul_block (per-block, 9 args) — for production blocked kernels
+ *
+ * ## Usage Examples
+ *
+ *   #include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+ *   using namespace compute_kernel_lib;
+ *
+ *   // Example 1: Simple tile-mode matmul (replaces bmm.cpp TileMatmulOp::run)
+ *   auto cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_out);
+ *   matmul_init<TILE>(cfg);
+ *   matmul<TILE>(cfg, MatmulBlockShape::of(batch, Mt, Nt, Kt, 1, 1, 1, 1, 1));
+ *
+ *   // Example 2: Block-mode with spill/reload (replaces bmm_large_block_zm_fused)
+ *   auto cfg = MatmulConfig::block(cb_in0, cb_in1, cb_partials,
+ *                                   out_subblock_w, out_subblock_h, in0_block_w,
+ *                                   transpose, cb_partials);
+ *   matmul_init<BLOCK>(cfg);
+ *   tile_regs_acquire();
+ *   if (enable_reload) matmul_reload_partials<BLOCK>(cfg, num_tiles);
+ *   matmul_accumulate<BLOCK>(cfg, in0_off, in1_off, 0, in0_block_w, 1, in1_block_w, 0);
+ *   matmul_pack_to_cb(out_cb, num_tiles);
+ *
+ *   // Example 3: Conv pattern — accumulate and pack in one call
+ *   auto cfg = MatmulConfig::block(in0, in1, out, ct, rt, kt);
+ *   matmul_init_short<BLOCK>(cfg);
+ *   matmul_accumulate_and_pack<BLOCK>(cfg, in0_off, in1_off, in0_block_w, stride, out_cb, tiles);
+ *
+ *   // Example 4: SDPA attention accumulate (tile mode)
+ *   auto cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_out, true);
+ *   matmul_init<TILE>(cfg);
+ *   tile_regs_acquire();
+ *   matmul_accumulate_attn<TILE>(cfg, Kt, progressive_in0);
+ *   matmul_pack_to_cb(cb_intermed0, 1);
+ *
+ *   // Example 5: Reduce-W via matmul (replaces reduce_w.cpp)
+ *   auto cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_out);
+ *   matmul_init<TILE>(cfg);
+ *   tile_regs_acquire();
+ *   matmul_reduce_w<TILE>(cfg, Wt, 0);
+ *   // ... pack result ...
+ */
+
+namespace compute_kernel_lib {
+
+// =============================================================================
+// MatmulMode — selects tile vs block LLK functions
+// =============================================================================
+
+enum class MatmulMode { TILE, BLOCK };
+
+// Convenience aliases for template arguments
+inline constexpr MatmulMode TILE = MatmulMode::TILE;
+inline constexpr MatmulMode BLOCK = MatmulMode::BLOCK;
+
+// =============================================================================
+// MatmulConfig — replaces ckernel::MatmulOpConfig
+// =============================================================================
+
+/**
+ * @brief Configuration for matmul operations
+ *
+ * Holds CB IDs, block dimensions, transpose flag, and optional partials CB.
+ * Block dimensions (ct_dim, rt_dim, kt_dim) are only used in BLOCK mode.
+ *
+ * Create via factory methods for clarity:
+ *   MatmulConfig::tile(in0, in1, out)              // tile mode defaults
+ *   MatmulConfig::block(in0, in1, out, ct, rt, kt) // block mode with dims
+ */
+struct MatmulConfig {
+    uint32_t in0_cb_id;  // CB for the A matrix (left operand)
+    uint32_t in1_cb_id;  // CB for the B matrix (right operand)
+    uint32_t out_cb_id;  // CB for output (or intermediate partials for spill)
+
+    uint32_t ct_dim = 1;  // Output subblock column dimension in tiles (subblock_w)
+    uint32_t rt_dim = 1;  // Output subblock row dimension in tiles (subblock_h)
+    uint32_t kt_dim = 1;  // Inner dimension block size in tiles (in0_block_w)
+
+    bool transpose = false;       // Transpose B tiles (width-height swap)
+    uint32_t partials_cb_id = 0;  // CB for partial accumulations (0 = disabled)
+
+    // --- Factory methods ---
+
+    static constexpr MatmulConfig tile(uint32_t in0, uint32_t in1, uint32_t out, bool trans = false) {
+        return {in0, in1, out, 1, 1, 1, trans, 0};
+    }
+
+    static constexpr MatmulConfig block(
+        uint32_t in0,
+        uint32_t in1,
+        uint32_t out,
+        uint32_t ct,
+        uint32_t rt,
+        uint32_t kt,
+        bool trans = false,
+        uint32_t partials = 0) {
+        return {in0, in1, out, ct, rt, kt, trans, partials};
+    }
+};
+
+// =============================================================================
+// MatmulBlockShape — dimensions for full automated matmul
+// =============================================================================
+
+/**
+ * @brief Block shape specification for the full matmul() function
+ *
+ * Describes the complete iteration space for a blocked matrix multiply.
+ */
+struct MatmulBlockShape {
+    uint32_t batch;
+    uint32_t num_blocks_h;
+    uint32_t num_blocks_w;
+    uint32_t num_blocks_inner;
+    uint32_t in0_num_subblocks;
+    uint32_t in1_num_subblocks;
+    uint32_t in0_block_num_tiles;
+    uint32_t in1_block_num_tiles;
+    uint32_t in1_block_w;
+
+    static constexpr MatmulBlockShape of(
+        uint32_t b,
+        uint32_t bh,
+        uint32_t bw,
+        uint32_t bi,
+        uint32_t in0_nsub,
+        uint32_t in1_nsub,
+        uint32_t in0_btiles,
+        uint32_t in1_btiles,
+        uint32_t in1_bw) {
+        return {b, bh, bw, bi, in0_nsub, in1_nsub, in0_btiles, in1_btiles, in1_bw};
+    }
+};
+
+// =============================================================================
+// MoeDm1State — state for MoE W2 accumulate helpers
+// =============================================================================
+
+struct MoeDm1State {
+    uint32_t step;
+    uint32_t tiles_remaining;
+    uint32_t buf;     // current buffer index (for cycling)
+    uint32_t offset;  // tile offset for current buffer
+    uint32_t index;   // current in2 tile index
+};
+
+// =============================================================================
+// Layer 0: Initialization
+// =============================================================================
+
+/**
+ * @brief Full hardware initialization for matmul
+ *
+ * Configures unpacker, math engine, and packer for matmul mode.
+ * Must be called once before any matmul operations.
+ *
+ * @tparam mode TILE or BLOCK — selects mm_init vs mm_block_init
+ * @param cfg Matmul configuration
+ */
+template <MatmulMode mode>
+ALWI void matmul_init(const MatmulConfig& cfg);
+
+/**
+ * @brief Short reinit for matmul (unpacker + math only)
+ *
+ * Use when switching back to matmul from another operation (e.g., after
+ * copy_tile, transpose, bias add). Cheaper than full init.
+ */
+template <MatmulMode mode>
+ALWI void matmul_init_short(const MatmulConfig& cfg);
+
+/**
+ * @brief Short reinit with data format reconfiguration for srcA
+ *
+ * Reconfigures unpacker/math data format from old_in1_cb_id to the
+ * config's in1_cb_id, then does a short init. Used after copy_tile
+ * from a partials CB (which has a different data format than in1).
+ */
+template <MatmulMode mode>
+ALWI void matmul_init_short_with_dt(const MatmulConfig& cfg, uint32_t old_in1_cb_id);
+
+/**
+ * @brief Short reinit with data format reconfiguration for both srcA and srcB
+ *
+ * Block mode only. Used after operations that change both input data formats
+ * (e.g., transformer_group_attn_matmul after tilize).
+ */
+template <MatmulMode mode>
+ALWI void matmul_init_short_with_both_dt(const MatmulConfig& cfg, uint32_t old_in0_cb_id, uint32_t old_in1_cb_id);
+
+// =============================================================================
+// Layer 1: Single matmul operation
+// =============================================================================
+
+/**
+ * @brief Execute a single matmul operation (one tile or one block)
+ *
+ * In TILE mode: calls matmul_tiles(in0_cb, in1_cb, in0_idx, in1_idx, dst_idx)
+ * In BLOCK mode: calls matmul_block(in0_cb, in1_cb, in0_idx, in1_idx, dst_idx,
+ *                                    transpose, ct_dim, rt_dim, kt_dim)
+ *
+ * DEST must be in acquired state. Does NOT manage CB wait/pop.
+ */
+template <MatmulMode mode>
+ALWI void matmul_tile(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx);
+
+// =============================================================================
+// Layer 2: Accumulation loops
+// =============================================================================
+
+/**
+ * @brief Strided accumulation loop
+ *
+ * Iterates `count` times, advancing each index by its stride:
+ *   for k in [0, count):
+ *     matmul_tile(cfg, in0_start + k*in0_stride, in1_start + k*in1_stride, dst_start + k*dst_stride)
+ *
+ * Common patterns:
+ *   Inner-dim reduction:  matmul_accumulate(cfg, a, b, 0, K, 1, stride, 0)
+ *   Broadcast-in0:        matmul_accumulate(cfg, 0, b, 0, N, 0, 1, 1)
+ *   Broadcast-in1:        matmul_accumulate(cfg, 0, 0, 0, N, 1, 0, 1)
+ *
+ * DEST must be in acquired state. Does NOT manage CB wait/pop.
+ */
+template <MatmulMode mode>
+ALWI void matmul_accumulate(
+    const MatmulConfig& cfg,
+    uint32_t in0_start,
+    uint32_t in1_start,
+    uint32_t dst_start,
+    uint32_t count,
+    uint32_t in0_stride,
+    uint32_t in1_stride,
+    uint32_t dst_stride);
+
+/**
+ * @brief Tile-mode subblock accumulate
+ *
+ * Computes an (out_h x out_w) subblock of output tiles. Each output tile
+ * at (h, w) accumulates over inner_dim with standard tile indexing:
+ *   in0 = in0_offset + h * inner_dim + k
+ *   in1 = in1_offset + k * in1_stride + w
+ *   dst = sequential (0, 1, 2, ...)
+ *
+ * DEST must be in acquired state.
+ */
+template <MatmulMode mode>
+ALWI void matmul_accumulate_subblock(
+    const MatmulConfig& cfg,
+    uint32_t in0_subblock_offset,
+    uint32_t in1_subblock_offset,
+    uint32_t out_h,
+    uint32_t out_w,
+    uint32_t inner_dim,
+    uint32_t in1_stride);
+
+#ifdef ARCH_BLACKHOLE
+/**
+ * @brief Blackhole no-MOP accumulation (block mode only)
+ *
+ * Uses matmul_block_no_mop for better performance on Blackhole SDPA.
+ * Same interface as matmul_accumulate but calls the no-MOP LLK variant.
+ */
+template <MatmulMode mode>
+ALWI void matmul_accumulate_no_mop(
+    const MatmulConfig& cfg,
+    uint32_t in0_start,
+    uint32_t in1_start,
+    uint32_t dst_start,
+    uint32_t count,
+    uint32_t in0_stride,
+    uint32_t in1_stride,
+    uint32_t dst_stride);
+#endif
+
+// =============================================================================
+// Layer 3: DEST + Pack management
+// =============================================================================
+
+/**
+ * @brief Commit DEST, reserve output CB, wait, pack tiles, release, push
+ *
+ * Standard end-of-subblock sequence:
+ *   tile_regs_commit() → cb_reserve_back → tile_regs_wait() →
+ *   pack_tile(0..n-1) → tile_regs_release() → cb_push_back
+ *
+ * Call after accumulation with DEST in acquired state.
+ */
+ALWI void matmul_pack_to_cb(uint32_t dest_cb_id, uint32_t num_tiles);
+
+/**
+ * @brief Pack to the partials CB (shorthand using cfg.partials_cb_id)
+ */
+ALWI void matmul_pack_to_partials(const MatmulConfig& cfg, uint32_t num_tiles);
+
+/**
+ * @brief Reload partial accumulations from partials CB into DEST
+ *
+ * Performs: copy_tile_to_dst_init_short_with_dt → wait → copy_block → pop → reinit matmul
+ *
+ * Must be called after tile_regs_acquire() and before accumulation.
+ * Automatically reconfigures back to matmul mode after the copy.
+ */
+template <MatmulMode mode>
+ALWI void matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles);
+
+// =============================================================================
+// Layer 4: Compound patterns
+// =============================================================================
+
+/**
+ * @brief Acquire + optional reload + accumulate + pack to output
+ *
+ * Combines: tile_regs_acquire → [reload_partials] → accumulate → pack_to_cb
+ *
+ * Used by conv_bmm_tilize, conv3d, minimal_matmul, all_gather_minimal_matmul.
+ */
+template <MatmulMode mode>
+ALWI void matmul_accumulate_and_pack(
+    const MatmulConfig& cfg,
+    uint32_t in0_index_start,
+    uint32_t in1_index_start,
+    uint32_t inner_dim,
+    uint32_t in1_stride,
+    uint32_t dest_cb_id,
+    uint32_t num_tiles,
+    bool reload = false);
+
+/**
+ * @brief Compute one output tile with per-tile CB management
+ *
+ * For each of inner_dim iterations: wait(in0,1) + wait(in1,1) + matmul + pop both.
+ * Then packs the single output tile.
+ *
+ * Used by moreh_matmul and tile-mode bmm.cpp for simple streaming patterns.
+ */
+template <MatmulMode mode>
+ALWI void matmul_compute_one_tile(const MatmulConfig& cfg, uint32_t inner_dim);
+
+/**
+ * @brief Compute one inner block with subblock iteration and spill/reload
+ *
+ * Handles the double subblock loop (in0_num_subblocks x in1_num_subblocks),
+ * CB wait/pop for the input block, and spill/reload between inner blocks.
+ *
+ * Block mode only.
+ */
+template <MatmulMode mode>
+ALWI void matmul_compute_inner_block(
+    const MatmulConfig& cfg,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t in0_block_num_tiles,
+    uint32_t in1_block_num_tiles,
+    uint32_t in1_block_w,
+    bool enable_reload,
+    bool last_out);
+
+// =============================================================================
+// Layer 5: Specialized patterns
+// =============================================================================
+
+/**
+ * @brief Reduce-W via matmul: per-tile CB wait/pop on in0 with accumulation
+ *
+ * For each of `count` iterations: cb_wait_front(in0,1) → matmul(0,0,dst_idx) → cb_pop_front(in0,1)
+ *
+ * Used by reduce_w.cpp when REDUCE_ROW_SUM_VIA_MM is defined.
+ * DEST must be in acquired state.
+ */
+template <MatmulMode mode>
+ALWI void matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
+
+/**
+ * @brief Reduce-W with per-tile init (for data format reconfig between iterations)
+ *
+ * Same as matmul_reduce_w but calls matmul_init_short per tile.
+ * Includes FP32_DEST_ACC_EN reconfig. Used by moreh_mean_w, moreh_sum_w.
+ */
+template <MatmulMode mode>
+ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
+
+/**
+ * @brief Transformer attention accumulate with progressive in0 reveal
+ *
+ * For each of inner_dim iterations:
+ *   if progressive_in0: cb_wait_front(in0, kt+1)
+ *   cb_wait_front(in1, 1) → matmul(kt, 0, 0) → cb_pop_front(in1, 1)
+ *
+ * Used by transformer_attn_matmul.cpp.
+ * DEST must be in acquired state.
+ */
+template <MatmulMode mode>
+ALWI void matmul_accumulate_attn(const MatmulConfig& cfg, uint32_t inner_dim, bool progressive_in0);
+
+/**
+ * @brief SDPA reduce subblock inplace
+ *
+ * Per-subblock: acquire → matmul(0,0,0) → commit → pop(out,n) → pack(n) → release → push(n)
+ *
+ * Used by SDPA compute_common matmul_reduce pattern.
+ */
+template <MatmulMode mode>
+ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles);
+
+/**
+ * @brief MoE blocked accumulate with bias
+ *
+ * Iterates over weight blocks, accumulating data tiles with stride, stopping
+ * when k_tracker reaches limit, then adding bias via bias_cfg. Weight CB
+ * wait/pop handled internally. Returns updated in0_index.
+ */
+template <MatmulMode mode>
+ALWI uint32_t matmul_moe_accumulate_with_bias(
+    const MatmulConfig& cfg,
+    const MatmulConfig& bias_cfg,
+    uint32_t in0_start,
+    uint32_t num_blocks,
+    uint32_t tiles_per_block,
+    uint32_t tile_stride,
+    uint32_t limit);
+
+/**
+ * @brief MoE W2 accumulate with DM1 buffer cycling and bias
+ */
+template <MatmulMode mode>
+ALWI void matmul_moe_w2_accumulate_with_dm1_cycling(
+    const MatmulConfig& cfg,
+    const MatmulConfig& bias_cfg,
+    MoeDm1State& dm1,
+    uint32_t num_blocks,
+    uint32_t tiles_per_block,
+    uint32_t tile_stride,
+    uint32_t limit,
+    uint32_t dm1_rdy_cb,
+    uint32_t tiles_per_step,
+    uint32_t num_buffers,
+    const uint32_t* dm1_table);
+
+/**
+ * @brief MoE W2 accumulate with DM1 linear advance (no bias)
+ */
+template <MatmulMode mode>
+ALWI void matmul_moe_w2_accumulate_with_dm1_linear(
+    const MatmulConfig& cfg,
+    MoeDm1State& dm1,
+    uint32_t num_blocks,
+    uint32_t tiles_per_block,
+    uint32_t tile_stride,
+    uint32_t dm1_rdy_cb,
+    uint32_t tiles_per_step,
+    const uint32_t* dm1_table,
+    uint32_t last_block_early_exit_k);
+
+// =============================================================================
+// Layer 6: Full automated matmul
+// =============================================================================
+
+/**
+ * @brief Complete blocked matmul with full automation
+ *
+ * In TILE mode: for each (batch, h, w): compute_one_tile(num_blocks_inner)
+ * In BLOCK mode: for each (batch, bh, bw, bi): compute_inner_block(...)
+ *
+ * Handles spill/reload between inner blocks automatically.
+ */
+template <MatmulMode mode>
+ALWI void matmul(const MatmulConfig& cfg, const MatmulBlockShape& shape);
+
+}  // namespace compute_kernel_lib
+
+// Include implementation
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.inl"
