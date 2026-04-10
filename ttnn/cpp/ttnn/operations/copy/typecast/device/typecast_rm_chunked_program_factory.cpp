@@ -103,16 +103,23 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
 
+    // CB page sizes must be aligned to the source/destination buffer alignment so that
+    // consecutive pages in the double-buffered CB maintain NOC address alignment.
+    // On BH, DRAM reads require (src_addr & 63) == (dst_addr & 63), so CB pages for
+    // DRAM-backed buffers must be multiples of 64 bytes.
+    const auto aligned_input_cb_page_size = tt::align(input_full_chunk_size_bytes, src_buffer->alignment());
+    const auto aligned_output_cb_page_size = tt::align(output_full_chunk_size_bytes, dst_buffer->alignment());
+
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_pages * input_full_chunk_size_bytes, {{input_cb_index, cb_data_format_input}})
-            .set_page_size(input_cb_index, input_full_chunk_size_bytes);
+            num_input_pages * aligned_input_cb_page_size, {{input_cb_index, cb_data_format_input}})
+            .set_page_size(input_cb_index, aligned_input_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_pages * output_full_chunk_size_bytes, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_full_chunk_size_bytes);
+            num_output_pages * aligned_output_cb_page_size, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, aligned_output_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // Create compile-time args for unified kernels (handle both full and partial chunks)
