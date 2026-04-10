@@ -42,7 +42,6 @@ void pack_first_op_scalars(
         return;
     }
     switch (op.type()) {
-        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::MISH: packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype); break;
         case UnaryOpType::WHERE_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
@@ -64,7 +63,7 @@ void pack_first_op_scalars(
     }
 }
 
-bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::HARDSHRINK || t == UnaryOpType::LOGIT; }
+bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
