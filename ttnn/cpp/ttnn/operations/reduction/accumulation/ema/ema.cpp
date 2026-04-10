@@ -20,7 +20,7 @@ Tensor ema(
     auto kernel_config = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi4,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
 
