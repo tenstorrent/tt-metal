@@ -36,15 +36,17 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
 
     const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
 
+    local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +=
+        local_dfb_interface.stride_size_tiles;
     local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr += num_words;
-    local_dfb_interface.wr_entry_idx += (num_tiles * local_dfb_interface.stride_size_tiles);
     local_dfb_interface.wr_entry_ptr = 0;
 
-    if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr == local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_addr;
-        if (local_dfb_interface.tc_idx == local_dfb_interface.num_tcs_to_rr - 1) {
-            local_dfb_interface.wr_entry_idx = 0;
-        }
+    if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr >=
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr =
+            local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_addr;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx =
+            local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_entry_idx;
     }
 
     local_dfb_interface.tc_idx = (local_dfb_interface.tc_idx + 1) % local_dfb_interface.num_tcs_to_rr;
