@@ -48,27 +48,42 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 
 # ---------- RoPE (host-side, identical to reference) ----------
 
+_ROPE_CACHE: dict = {}
+
+
+def _rope_cos_sin(D: int, max_pos: int, base: float, dtype):
+    key = (D, max_pos, base, dtype)
+    c = _ROPE_CACHE.get(key)
+    if c is None:
+        inv_freq = 1.0 / (base ** (torch.arange(0, D, 2, dtype=torch.float32) / D))
+        seq = torch.arange(max_pos, dtype=torch.float32)
+        freqs = torch.einsum("i,j->ij", seq, inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1).to(dtype)
+        c = (emb.cos(), emb.sin())
+        _ROPE_CACHE[key] = c
+    return c
+
+
 def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) -> torch.Tensor:
     """Apply DUSt3R 2D RoPE100 on host. tokens: (B, H, N, Dh), pos: (B, N, 2)."""
     B, H, N, Dh = tokens.shape
     assert Dh % 2 == 0
-    D = Dh // 2  # per-axis dim
+    D = Dh // 2
+    max_pos = int(pos.max().item()) + 1
+    cos, sin = _rope_cos_sin(D, max_pos, base, tokens.dtype)
+
     y = tokens[..., :D]
     x = tokens[..., D:]
 
-    def apply_1d(t, p1d):
-        inv_freq = 1.0 / (base ** (torch.arange(0, D, 2, dtype=torch.float32) / D))
-        seq = torch.arange(int(p1d.max()) + 1, dtype=torch.float32)
-        freqs = torch.einsum("i,j->ij", seq, inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1).to(t.dtype)
-        cos = emb.cos()[p1d][:, None, :, :]
-        sin = emb.sin()[p1d][:, None, :, :]
+    def apply_1d(t, p1d, cos_t, sin_t):
+        c = cos_t[p1d][:, None, :, :]
+        s = sin_t[p1d][:, None, :, :]
         t1, t2 = t.chunk(2, dim=-1)
         rotated = torch.cat((-t2, t1), dim=-1)
-        return t * cos + rotated * sin
+        return t * c + rotated * s
 
-    y = apply_1d(y, pos[..., 0])
-    x = apply_1d(x, pos[..., 1])
+    y = apply_1d(y, pos[..., 0], cos, sin)
+    x = apply_1d(x, pos[..., 1], cos, sin)
     return torch.cat((y, x), dim=-1)
 
 
