@@ -267,7 +267,6 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& addcmul_input_tensor2) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     const auto resolved_sub_device_id =
@@ -300,8 +299,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* num_workers_per_link */ num_workers_per_link,
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,
-        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset,
-        /* devices */ devices};
+        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset};
 
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
