@@ -274,7 +274,7 @@ class RunTimeOptions {
     bool enable_2_erisc_mode = true;
 
     // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
-    bool enable_blackhole_dram_programmable_cores = false;
+    bool enable_blackhole_dram_programmable_cores = true;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
