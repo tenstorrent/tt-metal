@@ -28,8 +28,14 @@ TurboQuantDeviceOperation::MultiCore::cached_program_t TurboQuantDeviceOperation
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
+    tt::DataFormat cb_in_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t in_tile_size = tile_size(cb_in_format);
+
+    // Output is always BF16 for gather (centroid values), same as input for bucketize.
+    tt::DataFormat cb_out_format =
+        (attrs.op_type == TurboQuantOpType::GATHER_CENTROIDS) ? tt::DataFormat::Float16_b : cb_in_format;
+    uint32_t out_tile_size = tile_size(cb_out_format);
+
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
     // ── Distribute tiles across all available cores ──
@@ -40,15 +46,16 @@ TurboQuantDeviceOperation::MultiCore::cached_program_t TurboQuantDeviceOperation
         split_work_to_cores(grid, num_tiles);
 
     // ── Circular buffers: input (c_0) and output (c_2), 2 tiles each ──
+    // Input CB uses the tensor's native format (BFP4/BFP8/BF16).
+    // Output CB uses BF16 for gather (centroid float values).
     uint32_t num_cb_tiles = 2;
-    CircularBufferConfig cb_in_cfg =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
-            .set_page_size(CBIndex::c_0, single_tile_size);
+    CircularBufferConfig cb_in_cfg = CircularBufferConfig(num_cb_tiles * in_tile_size, {{CBIndex::c_0, cb_in_format}})
+                                         .set_page_size(CBIndex::c_0, in_tile_size);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
     CircularBufferConfig cb_out_cfg =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_2, cb_data_format}})
-            .set_page_size(CBIndex::c_2, single_tile_size);
+        CircularBufferConfig(num_cb_tiles * out_tile_size, {{CBIndex::c_2, cb_out_format}})
+            .set_page_size(CBIndex::c_2, out_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out_cfg);
 
     // ── Dataflow kernels: generic unary reader / writer ──

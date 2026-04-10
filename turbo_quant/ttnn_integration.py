@@ -626,14 +626,16 @@ class TTNNTurboQuantCache:
         else:
             k_idx = self.k_indices_dev[layer_idx]
             v_idx = self.v_indices_dev[layer_idx]
-            if self.use_bfp8_indices:
+            if not _FUSED_OPS_AVAILABLE and self.use_bfp8_indices:
                 k_idx = ttnn.typecast(k_idx, ttnn.bfloat16)
                 v_idx = ttnn.typecast(v_idx, ttnn.bfloat16)
 
             k_dequant = _dequantize_from_bf16_indices(k_idx, self.k_norms_dev[layer_idx], self.setup)
             v_dequant = _dequantize_from_bf16_indices(v_idx, self.v_norms_dev[layer_idx], self.setup)
 
-            if self.use_bfp8_indices:
+            # Only deallocate if typecast created a copy (fallback path).
+            # With fused ops, k_idx IS the cache tensor — don't deallocate it.
+            if not _FUSED_OPS_AVAILABLE and self.use_bfp8_indices:
                 ttnn.deallocate(k_idx)
                 ttnn.deallocate(v_idx)
 
@@ -767,14 +769,17 @@ class TTNNTurboQuantCache:
         else:
             k_idx = self.k_indices_dev[layer_idx]
             v_idx = self.v_indices_dev[layer_idx]
-            if self.use_bfp8_indices:
+            # Fused gather kernel accepts BFP4/BFP8 directly (hardware unpacks to
+            # float32 in DST). Skip typecast to avoid allocating a full BF16 temp.
+            # Fallback path (no fused ops) still needs BF16 for ttnn.ge comparisons.
+            if not _FUSED_OPS_AVAILABLE and self.use_bfp8_indices:
                 k_idx = ttnn.typecast(k_idx, ttnn.bfloat16)
                 v_idx = ttnn.typecast(v_idx, ttnn.bfloat16)
 
             k_rot = _dequantize_rotated(k_idx, self.k_norms_dev[layer_idx], self.setup)
             v_rot = _dequantize_rotated(v_idx, self.v_norms_dev[layer_idx], self.setup)
 
-            if self.use_bfp8_indices:
+            if not _FUSED_OPS_AVAILABLE and self.use_bfp8_indices:
                 ttnn.deallocate(k_idx)
                 ttnn.deallocate(v_idx)
 
