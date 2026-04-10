@@ -1636,7 +1636,7 @@ def _load_expert_proj(expert_dir, proj_name: str, device):
     expert_dir = _Path(expert_dir)
     data_tensor = ttnn.load_tensor(expert_dir / f"{proj_name}.tensorbin", device=device)
     assignment_path = expert_dir / f"{proj_name}_assignment.npy"
-    if not (HAS_BSPM_SUPPORT and assignment_path.exists()):
+    if not assignment_path.exists():
         return data_tensor
     assignment_2d = np.load(assignment_path)  # shape (tiles_h, tiles_w), int8
     tiles_h, tiles_w = assignment_2d.shape
