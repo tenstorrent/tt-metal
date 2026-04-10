@@ -320,7 +320,7 @@ def from_torch(
         dtype = spec.dtype
         layout = spec.layout
         memory_config = spec.memory_config
-        tile = spec.tile
+        tile = spec.tile if layout == ttnn.TILE_LAYOUT else None
 
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
