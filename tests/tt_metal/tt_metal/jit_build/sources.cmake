@@ -3,5 +3,5 @@
 
 set(UNIT_TESTS_JIT_BUILD_SRC
     test_depend.cpp
-    test_jit_build_cache_and_telemetry.cpp
+    test_jit_build_cache_telemetry.cpp
 )
