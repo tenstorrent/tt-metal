@@ -196,6 +196,46 @@ def get_decode_sdpa_configs(config, bsz, device):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
+def get_decoder_prefill_sdpa_configs(device):
+    """Program/compute config for decoder self-attention batched prefill (causal SDPA, multi-token)."""
+    q_chunk_size = 256
+    k_chunk_size = 256
+    compute_grid_size = device.compute_with_storage_grid_size()
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return program_config, compute_kernel_config
+
+
+def _write_decoder_kv_prefill_to_cache(key_states, value_states, k_cache, v_cache):
+    """Bulk-write prefilled K/V [B, H, L, d] into self-attention KV cache (matches init_kv_cache layout)."""
+    bsz, nh, seq_len, head_dim = (
+        int(key_states.shape[0]),
+        int(key_states.shape[1]),
+        int(key_states.shape[2]),
+        int(key_states.shape[3]),
+    )
+    begins = [0, 0, 0, 0]
+    ends = [bsz, nh, seq_len, head_dim]
+    strides = [1, 1, 1, 1]
+    k_bf8 = ttnn.typecast(key_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    v_bf8 = ttnn.typecast(value_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.experimental.slice_write(k_bf8, k_cache, begins, ends, strides)
+    ttnn.experimental.slice_write(v_bf8, v_cache, begins, ends, strides)
+    ttnn.deallocate(k_bf8)
+    ttnn.deallocate(v_bf8)
+
+
 def functional_sdpa(
     query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
 ):
@@ -317,6 +357,7 @@ def whisper_attention(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
+    decoder_prefill: bool = False,
     *,
     parameters,
 ):
@@ -327,12 +368,13 @@ def whisper_attention(
     bsz, *_, tgt_len, _ = hidden_states.shape
 
     is_cross_attention = encoder_hidden_states is not None
-    sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
+    self_kv_prefill = decoder_prefill and not is_cross_attention and is_decode and kv_cache is not None and tgt_len > 1
+    sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None and not self_kv_prefill
     # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
     encoder_sdpa_attention = not is_decode
     if encoder_sdpa_attention:
         transpose_k_heads = False
-    elif sdpa_with_kv_cache:
+    elif sdpa_with_kv_cache or self_kv_prefill:
         transpose_k_heads = False
     else:
         transpose_k_heads = True
@@ -396,12 +438,33 @@ def whisper_attention(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(fused_qkv)
-        if sdpa_with_kv_cache:
+        if self_kv_prefill:
+            k_cache = kv_cache[0]  # B, H, MaxS, d
+            v_cache = kv_cache[1]  # B, H, MaxS, d
+            sdpa_prefill_progcfg, sdpa_prefill_compute_kernel_config = get_decoder_prefill_sdpa_configs(
+                query_states.device()
+            )
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                scale=scaling,
+                attn_mask=None,
+                is_causal=True,
+                program_config=sdpa_prefill_progcfg,
+                compute_kernel_config=sdpa_prefill_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _write_decoder_kv_prefill_to_cache(key_states, value_states, k_cache, v_cache)
+            ttnn.deallocate(query_states)
+            ttnn.deallocate(key_states)
+            ttnn.deallocate(value_states)
+        elif sdpa_with_kv_cache:
             k_cache = kv_cache[0]  # B, H, MaxS, d
             v_cache = kv_cache[1]  # B, H, MaxS, d
 
             sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config = get_decode_sdpa_configs(
-                config, bsz, hidden_states.device()
+                config, bsz, query_states.device()
             )
 
             # Transpose from [B, H, S, d] to [S, B, H, d] for SDPA decode operations
@@ -543,6 +606,7 @@ def decoder_layer(
     current_decode_pos=None,
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
+    decoder_prefill: bool = False,
     *,
     parameters,
 ):
@@ -562,6 +626,7 @@ def decoder_layer(
         is_decode=True,
         kv_cache=kv_cache,
         current_decode_pos=current_decode_pos,
+        decoder_prefill=decoder_prefill,
         parameters=parameters.self_attn,
     )
     hidden_states = dropout(hidden_states, p=0, training=False)
@@ -636,6 +701,7 @@ def decoder(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
+    decoder_prefill: bool = False,
     *,
     parameters,
 ):
@@ -654,6 +720,7 @@ def decoder(
             cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             cross_attn_cache_valid=cross_attn_cache_valid,
             current_decode_pos=current_decode_pos,
+            decoder_prefill=decoder_prefill,
             parameters=decoder_layer_parameter,
         )
 
