@@ -130,7 +130,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
                 .defines = compute_kernel_defines});
     }
 
-    uint32_t tile_height = output.tensor_spec().tile().get_height();
+    uint32_t tile_height = a.tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 

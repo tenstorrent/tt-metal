@@ -1191,13 +1191,14 @@ HostTensor pad_impl(
         return output_buffer;
     };
 
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     return HostTensor(
         tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
@@ -1308,14 +1309,13 @@ HostTensor unpad_impl(
         return output_buffer;
     };
 
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     return HostTensor(
         tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
-                tensor.dtype(),
-                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
-                tt::tt_metal::MemoryConfig{})),
+                tensor.dtype(), tt::tt_metal::PageConfig(tensor.layout(), tile), tt::tt_metal::MemoryConfig{})),
         tensor.tensor_topology());
 }
 
@@ -1430,12 +1430,8 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
     ::detail::ReadShard(*buffer, device_data, core_id);
 
     auto output_buffer = std::vector<T>(std::move(device_data));
-    return Tensor(
-        HostBuffer(std::move(output_buffer)),
-        shard_shape,
-        tensor.dtype(),
-        tensor.layout(),
-        tensor.tensor_spec().tile());
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    return Tensor(HostBuffer(std::move(output_buffer)), shard_shape, tensor.dtype(), tensor.layout(), tile);
 }
 
 template <>
