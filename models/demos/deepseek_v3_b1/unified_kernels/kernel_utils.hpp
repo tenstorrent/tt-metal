@@ -77,18 +77,21 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
 // Cross-RISC synchronization
 // ============================================================================
 
-// Two-phase cross-RISC synchronization barrier using atomic L1 semaphores.
+// Two-phase cross-RISC synchronization barrier packed into a single uint32_t.
 // Used by reconfig_cb_interfaces to ensure NC resets stream regs only after
-// all other RISCs (BR/TR0/TR2) have completed prior work.
+// all other RISCs (BR/TR0/TR1/TR2) have completed prior work.
 //
-// Phase 1 (enter): BR/TR0/TR2 signal done → NC waits for all 3, then proceeds.
-// Phase 2 (exit):  NC signals done → BR/TR0/TR2 wait, then all proceed together.
+// Semaphore word layout:
+//   bits [15:0]  = enter count (BR/TR0/TR1/TR2 → NC)
+//   bits [31:16] = exit  count (NC → BR/TR0/TR1/TR2)
 //
-// Safe for repeated use: the full MoE body executes between exit and the next
-// enter, so sem[0] is always 0 when the next iteration's enter begins.
-// sem[0] reset is non-atomic but safe because others are blocked on sem[1].
+// Phase 1 (enter): BR/TR0/TR1/TR2 each add 1 to low half → NC waits for low >= 4,
+//                  then resets low half. Safe because BR/TR0/TR1/TR2 are blocked in
+//                  exit spinning on the high half.
+// Phase 2 (exit):  NC adds 4 to high half → BR/TR0/TR1/TR2 each spin until high != 0,
+//                  then subtract 1. The last one drains high to 0 for next iteration.
 
-// Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
+// Phase 1: BR/TR0/TR1/TR2 signal done → NC waits for all 4
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
 #if defined(COMPILE_FOR_TRISC)
@@ -96,19 +99,20 @@ FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #endif
     __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
-    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 4) {
+    while ((__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) & 0xFFFF) < 4) {
     }
+    __atomic_fetch_sub(&sem_addr[0], 4, __ATOMIC_RELAXED);
 #endif
 }
 
-// Phase 2: NC signals done → BR/TR0/TR2 wait then proceed
+// Phase 2: NC signals done → BR/TR0/TR1/TR2 wait then proceed
 FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_NCRISC)
-    __atomic_fetch_sub(&sem_addr[0], 4, __ATOMIC_RELAXED);
-#endif
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
-    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) != 0) {
+    __atomic_fetch_add(&sem_addr[0], 4 << 16, __ATOMIC_RELAXED);
+#elif defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+    while ((__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) >> 16) == 0) {
     }
+    __atomic_fetch_sub(&sem_addr[0], 1 << 16, __ATOMIC_RELAXED);
 #endif
 }
 
