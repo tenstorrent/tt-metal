@@ -253,7 +253,8 @@ class LMHeadStage(StageKind):
         ttnn_indices = ttnn.from_torch(
             torch_indices_flat,
             dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
+            tile=LMHeadStage.OUT_TILE,
             device=mesh_device,
             memory_config=indices_mem_config,
             mesh_mapper=indices_mesh_mapper,
