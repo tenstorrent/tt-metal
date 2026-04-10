@@ -1,9 +1,5 @@
-### Ticket
-Link to Github Issue
+### Summary
+<!-- Explain the motivation for this change. What problem does it solve? -->
 
-### Problem description
-Provide context for the problem.
-
-### What's changed
-Describe the approach used to solve the problem.
-Summarize the changes made and its impact.
+### Notes for reviewers
+<!-- Where should reviewers focus? Call out anything non-obvious, tradeoffs, or areas of uncertainty. -->
