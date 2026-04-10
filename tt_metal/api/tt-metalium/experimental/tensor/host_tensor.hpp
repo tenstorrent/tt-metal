@@ -186,6 +186,7 @@ public:
      * pre-condition: The HostTensor must be engaged.
      */
     const DistributedHostBuffer& buffer() const;
+    DistributedHostBuffer& buffer();
 
     // Derivables:
 
