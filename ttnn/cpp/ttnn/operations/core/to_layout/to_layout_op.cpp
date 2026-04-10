@@ -22,12 +22,12 @@ namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
-    auto tile = tensor.tensor_spec().tile();
     if (layout == Layout::ROW_MAJOR) {
         // There shouldn't be extra paddings for Row Major layout
         return tensor.logical_shape() != tensor.padded_shape();
     }
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     TensorSpec padded_spec(
         tensor.padded_shape(),
         tt::tt_metal::TensorLayout(tensor.dtype(), tt::tt_metal::PageConfig(layout, tile), tensor.memory_config()));
@@ -69,7 +69,7 @@ Tensor to_layout_impl(
     }
 
     auto tensor = tensor_arg;
-    const auto tile = tensor.tensor_spec().tile();
+    const auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     auto output_shape = tensor_arg.logical_shape();
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
@@ -102,7 +102,7 @@ Tensor to_layout_impl(
             }
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
-                    const auto tensor_tile = tensor.tensor_spec().tile();
+                    const auto tensor_tile = tile;
                     uint32_t tile_height = tensor_tile.get_height();
                     uint32_t tile_width = tensor_tile.get_width();
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec().value().shape;
