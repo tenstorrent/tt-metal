@@ -119,6 +119,11 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     std::map<std::string, std::string> kernel_defines;
+    if (ops_chain[0].type() == UnaryOpType::COS) {
+        kernel_defines["COS"] = "1";
+        log_info(tt::LogOp, "COS kernel");
+    }
+
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -148,6 +153,11 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         unary_defines["INP_UINT32"] = "1";
     } else {
         unary_defines["INP_FLOAT"] = "1";
+    }
+
+    if (ops_chain[0].type() == UnaryOpType::COS) {
+        unary_defines["COS"] = "1";
+        log_info(tt::LogOp, "COS kernel 2");
     }
 
     if (!ops_chain[0].empty()) {

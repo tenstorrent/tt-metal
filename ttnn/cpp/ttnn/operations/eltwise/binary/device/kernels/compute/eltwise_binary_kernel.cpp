@@ -40,6 +40,12 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
+    // volatile uint tt_reg_ptr* clock_lo =
+    //     reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    // volatile uint tt_reg_ptr* clock_hi =
+    //     reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    // uint64_t wall_clock_start = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
         copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
@@ -137,4 +143,14 @@ void kernel_main() {
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
     }
+
+    // uint64_t wall_clock_end = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    // uint64_t total_cycles = wall_clock_end - wall_clock_start;
+    // uint64_t tiles_processed =
+    //     static_cast<uint64_t>(per_core_block_cnt) * static_cast<uint64_t>(per_core_block_size);
+    // uint64_t num_fpu_cycles = tiles_processed * 32;
+
+    // float fpu_utilization = static_cast<float>(num_fpu_cycles) / static_cast<float>(total_cycles) * 100.0f;
+    // DPRINT << "eltwise_binary_kernel: wall_clock_cycles=" << total_cycles << " num_fpu_cycles=" << num_fpu_cycles
+    //        << " fpu_utilization=" << fpu_utilization << "%" << ENDL();
 }

@@ -18,20 +18,18 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 # This test was created to measure power consumption of BH chip on non-matmul workload.
 # The underlying workload is binary eltwise multiplication.
 class BinaryMulTest(OpTestBase):
-    def __init__(self, *args, compute_grid=None, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.compute_grid = compute_grid
 
     def run_device_operation(self):
         for _ in range(self.loop_count):
             ttnn.mul(
                 self.activations,
                 self.inputs[0],
-                sub_core_grids=self.compute_grid,
             )
+            print("mul")
         return ttnn.cos(
             self.activations,
-            sub_core_grids=self.compute_grid,
         )
 
 
@@ -57,12 +55,17 @@ def test_binary_mul(
     compute_grid = ttnn.CoreCoord(2, 1)
     logger.info(f"Running on {compute_grid} cores")
 
-    in0_shape = [1, 1, 128 * compute_grid.y, 512 * compute_grid.x]
+    in0_shape = [1, 1, 512 * compute_grid.y, 512 * compute_grid.x]
     in1_shape = in0_shape
 
-    in0_mem_config = ttnn.L1_MEMORY_CONFIG
-    in1_mem_config = ttnn.L1_MEMORY_CONFIG
-    out_mem_config = ttnn.L1_MEMORY_CONFIG
+    in0_mem_config = ttnn.create_sharded_memory_config(
+        in0_shape,
+        ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x),
+        ttnn.ShardStrategy.BLOCK,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in1_mem_config = in0_mem_config
+    out_mem_config = in0_mem_config
     program_config = None
     compute_config = None
 
@@ -76,9 +79,6 @@ def test_binary_mul(
         out_dtype=ttnn.DataType.BFLOAT8_B,
         program_config=program_config,
         compute_config=compute_config,
-        compute_grid=ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))]
-        ),
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
