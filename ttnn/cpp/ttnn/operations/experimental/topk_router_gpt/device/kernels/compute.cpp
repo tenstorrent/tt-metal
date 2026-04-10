@@ -100,9 +100,7 @@ void kernel_main() {
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
 
-        for (uint32_t k = 0; k < block; k++) {
-            mm.matmul(/*in0_tile_index=*/k, /*in1_tile_index=*/k, /*dst_tile_index=*/0);
-        }
+        mm.accumulate(0, 0, 0, block, 1);
 
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);

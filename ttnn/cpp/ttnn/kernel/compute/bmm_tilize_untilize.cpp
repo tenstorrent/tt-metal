@@ -178,22 +178,13 @@ void kernel_main() {
                             mm.init_short_with_dt(matmul_partials_cb);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
-                        int dst_index = 0;
-                        int in0_index_h_offset = 0;
-                        for (uint32_t h = 0; h < out_subblock_h; ++h) {
-                            for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                                int in1_index_inner_dim_offset = 0;
-                                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                                    mm.matmul(
-                                        in0_index_subblock_offset + in0_index_h_offset + inner_dim,
-                                        in1_index_subblock_offset + in1_index_inner_dim_offset + w,
-                                        dst_index);
-                                    in1_index_inner_dim_offset += in1_block_w;
-                                }  // for in0_block_w
-                                ++dst_index;
-                            }  // for out_subblock_w
-                            in0_index_h_offset += in0_block_w;
-                        }  // for out_subblock_h
+                        mm.accumulate_tile_subblock(
+                            in0_index_subblock_offset,
+                            in1_index_subblock_offset,
+                            out_subblock_h,
+                            out_subblock_w,
+                            in0_block_w,
+                            in1_block_w);
 #ifdef FUSE_BIAS
                            // if bias is to be added, add it to the data in dst before packing into the out cb
                         if (last_out) {

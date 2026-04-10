@@ -88,21 +88,13 @@ void kernel_main() {
 
                             tile_regs_acquire();
 
-                            uint32_t dst_index = 0;
-                            uint32_t in0_index_h_offset = 0;
-                            for (uint32_t h = 0; h < out_subblock_h; h++) {
-                                for (uint32_t w = 0; w < out_subblock_w; w++) {
-                                    uint32_t in1_index_inner_dim_offset = 0;
-                                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                        uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                        uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        mm.matmul(in0_index, in1_index, dst_index);
-                                        in1_index_inner_dim_offset += in1_per_core_w;
-                                    }
-                                    dst_index++;
-                                }
-                                in0_index_h_offset += in0_block_w;
-                            }
+                            mm.accumulate_tile_subblock(
+                                in0_index_subblock_offset,
+                                in1_index_subblock_offset,
+                                out_subblock_h,
+                                out_subblock_w,
+                                in0_block_w,
+                                in1_per_core_w);
 
                             tile_regs_commit();
 
