@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.torch_impl.synthesizer.modules import ResidualCouplingLayer as TorchResidualCouplingLayer
+from models.demos.rvc.torch_impl.vc.synthesizer import ResidualCouplingLayer as TorchResidualCouplingLayer
 from models.demos.rvc.tt_impl.vc.synthesizer import ResidualCouplingLayer as TTResidualCouplingLayer
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
