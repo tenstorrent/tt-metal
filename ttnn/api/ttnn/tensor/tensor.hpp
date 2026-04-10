@@ -7,11 +7,9 @@
 #include <cstdint>
 
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
-#include <unordered_set>
 #include <vector>
 
 #include "ttnn/common/queue_id.hpp"
@@ -44,9 +42,9 @@ public:
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    [[nodiscard]] explicit Tensor();
+    [[nodiscard]] explicit Tensor() = default;
     [[nodiscard]] Tensor(const Tensor& other);
-    [[nodiscard]] Tensor(Tensor&& other) noexcept;
+    [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(const Tensor& other);
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
@@ -273,14 +271,6 @@ public:
     // TODO #32045: Remove this function since IDs are assigned in the constructor.
     static std::uint64_t next_tensor_id();
 
-    struct LiveTensorBufferInfo {
-        uint64_t tensor_id;
-        size_t buffer_unique_id;
-        long tensor_attrs_refcount;
-        long mesh_buffer_refcount;
-    };
-    static std::vector<LiveTensorBufferInfo> get_live_tensor_buffer_info(const std::unordered_set<size_t>& target_ids);
-
 private:
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
@@ -288,11 +278,6 @@ private:
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
     void deallocate_impl(bool force);
-
-    static std::mutex live_tensor_mutex_;
-    static std::unordered_set<const Tensor*> live_tensors_;
-    void register_live();
-    void unregister_live();
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
