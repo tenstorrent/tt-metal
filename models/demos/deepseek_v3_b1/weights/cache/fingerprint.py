@@ -15,6 +15,7 @@ import json
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.cache.types import (
+    CompressedTensorTarget,
     Fingerprint,
     FusionGroupSpec,
     RegionSpec,
@@ -72,6 +73,20 @@ def _canonical_fusion_group(target: FusionGroupSpec) -> dict:
     }
 
 
+def _canonical_compressed_tensor_target(target: CompressedTensorTarget) -> dict:
+    return {
+        "kind": "compressed_tensor",
+        "name": target.name,
+        "K": target.K,
+        "N_padded": target.N_padded,
+        "num_banks": target.num_banks,
+        "max_shard_bytes": target.max_shard_bytes,
+        "bspm_variant": target.bspm_variant,
+        "bspm_budget": float(target.bspm_budget),
+        "transform_version": target.transform_version,
+    }
+
+
 def canonical(fingerprint: Fingerprint) -> dict:
     """Produce a deterministic, JSON-serializable dict from a Fingerprint."""
     target = fingerprint.target
@@ -88,6 +103,8 @@ def canonical(fingerprint: Fingerprint) -> dict:
         }
     elif isinstance(target, FusionGroupSpec):
         target_dict = _canonical_fusion_group(target)
+    elif isinstance(target, CompressedTensorTarget):
+        target_dict = _canonical_compressed_tensor_target(target)
     else:
         raise TypeError(f"Unsupported target type: {type(target)}")
     return {

@@ -29,6 +29,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.weights.cache import (
     CacheConfig,
+    CompressedTensorBuildInputs,
+    CompressedTensorTarget,
     ReplicateMeshMapper,
     Shard2dMeshMapper,
     ShardMeshMapper,
@@ -57,6 +59,7 @@ from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     moe_routed_expert_torch_for_cache,
     preprocess_gate_up,
     shared_down_torch_for_cache,
+    shuffle_dram_assignment,
     shuffle_dram_tiles,
 )
 
@@ -996,20 +999,8 @@ def prepare_shared_expert_weights(
 
 
 def _shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
-    """Apply the same tile permutation as shuffle_dram_tiles to a BSPM assignment."""
-    tiles_h, tiles_w = assignment.shape
-    per_N_tiles = tiles_w // num_banks
-    K_tiles = tiles_h
-    num_tiles_per_shard = K_tiles * per_N_tiles
-
-    i = np.arange(num_tiles_per_shard)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
-
-    result = np.empty_like(assignment)
-    for b in range(num_banks):
-        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].ravel()
-        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(K_tiles, per_N_tiles)
-    return result
+    """Thin wrapper — delegates to the canonical public version in transforms.moe."""
+    return shuffle_dram_assignment(assignment, num_banks)
 
 
 def _compute_bspm_max_shard_bytes(
@@ -1052,11 +1043,18 @@ def prepare_moe_routed_experts_bspm(
     bspm_data: dict,
     *,
     move_to_device: bool,
+    cache_config: CacheConfig,
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> MoERoutedExpertWeights:
-    """Upload MoE routed experts as BSPM-encoded CompressedTensor objects."""
-    tile_w = 32
-    device_for_torch = device if move_to_device else None
+    """Upload MoE routed experts as BSPM-encoded CompressedTensor objects.
 
+    Delegates to TensorCache (or EphemeralTensorCache) via cache_config so that
+    each expert projection is stored as compact tile bytes on disk (variable-length
+    per tile, no DRAM padding) and reloaded without re-reading HF weights.
+    """
+    tile_w = 32
+    proj_names = ["routed_gate_proj", "routed_up_proj", "routed_down_proj"]
     proj_keys = [
         [_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight") for e in range(num_routed_experts)],
         [_key(layer_idx, f"mlp.experts.{e}.up_proj.weight") for e in range(num_routed_experts)],
@@ -1064,50 +1062,54 @@ def prepare_moe_routed_experts_bspm(
     ]
 
     results: list[list] = [[], [], []]
-    for proj_idx, keys in enumerate(proj_keys):
+    for proj_idx, (proj_name, keys) in enumerate(zip(proj_names, proj_keys)):
         sample_w = state_dict[keys[0]]
         K, N = sample_w.shape[1], sample_w.shape[0]
         N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-        per_core_N = N_padded // num_banks
-
-        dram_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                )
-            }
-        )
-        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
         tiles_h = K // tile_w
         tiles_w_count = N_padded // tile_w
         all_assignments = [
             bspm_data["codes"][e, proj_idx].reshape(tiles_h, tiles_w_count) for e in range(num_routed_experts)
         ]
-        min_shard_bytes = _compute_bspm_max_shard_bytes(all_assignments, K, N_padded, num_banks, tile_w)
-        logger.debug("  proj_idx={}: uniform DRAM shard = {} B", proj_idx, min_shard_bytes)
+        max_shard_bytes = _compute_bspm_max_shard_bytes(all_assignments, K, N_padded, num_banks, tile_w)
+        logger.debug("  proj_idx={}: uniform DRAM shard = {} B", proj_idx, max_shard_bytes)
+
+        tgt = CompressedTensorTarget(
+            name=proj_name,
+            K=K,
+            N_padded=N_padded,
+            num_banks=num_banks,
+            max_shard_bytes=max_shard_bytes,
+            bspm_variant=bspm_variant,
+            bspm_budget=bspm_budget,
+        )
 
         for e, key in enumerate(keys):
-            w = state_dict[key].T.contiguous()
-            if N_padded != N:
-                w = torch.nn.functional.pad(w, (0, N_padded - N))
-
-            w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks).squeeze(0)
-            assignment = _shuffle_dram_assignment(all_assignments[e], num_banks)
-
-            ct = CompressedTensor.from_bspm(
-                w_shuffled.float(),
-                assignment,
-                device=device_for_torch,
-                memory_config=mem_config,
-                min_shard_bytes=min_shard_bytes,
+            assignment_logical = all_assignments[e]
+            fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(key,)),
+                target=tgt,
+            )
+            ct = cache_config.cache.get_or_create(
+                fp,
+                device,
+                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: {
+                    proj_name: CompressedTensorBuildInputs(
+                        w_logical=torch.nn.functional.pad(
+                            tensors[_k].T.contiguous().float(), (0, _N_padded - _N)
+                        ).numpy()
+                        if _N_padded != _N
+                        else tensors[_k].T.contiguous().float().numpy(),
+                        assignment_logical=_a,
+                    )
+                },
+                raw_tensors=lambda _k=key: {_k: state_dict[_k]},
             )
             results[proj_idx].append(ct)
 
             if (e + 1) % 32 == 0:
-                logger.info("  proj_idx={}: uploaded {}/{} experts (BSPM)", proj_idx, e + 1, num_routed_experts)
+                logger.info("  proj_idx={}: {}/{} experts (BSPM, cached)", proj_idx, e + 1, num_routed_experts)
 
     routed = MoERoutedExpertWeights(
         routed_gate_proj=results[0],
@@ -1136,19 +1138,18 @@ def prepare_routed_expert_weights(
 
     When ``bspm_dir`` is provided and a BSPM file exists for this layer, routed MoE experts
     are encoded as mixed-precision CompressedTensor objects instead of uniform bfloat4_b.
-    Falls back to uniform bfloat4_b if the file is not found or BSPM support is unavailable.
+    Falls back to uniform bfloat4_b if the file is not found.
 
     ``bspm_dir`` must be the model-specific subdirectory (e.g. ``results/deepseek-r1-0528``),
-    not the results root.
-
-    Note: BSPM experts bypass the TensorCache (disk caching not yet supported for CompressedTensor).
+    not the results root.  CompressedTensor experts are stored in compact format by the
+    TensorCache (variable-length tiles, no DRAM padding) — see Track C in PLAN.md.
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
-        # --- BSPM path ---
+        # --- BSPM path (TensorCache-backed via CompressedTensorTarget) ---
         bspm_data = None
         if bspm_dir is not None:
             bspm_path = (
@@ -1165,9 +1166,6 @@ def prepare_routed_expert_weights(
                 logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
 
         if bspm_data is not None:
-            # TODO: BSPM path bypasses TensorCache — CompressedTensor serialization not yet
-            # implemented (requires CompressedTensorTarget + _store_compressed/_load_compressed
-            # in weights/cache/). Tracked: test_dram_matmul_bspm_cache_roundtrip (SKIP).
             return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
@@ -1176,6 +1174,9 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 bspm_data=bspm_data,
                 move_to_device=move_to_device,
+                cache_config=cache_config,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---

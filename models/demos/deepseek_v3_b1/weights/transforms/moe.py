@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -76,6 +77,37 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
         shuffled = shuffled[:, :, :N]
 
     return shuffled.reshape(*orig_shape)
+
+
+def shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
+    """Apply the same tile permutation as :func:`shuffle_dram_tiles` to a BSPM assignment array.
+
+    Companion to :func:`shuffle_dram_tiles`: produces the per-shard column-major
+    tile ordering that matches the DRAM streaming kernel's read pattern.
+
+    The transform permutes tiles within each DRAM bank shard identically to what
+    shuffle_dram_tiles does to the float weight data, so that the format code for
+    physical tile i in the DRAM buffer matches the precision of the data at that position.
+
+    Args:
+        assignment: ``(tiles_h, tiles_w)`` int8 tile format codes in logical row-major order.
+        num_banks: Number of DRAM banks (``device.dram_grid_size().x``).
+
+    Returns:
+        ``(tiles_h, tiles_w)`` int8 array with the same values in DRAM-shuffled order.
+    """
+    tiles_h, tiles_w = assignment.shape
+    per_N_tiles = tiles_w // num_banks
+    num_tiles_per_shard = tiles_h * per_N_tiles
+
+    i = np.arange(num_tiles_per_shard)
+    source_idx = (i % tiles_h) * per_N_tiles + (i // tiles_h)
+
+    result = np.empty_like(assignment)
+    for b in range(num_banks):
+        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].ravel()
+        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(tiles_h, per_N_tiles)
+    return result
 
 
 def shared_down_torch_for_cache(
