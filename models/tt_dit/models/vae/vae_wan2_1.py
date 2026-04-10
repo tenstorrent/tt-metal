@@ -1182,6 +1182,7 @@ class WanDecoder3d(Module):
         target_height: int = 0,
         target_width: int = 0,
         t_chunk_size: int = 0,
+        cached: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1208,6 +1209,7 @@ class WanDecoder3d(Module):
             t_chunk_size,
             temperal_upsample=temperal_upsample,
             num_stages=len(dim_mult) - 1,
+            cached=cached,
         )
 
         lat_h, lat_w = stage_hw[0]
@@ -1410,6 +1412,7 @@ class WanDecoder(Module):
         target_height: int = 0,
         target_width: int = 0,
         t_chunk_size: int = 0,
+        cached: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1448,6 +1451,7 @@ class WanDecoder(Module):
             target_height=target_height,
             target_width=target_width,
             t_chunk_size=t_chunk_size,
+            cached=cached,
         )
 
         self.cached_conv_count = count_convs(self.decoder)

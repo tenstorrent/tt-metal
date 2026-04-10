@@ -263,6 +263,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             target_height=target_height,
             target_width=target_width,
             t_chunk_size=t_chunk_size,
+            cached=(vae_t_chunk_size is not None),
         )
 
         if self.dynamic_load:
@@ -336,6 +337,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
+                "vae_t_chunk_size": 7,
             }
             device_configs[(4, 8)] = {
                 "sp_axis": 1,
@@ -344,7 +346,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": 11,  # default T = 21 so will use two steps
+                "vae_t_chunk_size": None,  # full-T
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,

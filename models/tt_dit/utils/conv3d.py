@@ -38,19 +38,27 @@ class StageHW(NamedTuple):
 
 
 class StageT(NamedTuple):
-    T_res: int  # T for residual blocks (cur_T + 2 for k333 causal padding)
-    T_tconv: int  # T for temporal conv (cur_T + 1), or 0 if no temporal upsample
-    T_spatial: int  # T after temporal upsample (for spatial conv), equals cur_T if none
+    T_res: int  # T seen by residual-block conv3d = cur_T + 2 (causal pad)
+    T_tconv: int  # T seen by time_conv conv3d, or 0 if no temporal upsample
+    T_spatial: int  # T after temporal upsample (input to spatial conv), equals cur_T if none
 
 
 def compute_decoder_dims(
-    target_height, target_width, h_factor, w_factor, t_chunk_size, *, temperal_upsample, num_stages=3
+    target_height, target_width, h_factor, w_factor, t_chunk_size, *, temperal_upsample, num_stages=3, cached=False
 ):
     """Compute per-stage spatial and temporal dimensions for a VAE decoder.
 
     Returns (stage_hw, stage_t) where:
       stage_hw: list of StageHW per stage (length num_stages + 1), latent -> full resolution
       stage_t:  list of StageT per stage (length num_stages + 1)
+
+    Temporal formulas differ between uncached and cached paths because
+    WanResample splits off frame-0 in the uncached path but not in the cached path:
+
+      uncached: T_tconv = cur_T + 1   (frames[1:] = cur_T-1, +2 causal pad)
+                T_spatial = 2*(cur_T-1) + 1   (frame-0 + doubled rest)
+      cached:   T_tconv = cur_T + 2   (all frames + 2 causal pad from cache)
+                T_spatial = 2 * cur_T         (all frames doubled)
     """
     vae_scale = 2**num_stages
     lat_h = math.ceil(target_height / vae_scale / h_factor)
@@ -61,11 +69,16 @@ def compute_decoder_dims(
     stage_t = []
     for i in range(num_stages + 1):
         has_temporal_up = i < len(temperal_upsample) and temperal_upsample[i]
-        T_spatial = (2 * (cur_T - 1) + 1) if has_temporal_up else cur_T
+        if cached:
+            T_tconv = (cur_T + 2) if has_temporal_up else 0
+            T_spatial = (2 * cur_T) if has_temporal_up else cur_T
+        else:
+            T_tconv = (cur_T + 1) if has_temporal_up else 0
+            T_spatial = (2 * (cur_T - 1) + 1) if has_temporal_up else cur_T
         stage_t.append(
             StageT(
                 T_res=cur_T + 2,
-                T_tconv=cur_T + 1 if has_temporal_up else 0,
+                T_tconv=T_tconv,
                 T_spatial=T_spatial,
             )
         )
@@ -112,37 +125,37 @@ _BLOCKINGS = {
     (4, 8, 96, 96, (3, 3, 3), 83, 184, 160): (96, 96, 5, 8, 8),  # up3_res
     (4, 8, 96, 3, (3, 3, 3), 83, 184, 160): (96, 32, 3, 8, 16),  # conv_out
     # ===================================================================
-    # BH Galaxy 4x8, 720p, 81 frames t_chunk_size=11 (latent T=11)
-    # Per-device: same spatial as above
+    # TODO: BH Galaxy 4x8, 720p, t_chunk_size=16 cached (vae_t_chunk_size=16)
+    # Per-device: same spatial as full-T above
+    # Cached T (from compute_decoder_dims(720, 1280, 4, 8, 16, cached=True)):
+    #   stage 0 (cur_T=16): T_res=18, T_tconv=18, T_spatial=32
+    #   stage 1 (cur_T=32): T_res=34, T_tconv=34, T_spatial=64
+    #   stage 2 (cur_T=64): T_res=66, T_spatial=64 (no temporal upsample)
+    #   stage 3 (cur_T=64): T_res=66
+    # Needs sweep to fill in blocking values.
     # ===================================================================
-    (4, 8, 32, 384, (3, 3, 3), 13, 23, 20): (32, 128, 2, 16, 16),  # conv_in
-    (4, 8, 384, 384, (3, 3, 3), 13, 23, 20): (96, 96, 1, 4, 8),  # lat_res+mid_res
-    (4, 8, 384, 768, (3, 1, 1), 12, 23, 20): (192, 256, 2, 4, 4),  # up0_tconv
-    (4, 8, 384, 192, (1, 3, 3), 21, 46, 40): (96, 96, 1, 16, 16),  # up0_spatial
-    (4, 8, 192, 384, (3, 3, 3), 23, 46, 40): (96, 128, 2, 8, 4),  # up1_res0
-    (4, 8, 384, 384, (3, 3, 3), 23, 46, 40): (96, 128, 2, 8, 4),  # up1_res
-    (4, 8, 384, 768, (3, 1, 1), 22, 46, 40): (192, 256, 2, 4, 4),  # up1_tconv
-    (4, 8, 384, 192, (1, 3, 3), 41, 92, 80): (96, 96, 1, 16, 16),  # up1_spatial
-    (4, 8, 192, 192, (3, 3, 3), 43, 92, 80): (96, 96, 4, 8, 4),  # up2_res
-    (4, 8, 192, 96, (1, 3, 3), 41, 184, 160): (192, 96, 1, 4, 32),  # up2_spatial
-    (4, 8, 96, 96, (3, 3, 3), 43, 184, 160): (96, 96, 4, 8, 4),  # up3_res
-    (4, 8, 96, 3, (3, 3, 3), 43, 184, 160): (96, 32, 31, 4, 8),  # conv_out
+    # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7)
+    # BH (2,4): tp_axis=0, sp_axis=1 → h_factor=2, w_factor=4
+    # Per-device: lat(30,26) mid(60,52) hi(120,104) full(240,208)
+    # Cached T: cur_T grows 7 → 14 → 28 across stages
+    # TODO: blockings are _DEFAULT_BLOCKINGS placeholders — sweep needed
     # ===================================================================
-    # BH Loud Box 4x2, 480p, 81 frames cached (t_chunk_size=1)
-    # Per-device: lat(15,52) mid(30,104) hi(60,208) full(120,416)
-    # ===================================================================
-    (4, 2, 32, 384, (3, 3, 3), 3, 15, 52): (32, 128, 1, 16, 16),  # conv_in
-    (4, 2, 384, 384, (3, 3, 3), 3, 15, 52): (128, 128, 1, 8, 2),  # lat_res+mid_res
-    (4, 2, 384, 768, (3, 1, 1), 2, 15, 52): (128, 384, 3, 8, 2),  # up0_tconv
-    (4, 2, 384, 192, (1, 3, 3), 1, 30, 104): (128, 96, 1, 16, 16),  # up0_spatial
-    (4, 2, 192, 384, (3, 3, 3), 3, 30, 104): (96, 128, 3, 4, 8),  # up1_res0
-    (4, 2, 384, 384, (3, 3, 3), 3, 30, 104): (128, 128, 1, 8, 2),  # up1_res
-    (4, 2, 384, 768, (3, 1, 1), 2, 30, 104): (128, 384, 3, 8, 2),  # up1_tconv
-    (4, 2, 384, 192, (1, 3, 3), 1, 60, 208): (128, 96, 1, 16, 16),  # up1_spatial
-    (4, 2, 192, 192, (3, 3, 3), 3, 60, 208): (96, 96, 3, 8, 8),  # up2_res
-    (4, 2, 192, 96, (1, 3, 3), 1, 120, 416): (192, 96, 1, 16, 8),  # up2_spatial
-    (4, 2, 96, 96, (3, 3, 3), 3, 120, 416): (96, 96, 3, 4, 16),  # up3_res
-    (4, 2, 96, 3, (3, 3, 3), 3, 120, 416): (96, 32, 6, 16, 8),  # conv_out
+    # Stage 0 (cur_T=7): T_res=9, T_tconv=9, T_spatial=14
+    (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 96, 1, 2, 32),  # conv_in
+    (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 8, 4),  # lat_res+mid_res
+    (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (96, 96, 1, 8, 4),  # up0_tconv
+    (2, 4, 384, 192, (1, 3, 3), 14, 60, 52): (192, 96, 1, 32, 4),  # up0_spatial
+    # Stage 1 (cur_T=14): T_res=16, T_tconv=16, T_spatial=28
+    (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (64, 128, 1, 8, 4),  # up1_res0
+    (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 1, 8, 4),  # up1_res
+    (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (96, 96, 1, 8, 4),  # up1_tconv
+    (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (192, 96, 1, 32, 4),  # up1_spatial
+    # Stage 2 (cur_T=28): T_res=30, T_spatial=28 (no temporal upsample)
+    (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 1, 8, 4),  # up2_res
+    (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 8),  # up2_spatial
+    # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
+    (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 1, 8, 8),  # up3_res
+    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 1, 16, 8),  # conv_out
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
