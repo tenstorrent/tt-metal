@@ -530,6 +530,7 @@ def test_demo(mesh_device, model_path):
         prompts=prompts,
         max_new_tokens=64,
         max_seq_len=512,
+        enable_decode_trace=False,  # TODO: re-enable once trace-compatible
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")

@@ -181,10 +181,11 @@ class Gemma4Model:
                 lm_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 lm_mapper = replicate
+            # Always bfloat16 for LM head — bfloat8_b is too lossy for 262k-vocab argmax
             self.lm_head_weight = ttnn.as_tensor(
                 lm_head_weight,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=lm_mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}"),
