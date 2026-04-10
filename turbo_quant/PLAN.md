@@ -142,6 +142,44 @@ ttnn.experimental.turbo_quant_gather_centroids(input_tensor, centroids)
 
 Auto-detected at import time (`_FUSED_OPS_AVAILABLE`), graceful fallback to cascaded ops.
 
+### Fused TQ SDPA Decode Kernel
+
+Custom SDPA decode kernel that reads BFP4 quantization indices + BF16 norms from the
+TQ cache and dequantizes on-the-fly during SDPA computation. Eliminates the full-cache
+BF16 dequantize temporary that causes OOM at long sequences.
+
+**Pipeline (3 RISC-V cores per Tensix):**
+
+```
+Reader (RISC-V 0)           Compute (RISC-V 1-3)              Writer (RISC-V 4)
+─────────────────           ──────────────────────             ─────────────────
+Read Q (BF16) ──→ c_0       Pass 1: init_sfpu + typecast       Generate scale/
+Read K idx (BFP4) → c_10      BFP4→BF16 into c_14              identity tiles
+Read K norms (BF16)→ c_11   Pass 2: mm_init + centroid gather   Write output
+Read V idx (BFP4) → c_12      + norm bcast_cols + K transpose    from c_16
+Read V norms (BF16)→ c_13     → c_1 (K) and c_2 (V)
+                             Then: sdpa_standard(c_0,c_1,c_2)
+                               → c_16
+```
+
+**Key technical details:**
+- `init_sfpu(src_cb, dst_cb)` required for BFP4→BF16 typecast (not just `copy_tile`)
+- `mm_init()` must be called between SFPU (typecast) and FPU (bcast multiply) modes
+- Centroid gather uses in-place `pack_tile<true>` to overwrite index tiles
+- K tiles transposed during output via `pack_tile<true>(0, cb, col*Sk+row)`
+- Reader reads K NOT transposed (row-major for norm alignment), compute transposes
+
+**Python API:**
+```python
+ttnn.experimental.turbo_quant_sdpa_decode(
+    q, k_indices, k_norms, v_indices, v_norms,
+    page_table, cur_pos, centroids, scale
+)
+```
+
+**Test results (cosine vs CPU reference):**
+- 1 head: 0.9998, 8 heads: 0.9996, 32Q/8KV GQA: 0.9996
+
 ### C++ File Structure
 
 ```
@@ -149,12 +187,21 @@ ttnn/cpp/ttnn/operations/experimental/turbo_quant/
 ├── CMakeLists.txt
 ├── turbo_quant.hpp / .cpp            # Public API
 ├── turbo_quant_nanobind.hpp / .cpp   # Python bindings
-└── device/
-    ├── turbo_quant_device_operation.hpp / .cpp
-    ├── turbo_quant_program_factory.cpp
-    └── kernels/compute/
-        ├── turbo_quant_bucketize.cpp
-        └── turbo_quant_gather_centroids.cpp
+├── device/
+│   ├── turbo_quant_device_operation.hpp / .cpp
+│   ├── turbo_quant_program_factory.cpp
+│   └── kernels/compute/
+│       ├── turbo_quant_bucketize.cpp
+│       └── turbo_quant_gather_centroids.cpp
+└── sdpa/
+    ├── device/
+    │   ├── sdpa_tq_device_operation.hpp / .cpp
+    │   └── sdpa_tq_program_factory.cpp
+    └── kernels/
+        ├── compute/sdpa_tq_decode.cpp
+        └── dataflow/
+            ├── reader_tq_decode.cpp
+            └── writer_tq_decode.cpp
 ```
 
 ### Key Optimisations
@@ -168,6 +215,7 @@ ttnn/cpp/ttnn/operations/experimental/turbo_quant/
 | Pre-rescale centroids×norms | Store final values, dequantize = identity | O(1) dequantize |
 | Paged BF16 cache | Use paged SDPA on pre-rescaled BF16 values | Flat latency, 128K context |
 | BFP4 index cache | Integers 0-7 exact in BFP4 (~0.5 byte/elem) | 2× smaller than baseline |
+| Fused TQ SDPA kernel | On-the-fly dequant inside SDPA (typecast+gather+norm) | No BF16 temp tensor |
 | rsqrt norm | Replace square+sum+sqrt+div with rsqrt | Fewer ops in quantize |
 | Free layer_past | Deallocate BFP8 layer_past when TQ active | Doubles available DRAM |
 
@@ -212,18 +260,18 @@ already in the format SDPA expects). Rotation absorbed into W_v/W_o weights.
 - **Max context:** 128K tested, no OOM on N150
 - **Tradeoff:** 2× more KV memory than baseline
 
-### 4.3 — TurboQuant Memory-Efficient (BFP4 indices, contiguous)
+### 4.3 — TurboQuant Memory-Efficient (BFP4 indices + fused SDPA)
 
 Optimised for **minimal KV cache memory**. Stores BFP4 quantization indices
-(~0.5 bytes/elem) + BF16 norms in a contiguous (non-paged) cache. BFP4 exactly
-represents integers 0-7 (verified on hardware). Dequantize requires typecast +
-gather + mul per step, proportional to max_seq_len.
+(~0.5 bytes/elem) + BF16 norms in interleaved caches. Fused SDPA kernel reads
+indices + norms directly and dequantizes on-the-fly (typecast + centroid gather
++ norm multiply) inside the SDPA computation.
 
 - **Flag:** `memory_efficient=True` in `TTNNTurboQuantCache`
 - **KV memory:** ~0.52 bytes/element (BFP4 indices + BF16 norms) — **2× smaller than baseline**
-- **Latency:** 57–61ms/tok (higher, without trace/paging)
-- **Max context:** 16K (OOM at 32K due to contiguous dequantize temp allocation)
-- **Tradeoff:** slower decode due to contiguous SDPA + full-cache dequantize
+- **Status:** single-core MVP, numerically correct (cosine > 0.999)
+- **Current limitation:** pre-fills full BF16 cache in L1 before SDPA → OOM at 4K+
+- **Next step:** interleave dequant with SDPA chunk consumption for O(chunk) L1
 
 ---
 
@@ -231,23 +279,45 @@ gather + mul per step, proportional to max_seq_len.
 
 All measurements on **Wormhole N150, Llama-3.1-8B-Instruct, batch=1, 3-bit**.
 
-### Performance (ms/tok)
+### Performance (ms/tok) — TQ Performance + Baseline
 
 Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
 
-| max_seq | Baseline BFP8 | TQ Performance | TQ Memory-Efficient (BFP4) |
-|---------|--------------|----------------|----------------------------|
-| 128 | 36.9 | 37.2 | 59.4 |
-| 256 | 36.9 | 37.3 | 61.2 |
-| 512 | 37.0 | 37.2 | 59.3 |
-| 1024 | 37.0 | 37.2 | 56.6 |
-| 2048 | 36.9 | 37.2 | 59.0 |
-| 4096 | 36.9 | 37.2 | 60.1 |
-| 8192 | 37.0 | 37.3 | 57.4 |
-| 16384 | 37.0 | 37.2 | 57.4 |
-| 32768 | 36.9 | 37.2 | OOM |
-| 65536 | 37.0 | 37.2 | OOM |
-| 131072 | 37.0 | 37.2 | OOM |
+| max_seq | Baseline BFP8 | TQ Performance |
+|---------|--------------|----------------|
+| 128 | 36.9 | 37.2 |
+| 256 | 36.9 | 37.3 |
+| 512 | 37.0 | 37.2 |
+| 1024 | 37.0 | 37.2 |
+| 2048 | 36.9 | 37.2 |
+| 4096 | 36.9 | 37.2 |
+| 8192 | 37.0 | 37.3 |
+| 16384 | 37.0 | 37.2 |
+| 32768 | 36.9 | 37.2 |
+| 65536 | 37.0 | 37.2 |
+| 131072 | 37.0 | 37.2 |
+
+### Fused TQ SDPA Kernel Benchmark (single-core MVP)
+
+Measured 2026-04-10, synthetic data, 8Q/8KV heads, hd=128, 3-bit.
+
+| Seq Len | Fused TQ (ms) | Std SDPA (ms) | Cosine | BFP4 KV (MB) | BF16 KV (MB) |
+|---------|--------------|---------------|--------|--------------|--------------|
+| 128 | 3.7 | 0.03 | 0.9996 | 0.1 | 0.5 |
+| 256 | 7.4 | 0.04 | 0.9996 | 0.2 | 1.0 |
+| 512 | 14.6 | 0.06 | 0.9996 | 0.5 | 2.0 |
+| 1024 | 29.2 | 0.11 | 0.9997 | 1.0 | 4.0 |
+| 2048 | 58.4 | 0.21 | 0.9997 | 2.0 | 8.0 |
+| 4096 | OOM | 0.42 | — | 4.0 | 16.0 |
+| 8192 | OOM | 0.80 | — | 8.0 | 32.0 |
+| 16384 | OOM | 1.57 | — | 16.0 | 64.0 |
+| 32768 | OOM | 3.10 | — | 32.0 | 128.0 |
+
+**Notes:**
+- Fused kernel is ~100-300x slower than std SDPA (single-core MVP vs multi-core optimized)
+- Latency scales linearly at ~29ms per 1K tokens
+- OOM at 4K+ because full BF16 dequantized cache is materialized in L1 (1.5MB limit)
+- Standard SDPA comparison uses multi-core `scaled_dot_product_attention` (not decode variant)
 
 ### KV Cache Memory (per batch, 32 layers × 2 K/V × 8 heads × 128 dim)
 
@@ -309,32 +379,45 @@ This means:
   as K/V values, not indices
 - There's no hook between paged cache read and SDPA computation to dequantize
 
-### Current variant tradeoffs (no further optimisation possible without kernel changes)
+### Current variant tradeoffs
 
-| Variant | Latency | KV Memory | Max Context | Bottleneck |
-|---------|---------|-----------|-------------|------------|
-| TQ Performance | **37ms** (= baseline) | 2× baseline | 128K | BF16 required by SDPA |
-| TQ Memory-Efficient | 57-61ms | **0.5× baseline** | 16K | Contiguous dequantize temp OOM |
-| Baseline BFP8 | **37ms** | 1× | 128K | — |
+| Variant | Latency | KV Memory | Max Context | Status |
+|---------|---------|-----------|-------------|--------|
+| TQ Performance | **37ms** (= baseline) | 2× baseline | 128K | Production-ready |
+| TQ Memory-Efficient (fused) | ~29ms/1K tokens | **0.5× baseline** | 2K (L1 limit) | Single-core MVP |
+| Baseline BFP8 | **37ms** | 1× | 128K | Reference |
 
-### Fused Paged SDPA Reader (would unlock best of both worlds)
+### Fused TQ SDPA — Remaining optimisations (priority order)
 
-Modify the paged SDPA kernel to read BFP4 indices + BF16 norms from paged cache
-and dequantize on-the-fly (gather centroids + mul norms) inside the kernel's
-chunk-reading loop. This would give:
-- **37ms latency** (paged SDPA, same as baseline)
-- **~0.5 bytes/element** (BFP4 indices, 2× smaller than baseline)
-- **128K+ context** (paged allocation)
+**1. Interleave dequant with SDPA chunk consumption (critical for >2K context)**
 
-**Engineering scope:** Modify `reader_interleaved.cpp` (~500 lines) and
-`sdpa_program_factory.cpp` to:
-1. Read BFP4 tiles from paged KV cache instead of BF16/BFP8
-2. Add a compute stage that typecasts BFP4 → float32 in DST
-3. Apply centroid gather (reuse B2 kernel logic) + norm multiply
-4. Feed dequantized tiles to existing SDPA attention computation
+Current: pre-fill ALL dequantized BF16 K/V into L1 CBs → call sdpa_standard.
+At 4K seq, the BF16 CB needs 2.3MB > 1.5MB L1 → OOM.
 
-This is the single remaining optimisation that would make TurboQuant
-strictly better than baseline (same speed, half the memory).
+Fix: produce 1 K/V chunk of BF16 at a time, let sdpa_standard consume it, then
+produce the next. Requires either:
+- A custom SDPA inner loop with integrated dequant callbacks, or
+- Restructuring the compute kernel so the reader pushes chunks and the dequant
+  feeds sdpa_standard's CB consumption in lockstep
+
+This would reduce L1 memory from O(full_cache) to O(chunk) = ~65KB regardless
+of sequence length.
+
+**2. Multi-core parallelism (critical for latency)**
+
+Current: single-core MVP (~29ms/1K tokens). Standard SDPA uses the full compute
+grid (up to 64 cores) and achieves ~0.1ms/1K tokens.
+
+Fix: use `split_work_to_cores` to distribute batch × head across cores, matching
+the standard SDPA's work distribution. Estimated speedup: 30-60×.
+
+**3. Paged K/V index reads (for paged cache compatibility)**
+
+Current: reads BFP4 indices from interleaved tensors using `read_chunk_with_padding`.
+The Llama model's standard KV cache uses paged allocation.
+
+Fix: add paged read support to the TQ reader, or store TQ indices in paged format.
+This enables interop with the standard paged cache infrastructure.
 
 ### Other Next Steps
 
