@@ -23,7 +23,7 @@ def create_tt_model(
     mesh_device,
     max_batch_size=1,
     max_seq_len=8192,
-    dtype=ttnn.bfloat8_b,
+    dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
     mesh_config=None,
