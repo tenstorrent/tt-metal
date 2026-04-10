@@ -255,8 +255,11 @@ class DRAMStreamingMatmulCompressed:
         # DRAM cores from B tensor's shard grid
         dram_cores = ttnn.corerange_to_cores(data_tensor.memory_config().shard_spec.grid)
 
-        # Semaphore for pipeline synchronization between cores sharing a bank
-        pipeline_sem_id = 0
+        # Semaphore for pipeline synchronization between cores sharing a bank.
+        # Use sem ID 1 (non-zero) when cores_per_bank > 1 so the kernel's
+        # `if constexpr (CTArgs::pipeline_sem_id != 0)` guard fires correctly.
+        # ID 0 means no pipeline sync (cores_per_bank == 1).
+        pipeline_sem_id = 1 if cores_per_bank > 1 else 0
         semaphores = [
             ttnn.SemaphoreDescriptor(
                 id=pipeline_sem_id,
