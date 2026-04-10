@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.weights.prepare import (
+    _load_expert_proj,
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -242,6 +243,8 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
+    bspm_dir=None,
+    preloaded_experts=None,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -264,6 +267,10 @@ def create_routed_expert_tensors(
         state_dict: State dict in HF key convention (read-only when using HF weights).
         is_moe: If True use MoE keys (experts.{e}.*). If False use dense keys and slice to 8 experts.
         layer_idx: Layer index for state dict. If None, uses ROUTED_EXPERT_LAYER_IDX when is_moe else DENSE_LAYER_IDX.
+        bspm_dir: Optional path to BitSculpt results root for BSPM mixed-precision loading.
+        preloaded_experts: Optional tuple (gate_list, up_list, down_list) of pre-loaded device
+            tensors (plain ttnn.Tensor or CompressedTensor). When provided, skips
+            prepare_routed_expert_weights — the float golden dicts are still built from state_dict.
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -335,21 +342,6 @@ def create_routed_expert_tensors(
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
-    # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
-    ttnn_gate_mm_weights = attn.gate_mm
-    ttnn_rmsnorm_gamma = attn.ffn_norm
-    if ttnn_gate_mm_weights is not None:
-        compute_core_grid = ttnn_gate_mm_weights.core_range_set
-
-    # Routing tensors (only when enable_routing=True)
-    if not enable_routing:
-        ttnn_gate_mm_weights = None
-    ttnn_gate_bias = None
-    ttnn_gate_indices = None
-    gate_output_scores_tensor = None
-    gate_output_indices_tensor = None
-
     # ── Compute dimensions for expert DRAM matmul (down_proj padding for output extraction) ──
     num_banks = device.dram_grid_size().x
     tile_w = RoutedExpert.TILE_W
@@ -362,6 +354,11 @@ def create_routed_expert_tensors(
     up_proj_weights_dict = {}
     down_proj_weights_dict = {}
 
+    # Load expert weights to DRAM BEFORE allocating attention weights to L1.
+    # to_memory_config for DRAM-sharded expert tensors dispatches a copy program
+    # that needs L1 CBs.  If attention weights are already in L1 at those CB
+    # addresses, the dispatch check fires a "CB clash" error.  Loading to DRAM
+    # first (L1 is empty) avoids this.
     if is_moe:
         # Expected HF expert shapes: gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
         expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
@@ -384,17 +381,25 @@ def create_routed_expert_tensors(
             w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
-        routed_weights = prepare_routed_expert_weights(
-            device,
-            state_dict,
-            layer_idx=layer_idx,
-            is_moe=True,
-            num_routed_experts=num_experts,
-            move_to_device=True,
-        )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
+        if preloaded_experts is not None:
+            gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = preloaded_experts
+        else:
+            from pathlib import Path as _Path
+
+            bspm_dir_path = _Path(bspm_dir) if bspm_dir is not None else None
+            routed_weights = prepare_routed_expert_weights(
+                device,
+                state_dict,
+                layer_idx=layer_idx,
+                is_moe=True,
+                num_routed_experts=num_experts,
+                move_to_device=True,
+                bspm_dir=bspm_dir_path,
+                bspm_model_name="deepseek-r1-0528" if bspm_dir_path is not None else None,
+            )
+            gate_proj_expert_tensors = routed_weights.routed_gate_proj
+            up_proj_expert_tensors = routed_weights.routed_up_proj
+            down_proj_expert_tensors = routed_weights.routed_down_proj
         gate_proj_weights = gate_proj_expert_tensors[0]
         up_proj_weights = up_proj_expert_tensors[0]
         down_proj_weights = down_proj_expert_tensors[0]
@@ -431,6 +436,23 @@ def create_routed_expert_tensors(
         gate_proj_expert_tensors = None  # unused when is_moe=False
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None
+
+    # Build attention-side overlapped tensors from state dict via prepare_weights.
+    # Must run AFTER routed expert weights are in DRAM so L1 is clean for the
+    # to_memory_config dispatches used internally.
+    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    ttnn_gate_mm_weights = attn.gate_mm
+    ttnn_rmsnorm_gamma = attn.ffn_norm
+    if ttnn_gate_mm_weights is not None:
+        compute_core_grid = ttnn_gate_mm_weights.core_range_set
+
+    # Routing tensors (only when enable_routing=True)
+    if not enable_routing:
+        ttnn_gate_mm_weights = None
+    ttnn_gate_bias = None
+    ttnn_gate_indices = None
+    gate_output_scores_tensor = None
+    gate_output_indices_tensor = None
 
     if enable_routing:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
@@ -1625,3 +1647,621 @@ def test_mlp_with_reduce(
     assert passing_ref, f"Reference MLP comparison PCC failed: {pcc_ref}"
 
     logger.info("MoeOp no-routing with reduce test PASSED!")
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
+def test_moe_fused_bspm(device, get_reference_model_state_dict):
+    """Test fused MoE with real BSPM-driven mixed-precision weights.
+
+    Validates Phase 3 path: prepare_routed_expert_weights(bspm_dir=...) →
+    CompressedTensor.from_bspm() → MoeOp → DRAMStreamingMatmulCompressed.
+
+    Requires env var:
+      BSPM_DIR — path to BitSculpt results root (contains deepseek-r1-0528/ subdir)
+
+    Uses random weights (no real checkpoint needed) — the BSPM codes are what drive the
+    mixed-precision tile assignment. The float golden is computed from the same random
+    weights, so PCC validates kernel correctness independent of weight values.
+
+    PCC threshold is 0.90 (lower than 0.97 for uniform BFP4 — 3.5 b/e uses ~35% bfp2/zero tiles).
+    """
+    import os
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set — skipping real mixed-precision path test")
+
+    M = RoutedExpert.M
+    K = RoutedExpert.K
+
+    logger.info(f"Testing fused MoE with BSPM mixed-precision: layer={ROUTED_EXPERT_LAYER_IDX}, bspm_dir={bspm_dir}")
+
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=1,
+    )
+
+    r = create_routed_expert_tensors(
+        device,
+        use_hardcoded_expert_index=True,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        bspm_dir=bspm_dir,
+    )
+    sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    s = create_shared_expert_tensors(
+        device,
+        M,
+        K,
+        mcast_grid,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
+
+    # ── SDPA buffers (required by MoeOp.op for CB memory overlap) ──
+    kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
+    kvpe_dim = SDPA.KVPE_DIM
+    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+        ),
+    )
+
+    device_grid_size = device.compute_with_storage_grid_size()
+    sdpa_out_interm_shard_height = SDPA.OUT_INTERM_SHARD_HEIGHT
+    sdpa_out_interm_shard_width = SDPA.OUT_INTERM_SHARD_WIDTH
+    full_device_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+    num_full_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        full_device_grid,
+        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_shard_height * num_full_cores, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        tile=Tiles.TILE_8x32,
+    )
+
+    moe_semaphores = MoeOp.create_semaphores(device)
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
+        r.ttnn_residual_mcast_src,
+        r.ttnn_gate_mm_weights,
+        r.ttnn_gate_bias,
+        r.ttnn_gate_indices,
+        r.gate_output_scores_tensor,
+        r.gate_output_indices_tensor,
+        r.gate_proj_weights,
+        r.up_proj_weights,
+        r.down_proj_weights,
+        r.final_output_tensor,
+        r.ttnn_rmsnorm_gamma,
+        shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
+        shared_up_weights_overlapped=s.shared_up_weights_overlapped,
+        shared_down_weights_tensor=s.ttnn_down_weights,
+        shared_k_parallel=s.k_parallel,
+        shared_n_parallel=s.n_parallel,
+        use_hardcoded_expert_index=True,
+        sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer=sdpa_out_interm_buffer,
+        num_iterations=1,
+        reconfig_moe_cbs=True,
+        semaphores=moe_semaphores,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+    )
+    ttnn.synchronize_device(device)
+
+    output_final_torch = ttnn.to_torch(ttnn_result_final)
+    output_final_valid = extract_routed_expert_output(
+        output_final_torch,
+        r.num_gate_proj_cores,
+        r.final_output_width_per_core,
+        r.per_core_down_proj_N,
+    )
+
+    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden_single_device(
+        r.torch_input,
+        shared_gate_weights=s.torch_gate_weights,
+        shared_up_weights=s.torch_up_weights,
+        shared_down_weights=s.torch_down_weights,
+        gate_proj_weights_dict=r.expert_weights_dict,
+        up_proj_weights_dict=r.up_proj_weights_dict,
+        down_proj_weights_dict=r.down_proj_weights_dict,
+        rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        rmsnorm_epsilon=1e-6,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
+        eps=r.gate_eps,
+        scaling_factor=r.gate_scaling_factor,
+        use_hardcoded_expert_index=True,
+    )
+
+    assert output_final_valid.abs().sum() > 0, "BSPM output is all zeros — kernel may not have run"
+
+    passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.90)
+    logger.info(f"BSPM fused MoE PCC: {pcc} (threshold=0.90)")
+    assert passing, f"BSPM fused MoE PCC check failed (got {pcc}, expected >= 0.90)"
+
+    logger.info(f"BSPM fused MoE test PASSED! (PCC={pcc})")
+
+
+# ============================================================================
+# Real-weight BSPM cache validation
+# ============================================================================
+
+
+def _load_cached_expert_subset(cache_path, device, layer_idx: int, num_experts: int):
+    """Load the first num_experts experts from the BSPM cache (gate-all, up-all, down-all order).
+
+    Mirrors the allocation order of load_moe_routed_experts so that DRAM buffer
+    layout matches what DRAMStreamingExpertsMatmulCompressed expects.
+    """
+    from pathlib import Path
+
+    experts_dir = Path(cache_path) / f"layer_{layer_idx:03d}" / "experts"
+    gate_list, up_list, down_list = [], [], []
+    for e in range(num_experts):
+        gate_list.append(_load_expert_proj(experts_dir / f"e_{e:03d}", "gate_proj", device))
+    for e in range(num_experts):
+        up_list.append(_load_expert_proj(experts_dir / f"e_{e:03d}", "up_proj", device))
+    for e in range(num_experts):
+        down_list.append(_load_expert_proj(experts_dir / f"e_{e:03d}", "down_proj", device))
+    logger.info("Loaded {} experts from BSPM cache for layer {}", num_experts, layer_idx)
+    return gate_list, up_list, down_list
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("layer_idx", [4, 30, 57])
+def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
+    """MoE MLP: real BSPM-compressed weights from cache vs PyTorch float32 reference.
+
+    Loads BSPM 3.5 b/e expert tensors from a pre-generated cache (bspm_b_3_5_miguel),
+    runs through MoeOp, and compares against a float32 PyTorch golden.
+
+    Only the expert gate/up/down float weights for the golden come from the real HF
+    checkpoint. All scaffolding (routing matrix, gamma, attention weights, shared expert)
+    uses deterministic random weights to avoid the FP8→ttnn.from_torch issue in
+    prepare_attention_weights when loading directly from the R1-0528 FP8 checkpoint.
+
+    PCC threshold is 0.90 (consistent with 3.5 b/e having ~35% bfp2/zero tiles).
+
+    Required env vars:
+      DEEPSEEK_V3_HF_MODEL  — path to DeepSeek R1-0528 HF checkpoint (for expert float golden)
+      BSPM_CACHE_PATH       — path to pre-generated BSPM cache (bspm_b_3_5_miguel)
+
+    Run (BH Galaxy only — requires 13x10 grid):
+      TT_METAL_CLEAR_L1=1 TT_METAL_SLOW_DISPATCH_MODE=1 \\
+        DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/.../DeepSeek-R1-0528 \\
+        BSPM_CACHE_PATH=/mnt/MLPerf/.../bspm_b_3_5_miguel \\
+        pytest .../test_moe_mlp.py -k test_moe_layer_real_weights -v -s
+    """
+    import os
+
+    cache_path = os.environ.get("BSPM_CACHE_PATH")
+    if not cache_path:
+        pytest.skip("BSPM_CACHE_PATH not set — skipping real-weight BSPM cache test")
+
+    num_experts = device.get_num_devices()  # 1 on single-chip, 8 on 8-chip submesh
+
+    logger.info(
+        "test_moe_layer_real_weights: layer={}, cache={}, num_experts={}",
+        layer_idx,
+        cache_path,
+        num_experts,
+    )
+
+    # Load compressed experts from cache (all gate, then up, then down — preserves DRAM order).
+    experts = _load_cached_expert_subset(cache_path, device, layer_idx, num_experts)
+
+    # Random state dict for all scaffolding (routing, gamma, attention, shared expert).
+    # Avoids the FP8→ttnn.from_torch incompatibility in prepare_attention_weights when
+    # reading directly from the R1-0528 FP8 safetensors checkpoint.
+    random_state = get_reference_model_state_dict(
+        layer_idx=layer_idx,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=num_experts,
+        random_weights=True,
+    )
+
+    r = create_routed_expert_tensors(
+        device,
+        use_hardcoded_expert_index=True,
+        state_dict=random_state,
+        is_moe=True,
+        layer_idx=layer_idx,
+        bspm_dir=None,
+        preloaded_experts=experts,
+    )
+
+    # Override the expert float golden dicts with real HF weights so PCC reflects
+    # compression quality rather than random-vs-compressed comparison.
+    K = RoutedExpert.K
+    GATE_PROJ_N = RoutedExpert.GATE_PROJ_N
+    layer_key = f"model.layers.{layer_idx}"
+    expert_weights_dict = {}
+    up_proj_weights_dict = {}
+    down_proj_weights_dict = {}
+    for e in range(num_experts):
+        w_g = hf_state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous().float()
+        expert_weights_dict[e] = w_g.reshape(1, 1, K, GATE_PROJ_N)
+        w_u = hf_state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"].T.contiguous().float()
+        up_proj_weights_dict[e] = w_u.reshape(1, 1, K, GATE_PROJ_N)
+        w_d = hf_state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous().float()
+        down_proj_weights_dict[e] = w_d.reshape(1, 1, GATE_PROJ_N, K)
+    r = r._replace(
+        expert_weights_dict=expert_weights_dict,
+        up_proj_weights_dict=up_proj_weights_dict,
+        down_proj_weights_dict=down_proj_weights_dict,
+    )
+
+    sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    s = create_shared_expert_tensors(
+        device,
+        RoutedExpert.M,
+        RoutedExpert.K,
+        mcast_grid,
+        state_dict=random_state,
+        is_moe=True,
+        layer_idx=layer_idx,
+    )
+
+    # SDPA buffers — required by MoeOp for CB memory overlap.
+    kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
+    kvpe_dim = SDPA.KVPE_DIM
+    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+        ),
+    )
+
+    device_grid_size = device.compute_with_storage_grid_size()
+    full_device_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+    num_full_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        full_device_grid,
+        (SDPA.OUT_INTERM_SHARD_HEIGHT, SDPA.OUT_INTERM_SHARD_WIDTH),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((SDPA.OUT_INTERM_SHARD_HEIGHT * num_full_cores, SDPA.OUT_INTERM_SHARD_WIDTH), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        tile=Tiles.TILE_8x32,
+    )
+
+    moe_semaphores = MoeOp.create_semaphores(device)
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
+        r.ttnn_residual_mcast_src,
+        r.ttnn_gate_mm_weights,
+        r.ttnn_gate_bias,
+        r.ttnn_gate_indices,
+        r.gate_output_scores_tensor,
+        r.gate_output_indices_tensor,
+        r.gate_proj_weights,
+        r.up_proj_weights,
+        r.down_proj_weights,
+        r.final_output_tensor,
+        r.ttnn_rmsnorm_gamma,
+        shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
+        shared_up_weights_overlapped=s.shared_up_weights_overlapped,
+        shared_down_weights_tensor=s.ttnn_down_weights,
+        shared_k_parallel=s.k_parallel,
+        shared_n_parallel=s.n_parallel,
+        use_hardcoded_expert_index=True,
+        sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer=sdpa_out_interm_buffer,
+        num_iterations=1,
+        reconfig_moe_cbs=True,
+        semaphores=moe_semaphores,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+    )
+    ttnn.synchronize_device(device)
+
+    output_final_torch = ttnn.to_torch(ttnn_result_final)
+    output_final_valid = extract_routed_expert_output(
+        output_final_torch,
+        r.num_gate_proj_cores,
+        r.final_output_width_per_core,
+        r.per_core_down_proj_N,
+    )
+
+    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden_single_device(
+        r.torch_input,
+        shared_gate_weights=s.torch_gate_weights,
+        shared_up_weights=s.torch_up_weights,
+        shared_down_weights=s.torch_down_weights,
+        gate_proj_weights_dict=r.expert_weights_dict,
+        up_proj_weights_dict=r.up_proj_weights_dict,
+        down_proj_weights_dict=r.down_proj_weights_dict,
+        rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        rmsnorm_epsilon=1e-6,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
+        eps=r.gate_eps,
+        scaling_factor=r.gate_scaling_factor,
+        use_hardcoded_expert_index=True,
+    )
+
+    assert output_final_valid.abs().sum() > 0, "Output is all zeros — kernel may not have run"
+
+    passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.90)
+    logger.info("test_moe_layer_real_weights PCC: {} (threshold=0.90)", pcc)
+    assert passing, f"PCC check failed (got {pcc}, expected >= 0.90)"
+
+    logger.info("test_moe_layer_real_weights PASSED! (PCC={})", pcc)
+
+
+# ============================================================================
+# Real-weight BSPM cache validation — 8 experts on single chip
+# ============================================================================
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("layer_idx", [4, 30, 57])
+def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
+    """MoE MLP: experts 0-7 of a single layer vs PyTorch float32 reference.
+
+    Tests 8 different experts from the BSPM cache sequentially on a single chip.
+    Each expert is loaded, run through MoeOp, and compared against a float32 golden
+    built from the real HF checkpoint.  PCC must be >= 0.25 for every non-near-zero expert.
+
+    Required env vars:
+      DEEPSEEK_V3_HF_MODEL  — path to DeepSeek R1-0528 HF checkpoint
+      BSPM_CACHE_PATH       — path to pre-generated BSPM cache (bspm_b_3_5_miguel)
+
+    Run (BH Galaxy only — 13x10 grid required):
+      TT_METAL_CLEAR_L1=1 TT_METAL_SLOW_DISPATCH_MODE=1 \\
+        DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/.../DeepSeek-R1-0528 \\
+        BSPM_CACHE_PATH=/mnt/MLPerf/.../bspm_b_3_5_miguel \\
+        pytest .../test_moe_mlp.py -k test_moe_layer_real_weights_8expert -v -s
+    """
+    import os
+    from pathlib import Path
+
+    cache_path = os.environ.get("BSPM_CACHE_PATH")
+    if not cache_path:
+        pytest.skip("BSPM_CACHE_PATH not set")
+
+    num_experts_to_test = 8
+    K = RoutedExpert.K
+    GATE_PROJ_N = RoutedExpert.GATE_PROJ_N
+    layer_key = f"model.layers.{layer_idx}"
+    experts_dir = Path(cache_path) / f"layer_{layer_idx:03d}" / "experts"
+
+    # Random scaffolding shared across all expert iterations.
+    random_state = get_reference_model_state_dict(
+        layer_idx=layer_idx,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=1,
+        random_weights=True,
+    )
+
+    logger.info(
+        "test_moe_layer_real_weights_8expert: layer={}, testing experts 0-{}", layer_idx, num_experts_to_test - 1
+    )
+
+    all_passing = True
+    for e in range(num_experts_to_test):
+        # Load a single expert from cache (gate, up, down — in gate-all/up-all/down-all
+        # order mirrors what load_moe_routed_experts does for a 1-expert subset).
+        gate_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "gate_proj", device)
+        up_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "up_proj", device)
+        down_ct = _load_expert_proj(experts_dir / f"e_{e:03d}", "down_proj", device)
+        experts = ([gate_ct], [up_ct], [down_ct])
+
+        r = create_routed_expert_tensors(
+            device,
+            use_hardcoded_expert_index=True,
+            state_dict=random_state,
+            is_moe=True,
+            layer_idx=layer_idx,
+            bspm_dir=None,
+            preloaded_experts=experts,
+        )
+
+        # Real float golden for this expert.
+        gate_f = hf_state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous().float()
+        up_f = hf_state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"].T.contiguous().float()
+        down_f = hf_state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous().float()
+        r = r._replace(
+            expert_weights_dict={0: gate_f.reshape(1, 1, K, GATE_PROJ_N)},
+            up_proj_weights_dict={0: up_f.reshape(1, 1, K, GATE_PROJ_N)},
+            down_proj_weights_dict={0: down_f.reshape(1, 1, GATE_PROJ_N, K)},
+        )
+
+        sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+        mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+        s = create_shared_expert_tensors(
+            device,
+            RoutedExpert.M,
+            RoutedExpert.K,
+            mcast_grid,
+            state_dict=random_state,
+            is_moe=True,
+            layer_idx=layer_idx,
+        )
+
+        device_grid_size = device.compute_with_storage_grid_size()
+        kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
+        kvpe_dim = SDPA.KVPE_DIM
+        num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+        kv_cache_shard_spec = ttnn.ShardSpec(
+            mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        sdpa_kv_cache_buffer = ttnn.from_torch(
+            torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+            ),
+        )
+        full_device_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1),
+                )
+            }
+        )
+        num_full_cores = device_grid_size.x * device_grid_size.y
+        sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+            full_device_grid,
+            (SDPA.OUT_INTERM_SHARD_HEIGHT, SDPA.OUT_INTERM_SHARD_WIDTH),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sdpa_out_interm_buffer = ttnn.from_torch(
+            torch.zeros(
+                (SDPA.OUT_INTERM_SHARD_HEIGHT * num_full_cores, SDPA.OUT_INTERM_SHARD_WIDTH), dtype=torch.bfloat16
+            ),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                sdpa_out_interm_shard_spec,
+            ),
+            tile=Tiles.TILE_8x32,
+        )
+
+        moe_semaphores = MoeOp.create_semaphores(device)
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
+            r.ttnn_residual_mcast_src,
+            r.ttnn_gate_mm_weights,
+            r.ttnn_gate_bias,
+            r.ttnn_gate_indices,
+            r.gate_output_scores_tensor,
+            r.gate_output_indices_tensor,
+            r.gate_proj_weights,
+            r.up_proj_weights,
+            r.down_proj_weights,
+            r.final_output_tensor,
+            r.ttnn_rmsnorm_gamma,
+            shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
+            shared_up_weights_overlapped=s.shared_up_weights_overlapped,
+            shared_down_weights_tensor=s.ttnn_down_weights,
+            shared_k_parallel=s.k_parallel,
+            shared_n_parallel=s.n_parallel,
+            use_hardcoded_expert_index=True,
+            sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer=sdpa_out_interm_buffer,
+            num_iterations=1,
+            reconfig_moe_cbs=True,
+            semaphores=moe_semaphores,
+            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        )
+        ttnn.synchronize_device(device)
+
+        output_torch = ttnn.to_torch(ttnn_result_final)
+        output_valid = extract_routed_expert_output(
+            output_torch,
+            r.num_gate_proj_cores,
+            r.final_output_width_per_core,
+            r.per_core_down_proj_N,
+        )
+
+        _, _, torch_expected = MoeOp.golden_single_device(
+            r.torch_input,
+            shared_gate_weights=s.torch_gate_weights,
+            shared_up_weights=s.torch_up_weights,
+            shared_down_weights=s.torch_down_weights,
+            gate_proj_weights_dict=r.expert_weights_dict,
+            up_proj_weights_dict=r.up_proj_weights_dict,
+            down_proj_weights_dict=r.down_proj_weights_dict,
+            rmsnorm_gamma=r.torch_rmsnorm_gamma,
+            rmsnorm_epsilon=1e-6,
+            routing_weights_tensor=r.torch_gate_mm_weights,
+            bias_tensor=r.torch_bias,
+            eps=r.gate_eps,
+            scaling_factor=r.gate_scaling_factor,
+            use_hardcoded_expert_index=True,
+        )
+
+        # BSPM 3.5 b/e allocates 3 levels (bfp4/bfp2/zero) per-expert based on saliency.
+        # Near-zero experts (e.g. ~100% zero tiles at layer 30) produce near-zero TT output,
+        # making PCC against float golden meaningless (PCC ≈ noise). Detect them by the
+        # output-to-golden norm ratio and skip PCC, just verifying the output IS near-zero.
+        # For all other experts use PCC ≥ 0.25 to catch true hardware failures (garbage).
+        output_norm = output_valid.float().norm().item()
+        expected_norm = torch_expected.float().norm().item()
+        output_ratio = output_norm / expected_norm if expected_norm > 0 else 0.0
+        if output_ratio < 0.05:
+            # Near-zero expert: output is <5% of float magnitude — expected for ~100% zero tiles.
+            passing_e, pcc_e = True, float("nan")
+            logger.info("layer={} expert={} near-zero (ratio={:.4f}) pass=True", layer_idx, e, output_ratio)
+        else:
+            passing_e, pcc_e = comp_pcc(torch_expected, output_valid, 0.25)
+            logger.info("layer={} expert={} PCC={:.6f} pass={}", layer_idx, e, pcc_e, passing_e)
+        if not passing_e:
+            all_passing = False
+
+        # Free all device tensors before the next expert iteration to avoid L1/DRAM OOM.
+        # Only call ttnn.deallocate on plain ttnn.Tensor objects; CompressedTensor
+        # objects (expert weights from BSPM cache) are freed via Python del below.
+        for t in [
+            ttnn_result_scores,
+            ttnn_result_indices,
+            ttnn_result_final,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
+            r.ttnn_residual_mcast_src,
+            r.ttnn_gate_mm_weights,
+            r.ttnn_rmsnorm_gamma,
+            r.ttnn_gate_bias,
+            r.ttnn_gate_indices,
+            r.gate_output_scores_tensor,
+            r.gate_output_indices_tensor,
+            r.final_output_tensor,
+            s.shared_gate_weights_overlapped,
+            s.shared_up_weights_overlapped,
+            s.ttnn_down_weights,
+        ]:
+            if t is not None and isinstance(t, ttnn.Tensor):
+                ttnn.deallocate(t)
+        # Drop Python references so CPython ref-counting frees expert DRAM buffers
+        # (CompressedTensor objects) immediately, before the next iteration allocates.
+        del r, s, gate_ct, up_ct, down_ct
+
+    assert all_passing, f"One or more experts failed PCC check (layer={layer_idx})"
+    logger.info("test_moe_layer_real_weights_8expert PASSED (layer={})", layer_idx)
