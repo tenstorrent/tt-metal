@@ -20,8 +20,8 @@ import torch
 from transformers import BarkModel
 
 import ttnn
-from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
+from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 
 
 def pcc(a, b):
@@ -218,7 +218,9 @@ def main():
         )
         fine_params = preprocess_fine_model_parameters(hf_model.fine_acoustics, device)
         tt_fine = TtBarkFineModel(
-            device, fine_params, fine_config,
+            device,
+            fine_params,
+            fine_config,
             n_codes_total=hf_model.fine_acoustics.config.n_codes_total,
             n_codes_given=hf_model.fine_acoustics.config.n_codes_given,
         )

@@ -27,7 +27,6 @@ import time
 
 import numpy as np
 
-
 # Minimum semantic tokens to accumulate before starting coarse generation
 MIN_SEMANTIC_TOKENS = 50
 SEMANTIC_CHUNK_SIZE = 100  # Generate this many semantic tokens per chunk
@@ -155,8 +154,10 @@ class BarkStreamingPipeline:
         """
         sequential = sum(timings.values())
         # Stage 1 || Stage 2 (needs 2 devices or async scheduling)
-        overlap_12 = max(timings.get("semantic", 0), timings.get("coarse", 0)) + timings.get("fine", 0) + timings.get(
-            "decode", 0
+        overlap_12 = (
+            max(timings.get("semantic", 0), timings.get("coarse", 0))
+            + timings.get("fine", 0)
+            + timings.get("decode", 0)
         )
         # All stages overlapped (theoretical minimum = slowest stage)
         max_stage = max(timings.values())

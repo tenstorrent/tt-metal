@@ -67,15 +67,21 @@ def run_single(model, text: str, output_file: str, verbose: bool = True):
 
     # Clip and save
     audio = np.clip(audio, -1.0, 1.0)
-    timings["total_time"] = timings["semantic_time"] + timings["coarse_time"] + timings["fine_time"] + timings["decode_time"]
+    timings["total_time"] = (
+        timings["semantic_time"] + timings["coarse_time"] + timings["fine_time"] + timings["decode_time"]
+    )
     timings["audio_duration"] = len(audio) / 24000
     timings["rtf"] = timings["total_time"] / max(timings["audio_duration"], 1e-6)
 
     save_audio(audio, output_file)
 
     if verbose:
-        print(f"  Semantic: {timings['semantic_tokens']} tokens in {timings['semantic_time']:.2f}s ({timings['semantic_tps']:.1f} tok/s)")
-        print(f"  Coarse:   {timings['coarse_tokens']} tokens in {timings['coarse_time']:.2f}s ({timings['coarse_tps']:.1f} tok/s)")
+        print(
+            f"  Semantic: {timings['semantic_tokens']} tokens in {timings['semantic_time']:.2f}s ({timings['semantic_tps']:.1f} tok/s)"
+        )
+        print(
+            f"  Coarse:   {timings['coarse_tokens']} tokens in {timings['coarse_time']:.2f}s ({timings['coarse_tps']:.1f} tok/s)"
+        )
         print(f"  Fine:     {timings['fine_time']:.2f}s")
         print(f"  Decode:   {timings['decode_time']:.2f}s")
         print(f"  Audio:    {timings['audio_duration']:.2f}s @ 24kHz")
@@ -128,7 +134,9 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
             status = "PASS" if (sem_ok and rtf_ok) else "WARN"
             if not (sem_ok and rtf_ok):
                 all_pass = False
-            print(f"{r['name']:<12} {r['semantic_tps']:>10.1f} {r['coarse_tps']:>14.1f} {r['audio_duration']:>10.2f} {r['rtf']:>8.3f} {status:>8}")
+            print(
+                f"{r['name']:<12} {r['semantic_tps']:>10.1f} {r['coarse_tps']:>14.1f} {r['audio_duration']:>10.2f} {r['rtf']:>8.3f} {status:>8}"
+            )
 
         print(f"\nOverall: {'ALL PASS ✓' if all_pass else 'SOME WARNINGS ⚠'}")
 
