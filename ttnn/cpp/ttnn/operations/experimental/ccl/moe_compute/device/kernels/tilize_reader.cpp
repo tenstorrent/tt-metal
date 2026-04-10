@@ -844,33 +844,20 @@ void kernel_main() {
                 tilize_mcast_end_y,
                 metadata_ready_semaphore_addr);
 
-            // Multicast the value 1 to all non-drain tilize cores
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
-
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
             noc_async_writes_flushed();
+
+            // Multicast the value 1 to all non-drain tilize cores
+            noc_semaphore_set_multicast(
+                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
         }
 
-        /*
-         * Send metadata to MM cores (repeat for both bounding boxes):
-         * 1) Encode number of tokens per expert into the semaphore (plus a valid bit)
-         * 2) Signal the metadata via semaphore to MM cores
-         */
-
-        // == 1 ==
-
-        // Get pointer to token counts
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-        // Write raw token counts to the CB (already in the correct location)
-        // The counts are already written during the metadata aggregation phase above
-
-        // == 2 ==
-
         // Multicast the per-expert token counts to ALL worker cores (tilize + matmul + combine)
+        // this might be overkill, only matmul and combine need this right now but we can just do one big MC
         uint64_t all_worker_cores_expert_counts_mcast_addr = get_safe_multicast_noc_addr(
             all_worker_cores_mcast_start_x,
             all_worker_cores_mcast_start_y,
@@ -887,9 +874,7 @@ void kernel_main() {
         // Ensure multicast completes before signaling semaphore
         noc_async_write_barrier();
 
-        // == 3 ==
-
-        // Signal readiness via semaphore (no encoded data, just a ready flag)
+        // Signal readiness via semaphore
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
         // get mcast address for semaphore
@@ -963,16 +948,10 @@ void kernel_main() {
             l1_read_addr += e_t_output_page_size;
         }
 
-        // write out per_expert_total_tokens_output_tensor
-        // tensor is a single page
-        // l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
-        // noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
-
-        // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
-        // (drain core only issued these writes)
         noc_async_write_barrier();
 
-        // signal to A2A combine that metadata is available
+        // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
+        // needed.
         const uint64_t combine_sync_noc_addr =
             safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
         noc_semaphore_inc(combine_sync_noc_addr, 1);
