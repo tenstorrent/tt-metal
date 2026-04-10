@@ -128,6 +128,7 @@ enum class SfpuType {
     lcm,
     softshrink,
     hardshrink,
+    tanhshrink,
     hardsigmoid,
     threshold,
     where,

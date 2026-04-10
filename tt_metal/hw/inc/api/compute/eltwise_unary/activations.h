@@ -126,4 +126,29 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init<APPROX>())); }
 
+// clang-format off
+/**
+* Performs element-wise tanhshrink operation on each element of a tile
+* in DST register at index idst. The DST register buffer must be in
+* acquired state via *acquire_dst* call. This call is blocking and is only
+* available on the compute engine.
+*
+* Formula: tanhshrink(x) = x - tanh(x)
+*
+* Return value: None
+*
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+*/
+// clang-format on
+ALWI void tanhshrink_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_tanhshrink<APPROX, DST_ACCUM_MODE>(idst)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void tanhshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tanhshrink_init<APPROX, DST_ACCUM_MODE>())); }
+
 }  // namespace ckernel

@@ -93,6 +93,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
+        case UnaryOpType::TANHSHRINK:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
@@ -795,7 +796,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
-        case UnaryOpType::TANHSHRINK:
+        case UnaryOpType::TANHSHRINK: return {"tanhshrink_tile_init();", fmt::format("tanhshrink_tile({});", idst)};
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
@@ -1018,12 +1019,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
             return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-                return "tanhshrink_sfpu_kernel.cpp";
-            } else {
-                return "tanhshrink_kernel.cpp";
-            }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::HARDSWISH:
