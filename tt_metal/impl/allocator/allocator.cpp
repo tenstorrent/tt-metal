@@ -464,6 +464,11 @@ std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids() 
     return unsafe_tracked_ids_;
 }
 
+void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unsafe_tracked_ids_.erase(buffer_unique_id);
+}
+
 void AllocatorImpl::clear_unsafe_tracked_ids() {
     std::lock_guard<std::mutex> lock(mutex_);
     unsafe_tracked_ids_.clear();

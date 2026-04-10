@@ -268,6 +268,10 @@ std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids()
     return this->allocator_impl()->get_unsafe_tracked_ids();
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    this->allocator_impl()->remove_unsafe_tracked_id(buffer_unique_id);
+}
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::clear_unsafe_tracked_ids() { this->allocator_impl()->clear_unsafe_tracked_ids(); }
 std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
     return AllocatorImpl::drain_pending_traceback_ids();
@@ -1616,6 +1620,9 @@ void MeshDevice::mark_allocations_unsafe() { pimpl_->mark_allocations_unsafe(); 
 bool MeshDevice::allocations_unsafe() const { return pimpl_->allocations_unsafe(); }
 std::unordered_map<size_t, std::string> MeshDevice::get_unsafe_tracked_ids() const {
     return pimpl_->get_unsafe_tracked_ids();
+}
+void MeshDevice::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    pimpl_->remove_unsafe_tracked_id(buffer_unique_id);
 }
 void MeshDevice::clear_unsafe_tracked_ids() { pimpl_->clear_unsafe_tracked_ids(); }
 std::vector<size_t> MeshDevice::drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }

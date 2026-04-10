@@ -30,6 +30,7 @@ bool allocations_unsafe(MeshDevice* device);
 
 // Unsafe allocation tracking
 std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device);
+void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id);
 void clear_unsafe_tracked_ids(MeshDevice* device);
 std::vector<size_t> drain_pending_traceback_ids();
 
