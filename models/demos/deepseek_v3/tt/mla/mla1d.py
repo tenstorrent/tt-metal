@@ -964,7 +964,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
