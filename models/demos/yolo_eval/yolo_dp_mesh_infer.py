@@ -304,12 +304,23 @@ def print_run_summary(out_dir: Path, backend: str, timing: dict[str, float], sav
             print(
                 f"  post detail:  to_torch={_fmt_s(tt)}  postprocess(NMS+scale)={_fmt_s(pp)}  save_images={_fmt_s(sv)}"
             )
+    h2d = timing.get("h2d_sec")
+    compute = timing.get("compute_sec")
+    if backend == "tt" and h2d is not None and compute is not None:
+        print(f"  device split:  h2d(push_dram)={_fmt_s(h2d)}  " f"compute(reshard+trace+sync)={_fmt_s(compute)}")
     n_dev_iters = timing.get("device_measured_iters", 1) if backend == "tt" else 1
     if backend == "tt" and n_dev_iters > 1:
         print(
             f"  {dev_label} over {n_dev_iters} timed iters:  min={_fmt_s(timing['device_sec_min'])}  "
             f"mean={_fmt_s(timing['device_sec'])}  max={_fmt_s(timing['device_sec_max'])}"
         )
+        h2d_min = timing.get("h2d_sec_min")
+        compute_min = timing.get("compute_sec_min")
+        if h2d_min is not None and compute_min is not None:
+            print(
+                f"  h2d over {n_dev_iters} iters:  min={_fmt_s(h2d_min)}  max={_fmt_s(timing['h2d_sec_max'])}  "
+                f"compute:  min={_fmt_s(compute_min)}  max={_fmt_s(timing['compute_sec_max'])}"
+            )
     if backend == "cpu":
         print(
             f"  note: device=predict() only (letterbox+infer inside Ultralytics); "
@@ -439,10 +450,11 @@ def run_tt(args, image_bgr: np.ndarray, out_dir: Path, stem: str) -> dict[str, f
         )
 
         device_secs: list[float] = []
+        h2d_secs: list[float] = []
+        compute_secs: list[float] = []
         preds = None
         host_shards_prep_sec = 0.0
         if yolov8s_mesh_e2e_performant:
-            # Same as test_e2e_performant prep_once: _setup_l1_sharded_input (not part of per-iter device_sec).
             t_hprep0 = time.perf_counter()
             tt_host = runner.prepare_host_input(im)
             host_shards_prep_sec = time.perf_counter() - t_hprep0
@@ -451,11 +463,14 @@ def run_tt(args, image_bgr: np.ndarray, out_dir: Path, stem: str) -> dict[str, f
                 _wp = runner.execute_reshard_and_trace()
                 del _wp
             for _ in range(args.tt_measured_iters):
-                t_dev0 = time.perf_counter()
+                t_h0 = time.perf_counter()
                 runner.push_host_input_to_device_dram(tt_host)
+                t_h1 = time.perf_counter()
                 preds = runner.execute_reshard_and_trace()
-                t_dev1 = time.perf_counter()
-                device_secs.append(t_dev1 - t_dev0)
+                t_c1 = time.perf_counter()
+                h2d_secs.append(t_h1 - t_h0)
+                compute_secs.append(t_c1 - t_h1)
+                device_secs.append(t_c1 - t_h0)
         else:
             for _ in range(args.tt_warmup_iters):
                 _wp = runner.run(im)
@@ -511,6 +526,14 @@ def run_tt(args, image_bgr: np.ndarray, out_dir: Path, stem: str) -> dict[str, f
             timing["tt_pre_label"] = "pre(letterbox+tensor+prepare_host_input)"
             timing["pre_letterbox_tensor_sec"] = pre_letterbox_tensor_sec
             timing["pre_prepare_host_input_sec"] = host_shards_prep_sec
+            if h2d_secs:
+                timing["h2d_sec"] = sum(h2d_secs) / len(h2d_secs)
+                timing["compute_sec"] = sum(compute_secs) / len(compute_secs)
+                if len(h2d_secs) > 1:
+                    timing["h2d_sec_min"] = min(h2d_secs)
+                    timing["h2d_sec_max"] = max(h2d_secs)
+                    timing["compute_sec_min"] = min(compute_secs)
+                    timing["compute_sec_max"] = max(compute_secs)
         return timing
     finally:
         try:

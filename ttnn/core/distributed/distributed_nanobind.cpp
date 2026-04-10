@@ -283,6 +283,17 @@ void py_module(nb::module_& mod) {
                     List[MeshDevice]: The submeshes created on this MeshDevice.
         )doc")
         .def(
+            "quiesce_devices",
+            &MeshDevice::quiesce_devices,
+            R"doc(
+              Wait for all command queues to finish and reset their in_use state.
+
+              This recursively quiesces all child submeshes first, then waits for
+              completion and calls finish_and_reset_in_use() on each CQ.  Must be
+              called before close_mesh_device() when submeshes have been used, to
+              avoid TT_THROW about CQs still in use.
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
@@ -293,11 +304,11 @@ void py_module(nb::module_& mod) {
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
         .def_prop_ro(
-          "core_grid",
-          [](const MeshDevice& device) {
-            const auto& sz = device.compute_with_storage_grid_size();
-            return ttnn::CoreGrid(sz.x, sz.y);
-          })
+            "core_grid",
+            [](const MeshDevice& device) {
+                const auto& sz = device.compute_with_storage_grid_size();
+                return ttnn::CoreGrid(sz.x, sz.y);
+            })
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
@@ -585,6 +596,15 @@ void py_module(nb::module_& mod) {
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"));
+    mod.def(
+        "quiesce_devices",
+        [](MeshDevice* mesh_device) { mesh_device->quiesce_devices(); },
+        nb::arg("mesh_device"),
+        R"doc(
+          Wait for all command queues on ``mesh_device`` (and its submeshes)
+          to finish and reset their in_use state.  Call before
+          ``close_mesh_device`` when submeshes have been used.
+    )doc");
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
     py_placement_shard.def(nb::init<int>())

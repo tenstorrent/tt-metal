@@ -181,3 +181,25 @@ pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-ac
  ```sh
  pytest models/demos/yolo_eval/evaluate.py::test_yolov5x[device_params0-torch_model]
  ```
+
+## Unified video demo (MJPEG + mode toggle)
+
+From the **tt-metal** repository root, with the Python environment that has `cv2`, `torch`, `ttnn`, etc. activated:
+
+- Starts **side-by-side** YOLOv8s + YOLOv11s on two devices (`--device-id` / `--device-id-v11s`).
+- Browser UI can switch to **large-model** mode: YOLOv8L with 4×640 SAHI tiles on four devices (`--video-1280` must be 1280×1280 letterboxed).
+- Open `http://<host>:9090/` (e.g. SSH tunnel: `ssh -L 9090:localhost:9090 user@server`).
+
+```sh
+python models/demos/yolo_eval/unified_video_demo.py \
+  --video models/demos/yolo_eval/sample_images/14025986_640x640_29fps.mp4 \
+  --unified --device-id 0 --device-id-v11s 1 --serve --port 9090 \
+  --pre-letterboxed \
+  --video-1280 models/demos/yolo_eval/sample_images/14025986_1280x1280_29fps.mp4
+```
+
+Single line (equivalent):
+
+```sh
+python models/demos/yolo_eval/unified_video_demo.py --video models/demos/yolo_eval/sample_images/14025986_640x640_29fps.mp4 --unified --device-id 0 --device-id-v11s 1 --serve --port 9090 --pre-letterboxed --video-1280 models/demos/yolo_eval/sample_images/14025986_1280x1280_29fps.mp4
+```
