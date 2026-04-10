@@ -1,9 +1,7 @@
 from datasets import load_dataset
 from typing import List, Tuple
 import numpy as np
-from .setup import (
-    InferenceCtx,
-)
+from .inference import InferenceCtx
 
 system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
 

@@ -2,8 +2,7 @@ from typing import List, Tuple
 import ttnn
 import ttml
 import numpy as np
-from .setup import InferenceCtx
-from .inference import tokens_to_tensor, create_causal_mask, round_up
+from .inference import InferenceCtx, tokens_to_tensor, create_causal_mask, round_up
 from .ttml_operators import Exp, Clip, Min
 
 
