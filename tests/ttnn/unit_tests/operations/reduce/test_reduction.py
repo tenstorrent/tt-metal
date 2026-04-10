@@ -110,9 +110,8 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=dtype,
-        # pad_value=1.0,
+        pad_value=1.0,
     )
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
@@ -128,8 +127,6 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         rtol=0.089,
         atol=0.255,
         frobenius_threshold=0.071,
-        # check_allclose=False,
-        # check_frobenius=False,
     )
 
 
