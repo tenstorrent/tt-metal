@@ -151,7 +151,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (device_tensor.device_storage().is_uniform_storage()) {
-        tensor_impl::copy_to_host(cq, device_tensor, host_tensor, blocking);
+        tensor_impl::copy_to_host(cq, device_tensor.mesh_tensor(), host_tensor.host_tensor(), blocking);
     } else {
         auto coords = device_tensor.device_storage().get_coords();
         tensor_impl::non_uniform_data_movement::copy_to_host(cq, device_tensor, host_tensor, coords, blocking);

@@ -98,7 +98,7 @@ MeshTensor allocate_mesh_tensor(
 HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
 
 void copy_to_host(
-    distributed::MeshCommandQueue& cq, const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true);
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
 
 MeshTensor to_device(
     distributed::MeshCommandQueue& cq,
