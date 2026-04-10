@@ -1,100 +1,147 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Phase 1 – Mask generation (before the main loop):
+ *   Builds a "right mask" tile (if has_right_pad) and a "bottom mask" tile
+ *   (if has_bottom_pad) in face layout and pushes them to their respective
+ *   circular buffers. The compute kernel holds these tiles persistently
+ *   (never pops them) and uses them with where_tile to apply the fill.
+ *
+ *   Mask encoding (same DataFormat as the input tensor):
+ *     Float types  : 1.0 at padding positions, 0.0 elsewhere.
+ *     Integer types: integer 1 at padding positions, 0 elsewhere.
+ *
+ * Phase 2 – Write-back loop:
+ *   Reads masked tiles produced by the compute kernel from CB[16] and writes
+ *   them back to DRAM (or sharded L1). No masking is done here.
+ *
+ *   Three phase loops mirror fill_pad_reader.cpp's right / bottom / corner
+ *   phases, using the same per-phase (start, num) RT args so that reader,
+ *   compute and writer process tiles in lock-step.
+ *
+ * CT args layout:
+ *   [0]  W_tiles
+ *   [1]  H_tiles
+ *   [2]  N_slices (unused in the write loop)
+ *   [3]  has_right_pad
+ *   [4]  has_bottom_pad
+ *   [5]  W_mod32
+ *   [6]  H_mod32
+ *   [7]  cb_right_mask_idx  (= 1)
+ *   [8]  cb_bot_mask_idx    (= 2)
+ *   [9]  cb_data_out_idx    (= 16)
+ *   [10+] TensorAccessorArgs
+ *
+ * RT args:
+ *   [0]  buf_addr
+ *   [1]  start_right   [2]  num_right
+ *   [3]  start_bottom  [4]  num_bottom
+ *   [5]  start_corner  [6]  num_corner
+ */
+
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "fill_pad_dataflow_common.hpp"
+#include "experimental/tensor.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
-    constexpr bool tensor_in_dram = get_compile_time_arg_val(1) == 1;
-    const uint32_t fill_value = get_compile_time_arg_val(2);
-    const uint32_t element_size_bytes = get_compile_time_arg_val(3);
-    uint32_t logical_height = get_compile_time_arg_val(4);
-    uint32_t logical_width = get_compile_time_arg_val(5);
-    uint32_t padded_height = get_compile_time_arg_val(6);
-    uint32_t padded_width = get_compile_time_arg_val(7);
-    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(8);
-    uint32_t tiles_per_tile_row = get_compile_time_arg_val(9);
-    // hardware constraints
-    constexpr uint32_t tile_size = get_compile_time_arg_val(10);
-    constexpr uint32_t tile_hw = tile_size * tile_size;
-    constexpr uint32_t face_size = get_compile_time_arg_val(11);
-    constexpr uint32_t face_hw = face_size * face_size;
-    constexpr uint32_t alignment_adjustor = 16;
+    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t H_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t has_right_pad = get_compile_time_arg_val(3);
+    constexpr uint32_t has_bottom_pad = get_compile_time_arg_val(4);
+    constexpr uint32_t W_mod32 = get_compile_time_arg_val(5);
+    constexpr uint32_t H_mod32 = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_right_mask_idx = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_bot_mask_idx = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_data_out_idx = get_compile_time_arg_val(9);
 
-    uint32_t rt_arg_ind = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t cb_page_size = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t starting_tile_offset = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
+    // Per-phase strides (meaningful only when the corresponding phase is active).
+    // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
+    // the dead-code branches (when H_tiles==1 or W_tiles==1 the host sets the
+    // matching num_* to 0 and the loop below never executes).
+    constexpr uint32_t R =
+        (has_right_pad != 0u) ? ((has_bottom_pad != 0u) ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
+    constexpr uint32_t C =
+        (has_bottom_pad != 0u) ? ((has_right_pad != 0u) ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(12),   // Memory layout
-        get_compile_time_arg_val(13),   // The number of sharding cores
-        get_compile_time_arg_val(14),   // The page size we offset each write to
-        get_compile_time_arg_val(15),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(16),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(17),   // pages_per_shard_x
-        get_compile_time_arg_val(18)>;  // pages_per_shard_y
+    constexpr uint32_t tile_bytes = get_tile_size(cb_data_out_idx);
 
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-#else
-    constexpr auto dst_args = TensorAccessorArgs<12>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
-#endif
+    const uint32_t buf_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_right = get_arg_val<uint32_t>(1);
+    const uint32_t num_right = get_arg_val<uint32_t>(2);
+    const uint32_t start_bottom = get_arg_val<uint32_t>(3);
+    const uint32_t num_bottom = get_arg_val<uint32_t>(4);
+    const uint32_t start_corner = get_arg_val<uint32_t>(5);
+    const uint32_t num_corner = get_arg_val<uint32_t>(6);
 
-    // Reserve and push the fill value into the circular buffer
-    cb_reserve_back(cb_id_0, 1);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_0);
-    volatile tt_l1_ptr uint32_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
-    for (uint32_t i = 0; i < cb_page_size; i++) {
-        l1_ptr[i] = fill_value;
+    constexpr auto dst_args = TensorAccessorArgs<10>();
+    const auto s = TensorAccessor(dst_args, buf_addr, tile_bytes);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_right_mask(cb_right_mask_idx);
+    experimental::CircularBuffer cb_bot_mask(cb_bot_mask_idx);
+    experimental::CircularBuffer cb_data_out(cb_data_out_idx);
+
+    // ---- Phase 1: generate and push mask tile(s) ----
+    using mask_t = MASK_ELEM_UINT;
+    if constexpr (has_right_pad) {
+        cb_right_mask.reserve_back(1);
+        generate_mask_tile<mask_t, W_mod32, TILE>(
+            reinterpret_cast<mask_t*>(cb_right_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
+        cb_right_mask.push_back(1);
     }
-    cb_push_back(cb_id_0, 1);
+    if constexpr (has_bottom_pad) {
+        cb_bot_mask.reserve_back(1);
+        generate_mask_tile<mask_t, TILE, H_mod32>(
+            reinterpret_cast<mask_t*>(cb_bot_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
+        cb_bot_mask.push_back(1);
+    }
 
-    auto fill_pad_2d_tensor = [&](const uint32_t& tile_offset) {
-        uint32_t start_col;
-        for (uint32_t row = 0; row < padded_height; row++) {
-            if (row < logical_height) {
-                start_col = logical_width;
-            } else {
-                start_col = 0;
-            }
-            uint32_t curr_tile = (row / tile_size) * tiles_per_tile_row + (start_col / tile_size) + tile_offset;
-            uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_hw + (row % face_size) * face_size;
-            uint32_t c_f_offset = ((start_col % tile_size) / face_size) * face_hw + (start_col % face_size);
-            uint32_t face_offset = r_f_offset + c_f_offset;
+    // ---- Phase 2: write-back loop ----
+    // Tiles arrive in the same order as the reader pushes them (right, bottom, corner).
 
-            for (uint32_t col = start_col; col < padded_width;) {
-                // so for each iteration of col, we will be writing at most 2 faces
-                uint64_t start_tile_noc_addr = s0.get_noc_addr(curr_tile);
-                uint32_t face = face_offset / (face_hw);
-
-                uint64_t dst_noc_addr = start_tile_noc_addr + face_offset * element_size_bytes;
-                uint32_t alignment_offset = dst_noc_addr % alignment_adjustor;
-                uint32_t elems_to_write = col % face_size == 0 ? face_size : face_size - (col % face_size);
-                uint32_t bytes_to_write = elems_to_write * element_size_bytes;
-                noc_async_write(l1_write_addr + alignment_offset, dst_noc_addr, bytes_to_write);
-                col += elems_to_write;
-                face_offset += elems_to_write;
-
-                if (face % 2 == 0) {
-                    face_offset += face_size * (face_size - 1);
-                } else {
-                    curr_tile++;
-                    face_offset -= face_size * (face_size + 1);
-                }
-            }
+    // Right phase
+    if constexpr (has_right_pad != 0u) {
+        for (uint32_t i = 0; i < num_right; ++i) {
+            const uint32_t g = start_right + i;
+            const uint32_t slice = g / R;
+            const uint32_t row = g - slice * R;
+            const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
+            cb_data_out.wait_front(1);
+            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            cb_data_out.pop_front(1);
         }
-    };
-
-    for (uint32_t t = 0; t < num_2d_tensors; t++) {
-        fill_pad_2d_tensor(t * tiles_per_2d_tensor + starting_tile_offset);
     }
-    noc_async_write_barrier();
+
+    // Bottom phase
+    if constexpr (has_bottom_pad != 0u) {
+        for (uint32_t j = 0; j < num_bottom; ++j) {
+            const uint32_t g = start_bottom + j;
+            const uint32_t slice = g / C;
+            const uint32_t col = g - slice * C;
+            const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
+            cb_data_out.wait_front(1);
+            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            cb_data_out.pop_front(1);
+        }
+    }
+
+    // Corner phase
+    if constexpr (has_right_pad != 0u && has_bottom_pad != 0u) {
+        for (uint32_t k = 0; k < num_corner; ++k) {
+            const uint32_t slice = start_corner + k;
+            const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
+            cb_data_out.wait_front(1);
+            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            cb_data_out.pop_front(1);
+        }
+    }
+
+    noc.async_write_barrier();
 }
