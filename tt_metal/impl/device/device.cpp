@@ -153,8 +153,8 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         trace_region_size,
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
-    config.allocator_mode =
-        tt::parse_env("TT_METAL_ALLOCATOR_MODE_HYBRID", false) ? AllocatorMode::HYBRID : AllocatorMode::LOCKSTEP;
+    config.allocator_mode = MetalContext::instance().rtoptions().get_allocator_mode_hybrid() ? AllocatorMode::HYBRID
+                                                                                             : AllocatorMode::LOCKSTEP;
 
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});

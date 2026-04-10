@@ -130,12 +130,16 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         }
         deps_map[AllocatorID{0}] = lockstep_deps;
         BankManager::AllocatorDependencies l1_deps{deps_map};
+        // Use dram_alignment for both BankManager alignment_bytes_ and FreeListOpt min_allocation_size
+        // so that size_per_bank (from calculate_bank_size_spread) is always >= the allocator's
+        // min_allocation_size. Otherwise the HYBRID choosing logic picks addresses too close to range
+        // boundaries for the actual allocation to fit.
         l1_manager_ = std::make_unique<BankManager>(
             BufferType::L1,
             bank_id_to_bank_offset,
             allocatable_l1_size,
             interleaved_address_limit,
-            config_->l1_alignment,
+            config_->dram_alignment,
             config_->dram_alignment,
             config_->l1_unreserved_base,
             config_->disable_interleaved,
