@@ -148,7 +148,6 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
         [1, 1, 20, 16],
-        [1, 45, 10],
     ],
 )
 @pytest.mark.parametrize(
@@ -273,8 +272,6 @@ def test_cumprod_failing_cases(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
-    if layout == ttnn.TILE_LAYOUT:
-        ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
         ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

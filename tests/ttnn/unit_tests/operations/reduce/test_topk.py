@@ -372,6 +372,7 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
     value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
     index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
 
