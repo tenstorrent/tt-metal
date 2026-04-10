@@ -221,12 +221,39 @@ class Qwen35GatedAttention:
         ttnn.deallocate(combined)
         ttnn.deallocate(new_mask)
 
-    def forward(self, x, cos, sin, position_tensor=None, page_table=None):
+    def forward(self, x, cos, sin, position_tensor=None, page_table=None, chunk_page_table=None, chunk_start_idx=None):
         T = x.shape[1]
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
-        if self.use_paged_attention and T == 1:
+        if self.use_paged_attention and T > 1 and chunk_page_table is not None:
+            # Paged prefill: fill K/V into paged cache + chunked SDPA
+            output, _, _ = gated_attention_forward_ttnn(
+                hidden_states=x,
+                q_proj_weight=self.q_proj_weight,
+                k_proj_weight=self.k_proj_weight,
+                v_proj_weight=self.v_proj_weight,
+                o_proj_weight=self.o_proj_weight,
+                q_norm_weight=self.q_norm_weight,
+                k_norm_weight=self.k_norm_weight,
+                cos=cos,
+                sin=sin,
+                num_attention_heads=self.num_heads,
+                num_key_value_heads=self.num_kv_heads,
+                head_dim=self.head_dim,
+                device=self.device,
+                norm_eps=self.norm_eps,
+                compute_kernel_config=ckc,
+                use_optimized_concat=True,
+                norm_weights_pre_offset=True,
+                page_table=page_table,
+                paged_kv_cache_key=self.paged_kv_cache_key,
+                paged_kv_cache_value=self.paged_kv_cache_value,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+            )
+            return output
+        elif self.use_paged_attention and T == 1:
             # Paged decode: use paged_update_cache + paged_sdpa_decode via page_table
             output, _, _ = gated_attention_forward_ttnn(
                 hidden_states=x,
@@ -316,7 +343,8 @@ class Qwen35GatedAttention:
             self.cache_pos += T
             return output
         else:
-            # Concat path: used by paged prefill (T>1) and non-paged prefill
+            # Concat path: used by non-paged prefill and short-sequence paged prefill (T<=1024).
+            # For T>1024 paged prefill, the paged branch above is used instead.
             output, new_key, new_value = gated_attention_forward_ttnn(
                 hidden_states=x,
                 q_proj_weight=self.q_proj_weight,
