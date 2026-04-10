@@ -725,8 +725,11 @@ class Attention(LightweightModule):
         ###
         # KV update
         ###
-        if turbo_quant_cache is not None and not kv_cache:
-            # TurboQuant preprocessing: quantize + pre-rescale K/V, then let the
+        _use_fused_tq_sdpa = (
+            turbo_quant_cache is not None and not kv_cache and getattr(turbo_quant_cache, "memory_efficient", False)
+        )
+        if turbo_quant_cache is not None and not kv_cache and not _use_fused_tq_sdpa:
+            # TurboQuant "Performance" mode: quantize + pre-rescale K/V, then let the
             # standard paged scatter + paged SDPA handle the rest.
             # Requires BF16 paged layer_past (BFP8 destroys pre-rescaled values).
             rotation_absorbed = getattr(turbo_quant_cache, "rotation_absorbed", False)
@@ -760,59 +763,88 @@ class Attention(LightweightModule):
             # Pre-rotate Q for rotated-space SDPA.
             q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
 
-        # Standard scatter + SDPA path (paged or non-paged).
-        # With TQ: K/V are pre-rescaled centroid×norm values in BF16 paged cache.
-        # Without TQ: K/V are raw attention heads in BFP8 paged cache.
-        if kv_cache:
-            keys = kv_cache[0]
-            values = kv_cache[1]
-        else:
-            keys = self.layer_past[0]
-            values = self.layer_past[1]
+        if _use_fused_tq_sdpa:
+            # TurboQuant "Memory Efficient" mode: fused SDPA reads BFP4 indices + norms
+            # directly from the TQ cache, dequantizes on-the-fly (centroid gather × norm).
+            # No full-cache BF16 temporary — enables 32K+ context without OOM.
+            orig_mem = k_heads_1BKD.memory_config()
+            k_dram = ttnn.to_memory_config(k_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
+            v_dram = ttnn.to_memory_config(v_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(k_heads_1BKD)
+            ttnn.deallocate(v_heads_1BKD)
 
-        # Disable fused QK update when TQ modifies K/V shapes (different memory config).
-        if self.use_qk_fused and turbo_quant_cache is None:
-            ttnn.experimental.paged_fused_update_cache(
-                keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        else:
-            ttnn.experimental.paged_update_cache(
-                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-            ttnn.experimental.paged_update_cache(
-                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        ttnn.deallocate(k_heads_1BKD)
-        ttnn.deallocate(v_heads_1BKD)
+            k_for_tq = ttnn.permute(k_dram, (1, 2, 0, 3))
+            v_for_tq = ttnn.permute(v_dram, (1, 2, 0, 3))
+            ttnn.deallocate(k_dram)
+            ttnn.deallocate(v_dram)
 
-        sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
-        if page_table:
-            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                page_table_tensor=page_table,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                sliding_window_size=self.sliding_window,
-                program_config=sdpa_decode_prog_cfg,
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                sliding_window_size=self.sliding_window,
-                program_config=sdpa_decode_prog_cfg,
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            turbo_quant_cache.update_cache(k_for_tq, v_for_tq, layer_idx=0, current_pos=current_pos)
+            ttnn.deallocate(k_for_tq)
+            ttnn.deallocate(v_for_tq)
 
-        ttnn.deallocate(q_heads_1BQD)
+            # Pre-rotate Q for rotated-space SDPA.
+            q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
+
+            # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
+            attn_output_1G4D = turbo_quant_cache.fused_sdpa_decode(
+                q_heads_1BQD, layer_idx=0, current_pos=current_pos, scale=self.scale
+            )
+            ttnn.deallocate(q_heads_1BQD)
+
+        if not _use_fused_tq_sdpa:
+            # Standard scatter + SDPA path (paged or non-paged).
+            # With TQ Performance: K/V are pre-rescaled centroid×norm values in BF16 paged cache.
+            # Without TQ: K/V are raw attention heads in BFP8 paged cache.
+            if kv_cache:
+                keys = kv_cache[0]
+                values = kv_cache[1]
+            else:
+                keys = self.layer_past[0]
+                values = self.layer_past[1]
+
+            # Disable fused QK update when TQ modifies K/V shapes (different memory config).
+            if self.use_qk_fused and turbo_quant_cache is None:
+                ttnn.experimental.paged_fused_update_cache(
+                    keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+            else:
+                ttnn.experimental.paged_update_cache(
+                    keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+                ttnn.experimental.paged_update_cache(
+                    values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+            ttnn.deallocate(k_heads_1BKD)
+            ttnn.deallocate(v_heads_1BKD)
+
+            sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
+            if page_table:
+                attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    page_table_tensor=page_table,
+                    cur_pos_tensor=current_pos,
+                    scale=self.scale,
+                    sliding_window_size=self.sliding_window,
+                    program_config=sdpa_decode_prog_cfg,
+                    compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    cur_pos_tensor=current_pos,
+                    scale=self.scale,
+                    sliding_window_size=self.sliding_window,
+                    program_config=sdpa_decode_prog_cfg,
+                    compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+            ttnn.deallocate(q_heads_1BQD)
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
             memory_config=self.args.get_attn_sdpa_output_mem_config(
