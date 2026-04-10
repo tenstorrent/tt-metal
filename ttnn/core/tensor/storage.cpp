@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <numeric>
 #include <functional>
-#include <unordered_set>
+#include <set>
 #include <vector>
 
 #include <ttnn/tensor/layout/layout.hpp>
@@ -166,21 +166,22 @@ DeviceStorage DeviceStorage::combine_device_storages(
             storages.begin(),
             storages.end(),
             [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
-        "All DeviceStorages must point to the same device memory");
+        "tensor shards must be allocated on the same mesh buffer.");
 
-    auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
-        return sum + storage.get().get_coords().size();
-    });
-
-    std::unordered_set<distributed::MeshCoordinate> joint_coords;
-    joint_coords.reserve(num_coords);
+    std::set<distributed::MeshCoordinate> seen_coords;
+    std::vector<distributed::MeshCoordinate> joint_coords;
     for (const auto& storage : storages) {
-        auto other_coords = storage.get().get_coords();
-        joint_coords.insert(other_coords.begin(), other_coords.end());
+        for (const auto& coord : storage.get().get_coords()) {
+            TT_FATAL(
+                seen_coords.insert(coord).second,
+                "Found a tensor shard at duplicate coordinate {}",
+                coord);
+            joint_coords.push_back(coord);
+        }
     }
+    std::sort(joint_coords.begin(), joint_coords.end());
 
-    return DeviceStorage(
-        model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
+    return DeviceStorage(model_storage, std::move(joint_coords));
 }
 
 }  // namespace tt::tt_metal
