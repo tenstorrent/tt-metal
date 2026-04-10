@@ -133,11 +133,13 @@ def encoder_block_device_pre(
     tt_scores = ttnn.matmul(tt_q, tt_k)
     tt_scores = ttnn.multiply(tt_scores, 1.0 / math.sqrt(dh))
     tt_attn = ttnn.softmax(tt_scores, dim=-1)
-    tt_ctx = ttnn.matmul(tt_attn, tt_v)
+    tt_ctx = ttnn.matmul(tt_attn, tt_v)  # (B*H, N, dh)
 
-    ctx_host = ttnn.to_torch(tt_ctx).reshape(B, heads, N, dh).transpose(1, 2).reshape(B, N, D)
-    tt_ctx2 = _t2d(ctx_host, device)
-    tt_proj = ttnn.linear(tt_ctx2, tt_w["pw"], bias=tt_w["pb"])
+    # On-device reshape (B*H, N, dh) -> (B, N, H*dh) = (B, N, D).
+    tt_ctx = ttnn.reshape(tt_ctx, (B, heads, N, dh))
+    tt_ctx = ttnn.permute(tt_ctx, (0, 2, 1, 3))  # (B, N, H, dh)
+    tt_ctx = ttnn.reshape(tt_ctx, (B, N, D))
+    tt_proj = ttnn.linear(tt_ctx, tt_w["pw"], bias=tt_w["pb"])
 
     tt_x = ttnn.add(tt_x, tt_proj)
 
