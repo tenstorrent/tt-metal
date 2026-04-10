@@ -20,6 +20,7 @@
 #include <string>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -422,23 +423,62 @@ protected:
         return c;
     }
 
-    // Parallel inter-mesh links from mapped exit ASICs on src_mesh toward dst_mesh (subset of topology total).
+    // Which physical mesh (pm) hosts all ASICs assigned to fabric nodes on logical_mesh.
+    static ::tt::tt_fabric::MeshId infer_physical_mesh_for_logical_mesh(
+        const TopologyMappingResult& result,
+        const PhysicalMultiMeshGraph& physical,
+        ::tt::tt_fabric::MeshId logical_mesh) {
+        std::vector<tt::tt_metal::AsicID> mapped_asics;
+        for (const auto& [node, asic] : result.fabric_node_to_asic) {
+            if (node.mesh_id == logical_mesh) {
+                mapped_asics.push_back(asic);
+            }
+        }
+        EXPECT_FALSE(mapped_asics.empty()) << "No mapped ASICs for logical mesh " << logical_mesh.get();
+        std::vector<::tt::tt_fabric::MeshId> candidates;
+        for (const auto& [pm, graph] : physical.mesh_adjacency_graphs_) {
+            const auto& nodes = graph.get_nodes();
+            bool all_in = true;
+            for (const auto& a : mapped_asics) {
+                if (std::find(nodes.begin(), nodes.end(), a) == nodes.end()) {
+                    all_in = false;
+                    break;
+                }
+            }
+            if (all_in) {
+                candidates.push_back(pm);
+            }
+        }
+        EXPECT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
+                                         << " should lie in exactly one physical mesh subgraph";
+        return candidates.front();
+    }
+
+    // Parallel inter-mesh links from mapped exit ASICs on logical src_mesh toward logical dst_mesh (subset of
+    // topology total). Resolves logical mesh ids to physical mesh ids (inter-mesh mapping may permute meshes).
     static uint32_t mapped_exit_link_capacity_toward_dst(
-        const TopologyMappingResult& result, const PhysicalMultiMeshGraph& physical, MeshId src_mesh, MeshId dst_mesh) {
+        const TopologyMappingResult& result,
+        const PhysicalMultiMeshGraph& physical,
+        ::tt::tt_fabric::MeshId logical_src_mesh,
+        ::tt::tt_fabric::MeshId logical_dst_mesh) {
+        const ::tt::tt_fabric::MeshId physical_src_mesh =
+            infer_physical_mesh_for_logical_mesh(result, physical, logical_src_mesh);
+        const ::tt::tt_fabric::MeshId physical_dst_mesh =
+            infer_physical_mesh_for_logical_mesh(result, physical, logical_dst_mesh);
         std::unordered_set<tt::tt_metal::AsicID> mapped_src_asics;
         for (const auto& [node, asic] : result.fabric_node_to_asic) {
-            if (node.mesh_id == src_mesh) {
+            if (node.mesh_id == logical_src_mesh) {
                 mapped_src_asics.insert(asic);
             }
         }
         uint32_t s = 0;
-        const auto& ex = physical.mesh_exit_node_graphs_.at(src_mesh);
+        const auto& ex = physical.mesh_exit_node_graphs_.at(physical_src_mesh);
         for (const auto& pen : ex.get_nodes()) {
             if (!mapped_src_asics.contains(pen.asic_id)) {
                 continue;
             }
             for (const auto& nb : ex.get_neighbors(pen)) {
-                if (nb.mesh_id == dst_mesh) {
+                if (nb.mesh_id == physical_dst_mesh) {
                     s++;
                 }
             }
@@ -454,8 +494,9 @@ protected:
         const PhysicalMultiMeshGraph& physical) {
         for (const auto& [fabric_node, asic_id] : result.fabric_node_to_asic) {
             const MeshId m = fabric_node.mesh_id;
-            ASSERT_TRUE(physical.mesh_adjacency_graphs_.contains(m));
-            const auto& phys_intra = physical.mesh_adjacency_graphs_.at(m);
+            const MeshId physical_mesh = infer_physical_mesh_for_logical_mesh(result, physical, m);
+            ASSERT_TRUE(physical.mesh_adjacency_graphs_.contains(physical_mesh));
+            const auto& phys_intra = physical.mesh_adjacency_graphs_.at(physical_mesh);
             bool asic_in_mesh = false;
             for (const auto& a : phys_intra.get_nodes()) {
                 if (a == asic_id) {
@@ -468,7 +509,8 @@ protected:
         }
 
         for (const auto& [mid, log_g] : logical.mesh_adjacency_graphs_) {
-            const auto& phys_g = physical.mesh_adjacency_graphs_.at(mid);
+            const MeshId physical_mid = infer_physical_mesh_for_logical_mesh(result, physical, mid);
+            const auto& phys_g = physical.mesh_adjacency_graphs_.at(physical_mid);
             verify_connectivity_preserved(
                 result, adjacency_graph_to_neighbor_map(log_g), adjacency_graph_to_neighbor_map(phys_g));
         }
@@ -482,7 +524,9 @@ protected:
                 if (L == 0) {
                     continue;
                 }
-                const uint32_t T = count_physical_exit_links_between_meshes(physical, src_mesh, dst_mesh);
+                const MeshId physical_src = infer_physical_mesh_for_logical_mesh(result, physical, src_mesh);
+                const MeshId physical_dst = infer_physical_mesh_for_logical_mesh(result, physical, dst_mesh);
+                const uint32_t T = count_physical_exit_links_between_meshes(physical, physical_src, physical_dst);
                 const uint32_t R = std::min(L, T);
                 const uint32_t S = mapped_exit_link_capacity_toward_dst(result, physical, src_mesh, dst_mesh);
                 EXPECT_GE(S, R) << "mesh " << src_mesh.get() << " -> mesh " << dst_mesh.get()
@@ -834,7 +878,8 @@ TEST_F(TopologyMapperUtilsTest, StrictMode_InsufficientChannels_Fails) {
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
     EXPECT_FALSE(result.success);
-    EXPECT_THAT(result.error_message, ::testing::HasSubstr("channel"));
+    // Under STRICT, insufficient parallel physical links cannot yield a complete node mapping.
+    EXPECT_LT(result.fabric_node_to_asic.size(), nodes.size());
 }
 
 TEST_F(TopologyMapperUtilsTest, RelaxedMode_InsufficientChannels_Succeeds) {
@@ -1040,7 +1085,15 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
     EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
-    EXPECT_EQ(result.fabric_node_to_asic.at(ln0[0]), a200);
+    EXPECT_EQ(result.fabric_node_to_asic.at(ln1[0]), a100) << "Pinned fabric node must map to ASIC at pinned position";
+    if (::tt::tt_fabric::detail::topology_mapping_use_sat_engine()) {
+        const tt::tt_metal::AsicID m0 = result.fabric_node_to_asic.at(ln0[0]);
+        const tt::tt_metal::AsicID m1 = result.fabric_node_to_asic.at(ln0[1]);
+        EXPECT_TRUE((m0 == a200 && m1 == a201) || (m0 == a201 && m1 == a200))
+            << "Unpinned logical mesh may flip along the 2-node physical chain under SAT";
+    } else {
+        EXPECT_EQ(result.fabric_node_to_asic.at(ln0[0]), a200);
+    }
 }
 
 // =============================================================================
@@ -1656,7 +1709,8 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshLevelExitMultiplicity
 
     EXPECT_FALSE(result.success)
         << "expected STRICT inter-mesh rejection when logical requires 4 channels but physical mesh graph has 2";
-    EXPECT_THAT(result.error_message, ::testing::HasSubstr("Strict mode"));
+    // Successful run maps 6 fabric nodes (2 per mesh × 3 meshes); failure must not complete the placement.
+    EXPECT_LT(result.fabric_node_to_asic.size(), 6u);
 }
 
 // 8 logical mesh-level / exit channels per neighbor; physical topology has 2 parallel inter-mesh links per exit ASIC

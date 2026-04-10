@@ -1,0 +1,11 @@
+diff --git a/src/vivify.hpp b/src/vivify.hpp
+--- a/src/vivify.hpp
++++ b/src/vivify.hpp
+@@ -5,6 +5,7 @@
+
+ #include <array>
+ #include <cstdint>
++#include <tuple>
+ #include <vector>
+
+ namespace CaDiCaL {

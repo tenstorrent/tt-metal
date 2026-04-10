@@ -1128,20 +1128,24 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
-    // Run DFS search (state is now internal to the engine)
-    DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+    MappingResult<TargetNode, GlobalNode> result;
+    if (topology_mapping_use_sat_engine()) {
+        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
+        sat_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = sat_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
+    } else {
+        DFSSearchEngine<TargetNode, GlobalNode> search_engine;
+        search_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = search_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
+    }
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    // Get state from engine and build result using validator
-    const auto& state = search_engine.get_state();
-    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
-
-    // Set elapsed time
     result.stats.elapsed_time = elapsed_ms;
 
     return result;
@@ -2943,7 +2947,7 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
+    const TopologySearchState& state,
     ConnectionValidationMode validation_mode,
     bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
@@ -3132,5 +3136,10 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 }
 
 }  // namespace tt::tt_fabric::detail
+
+// SAT / MaxSAT backend (CaDiCaL): included at global scope so third-party headers (cadical.hpp)
+// are not nested under tt::tt_fabric::detail (would break CaDiCaL::Solver linkage).
+// NOLINTNEXTLINE(misc-header-include-cycle)
+#include <tt-metalium/experimental/fabric/topology_solver_sat.tpp>
 
 #endif  // TOPOLOGY_SOLVER_TPP
