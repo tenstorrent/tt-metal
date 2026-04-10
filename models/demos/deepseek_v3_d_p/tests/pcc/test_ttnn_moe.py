@@ -242,10 +242,10 @@ def test_ttnn_moe(
         topology=topology,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
-        routed_expert_activations_dtype=ttnn.bfloat16,
-        routed_expert_weights_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
-        shared_expert_weights_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
     )

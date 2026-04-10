@@ -39,6 +39,110 @@ class TtPrefillBlock(LightweightModule):
             ffn_weights:            dict with "gate_proj", "up_proj", "down_proj"
     """
 
+    @staticmethod
+    def build_ttnn_cache(
+        state_dict: dict,
+        layer_idx: int,
+        cache_path: Path,
+        mesh_device: ttnn.MeshDevice,
+        config: PretrainedConfig,
+        seq_len: int = 1024,
+        num_links: int = 2,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        capacity_factor: int = 32,
+        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
+    ):
+        """
+        Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
+
+        Args:
+            state_dict: Layer weights dict
+            layer_idx: Layer index
+            cache_path: Cache directory
+            mesh_device: Mesh device reference
+            config: Model config
+            ... other args for sub-components
+        """
+        is_moe = layer_idx >= DeepSeekV3Config.NUM_DENSE_LAYERS
+        emb_dim = config.hidden_size
+
+        logger.info(f"Building TTNN cache for TtPrefillBlock layer {layer_idx} ({'MoE' if is_moe else 'dense'})")
+
+        # Build attn_norm cache
+        TtDistributedRmsNorm.build_ttnn_cache(
+            torch_weight=state_dict["attn_norm_weight"],
+            emb_dim=emb_dim,
+            mesh_device=mesh_device,
+            cache_path=cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+        )
+
+        # Build MLA cache
+        ttMLA.build_ttnn_cache(
+            state_dict=state_dict.get("mla_weights", {}),
+            cache_path=cache_path,
+            mesh_device=mesh_device,
+            config=config,
+            layer_idx=layer_idx,
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+
+        # Build ffn_norm cache
+        TtDistributedRmsNorm.build_ttnn_cache(
+            torch_weight=state_dict["ffn_norm_weight"],
+            emb_dim=emb_dim,
+            mesh_device=mesh_device,
+            cache_path=cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+        )
+
+        # Build FFN or MoE cache
+        if is_moe:
+            # Use static method (no device copy!)
+            mesh_config = extract_mesh_config(mesh_device)
+            sp_factor = mesh_device.shape[sp_axis]
+            seq_len_per_chip = seq_len // sp_factor
+            experts_per_chip, _, _ = compute_constants(
+                seq_len_per_chip,
+                DeepSeekV3Config.NUM_ROUTED_EXPERTS,
+                DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+                mesh_device.get_num_devices(),
+                mesh_config.dispatch_group_size,
+                capacity_factor,
+            )
+
+            TtMoe.build_ttnn_cache(
+                gate_weights=state_dict.get("gate_weights"),
+                routed_expert_weights=state_dict.get("routed_expert_weights"),
+                shared_expert_weights=state_dict.get("shared_expert_weights"),
+                experts_per_chip=experts_per_chip,
+                emb_dim=emb_dim,
+                hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+                mesh_device=mesh_device,
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
+                shared_expert_weights_dtype=shared_expert_weights_dtype,
+                cache_path=cache_path,
+                layer_idx=layer_idx,
+            )
+        else:
+            # Use static method (no device copy!)
+            TtFfn.build_ttnn_cache(
+                torch_weights=state_dict.get("ffn_weights"),
+                mesh_device=mesh_device,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.ffn",
+            )
+
+        logger.info(f"Cache built for layer {layer_idx}")
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -73,7 +177,7 @@ class TtPrefillBlock(LightweightModule):
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
-            torch_weight=state_dict["attn_norm_weight"],
+            torch_weight=state_dict.get("attn_norm_weight"),  # None if cache exists
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -84,7 +188,7 @@ class TtPrefillBlock(LightweightModule):
         # --- MLA ---
         self.mla = ttMLA(
             config,
-            state_dict["mla_weights"],
+            state_dict.get("mla_weights", {}),  # Empty dict if cache exists
             mesh_device,
             layer_idx=layer_idx,
             seq_len=seq_len,
@@ -98,7 +202,7 @@ class TtPrefillBlock(LightweightModule):
         self.ffn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
-            torch_weight=state_dict["ffn_norm_weight"],
+            torch_weight=state_dict.get("ffn_norm_weight"),  # None if cache exists
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -128,7 +232,7 @@ class TtPrefillBlock(LightweightModule):
         else:
             self.ffn = TtFfn(
                 mesh_device=mesh_device,
-                torch_weights=state_dict["ffn_weights"],
+                torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
                 num_links=num_links,
                 topology=topology,
                 weight_cache_path=weight_cache_path,
@@ -180,13 +284,13 @@ class TtPrefillBlock(LightweightModule):
             hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
             num_links=num_links,
             topology=topology,
-            routed_expert_weights=state_dict["routed_expert_weights"],
-            shared_expert_weights=state_dict["shared_expert_weights"],
+            routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
+            shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
-            gate_weights=state_dict["gate_weights"],
+            gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,

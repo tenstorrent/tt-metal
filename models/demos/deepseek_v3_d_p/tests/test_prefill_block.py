@@ -138,10 +138,9 @@ def test_prefill_block(
                 use_cache=return_kv_cache,
             )
             torch_output = layer_out[0]
+        logger.info(f"Torch reference output shape: {torch_output.shape}")
         if ref_cache is not None:
             ref_kvpe = ref_cache.key_cache[layer_idx]
-        logger.info(f"Torch reference output shape: {torch_output.shape}")
-        if ref_kvpe is not None:
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 
