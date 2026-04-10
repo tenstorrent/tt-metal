@@ -31,20 +31,22 @@ jobs:
             // optional: true  → shown as opt-in, "no run" is expected
             // optional: false → required, "no run" is a signal something's missing
             const pipelines = [
-              { name: "Sanity tests",           workflow: "sanity-tests.yaml",               optional: false },
-              { name: "Blackhole post-commit",   workflow: "blackhole-post-commit.yaml",      optional: false },
-              { name: "cpp-unit-tests",          workflow: "tt-metal-l2-nightly.yaml",        optional: false },
-              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",      optional: true  },
-              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",  optional: true  },
-              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml", optional: true },
+              { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
+              { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
+              { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
+              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
+              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
+              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
             ];
 
             const rows = [];
             for (const p of pipelines) {
-              const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}`;
+              // Include branch filter so the link lands on runs for this PR's branch
+              const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}?query=branch:${branchName}`;
+              const badgeUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}/badge.svg?branch=${branchName}`;
               const optionalTag = p.optional ? " *(opt-in)*" : "";
 
-              let statusEmoji, runLink;
+              let runLink;
               try {
                 const runsResp = await github.rest.actions.listWorkflowRuns({
                   owner,
@@ -55,39 +57,23 @@ jobs:
                 });
 
                 if (runsResp.data.total_count === 0) {
-                  statusEmoji = "➖";
                   runLink = `[Launch ↗](${dispatchUrl})`;
                 } else {
                   const run = runsResp.data.workflow_runs[0];
-                  const status = run.status;
-                  const conclusion = run.conclusion;
-
-                  if (status === "in_progress" || status === "queued" || status === "waiting" || status === "requested") {
-                    statusEmoji = "⏳";
-                  } else if (conclusion === "success") {
-                    statusEmoji = "✅";
-                  } else if (conclusion === "failure") {
-                    statusEmoji = "❌";
-                  } else if (conclusion === "cancelled") {
-                    statusEmoji = "🚫";
-                  } else if (conclusion === "skipped") {
-                    statusEmoji = "⏭️";
-                  } else {
-                    statusEmoji = "❓";
-                  }
                   runLink = `[#${run.run_number}](${run.html_url})`;
                 }
               } catch (e) {
-                statusEmoji = "❓";
                 runLink = `[Launch ↗](${dispatchUrl})`;
               }
 
-              rows.push(`| [${p.name}](${dispatchUrl})${optionalTag} | ${statusEmoji} | ${runLink} |`);
+              // Badge image in status column: always live, auto-updates between pushes too
+              const statusBadge = `[![](${badgeUrl})](${dispatchUrl})`;
+              rows.push(`| [${p.name}](${dispatchUrl})${optionalTag} | ${statusBadge} | ${runLink} |`);
             }
 
             const statusSection = [
               "### CI Status",
-              "_Auto-generated on every push. Click a pipeline name to open the workflow dispatch page._",
+              "_Auto-generated on every push. Badges update live. Click a pipeline name or badge to filter by this branch._",
               "",
               "| Pipeline | Status | Latest Run |",
               "|---|:---:|---|",
