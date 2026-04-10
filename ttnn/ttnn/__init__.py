@@ -483,7 +483,11 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+
+# Expose disaggregation in experimental namespace
+experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -532,3 +536,25 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+import atexit as _atexit
+
+
+def _ttnn_cleanup():
+    """Release Python-side references to C++ operation wrappers before interpreter shutdown.
+
+    nanobind's leak checker fires before module dicts are fully cleared on some
+    Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
+    reference count on C++ wrapper objects reaches zero before the check.
+    """
+    try:
+        from ttnn.decorators import REGISTERED_OPERATIONS
+
+        REGISTERED_OPERATIONS.operations.clear()
+    except Exception as e:
+        # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
+        logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
+
+
+_atexit.register(_ttnn_cleanup)
+del _atexit
