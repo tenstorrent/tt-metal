@@ -32,6 +32,10 @@ from models.experimental.tt_symbiote.modules.qwen_attention import TTNNQwenPaged
 from models.experimental.tt_symbiote.modules.qwen35_decoder_layer import TTNNQwen35DecoderLayer
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
+from models.experimental.tt_symbiote.tests.conftest import (
+    QWEN_MESH_DEVICE_PARAM,
+)
+
 
 # ============================================================================
 # Helpers
@@ -63,7 +67,7 @@ def pcc_and_max_diff(tensor1, tensor2):
 def extract_hidden_states(outputs, mesh_device):
     """Extract the hidden_states tensor from decoder layer output.
 
-    In distributed traced mode, output is col-sharded — use ConcatMeshToTensor(dim=-1).
+    In distributed traced mode, output is col-sharded -- use ConcatMeshToTensor(dim=-1).
     """
     hs = outputs[0] if isinstance(outputs, tuple) else outputs
     if isinstance(hs, TorchTTNNTensor):
@@ -115,19 +119,6 @@ def get_layer_type(layer):
 # Fixtures
 # ============================================================================
 
-MESH_DEVICE_PARAM = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "N150x4": (1, 4),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-    "P150": (1, 1),
-    "P300": (1, 2),
-    "P150x4": (1, 4),
-    "P150x8": (1, 8),
-    "BHGLX": (8, 4),
-}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-
 DEVICE_PARAMS = {
     "trace_region_size": 200000000,  # 200MB for decoder trace with GDN loop
     "num_command_queues": 1,
@@ -144,14 +135,38 @@ def qwen_model():
     return model
 
 
+@pytest.fixture(scope="function")
+def ttnn_gdn_layer_real(mesh_device, qwen_model):
+    """TTNN GDN layer from real model weights."""
+    torch_layer = qwen_model.model.layers[0]
+    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
+    set_device(ttnn_layer, mesh_device)
+    ttnn_layer.preprocess_weights()
+    ttnn_layer.move_weights_to_device()
+    yield ttnn_layer
+    TracedRun.release_all()
+
+
+@pytest.fixture(scope="function")
+def ttnn_full_attn_layer_real(mesh_device, qwen_model):
+    """TTNN FullAttn layer from real model weights."""
+    torch_layer = qwen_model.model.layers[3]
+    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
+    set_device(ttnn_layer, mesh_device)
+    ttnn_layer.preprocess_weights()
+    ttnn_layer.move_weights_to_device()
+    yield ttnn_layer
+    TracedRun.release_all()
+
+
 # ============================================================================
-# Test 1: Prefill — GDN layer (linear_attention)
+# Test 1: Prefill -- GDN layer (linear_attention)
 # ============================================================================
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [MESH_DEVICE_PARAM], indirect=True)
-def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
+@pytest.mark.parametrize("mesh_device", [QWEN_MESH_DEVICE_PARAM], indirect=True)
+def test_prefill_gdn_layer_traced(ttnn_gdn_layer_real, mesh_device, qwen_model):
     """Test prefill for a GDN (linear_attention) decoder layer under TRACED mode.
 
     GDN layers use conv/recurrence state (no KV cache). Prefill unrolls a
@@ -159,6 +174,7 @@ def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
 
     Verifies trace capture output matches PyTorch reference.
     """
+    TracedRun.release_all()
     config = qwen_model.config
     torch_layer = qwen_model.model.layers[0]  # Layer 0 = linear_attention
     assert get_layer_type(torch_layer) == "linear_attention"
@@ -169,18 +185,12 @@ def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
 
     # PyTorch reference
     with torch.no_grad():
-        torch_out = torch_layer.linear_attn(x)[0]
-        torch_mlp_in = torch_layer.input_layernorm(x)
-        # Full decoder layer reference
         torch_full_out = torch_layer(x, position_embeddings=None)[0]
 
-    # TTNN traced
-    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
-    set_device(ttnn_layer, mesh_device)
-    ttnn_layer.preprocess_weights()
-    ttnn_layer.move_weights_to_device()
+    ttnn_layer = ttnn_gdn_layer_real
 
     # Run 1: warmup (no trace)
+    ttnn_layer.attention.reset_state()
     ttnn_out_1 = ttnn_layer(x)
     hs_1 = extract_hidden_states(ttnn_out_1, mesh_device)
 
@@ -188,10 +198,7 @@ def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
     print(f"GDN prefill warmup -- PCC: {pcc_1:.6f}, Max Diff: {max_diff_1:.6f}")
 
     # Run 2: trace capture (same inputs)
-    ttnn_layer.attention.conv_states = None  # Reset GDN states
-    ttnn_layer.attention.rec_states = None
-    ttnn_layer.attention.rec_output = None
-
+    ttnn_layer.attention.reset_state()
     ttnn_out_2 = ttnn_layer(x)
     hs_2 = extract_hidden_states(ttnn_out_2, mesh_device)
 
@@ -199,10 +206,7 @@ def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
     print(f"GDN prefill trace capture -- PCC: {pcc_2:.6f}, Max Diff: {max_diff_2:.6f}")
 
     # Run 3: trace replay
-    ttnn_layer.attention.conv_states = None
-    ttnn_layer.attention.rec_states = None
-    ttnn_layer.attention.rec_output = None
-
+    ttnn_layer.attention.reset_state()
     ttnn_out_3 = ttnn_layer(x)
     hs_3 = extract_hidden_states(ttnn_out_3, mesh_device)
 
@@ -217,18 +221,19 @@ def test_prefill_gdn_layer_traced(mesh_device, qwen_model):
 
 
 # ============================================================================
-# Test 2: Decode — GDN layer (linear_attention)
+# Test 2: Decode -- GDN layer (linear_attention)
 # ============================================================================
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [MESH_DEVICE_PARAM], indirect=True)
-def test_decode_gdn_layer_traced(mesh_device, qwen_model):
+@pytest.mark.parametrize("mesh_device", [QWEN_MESH_DEVICE_PARAM], indirect=True)
+def test_decode_gdn_layer_traced(ttnn_gdn_layer_real, mesh_device, qwen_model):
     """Test decode (seq_len=1) for a GDN layer under TRACED mode.
 
     GDN decode uses shift-register conv1d and fused recurrence.
     All ops are device-side and trace-compatible.
     """
+    TracedRun.release_all()
     config = qwen_model.config
     torch_layer = qwen_model.model.layers[0]
     assert get_layer_type(torch_layer) == "linear_attention"
@@ -236,15 +241,11 @@ def test_decode_gdn_layer_traced(mesh_device, qwen_model):
     batch_size = 1
     hidden_size = config.hidden_size
 
+    ttnn_layer = ttnn_gdn_layer_real
+    ttnn_layer.attention.reset_state()
+
     # Prefill first to init conv/rec states
     prefill_x = torch.randn(batch_size, 4, hidden_size, dtype=torch.bfloat16)
-
-    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
-    set_device(ttnn_layer, mesh_device)
-    ttnn_layer.preprocess_weights()
-    ttnn_layer.move_weights_to_device()
-
-    # Prefill to init states
     ttnn_layer(prefill_x)
 
     # Decode: seq_len=1
@@ -275,18 +276,19 @@ def test_decode_gdn_layer_traced(mesh_device, qwen_model):
 
 
 # ============================================================================
-# Test 3: Prefill — Full attention layer (GQA)
+# Test 3: Prefill -- Full attention layer (GQA)
 # ============================================================================
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [MESH_DEVICE_PARAM], indirect=True)
-def test_prefill_full_attn_layer_traced(mesh_device, qwen_model):
+@pytest.mark.parametrize("mesh_device", [QWEN_MESH_DEVICE_PARAM], indirect=True)
+def test_prefill_full_attn_layer_traced(ttnn_full_attn_layer_real, mesh_device, qwen_model):
     """Test prefill for a full attention (GQA) decoder layer under TRACED mode.
 
     Full attention layers use paged KV cache. Prefill fills the cache and
     computes attention via SDPA.
     """
+    TracedRun.release_all()
     config = qwen_model.config
     torch_layer = qwen_model.model.layers[3]  # Layer 3 = full_attention
     assert get_layer_type(torch_layer) == "full_attention"
@@ -305,14 +307,7 @@ def test_prefill_full_attn_layer_traced(mesh_device, qwen_model):
             attention_mask=None,
         )[0]
 
-    # TTNN traced
-    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
-    set_device(ttnn_layer, mesh_device)
-    ttnn_layer.preprocess_weights()
-    ttnn_layer.move_weights_to_device()
-
-    num_kv_heads = getattr(config, "num_key_value_heads", 4)
-    head_dim = getattr(config, "head_dim", hidden_size // config.num_attention_heads)
+    ttnn_layer = ttnn_full_attn_layer_real
 
     # Run 1: warmup
     paged_cache_1 = create_paged_kv_cache(config, mesh_device, layer_indices=[3])
@@ -358,17 +353,18 @@ def test_prefill_full_attn_layer_traced(mesh_device, qwen_model):
 
 
 # ============================================================================
-# Test 4: Decode — Full attention layer (GQA)
+# Test 4: Decode -- Full attention layer (GQA)
 # ============================================================================
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [MESH_DEVICE_PARAM], indirect=True)
-def test_decode_full_attn_layer_traced(mesh_device, qwen_model):
+@pytest.mark.parametrize("mesh_device", [QWEN_MESH_DEVICE_PARAM], indirect=True)
+def test_decode_full_attn_layer_traced(ttnn_full_attn_layer_real, mesh_device, qwen_model):
     """Test decode (seq_len=1) for a full attention layer under TRACED mode.
 
     Uses paged attention decode with trace-compatible cache_position handling.
     """
+    TracedRun.release_all()
     config = qwen_model.config
     torch_layer = qwen_model.model.layers[3]
     assert get_layer_type(torch_layer) == "full_attention"
@@ -377,11 +373,7 @@ def test_decode_full_attn_layer_traced(mesh_device, qwen_model):
     hidden_size = config.hidden_size
     prefill_length = 8
 
-    # TTNN layer
-    ttnn_layer = TTNNQwen35DecoderLayer.from_torch(torch_layer)
-    set_device(ttnn_layer, mesh_device)
-    ttnn_layer.preprocess_weights()
-    ttnn_layer.move_weights_to_device()
+    ttnn_layer = ttnn_full_attn_layer_real
 
     paged_cache = create_paged_kv_cache(config, mesh_device, layer_indices=[3])
 

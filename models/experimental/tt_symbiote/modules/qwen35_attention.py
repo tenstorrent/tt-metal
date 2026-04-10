@@ -221,7 +221,6 @@ class TTNNQwen35FullAttention(TTNNModule):
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
         )
-        ttnn.synchronize_device(self.device)
         return gathered
 
     def _repeat_kv(self, hidden_states: ttnn.Tensor, n_rep: int) -> ttnn.Tensor:

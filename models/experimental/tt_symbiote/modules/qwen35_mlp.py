@@ -40,7 +40,6 @@ class TTNNQwen35MLP(TTNNModule):
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
         )
-        ttnn.synchronize_device(self.device)
         return gathered
 
     @classmethod

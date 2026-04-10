@@ -65,7 +65,6 @@ class TTNNQwen35DecoderLayer(TTNNModule):
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
         )
-        ttnn.synchronize_device(self.device)
         return gathered
 
     def set_output_tensors_config_impl(self, output_tensors):
@@ -153,7 +152,6 @@ class TTNNQwen35DecoderLayer(TTNNModule):
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
         )
-        ttnn.synchronize_device(self.device)
         return gathered
 
     def _all_gather_position_embeddings(self, position_embeddings):
@@ -184,7 +182,6 @@ class TTNNQwen35DecoderLayer(TTNNModule):
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
         )
-        ttnn.synchronize_device(self.device)
         return (cos, sin)
 
     def forward(
