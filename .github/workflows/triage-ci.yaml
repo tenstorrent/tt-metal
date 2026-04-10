@@ -7,6 +7,26 @@ on:
         description: "Number of recent runs to evaluate per job"
         type: string
         default: "3"
+      max-phase:
+        description: "Stop after this phase (0=smoke, 1=discover, 2=candidates, 3=fixpoints, 4=full)"
+        type: string
+        default: "4"
+      test-workflows:
+        description: "Comma-separated workflow paths to process (empty = all)"
+        type: string
+        default: ""
+      max-candidates:
+        description: "Max confirmed failures before Phase 2 stops"
+        type: string
+        default: "999"
+      max-log-bytes:
+        description: "Per-run log truncation in bytes"
+        type: string
+        default: "50000"
+      max-escapes:
+        description: "Max bug escapes before Phase 4 stops"
+        type: string
+        default: "999"
 
 permissions:
   contents: read
@@ -17,6 +37,11 @@ jobs:
     uses: tenstorrent/tt-auto-triage/.github/workflows/bug-escapes-ci.yaml@ebanerjee/bug-escapes
     with:
       consecutive-runs: ${{ inputs.consecutive-runs }}
+      max-phase: ${{ inputs.max-phase }}
+      test-workflows: ${{ inputs.test-workflows }}
+      max-candidates: ${{ inputs.max-candidates }}
+      max-log-bytes: ${{ inputs.max-log-bytes }}
+      max-escapes: ${{ inputs.max-escapes }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
