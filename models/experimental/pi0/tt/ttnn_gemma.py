@@ -387,11 +387,24 @@ class GemmaAttentionTTNN:
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
         k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-        # Handle KV cache
+        # Handle KV cache — first call uses concat (keeps logical shape 594),
+        # subsequent calls use fill_cache with offset (~9x faster than concat, ~12ms saved/inference)
         if past_key_value is not None:
             past_k, past_v = past_key_value
-            k_rope = ttnn.concat([past_k, k_rope], dim=2)
-            v = ttnn.concat([past_v, v], dim=2)
+            prefix_len = past_k.shape[2]
+            if self._kv_concat_k is None:
+                self._kv_concat_k = ttnn.concat([past_k, k_rope], dim=2)
+                self._kv_concat_v = ttnn.concat([past_v, v], dim=2)
+            else:
+                # Ensure dtype match for fill_cache (requires input.dtype == cache.dtype)
+                if k_rope.dtype != self._kv_concat_k.dtype:
+                    k_rope = ttnn.typecast(k_rope, self._kv_concat_k.dtype)
+                if v.dtype != self._kv_concat_v.dtype:
+                    v = ttnn.typecast(v, self._kv_concat_v.dtype)
+                ttnn.fill_cache(self._kv_concat_k, k_rope, 0, update_idx=prefix_len)
+                ttnn.fill_cache(self._kv_concat_v, v, 0, update_idx=prefix_len)
+            k_rope = self._kv_concat_k
+            v = self._kv_concat_v
 
         new_cache = (k_rope, v) if use_cache else None
 
