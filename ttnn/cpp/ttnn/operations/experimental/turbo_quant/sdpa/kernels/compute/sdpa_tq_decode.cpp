@@ -267,7 +267,7 @@ void kernel_main() {
             // ── Run standard SDPA on the pre-filled K/V CBs ──
             mm_init(cb_q_in, cb_k_in, cb_out);
             cb_wait_front(cb_identity_scale_in, 1);
-            sdpa_standard<cb_qk_im, cb_identity_scale_in, 0 /*cb_attention_sink*/, 0 /*cb_scale*/>(
+            sdpa_standard<cb_qk_im, cb_identity_scale_in, (uint32_t)tt::CBIndex::c_4, 0>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -281,11 +281,11 @@ void kernel_main() {
                 out_in0_num_subblocks,
                 out_in1_num_subblocks,
                 out_num_blocks,
-                0,
-                1,
-                1,
-                0,
-                0,
+                (uint32_t)0,  // iter_q_start
+                (uint32_t)1,  // iter_q_end
+                (uint32_t)1,  // q_num_chunks
+                (uint32_t)0,  // local_q_start
+                (uint32_t)0,  // chunked_q_chunk_offset
                 k_num_chunks,
                 q_chunk_tiles,
                 k_chunk_tiles,
@@ -295,7 +295,7 @@ void kernel_main() {
                 cb_q_in,
                 cb_k_in,
                 cb_v_in,
-                tt::CBIndex::c_3 /*cb_mask_in unused*/,
+                (uint32_t)tt::CBIndex::c_3 /*cb_mask_in unused*/,
                 cb_col_identity,
                 cb_out_im_A,
                 cb_out_im_B,
