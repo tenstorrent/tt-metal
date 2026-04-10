@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -260,7 +260,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // junk/padding data
         if constexpr (zero_pages && reader_id == 0) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page<in_cb_id>();
+                zero_out_page<in_cb_id>(get_write_ptr(in_cb_id));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {

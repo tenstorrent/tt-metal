@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,8 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<bool> share_cache) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -86,7 +87,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
         program_config,
         kernel_config_val,
         k_chunk_size,
-        std::nullopt,
+        share_cache,
         std::nullopt,
         std::nullopt);
 }

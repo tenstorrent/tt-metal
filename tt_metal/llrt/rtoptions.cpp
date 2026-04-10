@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,6 +61,7 @@ enum class EnvVarID {
     // ========================================
     // KERNEL EXECUTION CONTROL
     // ========================================
+    TT_METAL_CHECKPOINT,            // Enable debug checkpoints
     TT_METAL_NULL_KERNELS,          // Skip kernel execution (testing)
     TT_METAL_KERNELS_EARLY_RETURN,  // Kernels return early
 
@@ -461,6 +462,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (kernels execute normally)
         // Usage: export TT_METAL_NULL_KERNELS=1
         case EnvVarID::TT_METAL_NULL_KERNELS: this->null_kernels = true; break;
+
+        // TT_METAL_CHECKPOINT
+        // Enable debug checkpoints for fine-grain debugging of large ops.
+        // Default: false
+        // Usage: export TT_METAL_CHECKPOINT=1
+        case EnvVarID::TT_METAL_CHECKPOINT: this->checkpoint_enabled = true; break;
 
         // TT_METAL_KERNELS_EARLY_RETURN
         // Kernels return early, skipping execution but maintaining same size as normal.

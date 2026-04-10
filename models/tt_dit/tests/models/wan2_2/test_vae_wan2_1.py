@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1359,7 +1359,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
-@pytest.mark.parametrize("use_cache", [True, False], ids=["cached", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 2, None], ids=["chunk_1", "chunk_2", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1407,7 +1407,7 @@ def test_wan_decoder(
     num_links,
     real_weights,
     skip_check,
-    use_cache,
+    t_chunk_size,
     dtype,
     MIN_PCC,
     MAX_RMSE,
@@ -1479,9 +1479,9 @@ def test_wan_decoder(
         dtype=tt_input_dtype,
     )
 
-    logger.info(f"running tt model (use_cache={use_cache})")
+    logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, use_cache=use_cache)
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1511,6 +1511,152 @@ def test_wan_decoder(
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     else:
         logger.warning("Skipping check")
+
+
+@pytest.mark.parametrize(
+    ("B, C, H, W"),
+    [
+        (1, 16, 60, 104),  # 480p
+        (1, 16, 90, 160),  # 720p
+    ],
+    ids=["480p", "720p"],
+)
+@pytest.mark.parametrize("T", [5, 21, 32], ids=["5f", "21f", "32f"])
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [
+        ((2, 4), 0, 1, 1),
+        ((4, 8), 0, 1, 2),
+    ],
+    ids=[
+        "2x4_h0_w1",
+        "bh_4x8_h0_w1",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_wan_decoder_chunked_consistency(
+    mesh_device,
+    B,
+    C,
+    T,
+    H,
+    W,
+    h_axis,
+    w_axis,
+    num_links,
+    dtype,
+):
+    """
+    Verify that VAE decoding with t_chunk_size=(2, 4, 8, 16, T) produces the same output as with t_chunk_size=1
+    """
+    from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    torch.manual_seed(0)
+
+    base_dim = 96
+    z_dim = 16
+    dim_mult = [1, 2, 4, 4]
+    num_res_blocks = 2
+    attn_scales = []
+    temperal_downsample = [False, True, True]
+    out_channels = 3
+
+    torch_model = TorchAutoencoderKLWan(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        dropout=0.0,
+        out_channels=out_channels,
+        is_residual=False,
+    )
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+    tt_model = WanDecoder(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        out_channels=out_channels,
+        is_residual=False,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        dtype=dtype,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    # Prepare input
+    torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
+    tt_input_host = torch_input.permute(0, 2, 3, 4, 1)
+    tt_input_host = conv_pad_in_channels(tt_input_host)
+    tt_input_host, logical_h = conv_pad_height(tt_input_host, parallel_config.height_parallel.factor)
+
+    concat_dims = [None, None]
+    concat_dims[h_axis] = 3
+    concat_dims[w_axis] = 4
+
+    def run_decoder(t_chunk_size):
+        tt_input_tensor = typed_tensor_2dshard(
+            tt_input_host,
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
+        )
+        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+        return ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        )
+
+    # Run baseline: per-frame cached decode
+    logger.info("Running baseline (t_chunk_size=1)")
+    baseline = run_decoder(t_chunk_size=1)
+    logger.info(f"Baseline output shape: {baseline.shape}")
+
+    # Compare each chunk size against the baseline
+    for t_chunk_size in [2, 4, 8, 16, T]:
+        if t_chunk_size > T:
+            continue
+        logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
+        chunked = run_decoder(t_chunk_size=t_chunk_size)
+        logger.info(f"  chunked output shape: {chunked.shape}")
+
+        assert baseline.shape == chunked.shape, (
+            f"Shape mismatch for t_chunk_size={t_chunk_size}: " f"baseline {baseline.shape} vs chunked {chunked.shape}"
+        )
+        diff = (baseline - chunked).abs()
+        try:
+            torch.testing.assert_close(baseline, chunked, rtol=1e-3, atol=1e-3)
+        except AssertionError as exc:
+            logger.error(
+                f"  t_chunk_size={t_chunk_size} MISMATCH: "
+                f"max_abs_diff={diff.max().item()}, "
+                f"mean_abs_diff={diff.mean().item()}, "
+                f"num_outside_atol={(diff > 1e-3).sum().item()}/{diff.numel()}"
+            )
+            raise AssertionError(
+                f"Mismatch for t_chunk_size={t_chunk_size}: "
+                f"max_abs_diff={diff.max().item()}, "
+                f"mean_abs_diff={diff.mean().item()}"
+            ) from exc
+        logger.info(f"  t_chunk_size={t_chunk_size} PASSED (within tolerance)")
 
 
 @pytest.mark.parametrize(

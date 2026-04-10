@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -208,7 +208,7 @@ def _demo_case(
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool):
     # Path to the external JSON file containing prompts
-    json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
+    json_path = "models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"
 
     # Load prompts from JSON file
     prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])

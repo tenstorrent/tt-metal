@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -209,6 +209,10 @@ void JitBuildEnv::init(
         if (rtoptions.get_use_device_print()) {
             this->defines_ += "-DUSE_DEVICE_PRINT ";
         }
+    }
+
+    if (rtoptions.get_checkpoint_enabled()) {
+        this->defines_ += "-DDEBUG_CHECKPOINT_ENABLED ";
     }
 
     if (rtoptions.get_record_noc_transfers()) {

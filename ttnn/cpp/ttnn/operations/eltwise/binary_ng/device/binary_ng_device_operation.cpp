@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,7 +49,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
         case DIV_TRUNC:
-        case REMAINDER: return (a == INT32 && b == INT32);
+        case REMAINDER:
         case FMOD:
         case QUANT:
         case REQUANT:
@@ -57,6 +57,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
+        case ATAN2:
         case POWER:
         case WHERE_TST:
         case WHERE_TTS: return true;
@@ -566,7 +567,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
                 }
-            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+            } else if (input_tensor_b.shard_spec()->num_cores() > input_tensor_a.shard_spec()->num_cores()) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(

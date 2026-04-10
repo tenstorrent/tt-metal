@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,25 +23,44 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
+_conv3d_blocking_configs = {
+    # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+    (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
+    (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
+    (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
+    (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
+    (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
+    (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+}
+
+
+def register_conv3d_configs(configs: dict) -> None:
+    """Register additional conv3d blocking configs from external models.
+
+    Args:
+        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
+            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
+
+    Example::
+
+        register_conv3d_configs({
+            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
+            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
+        })
+    """
+    _conv3d_blocking_configs.update(configs)
+
+
 def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
     if weights_dtype == ttnn.float32:
         # Use smaller block size to reduce memory use.
         config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
     else:
-        config_to_blocking = {
-            # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-            # Keep the old padded conv_out tuning for the new unpadded C_out=3 path.
-            (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
-            (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
-            (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
-            (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
-            (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
-            (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
-            (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
-            (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
-        }
+        config_to_blocking = _conv3d_blocking_configs
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:

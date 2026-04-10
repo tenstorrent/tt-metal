@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,7 @@ inline std::string get_soc_description_file(
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
         case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
-        case tt::ARCH::QUASAR:  // Quasar is currently only supported for simulation
+        case tt::ARCH::QUASAR: file = "quasar_32_arch.yaml"; break;
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;
@@ -330,7 +330,7 @@ void Cluster::initialize_device_drivers() {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
             ChipId mmio_id = *mmio_ids.begin();
-            auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+            auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
                 this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();

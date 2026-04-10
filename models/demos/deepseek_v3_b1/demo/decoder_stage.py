@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,11 +23,11 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3DenseLayerWeights, DeepSeekV3MoELayerWeights
 
 # TODO: This shouldn't live in the test file; we should refactor this
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.weights.prepare import DeepSeekV3DenseLayerWeights, DeepSeekV3MoELayerWeights
 
 
 class DecoderStage(StageKind):
@@ -169,7 +169,8 @@ class DecoderStage(StageKind):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            num_links=1,
+            num_links_bcast=1,
+            num_links_allreduce=1,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
             downstream_sockets=self._state["downstream_sockets"],

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    create_passthrough_pipeline_configuration,
+    create_single_galaxy_deepseek_pipeline_configuration,
+)
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
@@ -25,6 +31,53 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _blitz_mesh_coord_tuple(coord) -> tuple:
+    """Normalize MeshCoordinate from BlitzDecodePipelineStage for equality checks."""
+    n = int(coord.dims())
+    return tuple(int(coord[i]) for i in range(n))
+
+
+def assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs):
+    """
+    Inter-mesh Blitz stages must pair distinct logical devices for ingress vs egress on each mesh.
+    (Mirrors C++ control-plane exit-node pairing: identical entry/exit fabric nodes break setup_fabric_connection.)
+    """
+    assert (
+        len(pipeline_config) == num_procs + 1
+    ), f"expected {num_procs + 1} pipeline stages (procs + loopback), got {len(pipeline_config)}"
+    for i, stage in enumerate(pipeline_config):
+        assert stage.stage_index == i, f"stage_index mismatch at list position {i}: {stage.stage_index}"
+        entry_t = _blitz_mesh_coord_tuple(stage.entry_node_coord)
+        exit_t = _blitz_mesh_coord_tuple(stage.exit_node_coord)
+        assert entry_t != exit_t, (
+            f"Blitz stage {i}: entry and exit mesh coordinates must differ "
+            f"(same coord implies same fabric node id / fabric src==dst TT_FATAL). "
+            f"entry={entry_t} exit={exit_t}"
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
+    """Lightweight check: generate_blitz_decode_pipeline pairs distinct entry/exit chips per stage."""
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
 
 @pytest.mark.parametrize(
@@ -63,9 +116,9 @@ def create_fabric_router_config(max_payload_size):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -75,10 +128,6 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     my_mesh_id = mesh_device.get_system_mesh_id()
 
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    # Number of pipeline stages is equal to the number of processes + 1 for the loopback stage
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -252,9 +301,9 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -272,9 +321,6 @@ def test_multi_host_loopback_pipeline_with_embedding(
 
     my_mesh_id = mesh_device.get_system_mesh_id()
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -462,8 +508,6 @@ def test_multi_host_loopback_pipeline_with_embedding(
 def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -569,8 +613,6 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
 def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -652,3 +694,141 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
             )
 
     pipeline_block.terminate()
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_passthrough_pipeline_block(mesh_device):
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+
+    num_procs = int(ttnn.distributed_context_get_size())
+
+    config = create_passthrough_pipeline_configuration(SyntheticWeightProvider(), num_procs)
+    pipeline = config.build_pipeline(mesh_device)
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
+
+            vocab_size = LogicalModelDimensions.VOCAB_SIZE
+            embedding_dim = LogicalModelDimensions.HIDDEN_SIZE
+
+            embedding_dtype = torch.bfloat16
+            torch_embedding = torch.zeros((1, 1, vocab_size, embedding_dim), dtype=embedding_dtype)
+            torch_embedding[
+                0,
+                0,
+                torch.arange(vocab_size, dtype=torch.int64),
+                torch.arange(vocab_size, dtype=torch.int64) % embedding_dim,
+            ] = 1
+
+            token_dtype = torch.uint32
+            token_size_bytes = 64
+            token_size_datums = token_size_bytes // dtype_size(token_dtype)
+
+            for token_id in range(vocab_size):
+                torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
+                torch_input[0, 0] = token_id
+                input_tensor = ttnn.from_torch(
+                    torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                torch_output = torch.zeros(1, embedding_dim, dtype=embedding_dtype)
+                output_tensor = ttnn.from_torch(
+                    torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                pipeline.write_token(input_tensor)
+                pipeline.read_output(output_tensor)
+
+                result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+                expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+                match = torch.equal(expected, result_torch)
+                assert match, (
+                    f"Token {token_id}: D2H output does not match embedding row!\n"
+                    f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+                )
+            logger.info(f"{vocab_size} token lookups verified successfully over passthrough pipeline configuration")
+
+        pipeline.barrier()
+    finally:
+        pipeline.terminate()
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            # TORUS_X needs X-direction wrap links; mesh graph descriptors for this pipeline only
+            # provide TORUS_Y (or mesh). FabricConfig cannot add links—only restrict routing.
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
+    """
+    4-stage 4x2 single-galaxy pipeline (Embed -> Dense -> MoE -> LMHead), copied from
+    ``test_pipline_block_4stage_galaxy_1_iteration`` but using
+    :func:`create_single_galaxy_deepseek_pipeline_configuration`.
+    No loopback: token is read on the last mesh (LMHead stage). One-shot LMHead (no persistent mode).
+    No numerical golden check (smoke test only).
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    config = create_single_galaxy_deepseek_pipeline_configuration(
+        SyntheticWeightProvider(),
+        lm_head_fp32_dest_acc_en=use_fp32,
+        lm_head_persistent_mode=False,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 0] = 0
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            pipeline.read_output(output_tensor)
+            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+            logger.info(f"test_single_galaxy_deepseek_pipeline last-mesh output token (no golden check): {got.item()}")
+
+        pipeline.barrier()
+    finally:
+        pipeline.terminate()
