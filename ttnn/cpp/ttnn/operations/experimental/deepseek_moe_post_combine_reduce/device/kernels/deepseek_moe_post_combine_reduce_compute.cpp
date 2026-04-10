@@ -27,18 +27,22 @@ void kernel_main() {
 
     cb_reserve_back(cb_rowmajor, total_token_tiles);
 
+    // Process one expert at a time from c_0 (streamed by reader).
+    // This reduces c_0 from num_experts*emb_dim_tiles to emb_dim_tiles (~100KB savings).
     for (uint32_t i = 0; i < TOKENS_PER_CORE; ++i) {
-        cb_wait_front(cb_combine_input, total_expert_tiles);
         cb_wait_front(cb_weights, num_experts);
 
         mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
 
         bool first_active = true;
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+            cb_wait_front(cb_combine_input, emb_dim_tiles);
+
             // Read weight value — if zero, skip (but always process at least one
             // expert so the accumulator gets initialized with valid data)
             uint32_t weight_val = read_tile_value(cb_weights, expert_idx, 0);
             if (weight_val == 0 && !first_active) {
+                cb_pop_front(cb_combine_input, emb_dim_tiles);
                 continue;
             }
 
@@ -49,12 +53,11 @@ void kernel_main() {
                 first_active = false;
             }
 
-            uint32_t tile_offset = expert_idx * emb_dim_tiles;
-
+            // Tiles are at offset 0 in c_0 (single expert buffered)
             tile_regs_acquire();
 
             for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-                mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input, cb_weights, tile_offset + j, expert_idx, j);
+                mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input, cb_weights, j, expert_idx, j);
             }
 
             tile_regs_commit();
@@ -66,10 +69,11 @@ void kernel_main() {
             }
 
             tile_regs_release();
+
+            cb_pop_front(cb_combine_input, emb_dim_tiles);
         }
         pack_reconfig_l1_acc(0);
 
-        cb_pop_front(cb_combine_input, total_expert_tiles);
         cb_pop_front(cb_weights, num_experts);
     }
     cb_push_back(cb_rowmajor, total_token_tiles);

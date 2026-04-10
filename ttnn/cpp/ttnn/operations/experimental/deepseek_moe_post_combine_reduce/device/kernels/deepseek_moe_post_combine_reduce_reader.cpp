@@ -22,19 +22,19 @@ void kernel_main() {
 
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr, combine_page_size);
 
+    // Stream one expert at a time to reduce L1 footprint (~100KB savings).
+    // Compute pops emb_dim_tiles per expert, so we push emb_dim_tiles per expert.
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
-        constexpr uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
-        cb_reserve_back(cb_combine_input, total_expert_tiles);
-        uint32_t cb_write_addr = get_write_ptr(cb_combine_input);
-
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+            cb_reserve_back(cb_combine_input, emb_dim_tiles);
+            uint32_t cb_write_addr = get_write_ptr(cb_combine_input);
+
             uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
             noc_async_read_page(expert_page_idx, combine_addrg, cb_write_addr);
-            cb_write_addr += combine_page_size;
+            noc_async_read_barrier();
+            cb_push_back(cb_combine_input, emb_dim_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_combine_input, total_expert_tiles);
     }
 }
