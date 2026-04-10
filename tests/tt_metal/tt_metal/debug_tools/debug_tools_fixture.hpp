@@ -311,6 +311,15 @@ public:
     }
 };
 
+// A version of MeshWatcherFixture with dump_all enabled for tile counter visibility
+class MeshWatcherDumpAllFixture : public MeshWatcherFixture {
+protected:
+    void SetUp() override {
+        MeshWatcherFixture::SetUp();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(true);
+    }
+};
+
 class DevicePrintFixture : public DebugToolsMeshFixture {
 protected:
     int memfd_;
