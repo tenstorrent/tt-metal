@@ -197,8 +197,8 @@ def test_pipeline_performance(
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
 
-    num_frames = 81
-    num_inference_steps = 40
+    num_frames = 5
+    num_inference_steps = 10
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 

@@ -33,7 +33,13 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import fast_device_to_host, bf16_tensor, float32_tensor, local_device_to_torch, typed_tensor_2dshard
+from ...utils.tensor import (
+    bf16_tensor,
+    fast_device_to_host,
+    float32_tensor,
+    local_device_to_torch,
+    typed_tensor_2dshard,
+)
 
 _UNSET = object()  # sentinel for "use config default" in create_pipeline
 
