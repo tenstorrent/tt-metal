@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.torch_impl.synthesizer.attentions import MultiHeadAttention as TorchMultiHeadAttention
-from models.demos.rvc.tt_impl.synthesizer.attentions import MultiHeadAttention as TTMultiHeadAttention
+from models.demos.rvc.tt_impl.vc.synthesizer import MultiHeadAttention as TTMultiHeadAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

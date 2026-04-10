@@ -13,8 +13,8 @@ from models.demos.rvc.tt_impl.conv1d import Conv1d
 from models.demos.rvc.tt_impl.convtranspose1d import ConvTranspose1d
 from models.demos.rvc.tt_impl.layernorm import LayerNorm
 from models.demos.rvc.tt_impl.linear import Linear
-from models.demos.rvc.tt_impl.synthesizer.attentions import FFN, MultiHeadAttention
-from models.demos.rvc.tt_impl.synthesizer.modules import LRELU_SLOPE, ResBlock1, ResBlock2, ResidualCouplingLayer
+
+LRELU_SLOPE = 0.1
 
 
 def ttnn_randn_fallback(shape, dtype, device):
@@ -71,6 +71,453 @@ def _flip_last_dim_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
     reverse_index = ttnn.expand(reverse_index, tuple(x.shape))
     reverse_index = ttnn.typecast(reverse_index, ttnn.uint32)
     return ttnn.gather(x, dim=-1, index=reverse_index)
+
+
+def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -> ttnn.Tensor:
+    # Fallback implementation of gather using to_host, torch.gather, and from_torch.
+    # needed since ttnn.gather is 4-8x slower than this fallback version
+    x_torch = ttnn.to_torch(x)
+    index_torch = ttnn.to_torch(index).to(torch.int64)
+    gathered_torch = torch.gather(x_torch, dim=dim, index=index_torch)
+    gathered = ttnn.from_torch(gathered_torch, dtype=x.dtype, layout=x.layout, device=device)
+    return gathered
+
+
+class MultiHeadAttention:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        in_features: int,
+        out_features: int,
+        num_heads: int,
+        window_size: int | None = None,
+    ) -> None:
+        if in_features % num_heads != 0:
+            raise ValueError("in_features must be divisible by num_heads")
+
+        self.device = device
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.features_per_head = in_features // num_heads
+
+        self.linear_q = Linear(
+            device=device,
+            in_features=in_features,
+            out_features=in_features,
+        )
+        self.linear_k = Linear(
+            device=device,
+            in_features=in_features,
+            out_features=in_features,
+        )
+        self.linear_v = Linear(
+            device=device,
+            in_features=in_features,
+            out_features=in_features,
+        )
+        self.linear_o = Linear(
+            device=device,
+            in_features=in_features,
+            out_features=out_features,
+        )
+        self.emb_rel_k: ttnn.Tensor | None = None
+        self.emb_rel_v: ttnn.Tensor | None = None
+        self.relative_position_cache: dict[int : ttnn.Tensor] = {}
+        self.index_cache: dict[int : ttnn.Tensor] = {}
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
+        self.linear_q.load_state_dict(state_dict=state_dict, key="linear_q", module_prefix=module_prefix)
+        self.linear_k.load_state_dict(state_dict=state_dict, key="linear_k", module_prefix=module_prefix)
+        self.linear_v.load_state_dict(state_dict=state_dict, key="linear_v", module_prefix=module_prefix)
+        self.linear_o.load_state_dict(state_dict=state_dict, key="linear_o", module_prefix=module_prefix)
+        if self.window_size is not None:
+            key_emb_rel_k = f"{module_prefix}emb_rel_k"
+            key_emb_rel_v = f"{module_prefix}emb_rel_v"
+
+            emb_rel_k = state_dict[key_emb_rel_k].reshape(1, 1, -1, self.features_per_head)
+            emb_rel_v = state_dict[key_emb_rel_v].reshape(1, 1, -1, self.features_per_head)
+            self.emb_rel_k = ttnn.from_torch(
+                emb_rel_k,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            self.emb_rel_v = ttnn.from_torch(
+                emb_rel_v,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+
+    def __call__(self, x: ttnn.Tensor, context: ttnn.Tensor) -> ttnn.Tensor:
+        q = self._reshape_to_heads(self.linear_q(x))
+        k = self._reshape_to_heads(self.linear_k(context))
+        v = self._reshape_to_heads(self.linear_v(context))
+        q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.features_per_head), output_tensor=q)
+        scores = ttnn.matmul(q_scaled, k, transpose_b=True)
+        _, _, target_length, source_length = scores.shape
+        if self.window_size is not None:
+            if source_length != target_length:
+                raise ValueError("Relative attention is only available for self-attention.")
+            if self.emb_rel_k is None or self.emb_rel_v is None:
+                raise ValueError("Relative embeddings are not loaded.")
+
+            key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, source_length)
+            rel_logits = ttnn.matmul(q_scaled, key_relative_embeddings, transpose_b=True)
+            scores_local = self._relative_to_absolute_position(rel_logits)
+            scores = ttnn.add(scores, scores_local, output_tensor=scores)
+        scores = ttnn.to_memory_config(scores, ttnn.L1_MEMORY_CONFIG)
+        attn_weights = ttnn.softmax_in_place(scores, dim=-1)
+        out = ttnn.matmul(attn_weights, v, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if self.window_size is not None:
+            assert self.emb_rel_v is not None
+            relative_weights = self._absolute_to_relative_position(attn_weights)
+            value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
+            out = ttnn.add(out, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=out)
+        out = ttnn.transformer.concatenate_heads(out)
+
+        out = self.linear_o(out)
+        return out
+
+    def _reshape_to_heads(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        batch_size, length, channels = x.shape
+        x = ttnn.reshape(x, (batch_size, length, self.num_heads, self.features_per_head))
+        x_heads = ttnn.permute(x, (0, 2, 1, 3))
+        return x_heads
+
+    def _get_relative_embeddings(self, relative_embeddings: ttnn.Tensor, length: int) -> ttnn.Tensor:
+        if self.window_size is None:
+            raise ValueError("window_size must be set for relative attention.")
+        pad_length: int = max(length - (self.window_size + 1), 0)
+        slice_start_position = max((self.window_size + 1) - length, 0)
+        slice_end_position = slice_start_position + 2 * length - 1
+
+        embeddings = relative_embeddings
+        if pad_length > 0:
+            embeddings = ttnn.pad(
+                embeddings,
+                padding=((0, 0), (0, 0), (pad_length, pad_length), (0, 0)),
+                value=0.0,
+            )
+        embeddings = ttnn.slice(
+            embeddings,
+            (0, 0, slice_start_position, 0),
+            (1, 1, slice_end_position, self.features_per_head),
+        )
+        return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
+
+    def _get_relative_position_index(self, length: int) -> ttnn.Tensor:
+        if length in self.index_cache:
+            return self.index_cache[length]
+        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.uint32, device=self.device), dim=1)
+        idx_col = ttnn.unsqueeze(
+            ttnn.arange(start=length - 1, end=2 * length - 1, dtype=ttnn.uint32, device=self.device), dim=0
+        )
+        relative_position_index = idx_col - idx_row
+        relative_position_index = ttnn.expand(
+            ttnn.reshape(relative_position_index, shape=(1, 1, length, length)), (1, 1, length, length)
+        )
+        self.index_cache[length] = relative_position_index
+        return relative_position_index
+
+    def _relative_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        batch, heads, length, _ = x.shape
+        relative_position_index = self._get_relative_position_index(length)
+        out = ttnn_gather_fallback(x, dim=3, index=relative_position_index, device=self.device)
+        return out
+
+    def _absolute_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        batch, heads, length, _ = x.shape
+        relative_position_index = self._get_relative_position_index(length)
+        if length in self.relative_position_cache:
+            out = self.relative_position_cache[length]
+        else:
+            out = ttnn.zeros(
+                (batch, heads, length, 2 * length - 1),
+                dtype=x.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            self.relative_position_cache[length] = out
+        out = ttnn.scatter(out, dim=3, index=relative_position_index, src=x)
+        return out
+
+
+class FFN:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        in_channels: int,
+        out_channels: int,
+        filter_channels: int,
+        kernel_size: int,
+    ) -> None:
+        self.conv_1 = Conv1d(
+            device=device,
+            in_channels=in_channels,
+            out_channels=filter_channels,
+            kernel_size=kernel_size,
+            padding="same",
+            activation="relu",
+        )
+        self.conv_2 = Conv1d(
+            device=device,
+            in_channels=filter_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding="same",
+            deallocate_input=True,
+        )
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        self.conv_1.load_state_dict(state_dict=state_dict, key="conv_1", module_prefix=module_prefix)
+        self.conv_2.load_state_dict(state_dict=state_dict, key="conv_2", module_prefix=module_prefix)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = self.conv_1(x)
+        out = self.conv_2(x)
+        return out
+
+
+class WN:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        num_layers: int,
+        gin_channels: int = 0,
+    ) -> None:
+        if kernel_size % 2 != 1:
+            raise ValueError("kernel_size must be odd")
+        self.device = device
+        self.hidden_channels = hidden_channels
+        self.num_layers = num_layers
+        self.gin_channels = gin_channels
+        self.in_layers: list[Conv1d] = []
+        self.res_skip_layers: list[Linear] = []
+
+        self.cond_layer: Linear | None = None
+        if gin_channels != 0:
+            self.cond_layer = Linear(
+                device=device,
+                in_features=gin_channels,
+                out_features=2 * hidden_channels * num_layers,
+            )
+
+        for i in range(num_layers):
+            dilation = dilation_rate**i
+            self.in_layers.append(
+                Conv1d(
+                    device=device,
+                    in_channels=hidden_channels,
+                    out_channels=2 * hidden_channels,
+                    kernel_size=kernel_size,
+                    dilation=dilation,
+                    padding="same",
+                )
+            )
+
+            res_skip_channels = 2 * hidden_channels if i < num_layers - 1 else hidden_channels
+            self.res_skip_layers.append(
+                Linear(
+                    device=device,
+                    in_features=hidden_channels,
+                    out_features=res_skip_channels,
+                )
+            )
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if self.cond_layer is not None:
+            self.cond_layer.load_state_dict(state_dict, key="cond_layer", module_prefix=module_prefix)
+        for i, layer in enumerate(self.in_layers):
+            layer.load_state_dict(state_dict, key=f"in_layers.{i}", module_prefix=module_prefix)
+        for i, layer in enumerate(self.res_skip_layers):
+            layer.load_state_dict(state_dict, key=f"res_skip_layers.{i}", module_prefix=module_prefix)
+
+    def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        out = ttnn.zeros_like(x)
+        g_proj = None
+        if g is not None:
+            if self.cond_layer is None:
+                raise ValueError("g is provided but gin_channels is 0.")
+            g_proj = self.cond_layer(g)
+
+        for i, (in_layer, res_skip_layer) in enumerate(zip(self.in_layers, self.res_skip_layers, strict=True)):
+            conv_out = in_layer(x)
+            if g_proj is not None:
+                cond_offset = i * 2 * self.hidden_channels
+                layer_conditioning = ttnn.slice(
+                    g_proj,
+                    (0, 0, cond_offset),
+                    (g_proj.shape[0], g_proj.shape[1], cond_offset + 2 * self.hidden_channels),
+                )
+            else:
+                layer_conditioning = ttnn.zeros_like(conv_out)
+            conv_out = ttnn.to_memory_config(conv_out, ttnn.L1_MEMORY_CONFIG)
+            input_activation = ttnn.add(conv_out, layer_conditioning, output_tensor=conv_out)
+            t_activation, s_activation = ttnn.chunk(input_activation, 2, dim=-1)
+            gates_activations = ttnn.multiply(
+                ttnn.sigmoid(s_activation, output_tensor=s_activation),
+                ttnn.tanh(t_activation, output_tensor=t_activation),
+                output_tensor=s_activation,
+            )
+            res_skip_out = res_skip_layer(gates_activations)
+            if i < self.num_layers - 1:
+                residual_out, skip_out = ttnn.chunk(res_skip_out, 2, dim=-1)
+                x = ttnn.add(x, residual_out, output_tensor=x)
+                out = ttnn.add(out, skip_out, output_tensor=out)
+            else:
+                out = ttnn.add(out, res_skip_out, output_tensor=out)
+
+        return out
+
+
+class ResBlock1:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        channels: int,
+        kernel_size: int = 3,
+        dilation: tuple[int, int, int] = (1, 3, 5),
+    ) -> None:
+        self.convs1: list[Conv1d] = []
+        self.convs2: list[Conv1d] = []
+        self.lrelu_slope = LRELU_SLOPE
+        for d_value in dilation:
+            self.convs1.append(
+                Conv1d(
+                    device=device,
+                    in_channels=channels,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    dilation=d_value,
+                    padding="same",
+                    activation=("leaky_relu", {"negative_slope": self.lrelu_slope}),
+                    deallocate_input=True,
+                )
+            )
+            self.convs2.append(
+                Conv1d(
+                    device=device,
+                    in_channels=channels,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    dilation=1,
+                    padding="same",
+                    deallocate_input=True,
+                )
+            )
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        for i, conv in enumerate(self.convs1):
+            conv.load_state_dict(state_dict, key=f"convs1.{i}", module_prefix=module_prefix)
+        for i, conv in enumerate(self.convs2):
+            conv.load_state_dict(state_dict, key=f"convs2.{i}", module_prefix=module_prefix)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
+        x = ttnn.clone(x)
+        for c1, c2 in zip(self.convs1, self.convs2, strict=True):
+            hidden = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
+            hidden = c1(hidden)
+            hidden = c2(hidden)
+            x = ttnn.add(hidden, x, output_tensor=x)
+        return x
+
+
+class ResBlock2:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        channels: int,
+        kernel_size: int = 3,
+        dilation: tuple[int, int] = (1, 3),
+    ) -> None:
+        self.convs: list[Conv1d] = []
+        self.lrelu_slope = LRELU_SLOPE
+        for d_value in dilation:
+            self.convs.append(
+                Conv1d(
+                    device=device,
+                    in_channels=channels,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    dilation=d_value,
+                    padding="same",
+                    deallocate_input=True,
+                )
+            )
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        for i, conv in enumerate(self.convs):
+            conv.load_state_dict(state_dict, key=f"convs.{i}", module_prefix=module_prefix)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
+        x = ttnn.clone(x)
+        for conv in self.convs:
+            xt = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
+            xt = conv(xt)
+            x = ttnn.add(xt, x, output_tensor=x)
+        return x
+
+
+class ResidualCouplingLayer:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        num_layers: int,
+        gin_channels: int = 0,
+    ) -> None:
+        if channels % 2 != 0:
+            raise ValueError("channels should be divisible by 2")
+        self.half_channels = channels // 2
+        self.pre_linear = Linear(
+            device=device,
+            in_features=self.half_channels,
+            out_features=hidden_channels,
+        )
+        self.enc = WN(
+            device=device,
+            hidden_channels=hidden_channels,
+            kernel_size=kernel_size,
+            dilation_rate=dilation_rate,
+            num_layers=num_layers,
+            gin_channels=gin_channels,
+        )
+        self.post_linear = Linear(
+            device=device,
+            in_features=hidden_channels,
+            out_features=self.half_channels,
+        )
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
+        enc_module_prefix = f"{module_prefix}enc."
+        self.pre_linear.load_state_dict(state_dict, key="pre_linear", module_prefix=module_prefix)
+        self.enc.load_state_dict(state_dict, module_prefix=enc_module_prefix)
+        self.post_linear.load_state_dict(state_dict, key="post_linear", module_prefix=module_prefix)
+
+    def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        x0, x1 = ttnn.chunk(x, 2, dim=-1)
+        h = self.pre_linear(x0)
+        h = self.enc(h, g=g)
+        stats = self.post_linear(h)
+        x1 = ttnn.subtract(x1, stats, output_tensor=x1)
+        out = ttnn.concat([x0, x1], dim=-1, memory_config=x0.memory_config())
+        return out
 
 
 class Embedding:

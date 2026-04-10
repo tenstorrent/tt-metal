@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.torch_impl.synthesizer.models import SynthesizerTrnMsNSF as TorchSynthesizerTrnMsNSF
-from models.demos.rvc.tt_impl.synthesizer.models import SynthesizerTrnMsNSF as TTSynthesizerTrnMsNSF
+from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF as TTSynthesizerTrnMsNSF
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

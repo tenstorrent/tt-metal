@@ -23,13 +23,11 @@ def test_hubert_multihead_attention(device):
     torch_attn = TorchMultiheadSelfAttention(
         embed_dim=embed_dim,
         num_heads=num_heads,
-        self_attention=True,
     ).eval()
     tt_attn = TTMultiheadSelfAttention(
         device=device,
         embed_dim=embed_dim,
         num_heads=num_heads,
-        self_attention=True,
     )
 
     state_dict = {f"attn.{k}": v for k, v in torch_attn.state_dict().items()}

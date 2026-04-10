@@ -19,7 +19,7 @@ def load_model_ensemble_and_task(
 
     with open(model_cfg_path) as f:
         cfg = json.load(f)
-    model = HubertModel.build_model(cfg["model"], task, device=tt_device)
+    model = HubertModel(device=tt_device, cfg=cfg["model"], task_cfg=task.cfg)
     hubert_state_safetensors = load_file(model_path)
 
     model.load_state_dict(hubert_state_safetensors)

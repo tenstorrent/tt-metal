@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.torch_impl.synthesizer.models import GeneratorNSF as TorchGeneratorNSF
-from models.demos.rvc.tt_impl.synthesizer.models import GeneratorNSF as TTGeneratorNSF
+from models.demos.rvc.tt_impl.vc.synthesizer import GeneratorNSF as TTGeneratorNSF
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

@@ -18,7 +18,7 @@ from scipy import signal
 import ttnn
 from models.demos.rvc.torch_impl.audio import load_audio
 from models.demos.rvc.torch_impl.configs.config import Config
-from models.demos.rvc.tt_impl.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
+from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
 from models.demos.rvc.tt_impl.vc.utils import load_hubert
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)

@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.torch_impl.synthesizer.attentions import FFN as TorchFFN
-from models.demos.rvc.tt_impl.synthesizer.attentions import FFN as TTFFN
+from models.demos.rvc.tt_impl.vc.synthesizer import FFN as TTFFN
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

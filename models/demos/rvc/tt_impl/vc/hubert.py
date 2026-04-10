@@ -27,7 +27,7 @@ def pad_to_multiple(x: ttnn.Tensor, multiple: int, value: float = 0.0) -> tuple[
 class MultiheadSelfAttention:
     """Optimized TT HuBERT attention using TTNN transformer attention operators."""
 
-    def __init__(self, device: ttnn.MeshDevice, embed_dim: int, num_heads: int, self_attention: bool = False) -> None:
+    def __init__(self, device: ttnn.MeshDevice, embed_dim: int, num_heads: int) -> None:
         self.device = device
         self.embed_dim = embed_dim
         self.k_dim = embed_dim
@@ -36,7 +36,6 @@ class MultiheadSelfAttention:
         self.head_dim = embed_dim // num_heads
         if self.head_dim * num_heads != self.embed_dim:
             raise ValueError("embed_dim must be divisible by num_heads")
-        self.self_attention = self_attention
 
         self.k_proj = Linear(device=device, in_features=self.k_dim, out_features=embed_dim)
         self.v_proj = Linear(device=device, in_features=self.v_dim, out_features=embed_dim)
@@ -106,9 +105,7 @@ class TransformerSentenceEncoderLayer:
         self.device = device
         self.embedding_dim = embed_dim
         self.activation_fn = activation_fn
-        self.self_attn = MultiheadSelfAttention(
-            device=device, embed_dim=embed_dim, num_heads=attention_heads, self_attention=True
-        )
+        self.self_attn = MultiheadSelfAttention(device=device, embed_dim=embed_dim, num_heads=attention_heads)
         self.layer_norm_first = layer_norm_first
         self.fc1 = Linear(
             device=device,
@@ -253,46 +250,21 @@ class ConvFeatureExtractionModel:
                 group_norm.deallocate()
 
 
-class PositionalConvEmbedding:
-    def __init__(self, device: ttnn.MeshDevice, embed_dim: int, kernel_size: int, groups: int) -> None:
-        self.device = device
-        self.embed_dim = embed_dim
-        self.kernel_size = kernel_size
-        self.conv = Conv1d(
-            device=device,
-            in_channels=embed_dim,
-            out_channels=embed_dim,
-            kernel_size=kernel_size,
-            stride=1,
-            padding="same",
-            groups=groups,
-            dtype=ttnn.bfloat16,
-            activation="gelu",
-        )
-
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
-        self.conv.load_state_dict(state_dict=state_dict, key="0", module_prefix=module_prefix)
-
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        input_length = x.shape[1]
-        output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
-        out = self.conv(x)
-        return out
-
-    def deallocate(self) -> None:
-        self.conv.deallocate()
-
-
 class TransformerEncoder:
     def __init__(self, device: ttnn.MeshDevice, args: dict) -> None:
         self.device = device
         self.embedding_dim = args["encoder_embed_dim"]
         self.required_seq_len_multiple = args.get("required_seq_len_multiple", 2)
-        self.pos_conv = PositionalConvEmbedding(
+        self.pos_conv = Conv1d(
             device=device,
-            embed_dim=self.embedding_dim,
+            in_channels=self.embedding_dim,
+            out_channels=self.embedding_dim,
             kernel_size=args["conv_pos"],
+            stride=1,
+            padding="same",
             groups=args["conv_pos_groups"],
+            dtype=ttnn.bfloat16,
+            activation="gelu",
         )
         self.layers = [self.build_encoder_layer(args) for _ in range(args["encoder_layers"])]
         self.layer_norm_first = args["layer_norm_first"]
@@ -311,7 +283,7 @@ class TransformerEncoder:
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
             module_prefix = ""
-        self.pos_conv.load_state_dict(state_dict=state_dict, module_prefix=f"{module_prefix}pos_conv.")
+        self.pos_conv.load_state_dict(state_dict=state_dict, key="pos_conv.0", module_prefix=module_prefix)
         self.layer_norm.load_state_dict(state_dict=state_dict, key="layer_norm", module_prefix=module_prefix)
         for i, layer in enumerate(self.layers):
             layer.load_state_dict(state_dict=state_dict, module_prefix=f"{module_prefix}layers.{i}.")
@@ -379,10 +351,6 @@ class HubertModel:
             in_features=cfg["encoder_embed_dim"],
             out_features=final_dim,
         )
-
-    @classmethod
-    def build_model(cls, cfg, task, device: ttnn.MeshDevice):
-        return cls(device=device, cfg=cfg, task_cfg=task.cfg)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.feature_extractor.load_state_dict(state_dict=state_dict, module_prefix="feature_extractor.")
