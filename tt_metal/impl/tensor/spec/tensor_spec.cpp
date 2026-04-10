@@ -51,7 +51,6 @@ std::optional<std::string> check_memory_config_with_tensor_shape(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
     if (!memory_config.is_sharded() or !memory_config.shard_spec().has_value()) {
-        log_warning(tt::LogAlways, "Memory config is not sharded, returning nullopt");
         return std::nullopt;
     }
 
@@ -125,7 +124,6 @@ std::optional<std::string> check_memory_config_with_tensor_shape(
             }
         }
     }
-    log_warning(tt::LogAlways, "Memory config is sharded and tensor shape is valid, returning nullopt");
     return std::nullopt;
 }
 

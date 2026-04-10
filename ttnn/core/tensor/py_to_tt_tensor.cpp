@@ -250,7 +250,6 @@ Tensor create_tt_tensor_from_host_data(
             !check_memory_config_with_tensor_shape(src_tensor_layout, tensor_shape).has_value();
 
         if (!src_layout_fits_shard_spec) {
-            log_warning(tt::LogAlways, "src_layout_fits_shard_spec is false, setting memory_config to default");
             src_tensor_layout = src_tensor_layout.with_memory_config(MemoryConfig{});
         }
 
