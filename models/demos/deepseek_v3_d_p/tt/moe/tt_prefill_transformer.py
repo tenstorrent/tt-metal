@@ -59,15 +59,37 @@ class TtPrefillTransformer(LightweightModule):
         is_balanced: bool = False,
         capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
-        routed_expert_activations_dtype=ttnn.bfloat16,
-        routed_expert_weights_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
-        shared_expert_weights_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
+
+        # Log environment variables that define reference output cache and TTNN weights cache.
+        # This is to prevent accidental cache creation at unusal places and fill disk space.
+        import os
+
+        TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
+        TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
+
+        logger.debug(f"{TT_DS_PREFILL_TTNN_CACHE=}")
+        logger.debug(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
+        if TT_DS_PREFILL_TTNN_CACHE is None:
+            logger.error(f"TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=")
+            import pytest
+
+            pytest.fail(f"{TT_DS_PREFILL_TTNN_CACHE=}")
+        if TT_DS_PREFILL_HOST_REF_CACHE is None:
+            logger.error(
+                f"TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE="
+            )
+            import pytest
+
+            pytest.fail(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
@@ -76,7 +98,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_device=mesh_device,
             vocab_size=config.vocab_size,
             emb_dim=config.hidden_size,
-            torch_weight=state_dict["embed_weight"],
+            torch_weight=state_dict.get("embed_weight"),  # None if cache exists
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
@@ -86,10 +108,12 @@ class TtPrefillTransformer(LightweightModule):
         self.layers = []
         for i in range(num_layers):
             logger.info(f"Building layer {i}/{num_layers}...")
+            # Get layer weights or empty dict if loading from cache
+            layer_state = state_dict["layers"][i] if state_dict.get("layers") else {}
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
-                state_dict=state_dict["layers"][i],
+                state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,
                 num_links=num_links,
@@ -111,7 +135,7 @@ class TtPrefillTransformer(LightweightModule):
         self.norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=config.hidden_size,
-            torch_weight=state_dict["norm_weight"],
+            torch_weight=state_dict.get("norm_weight"),  # None if cache exists
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,

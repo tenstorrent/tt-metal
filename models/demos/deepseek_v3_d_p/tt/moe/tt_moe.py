@@ -56,6 +56,62 @@ class TtMoe(LightweightModule):
         - Final Add: ROW_MAJOR
     """
 
+    @staticmethod
+    def build_ttnn_cache(
+        gate_weights: dict | None,
+        routed_expert_weights: list[dict] | None,
+        shared_expert_weights: dict | None,
+        experts_per_chip: int,
+        emb_dim: int,
+        hidden_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        routed_expert_weights_dtype: ttnn.DataType,
+        shared_expert_weights_dtype: ttnn.DataType,
+        cache_path: Path,
+        layer_idx: int,
+    ):
+        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy."""
+        # Build gate cache (delegate to TtMoEGatePrefill)
+        if gate_weights:
+            from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
+
+            # Create minimal config for caching
+            gate_config = TtMoEGateConfig()
+            gate_config.dim = emb_dim
+            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
+
+            TtMoEGatePrefill.build_ttnn_cache(
+                torch_weight=gate_weights["weight"],
+                torch_bias=gate_weights["e_score_correction_bias"],
+                config=gate_config,
+                mesh_device=mesh_device,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.gate",
+            )
+
+        # Build routed expert cache
+        if routed_expert_weights:
+            TtRoutedExpert.build_ttnn_cache(
+                routed_expert_weights,
+                experts_per_chip,
+                mesh_device,
+                routed_expert_weights_dtype,
+                cache_path,
+                f"layer_{layer_idx}.routed_expert",
+            )
+
+        # Build shared expert cache
+        if shared_expert_weights:
+            TtSharedExpert.build_ttnn_cache(
+                shared_expert_weights,
+                emb_dim,
+                hidden_dim,
+                mesh_device,
+                shared_expert_weights_dtype,
+                cache_path,
+                f"layer_{layer_idx}.shared_expert",
+            )
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -75,7 +131,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -147,12 +203,21 @@ class TtMoe(LightweightModule):
         gate_config.n_activated_experts = num_experts_per_tok
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
 
+        # Handle cache-only case (gate_weights=None)
+        if gate_weights is not None:
+            gate_weight = gate_weights["weight"]
+            gate_bias = gate_weights["e_score_correction_bias"]
+        else:
+            # Dummy tensors for cache load (ignored when cache exists)
+            gate_weight = torch.empty(num_routed_experts, emb_dim)
+            gate_bias = torch.empty(num_routed_experts)
+
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
             dispatch_table=expert_dispatch_table,
-            weight=gate_weights["weight"],
-            bias=gate_weights["e_score_correction_bias"],
+            weight=gate_weight,
+            bias=gate_bias,
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",

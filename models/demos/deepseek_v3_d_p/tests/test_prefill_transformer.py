@@ -17,6 +17,7 @@ Parametrized over:
 - n_routed_experts / capacity_factor / gate_fallback_mode: MoE configurations
 """
 
+import gc
 import json
 
 import pytest
@@ -33,13 +34,13 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPTS_PATH,
     create_hf_model,
-    create_hf_model_with_weights,
     download_infinitebench_subset,
     extract_tt_state_dict,
-    get_or_compute_host_reference,
+    load_and_compute_layer_by_layer,
+    load_reference_cache,
+    save_reference_cache,
     tokenize_infinitebench_to_isl,
     tokenize_prompts_to_isl,
-    tt_state_dict_to_hf_state_dict,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -159,18 +160,38 @@ def test_prefill_transformer(
     orig_num_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = n_routed_experts
 
-    # --- Build HF reference model and extract weights ---
-    profiler.start("weights_creation")
-    if use_pretrained:
-        _, state_dict = request.getfixturevalue("pretrained_transformer_weights")
-        hf_sd = tt_state_dict_to_hf_state_dict(state_dict)
-        hf_model = create_hf_model_with_weights(config, num_layers, hf_sd)
-    else:
-        hf_model = create_hf_model(config, num_layers, n_routed_experts=n_routed_experts)
-        state_dict = extract_tt_state_dict(hf_model)
-    profiler.end("weights_creation")
+    # --- Cache-aware loading strategy ---
+    profiler.start("cache_check")
 
-    # --- Create input ---
+    from models.demos.deepseek_v3_d_p.utils.cache_utils import check_reference_cache_exists, check_ttnn_cache_complete
+
+    # Check cache states
+    experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
+    ttnn_cache_complete = (
+        check_ttnn_cache_complete(effective_cache_path, num_layers, experts_per_chip, tuple(mesh_shape))
+        if effective_cache_path
+        else False
+    )
+
+    cache_key = f"{weight_type}_{input_source}_isl{isl_total}_layers{num_layers}_experts{n_routed_experts}"
+    ref_cache_exists = check_reference_cache_exists(cache_key) if pcc_validation else False
+
+    logger.info(f"Cache status: TTNN={ttnn_cache_complete}, Reference={ref_cache_exists}")
+
+    # Determine what we need to load
+    need_to_load_weights = not ttnn_cache_complete
+    need_to_compute_reference = pcc_validation and not ref_cache_exists
+    need_hf_model = need_to_load_weights or need_to_compute_reference
+
+    logger.info(
+        f"Loading strategy: need_weights={need_to_load_weights}, "
+        f"need_reference={need_to_compute_reference}, "
+        f"need_hf_model={need_hf_model}"
+    )
+
+    profiler.end("cache_check")
+
+    # --- Create input (needed early for reference computation) ---
     if input_source == "random":
         token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
     elif input_source == "json_prompts":
@@ -193,6 +214,60 @@ def test_prefill_transformer(
     else:
         raise ValueError(f"Unknown input_source: {input_source}")
 
+    # --- Build HF model and/or extract weights based on cache state ---
+    profiler.start("weights_creation")
+
+    state_dict = None
+    ref_snapshots = None
+    ref_kvpe_list = None
+
+    if use_pretrained:
+        model_path = request.getfixturevalue("model_path")
+        logger.debug(f"{model_path=}")
+        if need_hf_model:
+            # Use unified loader with flags
+            logger.info("Processing layers with unified loader...")
+            result = load_and_compute_layer_by_layer(
+                model_path=model_path,
+                config=config,
+                num_layers=num_layers,
+                token_ids=token_ids,
+                compute_reference=need_to_compute_reference,
+                build_ttnn_cache=need_to_load_weights,
+                weight_cache_path=effective_cache_path,
+                mesh_device=mesh_device,
+                seq_len=isl_total,
+                num_links=num_links,
+                topology=topology,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                capacity_factor=capacity_factor,
+                gate_fallback_mode=gate_fallback_mode,
+            )
+
+            # state_dict is always None (cache built to disk)
+            state_dict = {}
+            ref_snapshots = result.ref_snapshots
+            ref_kvpe_list = result.ref_kvpe_list
+
+            # Save reference cache if computed
+            if need_to_compute_reference and ref_snapshots is not None:
+                save_reference_cache(cache_key, ref_snapshots, ref_kvpe_list)
+                logger.info("Reference cached")
+        else:
+            # Both caches exist - skip loading entirely
+            logger.info("Both caches exist, skipping weight loading")
+            state_dict = {}
+    else:
+        # Random weights - always create HF model
+        logger.info("Creating HF model with random weights...")
+        hf_model = create_hf_model(config, num_layers, n_routed_experts=n_routed_experts)
+        state_dict = extract_tt_state_dict(hf_model)
+        del hf_model
+        gc.collect()
+
+    profiler.end("weights_creation")
+
     # --- TT transformer ---
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
@@ -210,6 +285,10 @@ def test_prefill_transformer(
         weight_cache_path=effective_cache_path,
     )
     ttnn.synchronize_device(mesh_device)
+    # --- Free memory immediately after transformer creation ---
+    del state_dict
+    gc.collect()
+    logger.info("State dict freed after transformer creation")
     profiler.end("tt_transformer_creation")
 
     # --- Create external KVPE cache ---
@@ -271,9 +350,11 @@ def test_prefill_transformer(
             threshold = PCC_THRESHOLD  # 0.99
         logger.info(f"PCC threshold: {threshold}")
 
-        cache_key = f"{weight_type}_{input_source}_isl{isl_total}" f"_layers{num_layers}_experts{n_routed_experts}"
-        is_ci = is_ci_env or is_ci_v2_env
-        ref_snapshots, ref_kvpe_list = get_or_compute_host_reference(hf_model, token_ids, num_layers, cache_key, is_ci)
+        # Load reference from cache if not already computed
+        if ref_snapshots is None:
+            logger.info("Loading reference from cache...")
+            ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
+        # else: already computed by load_and_compute_layer_by_layer()
 
         # Per-stage PCC comparison
         pcc_results = []
@@ -328,16 +409,21 @@ def test_prefill_transformer(
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
-        if failures:
-            msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
-            pytest.fail(f"PCC below {threshold} at: {msg}")
+        # Store failures for deferred check (after timing report)
+        has_pcc_failures = len(failures) > 0
 
-        logger.success(
-            f"TtPrefillTransformer PCC test passed "
-            f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
-            f"weights={weight_type})"
-        )
+        if not has_pcc_failures:
+            logger.success(
+                f"TtPrefillTransformer PCC test passed "
+                f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
+                f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+                f"weights={weight_type})"
+            )
+        else:
+            pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
+            logger.error(
+                f"TtPrefillTransformer PCC test has failures " f"(num_layers={num_layers}, failures={len(failures)})"
+            )
     else:
         logger.success(
             f"TtPrefillTransformer smoke test passed "
@@ -357,3 +443,7 @@ def test_prefill_transformer(
 
     # Restore original config
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
+
+    # Deferred PCC failure check (after timing report)
+    if pcc_validation and has_pcc_failures:
+        pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
