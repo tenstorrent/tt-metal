@@ -169,6 +169,8 @@ void kernel_main() {
     // TQ compile-time args
     constexpr uint32_t TQ_BASE = 33;
     constexpr uint32_t num_levels = get_compile_time_arg_val(TQ_BASE);
+    // pre_rescaled=1: BFP4 values are already centroid×norm, skip gather+norm
+    constexpr bool pre_rescaled = get_compile_time_arg_val(TQ_BASE + 1 + num_levels) == 1;
 
     // Runtime args
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -223,144 +225,173 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                // ── Pass 1K: Typecast K BFP4→BF16 into cb_dq_temp ──
-                init_sfpu(cb_k_idx, cb_dq_temp);
-                cb_reserve_back(cb_dq_temp, k_chunk_tiles);
-                for (uint32_t t = 0; t < k_chunk_tiles; t++) {
-                    tile_regs_acquire();
-                    cb_wait_front(cb_k_idx, 1);
-                    copy_tile(cb_k_idx, 0, 0);
-                    typecast_tile_init<DF_BFP4, DF_BF16>();
-                    typecast_tile<DF_BFP4, DF_BF16>(0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, cb_dq_temp);
-                    cb_pop_front(cb_k_idx, 1);
-                    tile_regs_release();
-                }
-                cb_push_back(cb_dq_temp, k_chunk_tiles);
-
-                // ── Pass 2K: Norm multiply + transpose → cb_k_in ──
-                // Reinitialize hardware for FPU broadcast multiply (after SFPU typecast)
-                mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
-                cb_wait_front(cb_dq_temp, k_chunk_tiles);
-                cb_reserve_back(cb_k_in, k_chunk_tiles);
-                cb_wait_front(cb_k_norms, Sk_chunk_t);
-                // Centroid gather: overwrite index tiles in cb_dq_temp with centroid values
-                for (uint32_t t = 0; t < k_chunk_tiles; t++) {
-                    tile_regs_acquire();
-                    copy_tile_to_dst_init_short(cb_dq_temp);
-                    copy_tile(cb_dq_temp, t, 0);  // DST[0] = float indices
-                    fill_tile_init();
-                    fill_tile(1, centroids[0]);
-                    for (uint32_t lev = 1; lev < num_levels; lev++) {
-                        copy_tile_to_dst_init_short(cb_dq_temp);
-                        copy_tile(cb_dq_temp, t, 2);
-                        unary_ge_tile_init();
-                        unary_ge_tile(2, level_bits_arr[lev]);
-                        fill_tile_init();
-                        fill_tile(3, centroids[lev]);
-                        sub_binary_tile_init();
-                        sub_binary_tile(3, 1, 3);
-                        mul_binary_tile_init();
-                        mul_binary_tile(2, 3, 3);
-                        add_binary_tile_init();
-                        add_binary_tile(1, 3, 1);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_dq_temp);
-                    pack_tile<true>(1, cb_dq_temp, t);  // overwrite in-place
-                    tile_regs_release();
-                }
-
-                // Norm multiply + transpose → cb_k_in
-                for (uint32_t row = 0; row < Sk_chunk_t; row++) {
-                    for (uint32_t col = 0; col < DHt; col++) {
-                        uint32_t src_tile = row * DHt + col;
+                if constexpr (pre_rescaled) {
+                    // ── Pre-rescaled mode: typecast BFP4→BF16 only (K transposed) ──
+                    // Reader pushes K transposed to cb_k_idx, V non-transposed to cb_v_idx.
+                    init_sfpu(cb_k_idx, cb_k_in);
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                    for (uint32_t t = 0; t < k_chunk_tiles; t++) {
                         tile_regs_acquire();
-                        mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
-                        mul_tiles_bcast_cols(cb_dq_temp, cb_k_norms, src_tile, row, 0);
+                        cb_wait_front(cb_k_idx, 1);
+                        copy_tile(cb_k_idx, 0, 0);
+                        typecast_tile_init<DF_BFP4, DF_BF16>();
+                        typecast_tile<DF_BFP4, DF_BF16>(0);
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_reconfig_data_format(cb_k_in);
-                        pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
+                        pack_tile(0, cb_k_in);
+                        cb_pop_front(cb_k_idx, 1);
                         tile_regs_release();
                     }
-                }
-                cb_pop_front(cb_dq_temp, k_chunk_tiles);
-                cb_pop_front(cb_k_norms, Sk_chunk_t);
-                cb_push_back(cb_k_in, k_chunk_tiles);
+                    cb_push_back(cb_k_in, k_chunk_tiles);
 
-                // ── Pass 1V: Typecast V BFP4→BF16 into cb_dq_temp ──
-                init_sfpu(cb_v_idx, cb_dq_temp);
-                cb_reserve_back(cb_dq_temp, v_chunk_tiles);
-                for (uint32_t t = 0; t < v_chunk_tiles; t++) {
-                    tile_regs_acquire();
-                    cb_wait_front(cb_v_idx, 1);
-                    copy_tile(cb_v_idx, 0, 0);
-                    typecast_tile_init<DF_BFP4, DF_BF16>();
-                    typecast_tile<DF_BFP4, DF_BF16>(0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, cb_dq_temp);
-                    cb_pop_front(cb_v_idx, 1);
-                    tile_regs_release();
-                }
-                cb_push_back(cb_dq_temp, v_chunk_tiles);
-
-                // ── Pass 2V: Centroid gather + norm multiply → cb_v_in (NO transpose) ──
-                mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
-                cb_wait_front(cb_dq_temp, v_chunk_tiles);
-                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                cb_wait_front(cb_v_norms, Sk_chunk_t);
-
-                // Centroid gather in-place
-                for (uint32_t t = 0; t < v_chunk_tiles; t++) {
-                    tile_regs_acquire();
-                    copy_tile_to_dst_init_short(cb_dq_temp);
-                    copy_tile(cb_dq_temp, t, 0);
-                    fill_tile_init();
-                    fill_tile(1, centroids[0]);
-                    for (uint32_t lev = 1; lev < num_levels; lev++) {
-                        copy_tile_to_dst_init_short(cb_dq_temp);
-                        copy_tile(cb_dq_temp, t, 2);
-                        unary_ge_tile_init();
-                        unary_ge_tile(2, level_bits_arr[lev]);
-                        fill_tile_init();
-                        fill_tile(3, centroids[lev]);
-                        sub_binary_tile_init();
-                        sub_binary_tile(3, 1, 3);
-                        mul_binary_tile_init();
-                        mul_binary_tile(2, 3, 3);
-                        add_binary_tile_init();
-                        add_binary_tile(1, 3, 1);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_dq_temp);
-                    pack_tile<true>(1, cb_dq_temp, t);
-                    tile_regs_release();
-                }
-
-                // Norm multiply
-                for (uint32_t row = 0; row < Sk_chunk_t; row++) {
-                    for (uint32_t col = 0; col < vDHt; col++) {
-                        uint32_t src_tile = row * vDHt + col;
+                    init_sfpu(cb_v_idx, cb_v_in);
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    for (uint32_t t = 0; t < v_chunk_tiles; t++) {
                         tile_regs_acquire();
-                        mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
-                        mul_tiles_bcast_cols(cb_dq_temp, cb_v_norms, src_tile, row, 0);
+                        cb_wait_front(cb_v_idx, 1);
+                        copy_tile(cb_v_idx, 0, 0);
+                        typecast_tile_init<DF_BFP4, DF_BF16>();
+                        typecast_tile<DF_BFP4, DF_BF16>(0);
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_reconfig_data_format(cb_v_in);
                         pack_tile(0, cb_v_in);
+                        cb_pop_front(cb_v_idx, 1);
                         tile_regs_release();
                     }
-                }
-                cb_pop_front(cb_dq_temp, v_chunk_tiles);
-                cb_pop_front(cb_v_norms, Sk_chunk_t);
-                cb_push_back(cb_v_in, v_chunk_tiles);
-            }
+                    cb_push_back(cb_v_in, v_chunk_tiles);
+                } else {
+                    // ── Full dequant mode: typecast + centroid gather + norm multiply ──
+                    // Pass 1K: Typecast K BFP4→BF16 into cb_dq_temp
+                    init_sfpu(cb_k_idx, cb_dq_temp);
+                    cb_reserve_back(cb_dq_temp, k_chunk_tiles);
+                    for (uint32_t t = 0; t < k_chunk_tiles; t++) {
+                        tile_regs_acquire();
+                        cb_wait_front(cb_k_idx, 1);
+                        copy_tile(cb_k_idx, 0, 0);
+                        typecast_tile_init<DF_BFP4, DF_BF16>();
+                        typecast_tile<DF_BFP4, DF_BF16>(0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_dq_temp);
+                        cb_pop_front(cb_k_idx, 1);
+                        tile_regs_release();
+                    }
+                    cb_push_back(cb_dq_temp, k_chunk_tiles);
+
+                    // Pass 2K: Centroid gather + norm multiply + transpose → cb_k_in
+                    mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
+                    cb_wait_front(cb_dq_temp, k_chunk_tiles);
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                    cb_wait_front(cb_k_norms, Sk_chunk_t);
+                    for (uint32_t t = 0; t < k_chunk_tiles; t++) {
+                        tile_regs_acquire();
+                        copy_tile_to_dst_init_short(cb_dq_temp);
+                        copy_tile(cb_dq_temp, t, 0);
+                        fill_tile_init();
+                        fill_tile(1, centroids[0]);
+                        for (uint32_t lev = 1; lev < num_levels; lev++) {
+                            copy_tile_to_dst_init_short(cb_dq_temp);
+                            copy_tile(cb_dq_temp, t, 2);
+                            unary_ge_tile_init();
+                            unary_ge_tile(2, level_bits_arr[lev]);
+                            fill_tile_init();
+                            fill_tile(3, centroids[lev]);
+                            sub_binary_tile_init();
+                            sub_binary_tile(3, 1, 3);
+                            mul_binary_tile_init();
+                            mul_binary_tile(2, 3, 3);
+                            add_binary_tile_init();
+                            add_binary_tile(1, 3, 1);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_dq_temp);
+                        pack_tile<true>(1, cb_dq_temp, t);
+                        tile_regs_release();
+                    }
+                    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+                        for (uint32_t col = 0; col < DHt; col++) {
+                            uint32_t src_tile = row * DHt + col;
+                            tile_regs_acquire();
+                            mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
+                            mul_tiles_bcast_cols(cb_dq_temp, cb_k_norms, src_tile, row, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_k_in);
+                            pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
+                            tile_regs_release();
+                        }
+                    }
+                    cb_pop_front(cb_dq_temp, k_chunk_tiles);
+                    cb_pop_front(cb_k_norms, Sk_chunk_t);
+                    cb_push_back(cb_k_in, k_chunk_tiles);
+
+                    // Pass 1V: Typecast V BFP4→BF16 into cb_dq_temp
+                    init_sfpu(cb_v_idx, cb_dq_temp);
+                    cb_reserve_back(cb_dq_temp, v_chunk_tiles);
+                    for (uint32_t t = 0; t < v_chunk_tiles; t++) {
+                        tile_regs_acquire();
+                        cb_wait_front(cb_v_idx, 1);
+                        copy_tile(cb_v_idx, 0, 0);
+                        typecast_tile_init<DF_BFP4, DF_BF16>();
+                        typecast_tile<DF_BFP4, DF_BF16>(0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_dq_temp);
+                        cb_pop_front(cb_v_idx, 1);
+                        tile_regs_release();
+                    }
+                    cb_push_back(cb_dq_temp, v_chunk_tiles);
+
+                    // Pass 2V: Centroid gather + norm multiply → cb_v_in (no transpose)
+                    mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
+                    cb_wait_front(cb_dq_temp, v_chunk_tiles);
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    cb_wait_front(cb_v_norms, Sk_chunk_t);
+                    for (uint32_t t = 0; t < v_chunk_tiles; t++) {
+                        tile_regs_acquire();
+                        copy_tile_to_dst_init_short(cb_dq_temp);
+                        copy_tile(cb_dq_temp, t, 0);
+                        fill_tile_init();
+                        fill_tile(1, centroids[0]);
+                        for (uint32_t lev = 1; lev < num_levels; lev++) {
+                            copy_tile_to_dst_init_short(cb_dq_temp);
+                            copy_tile(cb_dq_temp, t, 2);
+                            unary_ge_tile_init();
+                            unary_ge_tile(2, level_bits_arr[lev]);
+                            fill_tile_init();
+                            fill_tile(3, centroids[lev]);
+                            sub_binary_tile_init();
+                            sub_binary_tile(3, 1, 3);
+                            mul_binary_tile_init();
+                            mul_binary_tile(2, 3, 3);
+                            add_binary_tile_init();
+                            add_binary_tile(1, 3, 1);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_dq_temp);
+                        pack_tile<true>(1, cb_dq_temp, t);
+                        tile_regs_release();
+                    }
+                    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+                        for (uint32_t col = 0; col < vDHt; col++) {
+                            uint32_t src_tile = row * vDHt + col;
+                            tile_regs_acquire();
+                            mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
+                            mul_tiles_bcast_cols(cb_dq_temp, cb_v_norms, src_tile, row, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_v_in);
+                            pack_tile(0, cb_v_in);
+                            tile_regs_release();
+                        }
+                    }
+                    cb_pop_front(cb_dq_temp, v_chunk_tiles);
+                    cb_pop_front(cb_v_norms, Sk_chunk_t);
+                    cb_push_back(cb_v_in, v_chunk_tiles);
+                }  // end else (full dequant)
+            }  // end k_chunk loop
 
             // ── Run SDPA on the BF16 K/V ──
             mm_init(cb_q_in, cb_k_in, cb_out);
