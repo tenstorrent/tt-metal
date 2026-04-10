@@ -8,6 +8,7 @@ import transformers
 from datasets import load_dataset
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
+from transformers.models.whisper.modeling_whisper import WhisperDecoder
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -186,6 +187,260 @@ def test_whisper_attention(
         logger.info("All PCC checks passed!")
     else:
         assert does_pass, f"PCC is lower than expected for some of the outputs. Check warnings!"
+
+
+@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("prefix_len", [8])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+def test_whisper_self_attention_decoder_prefill_parity(
+    mesh_device, ttnn_model, model_name, batch_size_per_device, prefix_len
+):
+    """Batched decoder self-attn prefill (causal SDPA + bulk KV) matches L incremental KV-cache steps."""
+    torch.manual_seed(0)
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
+    config = transformers.WhisperConfig.from_pretrained(model_name)
+    model = transformers.models.whisper.modeling_whisper.WhisperAttention(
+        embed_dim=config.d_model,
+        num_heads=config.encoder_attention_heads,
+        dropout=config.attention_dropout,
+        is_decoder=True,
+        layer_idx=0,
+        config=config,
+    ).eval()
+
+    kv_incremental, _ = init_kv_cache(
+        config,
+        mesh_device,
+        max_seq_len=512,
+        n_layers=1,
+        weights_mesh_mapper=weights_mesh_mapper,
+    )
+    kv_prefill, _ = init_kv_cache(
+        config,
+        mesh_device,
+        max_seq_len=512,
+        n_layers=1,
+        weights_mesh_mapper=weights_mesh_mapper,
+    )
+    kv_incremental = kv_incremental[batch_size_per_device][0]
+    kv_prefill = kv_prefill[batch_size_per_device][0]
+
+    ttnn_parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        convert_to_ttnn=lambda *_: True,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=mesh_device,
+        prefix="",
+    )
+
+    torch_hidden = torch_random((batch_size, prefix_len, config.d_model), -0.1, 0.1, dtype=torch.float32)
+    ttnn_hidden_full = ttnn.from_torch(
+        torch_hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=input_mesh_mapper,
+    )
+
+    incremental_outputs = []
+    for i in range(prefix_len):
+        pos_tensor = ttnn.from_torch(
+            torch.full((batch_size,), i, dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=input_mesh_mapper,
+        )
+        hi = ttnn.from_torch(
+            torch_hidden[:, i : i + 1, :],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=input_mesh_mapper,
+        )
+        out = ttnn_model.whisper_attention(
+            config,
+            hi,
+            None,
+            is_decode=True,
+            kv_cache=kv_incremental,
+            current_decode_pos=pos_tensor,
+            parameters=ttnn_parameters,
+        )
+        incremental_outputs.append(out)
+
+    pos_dummy = ttnn.from_torch(
+        torch.zeros(batch_size, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=input_mesh_mapper,
+    )
+    prefill_out = ttnn_model.whisper_attention(
+        config,
+        ttnn_hidden_full,
+        None,
+        is_decode=True,
+        kv_cache=kv_prefill,
+        current_decode_pos=pos_dummy,
+        decoder_prefill=True,
+        parameters=ttnn_parameters,
+    )
+
+    inc_torch = [ttnn.to_torch(t, mesh_composer=output_mesh_composer) for t in incremental_outputs]
+    inc_stacked = torch.cat([x.squeeze(1) for x in inc_torch], dim=1)
+    pre_torch = ttnn.to_torch(prefill_out, mesh_composer=output_mesh_composer).squeeze(1)
+    assert_with_pcc(inc_stacked, pre_torch, 0.98)
+
+    k_inc = ttnn.to_torch(kv_incremental[0], mesh_composer=output_mesh_composer)[:, :, :prefix_len, :]
+    k_pr = ttnn.to_torch(kv_prefill[0], mesh_composer=output_mesh_composer)[:, :, :prefix_len, :]
+    v_inc = ttnn.to_torch(kv_incremental[1], mesh_composer=output_mesh_composer)[:, :, :prefix_len, :]
+    v_pr = ttnn.to_torch(kv_prefill[1], mesh_composer=output_mesh_composer)[:, :, :prefix_len, :]
+    assert_with_pcc(k_inc, k_pr, 0.99)
+    assert_with_pcc(v_inc, v_pr, 0.99)
+
+
+@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("prefix_len", [6])
+@pytest.mark.parametrize("encoder_sequence_size", [1500])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+def test_decoder_kv_batched_prefill_matches_incremental_loop(
+    mesh_device,
+    ttnn_model,
+    model_name,
+    batch_size_per_device,
+    prefix_len,
+    encoder_sequence_size,
+):
+    """Phase 4: full decoder — stacked single-step KV decodes vs one batched prefill forward (PCC)."""
+    torch.manual_seed(42)
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
+    config = transformers.WhisperConfig.from_pretrained(model_name)
+    embed_dim = config.d_model
+    model = WhisperDecoder(config).eval()
+
+    ttnn_parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        convert_to_ttnn=ttnn_model.convert_to_ttnn,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=mesh_device,
+        prefix="decoder",
+    )
+
+    torch_encoder_hidden_states = torch_random(
+        (batch_size, encoder_sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32
+    )
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=input_mesh_mapper,
+    )
+    ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
+    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, mesh_device)
+
+    decoder_input_ids = torch.randint(
+        low=0,
+        high=config.vocab_size,
+        size=(batch_size, prefix_len),
+        dtype=torch.int64,
+    )
+
+    kv_inc, cross_inc = init_kv_cache(
+        config,
+        mesh_device,
+        max_seq_len=512,
+        weights_mesh_mapper=weights_mesh_mapper,
+        n_layers=config.decoder_layers,
+    )
+    kv_inc = kv_inc[batch_size_per_device]
+    cross_inc = cross_inc[batch_size_per_device]
+
+    incremental_rows = []
+    cross_attn_cache_valid = False
+    for i in range(prefix_len):
+        pos_tensor = ttnn.from_torch(
+            torch.full((batch_size,), i, dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=input_mesh_mapper,
+        )
+        slice_ids = decoder_input_ids[:, i : i + 1]
+        decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+            config=config,
+            input_ids=slice_ids,
+            attention_mask=None,
+            parameters=ttnn_parameters,
+            device=mesh_device,
+            decode_pos=i,
+            create_attention_mask=False,
+            input_mesh_mapper=input_mesh_mapper,
+        )
+        out = ttnn_model.decoder(
+            config,
+            hidden_states=decoder_hidden_states,
+            decoder_attention_mask=decoder_attention_mask,
+            encoder_hidden_states=ttnn_encoder_hidden_states,
+            kv_cache=kv_inc,
+            cross_attn_cache=cross_inc,
+            cross_attn_cache_valid=cross_attn_cache_valid,
+            current_decode_pos=pos_tensor,
+            decoder_prefill=False,
+            parameters=ttnn_parameters,
+        )
+        cross_attn_cache_valid = True
+        out_th = ttnn.to_torch(out, mesh_composer=output_mesh_composer)
+        if len(out_th.shape) == 4:
+            out_th = out_th.squeeze(1)
+        incremental_rows.append(out_th)
+
+    inc_stacked = torch.cat(incremental_rows, dim=1)
+
+    kv_pf, cross_pf = init_kv_cache(
+        config,
+        mesh_device,
+        max_seq_len=512,
+        weights_mesh_mapper=weights_mesh_mapper,
+        n_layers=config.decoder_layers,
+    )
+    kv_pf = kv_pf[batch_size_per_device]
+    cross_pf = cross_pf[batch_size_per_device]
+    pos_dummy = ttnn.from_torch(
+        torch.zeros(batch_size, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=input_mesh_mapper,
+    )
+    decoder_hidden_full, decoder_attention_mask_full = ttnn_model.preprocess_decoder_inputs(
+        config=config,
+        input_ids=decoder_input_ids,
+        attention_mask=None,
+        parameters=ttnn_parameters,
+        device=mesh_device,
+        decode_pos=None,
+        create_attention_mask=False,
+        input_mesh_mapper=input_mesh_mapper,
+    )
+    out_pf = ttnn_model.decoder(
+        config,
+        hidden_states=decoder_hidden_full,
+        decoder_attention_mask=decoder_attention_mask_full,
+        encoder_hidden_states=ttnn_encoder_hidden_states,
+        kv_cache=kv_pf,
+        cross_attn_cache=cross_pf,
+        cross_attn_cache_valid=False,
+        current_decode_pos=pos_dummy,
+        decoder_prefill=True,
+        parameters=ttnn_parameters,
+    )
+    out_pf_th = ttnn.to_torch(out_pf, mesh_composer=output_mesh_composer)
+    if len(out_pf_th.shape) == 4:
+        out_pf_th = out_pf_th.squeeze(1)
+
+    assert_with_pcc(inc_stacked, out_pf_th, 0.99)
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])

@@ -139,6 +139,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     task: str = "transcribe",
     prompt: Optional[str] = None,
     batch_size_per_device=WHISPER_BATCH_SIZE,
+    use_batched_decoder_prefill: bool = True,
 ):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
@@ -153,6 +154,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         language: Language code for transcription (batch-homogeneous)
         task: Task type ("transcribe" or "translate") (batch-homogeneous)
         prompt: Optional prompt to guide style/spelling (batch-homogeneous)
+        use_batched_decoder_prefill: If True, one decoder forward over the forced prefix with causal SDPA KV
+            prefill; if False, legacy token-by-token KV prefill (parity / timing comparison).
     """
     if generation_params is None:
         generation_params = GenerationParams()
@@ -182,6 +185,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         kv_cache_per_batch_size=kv_cache_per_batch_size,
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
+        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     def _model_pipeline(
@@ -306,6 +310,18 @@ def run_demo_whisper_for_audio_classification_inference(
             logger.info(log_msg)
 
 
+def format_conditional_generation_inference_perf_metrics(
+    mesh_device, batch_size_per_device: int, ttft: float, decode_throughput: float
+) -> dict:
+    """Same shape as perf checks in ``test_demo_for_conditional_generation`` (prefill_time_to_token, decode_t/s, decode_t/s/u)."""
+    total_batch = mesh_device.get_num_devices() * batch_size_per_device
+    return {
+        "prefill_time_to_token": ttft,
+        "decode_t/s": decode_throughput * total_batch,
+        "decode_t/s/u": decode_throughput,
+    }
+
+
 def run_demo_whisper_for_conditional_generation_inference(
     input_path,
     mesh_device,
@@ -318,6 +334,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
     run_both_batch_sizes=False,
+    use_batched_decoder_prefill: bool = True,
 ):
     torch.manual_seed(0)
 
@@ -334,6 +351,7 @@ def run_demo_whisper_for_conditional_generation_inference(
         task=task,
         prompt=prompt,
         batch_size_per_device=effective_max_batch_size,
+        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     # load data
