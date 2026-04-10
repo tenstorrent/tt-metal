@@ -199,14 +199,6 @@ public:
     void mark_allocations_safe();
     bool allocations_unsafe() const;
 
-    // Unsafe allocation tracking
-    void suppress_unsafe_allocation_warning();
-    void unsuppress_unsafe_allocation_warning();
-    std::unordered_set<size_t> get_unsafe_tracked_ids() const;
-    std::unordered_map<size_t, long> get_unsafe_buffer_refcounts() const;
-    void clear_unsafe_tracked_ids();
-    static std::vector<size_t> drain_pending_traceback_ids();
-
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
