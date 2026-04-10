@@ -77,7 +77,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1});
 
@@ -92,7 +92,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2});
     }
