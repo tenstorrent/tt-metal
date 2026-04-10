@@ -23,8 +23,9 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
     constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr bool pre_rescaled = get_compile_time_arg_val(11) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<11>();
+    constexpr auto q_args = TensorAccessorArgs<12>();
     constexpr auto k_idx_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto k_norms_args = TensorAccessorArgs<k_idx_args.next_compile_time_args_offset()>();
     constexpr auto v_idx_args = TensorAccessorArgs<k_norms_args.next_compile_time_args_offset()>();
@@ -86,15 +87,25 @@ void kernel_main() {
                     (chunk_start_row + Sk_chunk_t < Skt) ? chunk_start_row + Sk_chunk_t : Skt;
                 const uint32_t kv_row_count = chunk_end_row - chunk_start_row;
 
-                // K indices: NOT transposed (compute transposes after dequant)
+                // K indices: transposed when pre_rescaled (compute skips dequant),
+                // NOT transposed otherwise (compute transposes after dequant).
                 {
                     const uint32_t k_start = k_idx_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
                     read_chunk_with_padding<k_idx_tile_bytes>(
-                        k_idx_reader, cb_k_idx, k_start, kv_row_count, DHt, Sk_chunk_t, DHt, barrier_threshold);
+                        k_idx_reader,
+                        cb_k_idx,
+                        k_start,
+                        kv_row_count,
+                        DHt,
+                        Sk_chunk_t,
+                        DHt,
+                        barrier_threshold,
+                        pre_rescaled  // transpose K when pre_rescaled
+                    );
                 }
 
-                // K norms
-                {
+                // K norms (skip when pre_rescaled — values already include norms)
+                if constexpr (!pre_rescaled) {
                     const uint32_t n_start = k_norms_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
                     read_chunk_with_padding<k_norms_tile_bytes>(
                         k_norms_reader, cb_k_norms, n_start, kv_row_count, 1, Sk_chunk_t, 1, barrier_threshold);
@@ -107,8 +118,8 @@ void kernel_main() {
                         v_idx_reader, cb_v_idx, v_start, kv_row_count, vDHt, Sk_chunk_t, vDHt, barrier_threshold);
                 }
 
-                // V norms
-                {
+                // V norms (skip when pre_rescaled)
+                if constexpr (!pre_rescaled) {
                     const uint32_t n_start = v_norms_tile_shape.id_of(nb, k_head, chunk_start_row, 0);
                     read_chunk_with_padding<v_norms_tile_bytes>(
                         v_norms_reader, cb_v_norms, n_start, kv_row_count, 1, Sk_chunk_t, 1, barrier_threshold);

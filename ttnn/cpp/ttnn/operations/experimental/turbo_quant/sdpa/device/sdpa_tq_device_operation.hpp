@@ -18,6 +18,7 @@ struct SDPATQDeviceOperation {
     struct operation_attributes_t {
         float scale;
         std::vector<float> centroids;  // centroid values (size = 2^bits)
+        bool pre_rescaled;             // true: BFP4 values are centroid×norm, skip gather+norm
         tt::tt_metal::MemoryConfig output_mem_config;
     };
 
@@ -77,6 +78,7 @@ Tensor turbo_quant_sdpa_decode(
     const Tensor& page_table,
     const Tensor& cur_pos,
     const std::vector<float>& centroids,
-    float scale);
+    float scale,
+    bool pre_rescaled = false);
 
 }  // namespace ttnn::prim

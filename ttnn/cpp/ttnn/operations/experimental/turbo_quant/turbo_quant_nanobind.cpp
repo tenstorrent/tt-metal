@@ -64,6 +64,7 @@ Args:
     cur_pos:     Int32 current position [B].
     centroids:   Centroid float values (len = 2^bits).
     scale:       Attention scale factor.
+    pre_rescaled: If true, BFP4 values are already centroid*norm — skip gather+norm.
 )doc",
         &ttnn::turbo_quant_sdpa_decode,
         nb::arg("q").noconvert(),
@@ -74,7 +75,8 @@ Args:
         nb::arg("page_table").noconvert(),
         nb::arg("cur_pos").noconvert(),
         nb::arg("centroids"),
-        nb::arg("scale"));
+        nb::arg("scale"),
+        nb::arg("pre_rescaled") = false);
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant

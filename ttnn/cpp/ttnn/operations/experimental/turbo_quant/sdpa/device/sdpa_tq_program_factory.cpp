@@ -252,10 +252,11 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         // TQ args (index 33+)
         num_levels,
     };
-    // Append centroid bit-patterns
+    // Append centroid bit-patterns, then pre_rescaled flag
     for (float c : attrs.centroids) {
         compute_ct_args.push_back(sdpa_float_to_bits(c));
     }
+    compute_ct_args.push_back(attrs.pre_rescaled ? 1 : 0);
 
     KernelHandle compute_kernel = CreateKernel(
         program,
@@ -280,6 +281,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         Sk_chunk_t,
         k_num_chunks,
         num_cores,
+        attrs.pre_rescaled ? 1u : 0u,
     };
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_idx.buffer()).append_to(reader_ct_args);
