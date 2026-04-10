@@ -169,19 +169,13 @@ DeviceStorage DeviceStorage::combine_device_storages(
         "tensor shards must be allocated on the same mesh buffer.");
 
     std::set<distributed::MeshCoordinate> seen_coords;
-    std::vector<distributed::MeshCoordinate> joint_coords;
     for (const auto& storage : storages) {
         for (const auto& coord : storage.get().get_coords()) {
-            TT_FATAL(
-                seen_coords.insert(coord).second,
-                "Found a tensor shard at duplicate coordinate {}",
-                coord);
-            joint_coords.push_back(coord);
+            auto [_, coord_is_new] = seen_coords.insert(coord);
+            TT_FATAL(coord_is_new, "Found a tensor shard at duplicate coordinate {}", coord);
         }
     }
-    std::sort(joint_coords.begin(), joint_coords.end());
-
-    return DeviceStorage(model_storage, std::move(joint_coords));
+    return DeviceStorage(model_storage, {seen_coords.begin(), seen_coords.end()});
 }
 
 }  // namespace tt::tt_metal
