@@ -70,6 +70,7 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
 // emits a Python DeprecationWarning before forwarding to the real implementation.
 // The binding-layer type is std::optional<bool> (default nb::none()) so we can
 // distinguish "user passed correction=True" from "used the default".
+// This whole function can be removed when the deprecated 'correction' parameter is removed.
 template <auto Func>
 Tensor generic_reduction_with_deprecated_correction(
     const Tensor& input_tensor,
