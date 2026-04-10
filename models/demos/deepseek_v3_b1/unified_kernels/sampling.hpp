@@ -172,6 +172,7 @@ uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
+#include "api/compute/transpose_wh.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -222,6 +223,18 @@ void softmax_reduce_c() {
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
+#if defined(TRISC_UNPACK)
+    constexpr uint32_t debug_elems = 32;
+    auto in0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
+    auto scale_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(scale_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_reduce_c in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    }
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_reduce_c scale[" << i << "]: " << BF16(scale_ptr[i]) << ENDL();
+    }
+#endif
     cb_reserve_back(out_cb, rows);
     constexpr uint32_t reduce_dst_idx = 0;
     for (uint32_t i = 0; i < rows; i++) {
@@ -232,6 +245,16 @@ void softmax_reduce_c() {
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(reduce_dst_idx, out_cb);
+#if defined(TRISC_PACK)
+        if (i == 0) {
+            constexpr uint32_t debug_elems = 32;
+            auto out_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(out_cb).fifo_wr_ptr << cb_addr_shift);
+            for (uint32_t j = 0; j < debug_elems; ++j) {
+                DPRINT << "softmax_reduce_c out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            }
+        }
+#endif
         cb_push_back(out_cb, 1);
         release_dst();
     }
@@ -243,6 +266,13 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
     cb_wait_front(in_cb, num_tiles);
+#if defined(TRISC_UNPACK)
+    constexpr uint32_t debug_elems = 32;
+    auto in_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_recip_block_inplace in[" << i << "]: " << BF16(in_ptr[i]) << ENDL();
+    }
+#endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, 0, 0);
@@ -251,6 +281,16 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         cb_reserve_back(in_cb, 1);
         pack_reconfig_data_format(in_cb);
         pack_tile(0, in_cb);
+#if defined(TRISC_PACK)
+        if (i == 0) {
+            constexpr uint32_t debug_elems = 32;
+            auto out_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in_cb).fifo_wr_ptr << cb_addr_shift);
+            for (uint32_t j = 0; j < debug_elems; ++j) {
+                DPRINT << "softmax_recip_block_inplace out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            }
+        }
+#endif
         cb_push_back(in_cb, 1);
         release_dst();
     }
@@ -262,15 +302,39 @@ void softmax_mul_block_bcast_scalar() {
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
+#if defined(TRISC_UNPACK)
+    constexpr uint32_t debug_elems = 32;
+    auto in0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
+    auto scalar_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+        get_local_cb_interface(in1_scalar_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_mul_block_bcast_scalar in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    }
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_mul_block_bcast_scalar scalar[" << i << "]: " << BF16(scalar_ptr[i]) << ENDL();
+    }
+#endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, 0, 0, 0);
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
+#if defined(TRISC_PACK)
+        if (i == 0) {
+            constexpr uint32_t debug_elems = 32;
+            auto out_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(out_cb).fifo_wr_ptr << cb_addr_shift);
+            for (uint32_t j = 0; j < debug_elems; ++j) {
+                DPRINT << "softmax_mul_block_bcast_scalar out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            }
+        }
+#endif
         cb_push_back(out_cb, 1);
         release_dst();
     }
+    // Consume the broadcast scalar tile; otherwise persistent runs can leak scalar CB state.
+    cb_pop_front(in1_scalar_cb, 1);
     cb_pop_front(in0_cb, num_tiles);
 }
 
@@ -280,6 +344,17 @@ inline void softmax_mul_block_bcast_cols(
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
+#if defined(TRISC_UNPACK)
+    constexpr uint32_t debug_elems = 32;
+    auto in0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
+    auto in1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in1_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_mul_block_bcast_cols in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    }
+    for (uint32_t i = 0; i < debug_elems; ++i) {
+        DPRINT << "softmax_mul_block_bcast_cols in1[" << i << "]: " << BF16(in1_ptr[i]) << ENDL();
+    }
+#endif
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
@@ -293,6 +368,7 @@ inline void softmax_mul_block_bcast_cols(
         }
     }
     cb_pop_front(in1_cb, rows);
+    cb_pop_front(in0_cb, num_tiles);
 }
 
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
@@ -385,6 +461,99 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
 
+    PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
+    ckernel::pack_reconfig_data_format(out_scores_cb);
+    ckernel::pack_tile(value_offset_tiles, out_scores_cb);
+    ckernel::pack_reconfig_data_format(out_indices_cb);
+    ckernel::pack_tile(index_offset_tiles, out_indices_cb);
+
+    release_dst();
+
+    cb_pop_front(in_scores_cb, num_input_tiles);
+    cb_pop_front(in_indices_cb, num_input_tiles);
+    cb_push_back(out_scores_cb, 1);
+    cb_push_back(out_indices_cb, 1);
+}
+
+template <
+    uint32_t in_scores_cb, uint32_t in_indices_cb,
+    uint32_t out_scores_cb, uint32_t out_indices_cb>
+void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_tiles) {
+    constexpr uint32_t value_offset_tiles = 0;
+    constexpr uint32_t index_offset_tiles = 2;
+    constexpr uint32_t decreasing = 0;
+    constexpr uint32_t increasing = 1;
+    constexpr uint32_t chunk_size = 1024;
+
+    cb_wait_front(in_scores_cb, num_input_tiles);
+    cb_wait_front(in_indices_cb, num_input_tiles);
+    cb_reserve_back(out_scores_cb, 1);
+    cb_reserve_back(out_indices_cb, 1);
+
+    acquire_dst();
+
+    const uint32_t num_chunks = row_elements / chunk_size;
+
+    // Step 1: load first 1024 values/indices chunk with transpose.
+    reconfig_data_format_srca(in_scores_cb);
+    transpose_wh_init_short(in_scores_cb);
+    transpose_wh_tile(in_scores_cb, 0, value_offset_tiles);
+
+    reconfig_data_format_srca(in_indices_cb);
+    transpose_wh_init_short(in_indices_cb);
+    transpose_wh_tile(in_indices_cb, 0, index_offset_tiles);
+
+    // Step 2: prepare first chunk for pre-sorted combine pipeline.
+    MATH((llk_math_deepseek_top32_rm_init<false>()));
+    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, decreasing>(value_offset_tiles)));
+
+    // Steps 3-5: ingest remaining full 1024 chunks and combine.
+    for (uint32_t i = 1; i < num_chunks; ++i) {
+        reconfig_data_format_srca(in_scores_cb);
+        transpose_wh_init_short(in_scores_cb);
+        transpose_wh_tile(in_scores_cb, i, value_offset_tiles + 1);
+
+        reconfig_data_format_srca(in_indices_cb);
+        transpose_wh_init_short(in_indices_cb);
+        transpose_wh_tile(in_indices_cb, i, index_offset_tiles + 1);
+
+        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, increasing>(
+            value_offset_tiles + 1)));
+        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>(value_offset_tiles)));
+    }
+
+    // Step 6: collapse per-face top-32 to a single top-32.
+    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_final<false, DST_ACCUM_MODE>(value_offset_tiles)));
+
+    // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
+    uint32_t num_faces = 4;
+    for (uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
+        num_faces = (i + 64 > row_elements) ? 2 : 4;
+
+        reconfig_data_format_srca(in_scores_cb);
+        UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
+        UNPACK((llk_unpack_A_top32_rm(in_scores_cb, i / 64, num_faces)));
+        MATH((llk_math_top32_rm_init(in_scores_cb)));
+        MATH((llk_math_top32_rm(in_scores_cb, value_offset_tiles + 1, num_faces)));
+
+        reconfig_data_format_srca(in_indices_cb);
+        UNPACK((llk_unpack_A_top32_rm_init(in_indices_cb)));
+        UNPACK((llk_unpack_A_top32_rm(in_indices_cb, i / 64, num_faces)));
+        MATH((llk_math_top32_rm_init(in_indices_cb)));
+        MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
+
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+            value_offset_tiles + 1, decreasing, false)));
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, false)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+            value_offset_tiles + 1, increasing, true)));
+
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+            value_offset_tiles, decreasing, true)));
+    }
+
+    // Step 10: pack final top-32 scores/indices.
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
@@ -1338,8 +1507,8 @@ struct TopKSampling {
             if constexpr (IsFinalCore && CTArgs::topk_k == 32) {
                 run_top32_llk<
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
-                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
-                    true>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles);
+                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb, true>(
+                    CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles);
             }
 
             // Mesh stage 1 merge via LLK (stage1_receiver, final core, k==32)
@@ -1370,6 +1539,8 @@ struct TopKSampling {
                 softmax_reduce_c<
                     PoolType::SUM, ReduceDim::REDUCE_ROW,
                     CTArgs::softmax_sub_cb, CTArgs::scaler_cb, CTArgs::sum_cb, 1, 1>();
+                // `scaler_cb` is reused across both reductions above; consume it once both are done.
+                cb_pop_front(CTArgs::scaler_cb, 1);
                 softmax_recip_block_inplace(CTArgs::sum_cb, 1);
                 softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
 

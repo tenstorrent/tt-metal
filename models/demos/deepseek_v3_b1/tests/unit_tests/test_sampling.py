@@ -199,7 +199,7 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
 
     logger.info(
         "Testing sampling argmax mesh(4x2): "
-        f"seed={seed}, final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
+        f"seed={seed}, final_core_idx={final_core_idx}, final_core_coord={final_core}, final_mesh_coord={final_mesh_coord}"
     )
     torch.manual_seed(seed)
 
@@ -442,7 +442,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
         f"  Golden: {sorted(golden_topk_set)}\n"
         f"  Rigged: {sorted(winner_indices)}"
     )
-    logger.info(f"Rigged {k} winner positions (first 5): {winner_positions[:5].tolist()}...")
+    logger.info(f"Rigged {k} winner positions (first 5): {winner_positions[:k].tolist()}...")
 
     input_shard_spec = ttnn.ShardSpec(
         core_grid,
@@ -548,7 +548,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
         (17, 0, 0.995, 0.4),
         (1337, 50, 1.0, 0.8),
         (4242, 73, 0.1, 0.6),
-    ],
+    ],ids = ["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx):
@@ -790,7 +790,7 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_mesh_4x2_axis_x(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
+def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
     """
     Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
 
