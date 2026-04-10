@@ -71,7 +71,7 @@ run_quad_galaxy_unit_tests() {
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
-  local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
+  local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
@@ -144,8 +144,8 @@ setup_dual_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
-        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
@@ -174,8 +174,8 @@ setup_quad_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
-        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
