@@ -94,8 +94,8 @@ def _build_reference_weights(peft_sd):
     indirect=True,
 )
 @pytest.mark.skipif(
-    get_device_name() not in ("n150", "p150"),
-    reason="test_lora_fusion runs only on n150/p150",
+    get_device_name() not in ["n150", "p150"],
+    reason="test_lora_fusion runs only on n150 and p150",
 )
 @torch.no_grad()
 def test_lora_fusion_pcc(mesh_device, load_sdxl_base_pipeline, lora_path):
