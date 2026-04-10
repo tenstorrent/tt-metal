@@ -391,10 +391,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-          "P150b-viommu-prio",
-        ]
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/triage.yaml
     with:
       runner-label: ${{ matrix.platform }}

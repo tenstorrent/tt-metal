@@ -117,6 +117,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 

@@ -33,7 +33,9 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
+from ...utils.tensor import fast_device_to_host, local_device_to_torch, typed_tensor_2dshard
+
+_UNSET = object()  # sentinel for "use config default" in create_pipeline
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -136,14 +138,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
-        vae_use_cache: bool = True,
+        vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
     ):
         super().__init__()
 
         self.checkpoint_name = checkpoint_name
         self.model_type = model_type
-        self.vae_use_cache = vae_use_cache
+        self.vae_t_chunk_size = vae_t_chunk_size
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
         self.text_encoder = UMT5EncoderModel.from_pretrained(
@@ -304,7 +306,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology=None,
         is_fsdp=None,
         pipeline_class=None,
-        vae_use_cache=None,
+        vae_t_chunk_size=_UNSET,
         sdpa_t_fracture_w_only=None,
     ):
         device_configs = {}
@@ -333,7 +335,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_use_cache": True,
+                "vae_t_chunk_size": 11,  # default T = 21 so will use two steps
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,
@@ -342,7 +344,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_use_cache": False,
+                "vae_t_chunk_size": None,
                 "sdpa_t_fracture_w_only": True,
             }
             config = device_configs[tuple(mesh_device.shape)]
@@ -400,7 +402,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
-            vae_use_cache=vae_use_cache if vae_use_cache is not None else config.get("vae_use_cache", True),
+            vae_t_chunk_size=vae_t_chunk_size if vae_t_chunk_size is not _UNSET else config.get("vae_t_chunk_size", 1),
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
@@ -1024,16 +1026,30 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 dtype=self.tt_vae.dtype,
             )
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=self.vae_use_cache)
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
+
+            # On-device post-processing for np output: [-1,1] → [0,1]
+            # VAE output is ROW_MAJOR; arithmetic ops require TILE_LAYOUT.
+            if output_type == "np":
+                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
+                tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
+                tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
+                tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=1.0)
+                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
+            video_torch = fast_device_to_host(
+                tt_video_BCTHW,
+                self.mesh_device,
+                concat_dims,
+                ccl_manager=self.vae_ccl_manager,
+            )
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             if output_type == "np":
-                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+                video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
             else:
                 video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:

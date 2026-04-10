@@ -5,6 +5,8 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 namespace {
@@ -64,6 +66,10 @@ void kernel_main() {
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_src(cb_id_src);
+    experimental::CircularBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
@@ -147,11 +153,11 @@ void kernel_main() {
                                 (stride_size_bytes < bytes_left_in_row) ? stride_size_bytes : bytes_left_in_row;
                             const uint32_t current_chunk_elements = current_chunk_bytes / element_size;
 
-                            cb_reserve_back(cb_id_src, 1);
-                            const uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
+                            cb_src.reserve_back(1);
+                            const uint32_t l1_write_addr_src = cb_src.get_write_ptr();
 
-                            cb_reserve_back(cb_id_src_b, 1);
-                            const uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
+                            cb_src_b.reserve_back(1);
+                            const uint32_t l1_write_addr_src_b = cb_src_b.get_write_ptr();
 
 #if SRC_BCAST
                             const uint32_t current_read_len_b = align(current_chunk_bytes, alignment_b);
@@ -159,13 +165,13 @@ void kernel_main() {
                             for (int32_t k = static_cast<int32_t>(limit) - 1; k >= 0; --k) {
                                 const uint32_t row_idx_a = row_block_a + static_cast<uint32_t>(k) * s_h_a;
                                 const uint64_t addr_a = get_noc_addr(row_idx_a, src);
-                                const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & 0xF);
+                                const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & (alignment_a - 1));
                                 const uint32_t scratch_l1_addr = l1_write_addr_src + src_low_bits;
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_a, scratch_l1_addr, element_size_aligned_a);
-                                noc_async_read_barrier();
+                                noc_async_read(addr_a, scratch_l1_addr, element_size);
+                                noc.async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
                                 FILL_TILE_WITH_FIRST_COLUMN_RM(row_l1_addr, current_chunk_elements);
@@ -178,7 +184,7 @@ void kernel_main() {
                                 noc_async_read(addr_b, curr_l1_b, current_read_len_b);
                                 curr_l1_b += current_chunk_bytes;
                             }
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
 #else
                             const uint32_t current_read_len_a = align(current_chunk_bytes, alignment_a);
 
@@ -189,26 +195,26 @@ void kernel_main() {
                                 noc_async_read(addr_a, curr_l1_a, current_read_len_a);
                                 curr_l1_a += current_chunk_bytes;
                             }
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
 
                             for (int32_t k = static_cast<int32_t>(limit) - 1; k >= 0; --k) {
                                 const uint32_t row_idx_b = row_block_b + static_cast<uint32_t>(k) * s_h_b;
                                 const uint64_t addr_b = get_noc_addr(row_idx_b, src_b);
-                                const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & 0xF);
+                                const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & (alignment_b - 1));
                                 const uint32_t scratch_l1_addr = l1_write_addr_src_b + src_low_bits;
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src_b + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_b, scratch_l1_addr, element_size_aligned_b);
-                                noc_async_read_barrier();
+                                noc_async_read(addr_b, scratch_l1_addr, element_size);
+                                noc.async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
                                 FILL_TILE_WITH_FIRST_COLUMN_RM(row_l1_addr, current_chunk_elements);
                             }
 #endif
 
-                            cb_push_back(cb_id_src, 1);
-                            cb_push_back(cb_id_src_b, 1);
+                            cb_src.push_back(1);
+                            cb_src_b.push_back(1);
                         }
 
                         row_blocks_pushed++;

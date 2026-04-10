@@ -5,7 +5,6 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 namespace ttnn {
-namespace {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
@@ -27,6 +26,41 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     auto ranges_vector = builder.CreateVector(range_offsets);
     return flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
 }
+
+tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
+    switch (type) {
+        case flatbuffer::DataType::BFloat16: return tt::tt_metal::DataType::BFLOAT16;
+        case flatbuffer::DataType::Float32: return tt::tt_metal::DataType::FLOAT32;
+        case flatbuffer::DataType::UInt32: return tt::tt_metal::DataType::UINT32;
+        case flatbuffer::DataType::BFloat8B: return tt::tt_metal::DataType::BFLOAT8_B;
+        case flatbuffer::DataType::BFloat4B: return tt::tt_metal::DataType::BFLOAT4_B;
+        case flatbuffer::DataType::UInt8: return tt::tt_metal::DataType::UINT8;
+        case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
+        case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
+        case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
+    }
+    TT_THROW("Unsupported DataType from flatbuffer.");
+}
+
+flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
+    switch (type) {
+        case tt::tt_metal::DataType::BFLOAT16: return flatbuffer::DataType::BFloat16;
+        case tt::tt_metal::DataType::FLOAT32: return flatbuffer::DataType::Float32;
+        case tt::tt_metal::DataType::UINT32: return flatbuffer::DataType::UInt32;
+        case tt::tt_metal::DataType::BFLOAT8_B: return flatbuffer::DataType::BFloat8B;
+        case tt::tt_metal::DataType::BFLOAT4_B: return flatbuffer::DataType::BFloat4B;
+        case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
+        case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
+        case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
+        case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
+    }
+    TT_THROW("Unsupported DataType to flatbuffer.");
+}
+
+namespace {
+
+using ttnn::from_flatbuffer;
+using ttnn::to_flatbuffer;
 
 tt::tt_metal::BufferType from_flatbuffer(flatbuffer::BufferType type) {
     switch (type) {
@@ -50,21 +84,6 @@ tt::tt_metal::TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout 
     TT_THROW("Unsupported TensorMemoryLayout from flatbuffer.");
 }
 
-tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
-    switch (type) {
-        case flatbuffer::DataType::BFloat16: return tt::tt_metal::DataType::BFLOAT16;
-        case flatbuffer::DataType::Float32: return tt::tt_metal::DataType::FLOAT32;
-        case flatbuffer::DataType::UInt32: return tt::tt_metal::DataType::UINT32;
-        case flatbuffer::DataType::BFloat8B: return tt::tt_metal::DataType::BFLOAT8_B;
-        case flatbuffer::DataType::BFloat4B: return tt::tt_metal::DataType::BFLOAT4_B;
-        case flatbuffer::DataType::UInt8: return tt::tt_metal::DataType::UINT8;
-        case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
-        case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
-        case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
-    }
-    TT_THROW("Unsupported DataType from flatbuffer.");
-}
-
 flatbuffer::TensorMemoryLayout to_flatbuffer(tt::tt_metal::TensorMemoryLayout layout) {
     switch (layout) {
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return flatbuffer::TensorMemoryLayout::Interleaved;
@@ -85,21 +104,6 @@ flatbuffer::BufferType to_flatbuffer(tt::tt_metal::BufferType type) {
         case tt::tt_metal::BufferType::TRACE: return flatbuffer::BufferType::Trace;
     }
     TT_THROW("Unsupported BufferType to flatbuffer.");
-}
-
-flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
-    switch (type) {
-        case tt::tt_metal::DataType::BFLOAT16: return flatbuffer::DataType::BFloat16;
-        case tt::tt_metal::DataType::FLOAT32: return flatbuffer::DataType::Float32;
-        case tt::tt_metal::DataType::UINT32: return flatbuffer::DataType::UInt32;
-        case tt::tt_metal::DataType::BFLOAT8_B: return flatbuffer::DataType::BFloat8B;
-        case tt::tt_metal::DataType::BFLOAT4_B: return flatbuffer::DataType::BFloat4B;
-        case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
-        case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
-        case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
-        case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
-    }
-    TT_THROW("Unsupported DataType to flatbuffer.");
 }
 
 tt::tt_metal::ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation) {

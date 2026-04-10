@@ -22,7 +22,7 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 

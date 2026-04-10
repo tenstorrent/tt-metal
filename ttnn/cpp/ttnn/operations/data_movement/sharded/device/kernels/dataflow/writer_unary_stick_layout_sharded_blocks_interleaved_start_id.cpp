@@ -14,9 +14,10 @@ void kernel_main() {
     const uint32_t start_id = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr + input_width_offset_bytes);
+    const auto s0 = TensorAccessor(dst_args, dst_addr + input_width_offset_bytes, stick_size);
 
     uint32_t stick_id = start_id;
     cb_wait_front(cb_id_out0, block_height);
