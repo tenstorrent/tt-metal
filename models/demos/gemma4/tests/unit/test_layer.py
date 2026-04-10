@@ -15,7 +15,13 @@ import ttnn
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_needs_multi_device
+from ...tests.test_factory import (
+    TestFactory,
+    compare_tensors,
+    parametrize_batch_seq,
+    parametrize_mesh_with_fabric,
+    skip_if_needs_multi_device,
+)
 
 # ── Config / Structure Tests ───────────────────────────────────────────────
 
@@ -304,13 +310,14 @@ def test_layer_forward_decode(layer_idx, device):
 # ── TP Layer Test ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_layer_forward_tp(batch_size, seq_len, layer_idx, mesh_device, device_params):
+def test_layer_forward_tp(batch_size, seq_len, layer_idx, mesh_device):
     """
-    Full decoder layer with TP=2 attention, compared against HF reference.
+    Full decoder layer with TP attention, compared against HF reference.
+
+    Filter: pytest -k "1x8" or pytest -k "1x2"
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager

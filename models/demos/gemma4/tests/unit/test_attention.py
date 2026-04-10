@@ -13,7 +13,7 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 
-from ...tests.test_factory import TestFactory, compare_tensors, skip_if_needs_multi_device
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric, skip_if_needs_multi_device
 
 # ── Prefill PCC Test ──────────────────────────────────────────────────────
 
@@ -165,15 +165,16 @@ def test_attention_decode(layer_idx, device):
     assert passing, f"Attention decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
 
 
-# ── TP=2 Prefill Test ────────────────────────────────────────────────────
+# ── TP Prefill Test ──────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-def test_attention_prefill_tp(layer_idx, mesh_device, device_params):
+def test_attention_prefill_tp(layer_idx, mesh_device):
     """
-    Test TP=2 prefill attention against HF reference with PCC >= 0.95.
+    Test TP prefill attention against HF reference with PCC >= 0.95.
+
+    Filter: pytest -k "1x8" or pytest -k "1x2"
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
@@ -226,15 +227,16 @@ def test_attention_prefill_tp(layer_idx, mesh_device, device_params):
     assert passing, f"Attention TP prefill (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
 
 
-# ── TP=2 Decode PCC Test ─────────────────────────────────────────────────
+# ── TP Decode PCC Test ───────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-def test_attention_decode_tp(layer_idx, mesh_device, device_params):
+def test_attention_decode_tp(layer_idx, mesh_device):
     """
-    Test TP=2 decode attention against HF reference with random KV cache and PCC >= 0.95.
+    Test TP decode attention against HF reference with random KV cache and PCC >= 0.95.
+
+    Filter: pytest -k "1x8" or pytest -k "1x2"
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
