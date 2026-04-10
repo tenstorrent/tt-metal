@@ -24,6 +24,7 @@
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#define EXP_APPROX_MODE 1
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/fill.h"
@@ -108,6 +109,27 @@ inline void dequantize_chunk(
     }
 }
 
+// Template helper to load centroid compile-time args (must be at namespace scope).
+template <uint32_t Idx, uint32_t N, uint32_t Base>
+struct LoadSDPACentroids {
+    static void apply(float* c, uint32_t* lb) {
+        constexpr uint32_t bits = get_compile_time_arg_val(Base + 1 + Idx);
+        union {
+            uint32_t u;
+            float f;
+        } conv;
+        conv.u = bits;
+        c[Idx] = conv.f;
+        float fi = static_cast<float>(Idx);
+        __builtin_memcpy(&lb[Idx], &fi, sizeof(uint32_t));
+        LoadSDPACentroids<Idx + 1, N, Base>::apply(c, lb);
+    }
+};
+template <uint32_t N, uint32_t Base>
+struct LoadSDPACentroids<N, N, Base> {
+    static void apply(float*, uint32_t*) {}
+};
+
 void kernel_main() {
     // ── Compile-time args: standard SDPA + TQ centroids ──
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -158,20 +180,11 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // Load centroid constants from compile-time args
+    // Load centroid constants from compile-time args (template-unrolled,
+    // defined at namespace scope above kernel_main)
     float centroids[16];
     uint32_t level_bits_arr[16];
-    for (uint32_t i = 0; i < num_levels; i++) {
-        uint32_t bits = get_compile_time_arg_val(TQ_BASE + 1 + i);
-        union {
-            uint32_t u;
-            float f;
-        } conv;
-        conv.u = bits;
-        centroids[i] = conv.f;
-        float fi = static_cast<float>(i);
-        __builtin_memcpy(&level_bits_arr[i], &fi, sizeof(uint32_t));
-    }
+    LoadSDPACentroids<0, num_levels, TQ_BASE>::apply(centroids, level_bits_arr);
 
     // ── CB indices ──
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;

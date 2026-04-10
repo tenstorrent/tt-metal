@@ -292,30 +292,20 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
-    // ── Writer kernel (reuse existing SDPA writer) ──
+    // ── Writer kernel (custom simple writer) ──
     std::vector<uint32_t> writer_ct_args = {
         B,
         NQH,
-        NKH,
-        1,
-        Skt,
-        DHt,
-        vDHt,
         Sq_chunk_t,
-        1,
-        Sk_chunk_t,
-        k_num_chunks,
+        vDHt,
         num_cores,
-        0,  // is_causal
-        0,  // use_provided_mask
-        0,  // use_padded_mask
-        1,  // is_chunked
+        sdpa_float_to_bits(attrs.scale),  // scale for identity tile
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
 
     KernelHandle writer_kernel = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/kernels/dataflow/writer_tq_decode.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
