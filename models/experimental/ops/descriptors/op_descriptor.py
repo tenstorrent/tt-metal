@@ -113,25 +113,35 @@ class _DeferredOutput:
 class OpDescriptor:
     """Operation descriptor with optional deferred ``ProgramDescriptor`` materialization.
 
-    Two construction patterns:
+    Three construction patterns:
 
     **Eager** (descriptor already materialized)::
 
-        op = OpDescriptor(descriptor=prog_desc, input_tensors=[...], output_tensors=[...])
+        op = OpDescriptor(descriptor=prog_desc, input_tensors={...}, output_tensors=[...])
 
     **Deferred** (factory runs only on first ``.descriptor`` access)::
 
         op = OpDescriptor(
             factory_fn=lambda: create_descriptor(...),
-            input_tensors=[...],
+            input_tensors={...},
             output_tensors=LazyOutputList([None], alloc_fn),
             name="rms_norm",
             program_cache_key=hash_value,
         )
 
+    **Persistent** (created by ``@OpDescriptor.create`` decorator when required
+    tensors are missing; materializes on first :meth:`update`)::
+
+        desc = rms_norm(weight=qw, ...)   # input_tensor omitted → persistent
+        desc.update(tt_q)                  # materializes hash + factory
+
     ``program_cache_key`` is always available for fusion build-cache lookup
     without touching ``.descriptor``. For eager ops it is computed from the
-    descriptor at construction; for deferred ops it is passed in.
+    descriptor; for deferred ops it is passed in; for persistent ops it is
+    computed on first :meth:`update`.
+
+    ``input_tensors`` may be a ``dict`` — auto-converted to a list with
+    ``_input_names`` for named :meth:`update` support.
     """
 
     __slots__ = (
@@ -225,12 +235,22 @@ class OpDescriptor:
         # don't trigger materialization until they're replaced with real tensors.
         if self.program_cache_key is None and self._complete_fn is not None:
             if all(t is not None and not isinstance(t, _DeferredOutput) for t in self.input_tensors):
-                full = self._complete_fn(self.input_tensors)
-                self.program_cache_key = full.program_cache_key
-                self._factory_fn = full._factory_fn
-                self._descriptor = full._descriptor
-                self.output_tensors = full.output_tensors
-                self._complete_fn = None
+                self._materialize()
+
+    def _materialize(self):
+        """Complete a persistent descriptor by calling its ``_complete_fn``.
+
+        Copies ``program_cache_key``, ``_factory_fn``, ``_descriptor``, and
+        ``output_tensors`` from the materialized descriptor.  Called by
+        :meth:`update` when all inputs are real tensors, or by
+        ``_materialize_chain`` during Sequential auto-wiring.
+        """
+        full = self._complete_fn(self.input_tensors)
+        self.program_cache_key = full.program_cache_key
+        self._factory_fn = full._factory_fn
+        self._descriptor = full._descriptor
+        self.output_tensors = full.output_tensors
+        self._complete_fn = None
 
     @property
     def descriptor(self):
