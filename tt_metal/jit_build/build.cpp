@@ -587,7 +587,8 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
     sync_build_steps(events);
 
-    BuildCacheTelemetry::inst().record_compile(this->srcs_.size(), compiled.count());
+    BuildCacheTelemetry::inst().record_compile(
+        static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
