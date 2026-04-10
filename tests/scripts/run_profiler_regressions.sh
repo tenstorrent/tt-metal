@@ -73,6 +73,10 @@ run_profiling_test() {
     # Host-device correlation: verify 1:1 mapping between host TracyMessages
     # and device-side real-time profiler records (requires Tracy but NOT device profiler)
     pytest tests/ttnn/tracy/test_host_device_correlation.py --timeout 600
+
+    # Cross-reference real-time profiler durations against device profiler
+    # kernel durations (manages its own device; env vars set before open_device)
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_profiler_cross_reference.py --timeout 300
 }
 
 main() {
