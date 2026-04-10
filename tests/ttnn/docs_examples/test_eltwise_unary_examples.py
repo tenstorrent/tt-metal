@@ -772,7 +772,7 @@ def test_tanhshrink(device):
     )
 
     # Apply tanh shrink function
-    output = ttnn.tanhshrink(tensor, fast_and_approximate_mode=False)
+    output = ttnn.tanhshrink(tensor)
     logger.info(f"Tanh shrink: {output}")
 
 
