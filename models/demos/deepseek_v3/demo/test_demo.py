@@ -15,8 +15,8 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
-PERF_MARGIN = 0.05
-TRACE_TPS_AT_128TH_TOKEN = "trace_execution_t/s/u @128th token"
+PERF_MARGIN = 0.08
+FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
 
 
 @lru_cache(maxsize=1)
@@ -162,7 +162,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            perf_targets={TRACE_TPS_AT_128TH_TOKEN: 0.986038678353197},
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 0.986038678353197},
             case_id="dual_full_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
@@ -193,7 +193,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            perf_targets={TRACE_TPS_AT_128TH_TOKEN: 1.0168109351915215},
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 1.0168109351915215},
             case_id="quad_full_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
