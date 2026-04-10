@@ -72,6 +72,7 @@ inline void dequantize_one_tile(
 
     tile_regs_commit();
     tile_regs_wait();
+    pack_reconfig_data_format(cb_temp);  // ensure packer matches temp CB format
     pack_tile(1, cb_temp);
     tile_regs_release();
     cb_pop_front(cb_idx, 1);
@@ -85,6 +86,7 @@ inline void dequantize_one_tile(
     mul_tiles_bcast_cols(cb_temp, cb_norms, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
+    pack_reconfig_data_format(cb_out);  // ensure packer matches output CB format
     pack_tile(0, cb_out);
     tile_regs_release();
     cb_pop_front(cb_temp, 1);
@@ -231,15 +233,35 @@ void kernel_main() {
             uint32_t processed_k_chunks = 0;
 
             for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                // ─── Step 1: Dequantize K chunk → cb_k_in ───
-                // Reconfigure unpacker for BFP4 input (cb_k_idx) before dequantize
-                reconfig_data_format(cb_k_idx, cb_k_norms);
-                pack_reconfig_data_format(cb_dq_temp);
-                dequantize_chunk<Sk_chunk_t, DHt, num_levels>(
-                    cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
+                // ─── Step 1: BYPASS dequantize — pass raw BFP4 tiles through as BF16 ──
+                // This skips centroid gather + norm multiply, just copies tiles.
+                // Used to isolate whether the SDPA math works with our CB pipeline.
+                {
+                    uint32_t k_tiles = Sk_chunk_t * DHt;
+                    for (uint32_t t = 0; t < k_tiles; t++) {
+                        cb_wait_front(cb_k_idx, 1);
+                        cb_reserve_back(cb_k_in, 1);
+                        tile_regs_acquire();
+                        copy_tile_to_dst_init_short(cb_k_idx);
+                        copy_tile(cb_k_idx, 0, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_k_in);
+                        pack_tile(0, cb_k_in);
+                        tile_regs_release();
+                        cb_pop_front(cb_k_idx, 1);
+                        cb_push_back(cb_k_in, 1);
+                    }
+                    // Consume and discard the norm tiles
+                    for (uint32_t t = 0; t < Sk_chunk_t; t++) {
+                        cb_wait_front(cb_k_norms, 1);
+                        cb_pop_front(cb_k_norms, 1);
+                    }
+                }
 
                 // ─── Step 2: Q × K^T ───
-                // Reconfigure unpackers/packers for matmul data formats after dequantize
+                // Re-initialize matmul after dequantize's SFPU operations
+                mm_init(cb_q_in, cb_k_in, cb_qk_im);
                 reconfig_data_format(cb_k_in, cb_q_in);
                 pack_reconfig_data_format(cb_qk_im);
                 matmul_blocks(
@@ -275,14 +297,31 @@ void kernel_main() {
                     alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
                 // ─── Step 4: Dequantize V chunk → cb_v_in ───
-                // Reconfigure unpacker for BFP4 input before dequantize
-                reconfig_data_format(cb_v_idx, cb_v_norms);
-                pack_reconfig_data_format(cb_dq_temp);
-                dequantize_chunk<Sk_chunk_t, vDHt, num_levels>(
-                    cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+                // BYPASS V dequantize — pass raw BFP4 through
+                {
+                    uint32_t v_tiles = Sk_chunk_t * vDHt;
+                    for (uint32_t t = 0; t < v_tiles; t++) {
+                        cb_wait_front(cb_v_idx, 1);
+                        cb_reserve_back(cb_v_in, 1);
+                        tile_regs_acquire();
+                        copy_tile_to_dst_init_short(cb_v_idx);
+                        copy_tile(cb_v_idx, 0, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_v_in);
+                        pack_tile(0, cb_v_in);
+                        tile_regs_release();
+                        cb_pop_front(cb_v_idx, 1);
+                        cb_push_back(cb_v_in, 1);
+                    }
+                    for (uint32_t t = 0; t < Sk_chunk_t; t++) {
+                        cb_wait_front(cb_v_norms, 1);
+                        cb_pop_front(cb_v_norms, 1);
+                    }
+                }
 
                 // ─── Step 5: Attn × V ───
-                // Reconfigure unpackers: srcA = cb_v_in, srcB = cb_qk_im
+                mm_init(cb_qk_im, cb_v_in, alias_mm2_cur_out);
                 reconfig_data_format(cb_v_in, cb_qk_im);
                 pack_reconfig_data_format(alias_mm2_cur_out);
                 matmul_blocks(
@@ -333,9 +372,9 @@ void kernel_main() {
                 processed_k_chunks++;
             }
 
-            // ─── Final normalization ───
-            // Complete the partial sum reduction across tile columns
-            matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+            // ─── Final normalization (matching standard SDPA non-streaming path) ───
+            // sub_exp_block_bcast_cols_inplace already produced fully reduced sum
+            // (no matmul_reduce needed for non-streaming standard path).
 
             // sum = 1.0 / sum
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);

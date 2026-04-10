@@ -243,7 +243,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         0,                                // use_attention_sink
         0,                                // use_streaming_compute
         Skt,                              // valid_Skt
-        1,                                // uniform_dataformat
+        0,                                // uniform_dataformat = false (mixed BFP4+BF16 formats)
         // TQ args (index 33+)
         num_levels,
     };
