@@ -293,38 +293,61 @@ Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
 
 ---
 
-## 6. Next Steps
+## 6. Constraints & Next Steps
 
-### BFP4 Paged Indices (best of both worlds)
+### Why BFP4/BFP8 paged caches don't work for pre-rescaled values
 
-Combine memory savings (2× smaller than baseline) with baseline-level latency:
-- Store BFP4 indices + BF16 norms in **paged** caches (not contiguous)
-- Use paged SDPA to read the paged BFP4 cache
-- After paged cache read, dequantize (gather centroids + mul norms) before SDPA compute
-- Expected: ~37ms latency + ~0.5 bytes/element memory → 2× longer contexts than baseline
+**Tested 2026-04-10:** Storing pre-rescaled centroid×norm values as BFP8 in the
+paged `layer_past` (instead of BF16) produces **garbage output** despite synthetic
+tests showing only 0.2% added error (cosine 0.99997). The BFP8 shared exponent
+per 32-element block causes selective precision loss on the specific value patterns
+that attention relies on. BFP4 is even worse for continuous values.
 
-This requires the paged cache read output to be dequantized before entering the
-SDPA attention computation. The dequantize operates only on the filled positions
-(not max_seq), so overhead scales with actual context, not allocation.
+This means:
+- **Paged SDPA requires BF16** for pre-rescaled TQ values (2 bytes/element)
+- **BFP4 indices can't be stored in paged `layer_past`** — SDPA interprets them
+  as K/V values, not indices
+- There's no hook between paged cache read and SDPA computation to dequantize
 
-The memory-efficient variant currently OOMs at 32K not from index storage (BFP4
-is small enough) but from the full-cache BF16 dequantize temporary. Paged mode
-avoids this by only dequantizing the active chunk.
+### Current variant tradeoffs (no further optimisation possible without kernel changes)
 
-### True 3-bit Packing
+| Variant | Latency | KV Memory | Max Context | Bottleneck |
+|---------|---------|-----------|-------------|------------|
+| TQ Performance | **37ms** (= baseline) | 2× baseline | 128K | BF16 required by SDPA |
+| TQ Memory-Efficient | 57-61ms | **0.5× baseline** | 16K | Contiguous dequantize temp OOM |
+| Baseline BFP8 | **37ms** | 1× | 128K | — |
 
-Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
-Would give 2.6× smaller KV cache than baseline. Requires custom pack/unpack
-kernels + ROW_MAJOR scatter (paged_update_cache only supports TILE BF16/FP32/BFP4/BFP8).
-CPU implementation exists in `bitpack.py`.
+### Fused Paged SDPA Reader (would unlock best of both worlds)
 
-### Quality Benchmarks
+Modify the paged SDPA kernel to read BFP4 indices + BF16 norms from paged cache
+and dequantize on-the-fly (gather centroids + mul norms) inside the kernel's
+chunk-reading loop. This would give:
+- **37ms latency** (paged SDPA, same as baseline)
+- **~0.5 bytes/element** (BFP4 indices, 2× smaller than baseline)
+- **128K+ context** (paged allocation)
 
+**Engineering scope:** Modify `reader_interleaved.cpp` (~500 lines) and
+`sdpa_program_factory.cpp` to:
+1. Read BFP4 tiles from paged KV cache instead of BF16/BFP8
+2. Add a compute stage that typecasts BFP4 → float32 in DST
+3. Apply centroid gather (reuse B2 kernel logic) + norm multiply
+4. Feed dequantized tiles to existing SDPA attention computation
+
+This is the single remaining optimisation that would make TurboQuant
+strictly better than baseline (same speed, half the memory).
+
+### Other Next Steps
+
+**Quality benchmarks:**
 - LongBench passkey-retrieval at 3-bit vs FP16 baseline
 - WikiText-2 perplexity measurement
 - Multi-turn conversation quality at 16K+ context
 
-### Multi-Batch / Multi-Device
-
+**Multi-batch / Multi-device:**
 - Batch > 1: TQ's compressed cache enables more concurrent sequences
 - Galaxy (8+ devices): already has `TT_NUM_DEVICES` support, needs testing
+
+**True 3-bit packing:**
+Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
+Requires custom pack/unpack kernels + ROW_MAJOR scatter. CPU implementation
+in `bitpack.py`. Only worthwhile after fused SDPA reader is implemented.
