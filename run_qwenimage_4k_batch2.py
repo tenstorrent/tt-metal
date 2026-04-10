@@ -29,7 +29,7 @@ NUM_STEPS = 50
 
 
 def generate_batched_4k(pipeline, prompts, num_inference_steps=NUM_STEPS, seed=42):
-    assert len(prompts) == 2
+    assert len(prompts) >= 2
 
     sp_axis = pipeline._parallel_config.sequence_parallel.mesh_axis
     submesh = pipeline._submesh_devices[0]
@@ -63,11 +63,12 @@ def generate_batched_4k(pipeline, prompts, num_inference_steps=NUM_STEPS, seed=4
     p = pipeline._patch_size
     shape = [1, pipeline._num_channels_latents, latents_height, latents_width]
 
-    torch.manual_seed(seed)
-    latents_A = pipeline.transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
-    torch.manual_seed(seed + 1)
-    latents_B = pipeline.transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
-    latents_batch = torch.cat([latents_A, latents_B], dim=0)
+    latent_list = []
+    for i in range(len(prompts)):
+        torch.manual_seed(seed + i)
+        lat = pipeline.transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
+        latent_list.append(lat)
+    latents_batch = torch.cat(latent_list, dim=0)
 
     # RoPE — same for both images. Match pipeline convention: [seq, dim] 2D tensors
     img_shapes = [[(1, latents_height // p, latents_width // p)]]
@@ -129,7 +130,7 @@ def generate_batched_4k(pipeline, prompts, num_inference_steps=NUM_STEPS, seed=4
     pipeline.prepare_vae()
 
     images = []
-    for b in range(2):
+    for b in range(len(prompts)):
         lat = torch_latents[b : b + 1]
         lat = pipeline.transformers[0].unpatchify(lat, height=latents_height, width=latents_width)
         lat = lat / pipeline._latents_scaling + pipeline._latents_shift
@@ -172,6 +173,8 @@ def main():
     prompts = [
         "A cartoon white llama with sunglasses on a colorful rainbow background, playful, fun, 4K ultra HD",
         "A cyberpunk cityscape at night with neon lights and rain-slick streets, cinematic, photorealistic, 4K",
+        "A serene Japanese zen garden with cherry blossoms, koi pond, wooden bridge, ultra HD, 4K",
+        "An astronaut riding a horse on Mars, Earth visible in the sky, photorealistic, 4K cinematic",
     ]
 
     # Warmup
@@ -184,21 +187,22 @@ def main():
     images = generate_batched_4k(pipeline, prompts, num_inference_steps=NUM_STEPS, seed=42)
     t1 = time.time()
 
+    n = len(images)
     total = t1 - t0
     print(f"\n{'='*80}")
-    print(f"4K BATCH=2 RESULTS")
+    print(f"4K BATCH={n} RESULTS")
     print(f"{'='*80}")
     print(f"resolution: {WIDTH}x{HEIGHT}")
-    print(f"images: {len(images)}")
+    print(f"images: {n}")
     print(f"total_time: {total:.2f}s")
-    print(f"per_image: {total/2:.2f}s")
-    print(f"throughput: {2/total:.4f} images/sec")
+    print(f"per_image: {total/n:.2f}s")
+    print(f"throughput: {n/total:.4f} images/sec")
     print(f"per_step: {total/NUM_STEPS:.2f}s")
     print(f"{'='*80}")
 
-    images[0].save("4k_batch2_img0.png")
-    images[1].save("4k_batch2_img1.png")
-    print("Saved 4k_batch2_img0.png and 4k_batch2_img1.png")
+    for i, img in enumerate(images):
+        img.save(f"4k_batch{n}_img{i}.png")
+    print(f"Saved {n} images as 4k_batch{n}_img*.png")
 
     ttnn.close_mesh_device(mesh_device)
     print("Done.")
