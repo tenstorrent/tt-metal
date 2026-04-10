@@ -1588,3 +1588,102 @@ def test_hybrid_expert_irregular_sram_down_grid(device):
         sram_cores_override=down_cores,
         accum_experts=True,
     )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_hybrid_expert_irregular_sram_gate_grid_multi_device(bh_2d_mesh_device):
+    """256 experts, 8 active (2 SRAM + 6 DRAM), K=7168, N=256, gate-proj A-cores (64 irregular), 8 devices."""
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    a_cores, _ = _build_ab_grids(mesh)
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=256,
+        sram_expert_ids=[112, 156],
+        dram_expert_ids=list(range(256)),
+        active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
+        formats_per_device=[
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp4", "bfp2", "bfp0"],
+            ["bfp4", "bfp0"],
+            ["bfp2", "bfp0"],
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp2"],
+        ],
+        sram_cores_override=a_cores,
+        sram_k_parallel=8,
+        sram_n_parallel=8,
+        dram_fuse_silu=True,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_hybrid_expert_irregular_sram_up_grid_multi_device(bh_2d_mesh_device):
+    """256 experts, 8 active (2 SRAM + 6 DRAM), K=7168, N=256, up-proj B-cores (64 irregular), 8 devices."""
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    _, b_cores = _build_ab_grids(mesh)
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=256,
+        sram_expert_ids=[112, 156],
+        dram_expert_ids=list(range(256)),
+        active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
+        formats_per_device=[
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp4", "bfp2", "bfp0"],
+            ["bfp4", "bfp0"],
+            ["bfp2", "bfp0"],
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp2"],
+        ],
+        sram_cores_override=b_cores,
+        sram_k_parallel=8,
+        sram_n_parallel=8,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
+    """256 experts, 8 active (2 SRAM + 6 DRAM), K=256, N=7168, down-proj 112-core grid, 8 devices."""
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    down_cores = _build_down_grid(mesh)
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=256,
+        sram_expert_ids=[112, 156],
+        dram_expert_ids=list(range(256)),
+        active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
+        formats_per_device=[
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp4", "bfp2", "bfp0"],
+            ["bfp4", "bfp0"],
+            ["bfp2", "bfp0"],
+            ["bfp4", "bfp2"],
+            ["bfp4"],
+            ["bfp2"],
+        ],
+        sram_cores_override=down_cores,
+        accum_experts=True,
+    )
