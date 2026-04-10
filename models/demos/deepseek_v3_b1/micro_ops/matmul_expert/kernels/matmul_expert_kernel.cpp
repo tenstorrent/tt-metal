@@ -10,7 +10,8 @@
 // DRAM path uses cb_in1_dram (CB 4) for streaming buffer.
 // Sharded buffer setup for cb_in0, cb_in1, cb_index done here before Op calls.
 
-#include "../../../unified_kernels/matmul_expert_compressed.hpp"
+#include "../../../unified_kernels/matmul_expert_compressed_sram.hpp"
+#include "../../../unified_kernels/matmul_expert_compressed_dram.hpp"
 
 void kernel_main() {
 // ============================================================================
@@ -119,10 +120,13 @@ void kernel_main() {
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;
     constexpr bool dram_active = get_named_compile_time_arg_val("dram_active") != 0;
-    // When both paths are active on the same core, only the last one (DRAM) pops shared CBs.
+    // When both paths run on the same core, SRAM runs first and must NOT pop
+    // cb_in0/cb_index — DRAM still needs them.
     constexpr bool sram_pop_in0 = sram_active && !dram_active;
     constexpr bool sram_pop_index = sram_active && !dram_active;
-    deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<SRAMArgs, sram_active, sram_pop_in0, sram_pop_index> sram_mm;
+    deepseek_b1_ops::MatmulExpertCompressedSRAM::
+        Op<SRAMArgs, sram_active, sram_pop_in0, /*pop_in1=*/true, sram_pop_index>
+            sram_mm;
     deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<DRAMArgs, dram_active> dram_mm;
     sram_mm();
     dram_mm();
