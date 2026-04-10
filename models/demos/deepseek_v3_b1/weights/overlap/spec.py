@@ -133,10 +133,10 @@ def _core_list(crs: ttnn.CoreRangeSet) -> list[tuple[int, int]]:
 def _greedy_place(specs: list[OverlappedTensorSpec], mesh_shape: tuple[int, int]) -> list[int]:
     """Assign byte offsets to specs via First-Fit-Decreasing placement.
 
-    Sorts by ``overlap_priority`` descending (``None`` treated as 0),
-    then by ``shard_bytes`` descending.  For each spec, finds the
-    earliest byte offset that avoids overlapping with already-placed
-    specs on any shared core.
+    Sorts by ``overlap_priority`` ascending (``None`` last), then by
+    ``shard_bytes`` descending.  For each spec, finds the earliest byte
+    offset that avoids overlapping with already-placed specs on any shared
+    core.
 
     Returns a list of offsets in the *original* spec order.
     """
@@ -144,10 +144,13 @@ def _greedy_place(specs: list[OverlappedTensorSpec], mesh_shape: tuple[int, int]
     core_sets = [set(_core_list(s.core_range_set)) for s in specs]
     sizes = [s.shard_bytes(mesh_shape) for s in specs]
 
-    order = sorted(
-        range(n),
-        key=lambda i: (-(specs[i].overlap_priority or 0), -sizes[i]),
-    )
+    def _sort_key(i: int) -> tuple[int, int, int]:
+        p = specs[i].overlap_priority
+        if p is not None:
+            return (0, p, -sizes[i])
+        return (1, 0, -sizes[i])
+
+    order = sorted(range(n), key=_sort_key)
 
     offsets = [0] * n
     for idx in order:

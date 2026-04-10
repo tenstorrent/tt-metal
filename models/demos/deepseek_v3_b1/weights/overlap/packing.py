@@ -56,12 +56,11 @@ def overlap_tensors(
     ``WIDTH_SHARDED`` or ``HEIGHT_SHARDED`` — controlled by each
     ``OverlappedTensorSpec.sharding``.
 
-    **Placement algorithm** — Entries are sorted by
-    ``overlap_priority`` descending (``None`` treated as 0), then by
-    ``shard_bytes`` descending (First-Fit-Decreasing).  Each entry is
-    assigned the earliest byte offset that does not conflict with
-    previously placed entries on any shared core.  Entries on disjoint
-    cores may share the same byte region ("hiding").
+    Placement is greedy: entries are ordered by ``overlap_priority``
+    ascending (lower first); unset (``None``) comes after all explicit
+    values; ties use larger per-core shard bytes first.  Each entry gets
+    the earliest byte offset that does not overlap earlier entries on any
+    shared core; disjoint core sets may reuse the same offset range.
 
     Args:
         entries: A flat list of ``OverlapEntry`` items.
