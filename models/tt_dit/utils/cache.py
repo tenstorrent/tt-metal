@@ -31,7 +31,7 @@ class MissingCacheError(Exception):
 def config_id(parallel_config):
     config_id = ""
     for n, v in parallel_config._asdict().items():
-        if v is not None and hasattr(v, "factor"):
+        if v is not None:
             config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
     return config_id
 
