@@ -117,6 +117,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+  - tests/ttnn/unit_tests/operations/reduce/test_intimg.py
 
 blackhole:
   # Multi-chip/CCL tests - require multi-device support
@@ -159,6 +160,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+  - tests/ttnn/unit_tests/operations/reduce/test_intimg.py
 
   # Skipping due to CI failure - issue #41286
   - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
