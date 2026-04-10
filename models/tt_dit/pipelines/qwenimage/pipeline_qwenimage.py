@@ -666,7 +666,8 @@ class QwenImagePipeline:
 
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
-                ttnn.synchronize_device(self.vae_device)
+                # Use the submesh device directly — vae_device may be None when using torch VAE.
+                ttnn.synchronize_device(self._submesh_devices[self.vae_submesh_idx])
 
                 tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
                     tt_latents_step_list[self.vae_submesh_idx],
