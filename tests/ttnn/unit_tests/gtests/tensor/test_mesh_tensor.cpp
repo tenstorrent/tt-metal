@@ -261,7 +261,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors2[1]};
             combine_device_tensors(shards_to_aggregate);
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("tensor shards must be allocated on the same mesh buffer.")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("All DeviceStorages must point to the same device memory")));
 
     // Try to aggregate the same shard twice
     EXPECT_THAT(
