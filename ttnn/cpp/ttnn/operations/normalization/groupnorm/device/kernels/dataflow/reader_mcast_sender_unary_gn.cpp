@@ -321,6 +321,15 @@ void kernel_main() {
 
                                 // read data from other cores
                                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
+                                    // When crossing a tile boundary, clear the new tile by
+                                    // reading a full tile from the partial buffer (mostly
+                                    // zeros).  Without this, stale L1 data in the un-written
+                                    // positions corrupts the reduce_tile sum.
+                                    if (cb_ex_external_bytes_written % single_tile_size_bytes == 0) {
+                                        experimental::UnicastEndpoint clear_ep;
+                                        noc.async_read(clear_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), single_tile_size_bytes, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
+                                        noc.async_read_barrier();
+                                    }
                                     experimental::UnicastEndpoint remote_ep;
                                     noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += 16;
