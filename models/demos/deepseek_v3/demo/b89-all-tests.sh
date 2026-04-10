@@ -35,13 +35,14 @@ run_demo_case() {
   local rankfile="$2"
   local hosts="$3"
   local case_id="$4"
+  local extra_mpi_x="${5:-}"
 
   echo
   echo "=== Running ${case_id} ==="
   tt-run \
     --tcp-interface "${TCP_INTERFACE}" \
     --rank-binding "${rank_binding}" \
-    --mpi-args "--host ${hosts} --map-by rankfile:file=${rankfile} --bind-to none -x DEEPSEEK_V3_HF_MODEL -x DEEPSEEK_V3_CACHE -x MESH_DEVICE" \
+    --mpi-args "--host ${hosts} --map-by rankfile:file=${rankfile} --bind-to none -x DEEPSEEK_V3_HF_MODEL -x DEEPSEEK_V3_CACHE -x MESH_DEVICE${extra_mpi_x}" \
     pytest -svvv "${TEST_PATH}" -k "${case_id}"
 }
 
@@ -50,13 +51,14 @@ run_teacher_forced_case() {
   local rankfile="$2"
   local hosts="$3"
   local mesh_name="$4"
+  local extra_mpi_x="${5:-}"
 
   echo
   echo "=== Running ${mesh_name} teacher-forced demo ==="
   tt-run \
     --tcp-interface "${TCP_INTERFACE}" \
     --rank-binding "${rank_binding}" \
-    --mpi-args "--host ${hosts} --map-by rankfile:file=${rankfile} --bind-to none -x DEEPSEEK_V3_HF_MODEL -x DEEPSEEK_V3_CACHE -x MESH_DEVICE" \
+    --mpi-args "--host ${hosts} --map-by rankfile:file=${rankfile} --bind-to none -x DEEPSEEK_V3_HF_MODEL -x DEEPSEEK_V3_CACHE -x MESH_DEVICE${extra_mpi_x}" \
     pytest -svvv "${TEACHER_FORCED_TEST_PATH}"
 }
 
@@ -88,6 +90,9 @@ ensure_non_default_hosts_on_other_system() {
 
 cd "${TT_METAL_HOME}"
 
+# USE_TORUS_MODE must be unset (not empty) for linear fabric; see config_helpers / config_dataclass.
+unset USE_TORUS_MODE
+
 ### DUAL TESTS ###
 export DEEPSEEK_V3_HF_MODEL="${DEEPSEEK_V3_HF_MODEL_DUAL:-/data/deepseek/DeepSeek-R1-0528-dequantized}"
 export DEEPSEEK_V3_CACHE="${DEEPSEEK_V3_CACHE_DUAL:-/data/deepseek/DeepSeek-R1-0528-Cache}"
@@ -118,10 +123,11 @@ done
 
 run_teacher_forced_case "${DUAL_RANK_BINDING}" "${DUAL_RANKFILE_PATH}" "${DUAL_HOSTS_CSV}" "DUAL"
 
-### QUAD TESTS ###
+### QUAD TESTS (linear fabric) ###
 export DEEPSEEK_V3_HF_MODEL="${DEEPSEEK_V3_HF_MODEL_QUAD:-/data/deepseek/DeepSeek-R1-0528-dequantized}"
 export DEEPSEEK_V3_CACHE="${DEEPSEEK_V3_CACHE_QUAD:-/data/deepseek/DeepSeek-R1-0528-Cache-pprajapati}"
 export MESH_DEVICE="QUAD"
+unset USE_TORUS_MODE
 
 QUAD_HOSTS_CSV="${QUAD_MPI_HOSTS:-${DEFAULT_QUAD_HOSTS_CSV}}"
 ensure_non_default_hosts_on_other_system "${QUAD_HOSTS_CSV}" "${DEFAULT_QUAD_HOSTS_CSV}" "QUAD_MPI_HOSTS"
@@ -145,7 +151,23 @@ for case_id in \
   quad_full_demo_8upr \
   quad_stress_demo_32upr \
   quad_stress_demo_8upr; do
-  run_demo_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "${case_id}"
+  run_demo_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "${case_id}" ""
 done
 
-run_teacher_forced_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "QUAD"
+run_teacher_forced_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "QUAD" ""
+
+### QUAD TESTS (torus / ring fabric) ###
+export USE_TORUS_MODE=1
+
+echo
+echo "=== QUAD torus mode (USE_TORUS_MODE=1) ==="
+
+for case_id in \
+  quad_full_demo_32upr \
+  quad_full_demo_8upr \
+  quad_stress_demo_32upr \
+  quad_stress_demo_8upr; do
+  run_demo_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "${case_id}" " -x USE_TORUS_MODE"
+done
+
+run_teacher_forced_case "${QUAD_RANK_BINDING}" "${QUAD_RANKFILE_PATH}" "${QUAD_HOSTS_CSV}" "QUAD (torus)" " -x USE_TORUS_MODE"
