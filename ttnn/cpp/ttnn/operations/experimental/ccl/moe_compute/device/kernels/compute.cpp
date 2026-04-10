@@ -250,37 +250,19 @@ void kernel_main() {
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
                 cb_wait_front(cb_w2c_rdy, 1);
-
-                uint32_t in2_offset = 0, in2_index = 0;
+                ckernel::MoeDm1State dm1{0, moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0], 0, 0, 0};
 
                 tile_regs_acquire();
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                        // The last block has only 4 tiles of interest, so we exit early.
-                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            break;
-                        }
-
-                        if (dm1_tiles_remaining == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
-                            in2_offset += tiles_per_step;
-                            in2_index = in2_offset;
-                        }
-                        dm1_tiles_remaining--;
-
-                        mm_w2.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
-                        in2_index++;
-                    }
-                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
-                }
+                mm_w2.moe_w2_accumulate_with_dm1_linear(
+                    dm1,
+                    w2_blocks_per_four_mm2_tile,
+                    w2_tiles_per_block,
+                    4,
+                    cb_w2c_rdy,
+                    tiles_per_step,
+                    &moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0],
+                    4);
                 tile_regs_commit();
 
                 tile_regs_wait();

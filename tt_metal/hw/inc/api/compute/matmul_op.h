@@ -9,8 +9,25 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+
+#ifdef ARCH_BLACKHOLE
+#include "api/compute/experimental/matmul_custom.h"
+#endif
 
 namespace ckernel {
+
+// -------------------------------------------------------------------------
+// MoE DM1 state for W2 accumulate helpers
+// -------------------------------------------------------------------------
+
+struct MoeDm1State {
+    uint32_t step;
+    uint32_t tiles_remaining;
+    uint32_t buf;     // current buffer index (for cycling)
+    uint32_t offset;  // tile offset for current buffer
+    uint32_t index;   // current in2 tile index
+};
 
 // -------------------------------------------------------------------------
 // Configuration struct
@@ -203,6 +220,230 @@ public:
         }
         accumulate(in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
         end_to_output(dest_cb_id, num_tiles);
+    }
+
+    // -------------------------------------------------------------------------
+    // Single-tile convenience: replaces accumulate(x, y, z, 1, 0, 0, 0)
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void matmul_one_tile(uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx) const {
+        matmul_single(in0_idx, in1_idx, dst_idx);
+    }
+
+    // -------------------------------------------------------------------------
+    // Blackhole no-MOP accumulate (block mode only)
+    // Uses matmul_block_no_mop for better performance on Blackhole SDPA.
+    // -------------------------------------------------------------------------
+
+#ifdef ARCH_BLACKHOLE
+    FORCE_INLINE void accumulate_no_mop(
+        uint32_t in0_start,
+        uint32_t in1_start,
+        uint32_t dst_start,
+        uint32_t count,
+        uint32_t in0_stride,
+        uint32_t in1_stride,
+        uint32_t dst_stride) const {
+        static_assert(IsBlockMode, "accumulate_no_mop is only supported in block mode");
+        for (uint32_t k = 0; k < count; ++k) {
+            matmul_block_no_mop(
+                cfg_.in0_cb_id,
+                cfg_.in1_cb_id,
+                in0_start + k * in0_stride,
+                in1_start + k * in1_stride,
+                dst_start + k * dst_stride,
+                cfg_.transpose,
+                cfg_.ct_dim,
+                cfg_.rt_dim,
+                cfg_.kt_dim);
+        }
+    }
+#endif
+
+    // -------------------------------------------------------------------------
+    // Reduce-W tiles: per-tile CB wait/pop on in0 with matmul accumulation.
+    // Absorbs: for(w){cb_wait(in0,1); matmul(0,0,dst); cb_pop(in0,1);}
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void reduce_w_tiles(uint32_t count, uint32_t dst_idx) const {
+        for (uint32_t w = 0; w < count; ++w) {
+            cb_wait_front(cfg_.in0_cb_id, 1);
+            matmul_single(0, 0, dst_idx);
+            cb_pop_front(cfg_.in0_cb_id, 1);
+        }
+    }
+
+    // Same as reduce_w_tiles but calls init_short() per tile.
+    // For kernels that reconfigure data formats between matmul iterations
+    // (e.g., moreh_mean_w, moreh_sum_w). Includes FP32_DEST_ACC_EN reconfig.
+    FORCE_INLINE void reduce_w_tiles_with_init(uint32_t count, uint32_t dst_idx) const {
+        for (uint32_t w = 0; w < count; ++w) {
+            cb_wait_front(cfg_.in0_cb_id, 1);
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cfg_.in0_cb_id, cfg_.in1_cb_id);
+#endif
+            init_short();
+            matmul_single(0, 0, dst_idx);
+            cb_pop_front(cfg_.in0_cb_id, 1);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Transformer attention accumulate: progressive in0 reveal + per-tile in1.
+    // Absorbs the inner Kt loop from transformer_attn_matmul.
+    // On first call (progressive_in0=true), progressively waits for in0 tiles.
+    // Each iteration: wait(in1,1), matmul(kt, 0, 0), pop(in1,1).
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void accumulate_attn(uint32_t inner_dim, bool progressive_in0) const {
+        for (uint32_t kt = 0; kt < inner_dim; ++kt) {
+            if (progressive_in0) {
+                cb_wait_front(cfg_.in0_cb_id, kt + 1);
+            }
+            cb_wait_front(cfg_.in1_cb_id, 1);
+            matmul_single(kt, 0, 0);
+            cb_pop_front(cfg_.in1_cb_id, 1);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Reduce subblock inplace: per-subblock acquire/matmul/commit/pop/pack/release.
+    // Absorbs the reduction loop from SDPA compute_common matmul_reduce.
+    // Each subblock: acquire → matmul(0,0,0,1) → commit → pop(out,n) → pack(n) → release → push(n).
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void reduce_subblock_inplace(uint32_t num_subblocks, uint32_t subblock_tiles) const {
+        for (uint32_t sub = 0; sub < num_subblocks; ++sub) {
+            tile_regs_acquire();
+            matmul_single(0, 0, 0);
+            tile_regs_commit();
+            cb_pop_front(cfg_.out_cb_id, subblock_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < subblock_tiles; i++) {
+                pack_tile(i, cfg_.out_cb_id);
+            }
+            tile_regs_release();
+            cb_push_back(cfg_.out_cb_id, subblock_tiles);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // MoE blocked accumulate with bias: iterates over weight blocks,
+    // accumulating data tiles with stride, stopping when k_tracker reaches
+    // limit, then adding bias via bias_op. Weight CB wait/pop handled internally.
+    // Returns updated in0_index.
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE uint32_t moe_accumulate_with_bias(
+        MatmulOp& bias_op,
+        uint32_t in0_start,
+        uint32_t num_blocks,
+        uint32_t tiles_per_block,
+        uint32_t tile_stride,
+        uint32_t limit) const {
+        uint32_t k_tracker = 0;
+        uint32_t in0_index = in0_start;
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_wait_front(cfg_.in1_cb_id, tiles_per_block);
+            uint32_t last_k_index = 0;
+            for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
+                if (k_tracker == limit) {
+                    last_k_index = k;
+                    break;
+                }
+                matmul_single(in0_index, k, 0);
+                in0_index++;
+                k_tracker++;
+            }
+            if (k_tracker == limit) {
+                bias_op.matmul_one_tile(0, last_k_index, 0);
+            }
+            cb_pop_front(cfg_.in1_cb_id, tiles_per_block);
+        }
+        return in0_index;
+    }
+
+    // -------------------------------------------------------------------------
+    // MoE W2 blocked accumulate with DM1 buffer cycling and bias.
+    // For moe_gpt W2 pattern: weight blocks with dm1 buffer tracking,
+    // 6-buffer cycling, and bias addition at k_tracker limit.
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void moe_w2_accumulate_with_dm1_cycling(
+        MatmulOp& bias_op,
+        MoeDm1State& dm1,
+        uint32_t num_blocks,
+        uint32_t tiles_per_block,
+        uint32_t tile_stride,
+        uint32_t limit,
+        uint32_t dm1_rdy_cb,
+        uint32_t tiles_per_step,
+        uint32_t num_buffers,
+        const uint32_t* dm1_table) const {
+        uint32_t k_tracker = 0;
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_wait_front(cfg_.in1_cb_id, tiles_per_block);
+            uint32_t last_k_index = 0;
+            for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
+                if (k_tracker == limit) {
+                    last_k_index = k;
+                    break;
+                }
+                if (dm1.tiles_remaining == 0) {
+                    cb_pop_front(dm1_rdy_cb, 1);
+                    cb_wait_front(dm1_rdy_cb, 1);
+                    dm1.tiles_remaining = dm1_table[++dm1.step];
+                    dm1.buf = (dm1.buf >= num_buffers - 1) ? 0 : dm1.buf + 1;
+                    dm1.offset = dm1.buf * tiles_per_step;
+                    dm1.index = dm1.offset;
+                }
+                dm1.tiles_remaining--;
+                matmul_single(dm1.index, k, 0);
+                dm1.index++;
+                k_tracker++;
+            }
+            if (k_tracker == limit) {
+                bias_op.matmul_one_tile(0, last_k_index, 0);
+            }
+            cb_pop_front(cfg_.in1_cb_id, tiles_per_block);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // MoE W2 blocked accumulate with DM1 linear advance (no bias).
+    // For moe_compute W2 pattern: weight blocks with dm1 buffer tracking,
+    // linear offset advance, and early exit on last block.
+    // -------------------------------------------------------------------------
+
+    FORCE_INLINE void moe_w2_accumulate_with_dm1_linear(
+        MoeDm1State& dm1,
+        uint32_t num_blocks,
+        uint32_t tiles_per_block,
+        uint32_t tile_stride,
+        uint32_t dm1_rdy_cb,
+        uint32_t tiles_per_step,
+        const uint32_t* dm1_table,
+        uint32_t last_block_early_exit_k) const {
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_wait_front(cfg_.in1_cb_id, tiles_per_block);
+            for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
+                if ((block == (num_blocks - 1)) && (k == last_block_early_exit_k)) {
+                    cb_pop_front(dm1_rdy_cb, 1);
+                    break;
+                }
+                if (dm1.tiles_remaining == 0) {
+                    cb_pop_front(dm1_rdy_cb, 1);
+                    cb_wait_front(dm1_rdy_cb, 1);
+                    dm1.tiles_remaining = dm1_table[++dm1.step];
+                    dm1.offset += tiles_per_step;
+                    dm1.index = dm1.offset;
+                }
+                dm1.tiles_remaining--;
+                matmul_single(dm1.index, k, 0);
+                dm1.index++;
+            }
+            cb_pop_front(cfg_.in1_cb_id, tiles_per_block);
+        }
     }
 
     // Computes one output tile by accumulating over inner_dim single tiles.

@@ -216,25 +216,8 @@ void kernel_main() {
                 uint32_t in0_index = in0_base;
 
                 tile_regs_acquire();
-                uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                    uint32_t last_k_index = 0;
-                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                        if (k_tracker == num_w0_w1_tiles_h) {
-                            last_k_index = k;
-                            break;
-                        }
-                        mm_data.accumulate(in0_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
-                        in0_index++;
-                        k_tracker++;
-                    }
-                    if (k_tracker == num_w0_w1_tiles_h) {
-                        // Bias addition: matmul(ones_tile, bias_row)
-                        mm_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
-                    }
-                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                }
+                mm_data.moe_accumulate_with_bias(
+                    mm_bias, in0_index, w0_w1_blocks_per_two_elt_tile, w0_w1_tiles_per_block, 4, num_w0_w1_tiles_h);
 
                 tile_regs_commit();
 
@@ -285,45 +268,22 @@ void kernel_main() {
             pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
 
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
                 cb_wait_front(cb_w2c_rdy, 1);
-
-                // 6-buffer cycling: each A2A step uses buf (step % 6)
-                uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
+                ckernel::MoeDm1State dm1_fused{
+                    0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
 
                 tile_regs_acquire();
-                uint32_t k_tracker = 0;
-
-                for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter_fused; ++block_id) {
-                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-                    uint32_t last_k_index = 0;
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                        if (k_tracker == num_w0_w1_tiles_h) {
-                            last_k_index = k;
-                            break;
-                        }
-                        if (dm1_tiles_remaining == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining =
-                                moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                            in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
-                            in2_offset = in2_buf * tiles_per_step;
-                            in2_index = in2_offset;
-                        }
-                        dm1_tiles_remaining--;
-
-                        mm_w2_data.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
-                        in2_index++;
-                        k_tracker++;
-                    }
-                    if (k_tracker == num_w0_w1_tiles_h) {
-                        // Bias addition: matmul(ones_tile, bias_row)
-                        mm_w2_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
-                    }
-                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
-                }
+                mm_w2_data.moe_w2_accumulate_with_dm1_cycling(
+                    mm_w2_bias,
+                    dm1_fused,
+                    w2_bias_blocks_per_iter_fused,
+                    w2_tiles_per_block,
+                    4,
+                    num_w0_w1_tiles_h,
+                    cb_w2c_rdy,
+                    tiles_per_step,
+                    6,
+                    &moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0]);
 
                 cb_pop_front(cb_w2c_rdy, 1);
 
@@ -365,25 +325,13 @@ void kernel_main() {
             uint32_t in0_index = expert_id * num_w0_w1_tiles_h;
 
             tile_regs_acquire();
-            uint32_t k_tracker = 0;
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                uint32_t last_k_index = 0;
-                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                    if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
-                        last_k_index = k;
-                        break;
-                    }
-                    mm_data.accumulate(in0_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
-                    in0_index++;
-                    k_tracker++;
-                }
-                if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
-                    // Bias addition: matmul(ones_tile, bias_row)
-                    mm_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
-                }
-                cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-            }
+            mm_data.moe_accumulate_with_bias(
+                mm_bias,
+                in0_index,
+                w0_w1_blocks_per_two_elt_tile,
+                w0_w1_tiles_per_block,
+                4,
+                moe_gpt_ring::NUM_W0_W1_TILES_H);
 
             tile_regs_commit();
             PACK(TTI_SEMWAIT(
@@ -426,42 +374,23 @@ void kernel_main() {
 
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-            uint32_t dm1_step = 0;
-            uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
             cb_wait_front(cb_w2c_rdy, 1);
-
-            uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
+            constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
+            ckernel::MoeDm1State dm1_nonfused{
+                0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
 
             tile_regs_acquire();
-            uint32_t k_tracker = 0;
-            constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
-            for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter; ++block_id) {
-                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-                uint32_t last_k_index = 0;
-                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
-                        last_k_index = k;
-                        break;
-                    }
-                    if (dm1_tiles_remaining == 0) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        cb_wait_front(cb_w2c_rdy, 1);
-                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
-                        in2_offset = in2_buf * tiles_per_step;
-                        in2_index = in2_offset;
-                    }
-                    dm1_tiles_remaining--;
-                    mm_w2_data.accumulate(in2_index, /*in1_index=*/k, /*dst_index=*/0, 1, 0, 0, 0);
-                    in2_index++;
-                    k_tracker++;
-                }
-                if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
-                    // Bias addition: matmul(ones_tile, bias_row)
-                    mm_w2_bias.accumulate(0, /*in1_index=*/last_k_index, /*dst_index=*/0, 1, 0, 0, 0);
-                }
-                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
-            }
+            mm_w2_data.moe_w2_accumulate_with_dm1_cycling(
+                mm_w2_bias,
+                dm1_nonfused,
+                w2_bias_blocks_per_iter,
+                w2_tiles_per_block,
+                4,
+                moe_gpt_ring::NUM_W0_W1_TILES_H,
+                cb_w2c_rdy,
+                tiles_per_step,
+                6,
+                &moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0]);
 
             cb_pop_front(cb_w2c_rdy, 1);
 

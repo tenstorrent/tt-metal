@@ -1302,21 +1302,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     cb_wait_front(in1_cb, N);
     cb_wait_front(out_cb, M);
 
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        tile_regs_acquire();
-
-        mm.accumulate(0, 0, 0, 1, 0, 0, 0);
-
-        tile_regs_commit();
-        cb_pop_front(out_cb, subblock_h);
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_h; i++) {
-            pack_tile(i, out_cb);
-        }
-        tile_regs_release();
-        cb_push_back(out_cb, subblock_h);
-    }
+    mm.reduce_subblock_inplace(in0_num_subblocks, subblock_h);
 }
 
 /**

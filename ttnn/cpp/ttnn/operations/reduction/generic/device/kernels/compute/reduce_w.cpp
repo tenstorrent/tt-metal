@@ -41,16 +41,15 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             acquire_dst();
+#ifndef REDUCE_ROW_SUM_VIA_MM
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb0.wait_front(onetile);
-                // REDUCE_OP is expected to come from add_define
-#ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
-#else
-                mm.accumulate(0, 0, 0, 1, 0, 0, 0);
-#endif
                 cb0.pop_front(onetile);
             }
+#else
+            mm.reduce_w_tiles(Wt, 0);
+#endif
 
             cb3.reserve_back(onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_3);

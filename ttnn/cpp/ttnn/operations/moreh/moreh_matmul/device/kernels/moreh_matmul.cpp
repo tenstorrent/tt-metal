@@ -289,7 +289,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             mm_cfg.out_cb_id = cb_out0;
             ckernel::TileMatmulOp mm(mm_cfg);
             mm.init_short();
-            mm.accumulate(0, 0, 0, 1, 0, 0, 0);
+            mm.matmul_one_tile(0, 0, 0);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
