@@ -69,9 +69,9 @@ inline void dequantize_one_tile(
         add_binary_tile(1, 3, 1);
     }
 
-    pack_tile(1, cb_temp);
     tile_regs_commit();
     tile_regs_wait();
+    pack_tile(1, cb_temp);
     tile_regs_release();
     cb_pop_front(cb_idx, 1);
     cb_push_back(cb_temp, 1);
