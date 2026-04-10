@@ -1586,4 +1586,5 @@ def test_hybrid_expert_irregular_sram_down_grid(device):
         active_expert_ids=[96, 112, 156, 200, 212, 220, 240, 250],
         formats_per_device=[["bfp4", "bfp2"]],
         sram_cores_override=down_cores,
+        accum_experts=True,
     )
