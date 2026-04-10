@@ -570,10 +570,8 @@ HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_t
 MeshTensor to_device(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
-    TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
-
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
@@ -583,7 +581,7 @@ MeshTensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, host_tensor.tensor_topology());
+    auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
     tt::tt_metal::tensor_impl::copy_to_device(cq, host_tensor, result);
     return result;
 }
@@ -760,10 +758,8 @@ void copy_to_host(
 std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
-    TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
-
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
@@ -773,7 +769,7 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, host_tensor.tensor_topology());
+    auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
     auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(cq, host_tensor, result);
     return {std::move(result), std::move(coords)};
 }

@@ -100,10 +100,10 @@ Tensor to_device(
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
     Tensor device_tensor;
     if (input_tensor.host_storage().is_uniform_storage()) {
-        device_tensor = Tensor(tensor_impl::to_device(cq, input_tensor.host_tensor(), mesh_device, mem_config));
+        device_tensor = Tensor(tensor_impl::to_device(cq, input_tensor.host_tensor(), *mesh_device, mem_config));
     } else {
         auto [mesh_tensor, coords] =
-            tensor_impl::non_uniform_data_movement::to_device(cq, input_tensor.host_tensor(), mesh_device, mem_config);
+            tensor_impl::non_uniform_data_movement::to_device(cq, input_tensor.host_tensor(), *mesh_device, mem_config);
         device_tensor = Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     }
     GraphTracker::instance().track_function_end(device_tensor);

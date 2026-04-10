@@ -103,7 +103,7 @@ void copy_to_host(
 MeshTensor to_device(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
 void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
@@ -133,7 +133,7 @@ void copy_to_host(
 std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
 std::vector<distributed::MeshCoordinate> copy_to_device(
