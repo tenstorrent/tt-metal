@@ -41,7 +41,7 @@ PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
-        // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
+        TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported");
         config_ = RowMajorPageConfig();
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
