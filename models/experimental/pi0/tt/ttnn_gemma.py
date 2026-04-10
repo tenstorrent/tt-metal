@@ -297,6 +297,10 @@ class GemmaAttentionTTNN:
             self._cos_presliced = None
             self._sin_presliced = None
 
+        # OPTIMIZATION: Lazy-allocated output buffers for KV concat (source build supports output_tensor)
+        self._kv_concat_k = None
+        self._kv_concat_v = None
+
 
     def forward(
         self,
