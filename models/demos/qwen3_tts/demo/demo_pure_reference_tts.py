@@ -100,25 +100,34 @@ class TTSConfig:
             }
 
 
-def load_weights():
-    """Load all model weights."""
+def load_weights(*, use_bfloat16: bool = False):
+    """Load all model weights.
+
+    Default float32 maximizes numerical parity with HF. Optional bfloat16 cuts
+    CPU RAM (~half) for CI or low-memory hosts (subprocess may be SIGKILL/OOM otherwise).
+    """
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
     print("Loading model weights...")
+    if use_bfloat16:
+        print("  (bfloat16 weights — lower memory)")
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
     model_path = Path(model_path)
 
+    def _to_compute_dtype(t):
+        return t.to(torch.bfloat16) if use_bfloat16 else t.float()
+
     # Main model weights
     main_dict = load_file(model_path / "model.safetensors")
-    main_dict = {k: v.float() for k, v in main_dict.items()}
+    main_dict = {k: _to_compute_dtype(v) for k, v in main_dict.items()}
     print(f"  Loaded {len(main_dict)} main weights")
 
     # Speech tokenizer weights (decoder)
     speech_path = model_path / "speech_tokenizer" / "model.safetensors"
     speech_dict = load_file(speech_path)
-    decoder_weights = {k[8:]: v.float() for k, v in speech_dict.items() if k.startswith("decoder.")}
+    decoder_weights = {k[8:]: _to_compute_dtype(v) for k, v in speech_dict.items() if k.startswith("decoder.")}
     print(f"  Loaded {len(decoder_weights)} decoder weights")
 
     return main_dict, decoder_weights, model_path
@@ -464,6 +473,10 @@ def generate_codes(
     talker_weights = extract_talker_weights(weights)
     codec_head = weights["talker.codec_head.weight"]
     codec_embed_weight = weights["talker.model.codec_embedding.weight"]
+    w_dtype = codec_embed_weight.dtype
+    inputs_embeds = inputs_embeds.to(dtype=w_dtype)
+    trailing_text_hidden = trailing_text_hidden.to(dtype=w_dtype)
+    tts_pad_embed = tts_pad_embed.to(dtype=w_dtype)
 
     # Extract code predictor weights
     code_predictor_weights = extract_code_predictor_weights(weights)
@@ -697,6 +710,11 @@ def main():
         help="Save ICL embeddings (inputs_embeds, trailing_text_hidden, tts_pad_embed) to .pt file",
     )
     parser.add_argument(
+        "--bfloat16-weights",
+        action="store_true",
+        help="Load weights in bfloat16 (much lower CPU RAM; use for tests / small machines)",
+    )
+    parser.add_argument(
         "--auto-trim-bleed",
         action="store_true",
         help="Automatically detect and trim reference audio bleed using Whisper",
@@ -726,7 +744,7 @@ def main():
         return
 
     # Load weights
-    main_weights, decoder_weights, model_path = load_weights()
+    main_weights, decoder_weights, model_path = load_weights(use_bfloat16=args.bfloat16_weights)
 
     # Load tokenizer
     tokenizer = load_tokenizer()
@@ -761,9 +779,9 @@ def main():
     if args.save_inputs:
         torch.save(
             {
-                "inputs_embeds": inputs_embeds.detach().cpu(),
-                "trailing_text_hidden": trailing_text_hidden.detach().cpu(),
-                "tts_pad_embed": tts_pad_embed.detach().cpu(),
+                "inputs_embeds": inputs_embeds.detach().cpu().float(),
+                "trailing_text_hidden": trailing_text_hidden.detach().cpu().float(),
+                "tts_pad_embed": tts_pad_embed.detach().cpu().float(),
             },
             args.save_inputs,
         )
