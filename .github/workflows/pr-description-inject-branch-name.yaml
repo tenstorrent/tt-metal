@@ -44,7 +44,7 @@ jobs:
               // Include branch filter so the link lands on runs for this PR's branch
               const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}?query=branch:${branchName}`;
               const badgeUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}/badge.svg?branch=${branchName}`;
-              const optionalTag = p.optional ? " *(opt-in)*" : "";
+              const optionalTag = "";  // all pipelines are opt-in; no label needed
 
               let runLink;
               try {
