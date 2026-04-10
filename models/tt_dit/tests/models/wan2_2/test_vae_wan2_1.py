@@ -1178,19 +1178,6 @@ def test_wan_decoder3d(
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
-    # --- conv3d shape tracing ---
-    _conv3d_log = []
-    _real_conv3d = ttnn.experimental.conv3d
-
-    def _traced_conv3d(*, input_tensor, kernel_size, **kwargs):
-        B_, T_, H_, W_, C_ = input_tensor.shape
-        logger.info(f"  [TRACE] conv3d  kernel={tuple(kernel_size)}  T={T_}  H={H_}  W={W_}  C={C_}")
-        _conv3d_log.append({"kernel": tuple(kernel_size), "T": T_, "H": H_, "W": W_, "C": C_})
-        return _real_conv3d(input_tensor=input_tensor, kernel_size=kernel_size, **kwargs)
-
-    ttnn.experimental.conv3d = _traced_conv3d
-    # --- end trace setup ---
-
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
@@ -1361,16 +1348,6 @@ def test_wan_decoder3d(
                     shard_mapping={h_axis: 2, w_axis: 3},
                     dtype=tt_input_dtype,
                 )
-
-    # --- conv3d shape trace summary ---
-    ttnn.experimental.conv3d = _real_conv3d
-    logger.info(f"\n{'='*80}")
-    logger.info(f"CONV3D SHAPE TRACE SUMMARY  ({len(_conv3d_log)} calls)")
-    logger.info(f"{'='*80}")
-    for idx, e in enumerate(_conv3d_log):
-        logger.info(f"  [{idx:3d}] kernel={e['kernel']}  T={e['T']}  H={e['H']}  W={e['W']}  C={e['C']}")
-    logger.info(f"{'='*80}\n")
-    # --- end trace summary ---
 
 
 @pytest.mark.parametrize(
