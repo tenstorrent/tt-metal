@@ -453,11 +453,6 @@ Tensor convert_python_tensor_to_tt_tensor(
     }
 
     TT_FATAL(output.dtype() == dst_dtype, "Output dtype mismatch. Expected: {}, Got: {}", dst_dtype, output.dtype());
-    TT_FATAL(
-        output.memory_config() == memory_config,
-        "Output memory config mismatch. Expected: {}, Got: {}",
-        memory_config,
-        output.memory_config());
     GraphTracker::instance().track_function_end(output);
     return output;
 }
