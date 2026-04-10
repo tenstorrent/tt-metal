@@ -155,7 +155,8 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         tensor_impl::copy_to_host(cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
     } else {
         auto coords = device_tensor.device_storage().get_coords();
-        tensor_impl::non_uniform_data_movement::copy_to_host(cq, device_tensor, host_tensor, coords, blocking);
+        tensor_impl::non_uniform_data_movement::copy_to_host(
+            cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), coords, blocking);
     }
     GraphTracker::instance().track_function_end(host_tensor);
 }
@@ -173,7 +174,8 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(tensor_impl::to_host(cq, input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
-        output = tensor_impl::non_uniform_data_movement::to_host(cq, input_tensor, coords, blocking);
+        output =
+            Tensor(tensor_impl::non_uniform_data_movement::to_host(cq, input_tensor.mesh_tensor(), coords, blocking));
     }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);

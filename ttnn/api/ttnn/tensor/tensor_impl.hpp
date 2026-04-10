@@ -117,16 +117,16 @@ void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_te
 // so the resulting DeviceStorage must track which coordinates were actually written.
 namespace non_uniform_data_movement {
 
-Tensor to_host(
+HostTensor to_host(
     distributed::MeshCommandQueue& cq,
-    const Tensor& tensor,
+    const MeshTensor& device_tensor,
     std::span<const distributed::MeshCoordinate> coords,
     bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& cq,
-    const Tensor& device_tensor,
-    Tensor& host_tensor,
+    const MeshTensor& device_tensor,
+    HostTensor& host_tensor,
     std::span<const distributed::MeshCoordinate> coords,
     bool blocking = true);
 
