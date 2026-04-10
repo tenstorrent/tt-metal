@@ -34,6 +34,30 @@ class UnsafeAllocationTracker:
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
 
+    @classmethod
+    def mark_corruptible(cls, tensor) -> int:
+        """
+        Mark a tensor's backing buffer as intentionally corruptible.
+        This removes the buffer from unsafe-allocation tracking immediately.
+        Returns the tensor's buffer_unique_id.
+        """
+        import ttnn
+        from ttnn._ttnn.operations.trace import remove_unsafe_tracked_id
+
+        if not isinstance(tensor, ttnn.Tensor):
+            raise TypeError(f"mark_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
+        if not ttnn.is_tensor_storage_on_device(tensor):
+            raise ValueError("mark_corruptible expects a tensor with device storage")
+        if not tensor.is_allocated():
+            raise ValueError("mark_corruptible expected an allocated tensor")
+
+        buf_id = tensor.buffer_unique_id()
+        if buf_id is None:
+            raise ValueError("mark_corruptible expected a tensor with a valid device buffer_unique_id")
+
+        remove_unsafe_tracked_id(tensor.device(), buf_id)
+        return buf_id
+
     def verify_before_replay(self) -> None:
         """
         Call before execute_trace. Triggers GC, then checks for unsafe
