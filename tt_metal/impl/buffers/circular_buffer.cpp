@@ -57,7 +57,10 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(descriptor.core_ranges),
     config_(descriptor),
-    locally_allocated_address_(std::nullopt) {
+    locally_allocated_address_(std::nullopt),
+    // const_cast is safe: the underlying CBDescriptor lives in a non-const ProgramDescriptor
+    // and we only write back when explicitly requested via write_back_allocated_address().
+    source_descriptor_(const_cast<CBDescriptor*>(&descriptor)) {
     this->validate_set_config_attributes();
     if (descriptor.global_circular_buffer) {
         TT_FATAL(
