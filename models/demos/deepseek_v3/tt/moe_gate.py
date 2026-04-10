@@ -29,7 +29,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_dequantized_tensor,
     shard_and_save,
 )
-from models.demos.deepseek_v3.utils.debug_utils import _print_memory_stats
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -297,14 +296,12 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert x.memory_config() == cfg["input_memory_config"]
-        device = x.device()
 
         # Gate projections
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
-        _print_memory_stats(device, "moegate forward linear")
         # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
@@ -313,16 +310,14 @@ class MoEGate(AbstractModule):
         # Add score correction bias
         # Expand bias to match scores shape(dynamic shape)
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias_repeated = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
-        scores_correction_bias_tiled = ttnn.to_layout(scores_correction_bias_repeated, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(scores_correction_bias_repeated)
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
+        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
         scores_with_bias = ttnn.add(
             scores,
-            scores_correction_bias_tiled,
+            scores_correction_bias,
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
-        ttnn.deallocate(scores_correction_bias_tiled)
         scores_with_bias_flat = (
             scores_with_bias
             if scores_with_bias.shape[1] == 1
@@ -331,7 +326,6 @@ class MoEGate(AbstractModule):
         # Reshape scores to expert groups
         expert_scores_grouped = ttnn.reshape(scores_with_bias_flat, **cfg["reshape_scores"])
         num_experts_per_group = expert_scores_grouped.shape[3]
-        _print_memory_stats(device, "moegate forward before top2")
 
         # calculate top-2 scores with expert groups
         if cfg["topk_fallback"]:
@@ -351,13 +345,11 @@ class MoEGate(AbstractModule):
             )
         ttnn.deallocate(expert_scores_grouped)
         ttnn.deallocate(topk_indices_within_expert_groups)
-        _print_memory_stats(device, "moegate forward topk topk_within")
         # sum top-2 scores within expert groups
-        expert_group_scores_sum = ttnn.sum(topk_scores_within_expert_groups, dim=3)
+        expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
         ttnn.deallocate(topk_scores_within_expert_groups)
         # reshape to 4D tensor
-        expert_group_scores = ttnn.unsqueeze(expert_group_scores_sum, dim=0)
-        ttnn.deallocate(expert_group_scores_sum)
+        expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
 
         # calculate top-k expert groups
         if cfg["topk_fallback"]:
@@ -376,15 +368,14 @@ class MoEGate(AbstractModule):
             )
         ttnn.deallocate(expert_group_scores)
         ttnn.deallocate(topk_expert_groups_scores)
-        _print_memory_stats(device, "moegate forward topk groups")
 
         # create full expert_groups_mask(dynamic shape)
-        input_mask = ttnn.repeat(cfg["scatter_top_expert_groups"]["input"], ttnn.Shape((1, 1, token_count, 1)))
-        _print_memory_stats(device, "moegate forward repeat1")
+        input_mask = cfg["scatter_top_expert_groups"]["input"]
+        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
 
         # create full src tensor of ones
-        src_tensor = ttnn.repeat(cfg["scatter_top_expert_groups"]["src"], ttnn.Shape((1, 1, token_count, 1)))
-        _print_memory_stats(device, "moegate forward repeat2")
+        src_tensor = cfg["scatter_top_expert_groups"]["src"]
+        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
 
         # scatter top-k expert groups indices to full expert_groups_mask
         active_groups_mask = ttnn.scatter(
@@ -393,24 +384,17 @@ class MoEGate(AbstractModule):
             src=src_tensor,
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
-        ttnn.deallocate(input_mask)
-        ttnn.deallocate(src_tensor)
         ttnn.deallocate(topk_expert_groups_indices)
-        _print_memory_stats(device, "moegate forward scatter")
-        active_groups_mask_tiled = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(active_groups_mask)
-        active_groups_mask = ttnn.reshape(active_groups_mask_tiled, **cfg["reshape_group_mask"])
-        ttnn.deallocate(active_groups_mask_tiled)
+        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
+        active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
 
         # expand active_groups_mask to all the experts
-        active_experts_mask_repeated = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
+        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
         ttnn.deallocate(active_groups_mask)
-        active_experts_mask = ttnn.reshape(active_experts_mask_repeated, **cfg["reshape_active_experts"])
-        ttnn.deallocate(active_experts_mask_repeated)
+        active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
         active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
         ttnn.deallocate(scores_with_bias)
         ttnn.deallocate(active_experts_mask)
-        _print_memory_stats(device, "moegate forward before topk experts")
 
         # calculate top-k experts
         if cfg["topk_fallback"]:
@@ -423,12 +407,10 @@ class MoEGate(AbstractModule):
             )
         ttnn.deallocate(active_experts_scores)
         ttnn.deallocate(topk_experts_scores_with_bias)
-        _print_memory_stats(device, "moegate forward topk experts")
 
         # gather original scores without bias
         topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)
         ttnn.deallocate(scores)
-        _print_memory_stats(device, "moegate forward gather2")
 
         # normalize scores
         topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
@@ -437,21 +419,17 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(topk_experts_scores)
 
         # multiply by expert scale
+        expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]
         # expand expert_scale to match topk_experts_scores_normalized shape(dynamic shape)
-        expert_scale_repeated = ttnn.repeat(
-            cfg["multiply_expert_scale"]["input_tensor_b"],
-            ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)),
-        )
-        expert_scale_tiled = ttnn.to_layout(expert_scale_repeated, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(expert_scale_repeated)
+        expert_scale = ttnn.repeat(expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
+        expert_scale = ttnn.to_layout(expert_scale, ttnn.TILE_LAYOUT)
         topk_experts_scores_normalized = ttnn.mul(
             topk_experts_scores_normalized,
-            expert_scale_tiled,
+            expert_scale,
             memory_config=cfg["multiply_expert_scale"]["memory_config"],
             dtype=cfg["multiply_expert_scale"]["dtype"],
         )
-        ttnn.deallocate(expert_scale_tiled)
-        _print_memory_stats(device, "moegate forward end")
+        ttnn.deallocate(expert_scale)
 
         return topk_experts_scores_normalized, topk_experts_indices
 
