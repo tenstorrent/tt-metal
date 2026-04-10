@@ -145,6 +145,8 @@ class Gemma4Model:
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+        tp = mesh_config.tp if mesh_config else 1
+        tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
         if state_dict and "model.language_model.embed_tokens.weight" in state_dict:
             embed_key = "model.language_model.embed_tokens.weight"
@@ -155,25 +157,37 @@ class Gemma4Model:
 
         if embed_key and state_dict:
             embed_weight = state_dict[embed_key]
+
+            # Embedding: column-parallel (shard hidden dim across TP devices)
+            # Each device holds [vocab, hidden/TP]; all-gather after lookup.
+            if tp > 1:
+                embed_mapper = mesh_config.column_parallel(mesh_device)
+            else:
+                embed_mapper = replicate
             self.embedding_weight = ttnn.as_tensor(
                 embed_weight.unsqueeze(0).unsqueeze(0),
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=replicate,
-                cache_file_name=get_cache_file_name(tensor_cache_path, "embed_tokens.weight"),
+                mesh_mapper=embed_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # LM head (tied with embeddings)
+            # LM head (tied with embeddings): column-parallel (shard vocab dim)
+            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
             lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+            if tp > 1:
+                lm_mapper = mesh_config.column_parallel(mesh_device)
+            else:
+                lm_mapper = replicate
             self.lm_head_weight = ttnn.as_tensor(
                 lm_head_weight,
                 device=mesh_device,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=replicate,
-                cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head.weight"),
+                mesh_mapper=lm_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -571,28 +585,45 @@ class Gemma4Model:
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
 
-        # LM head
+        # LM head (column-parallel on vocab dim when TP > 1)
         if self.lm_head_weight is not None:
             logits = ttnn.linear(hidden_states, self.lm_head_weight)
             hidden_states.deallocate(True)
         else:
             logits = hidden_states
 
-        # Softcapping: tanh(logits / cap) * cap
+        # Softcapping: tanh(logits / cap) * cap — element-wise, works on sharded vocab
         if self.final_logit_softcapping and self.final_logit_softcapping > 0:
             cap = self.final_logit_softcapping
             logits = ttnn.mul(logits, 1.0 / cap)
             logits = ttnn.tanh(logits)
             logits = ttnn.mul(logits, cap)
 
+        # All-gather sharded vocab dim back to full vocab for argmax
+        if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+
         return logits
 
     def embed_tokens(self, tokens):
-        """Embed input tokens and scale by sqrt(hidden_size)."""
+        """Embed input tokens and scale by sqrt(hidden_size).
+
+        Embedding is column-parallel (hidden dim sharded across TP devices).
+        All-gather reconstructs full hidden dim after lookup.
+        """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
         embeds = ttnn.mul(embeds, self.embed_scale)
+
+        # All-gather sharded hidden dim back to full hidden
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            embeds = ttnn.unsqueeze_to_4D(embeds)
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
 
     # ── Generator-compatible interface ────────────────────────────────────

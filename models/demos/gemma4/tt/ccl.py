@@ -111,3 +111,40 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         )
         tensor.deallocate(True)
         return result
+
+
+def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
+    """All-gather along dim, works on both N300 and T3K."""
+    if mesh_config is None or mesh_config.tp <= 1:
+        return tensor
+
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    tp_axis = mesh_config.tp_axis
+
+    if ccl_manager is not None and ccl_manager.num_devices > 2:
+        # T3K path: async all_gather with semaphores
+        gathered = ttnn.experimental.all_gather_async(
+            tensor,
+            dim=dim,
+            cluster_axis=tp_axis,
+            mesh_device=ccl_manager.mesh_device,
+            num_links=ccl_manager.num_links,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            memory_config=memory_config,
+        )
+        tensor.deallocate(True)
+        return gathered
+    else:
+        # N300 path: simple all_gather
+        gathered = ttnn.all_gather(
+            tensor,
+            dim=dim,
+            cluster_axis=tp_axis,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=memory_config,
+        )
+        tensor.deallocate(True)
+        return gathered
