@@ -53,17 +53,8 @@ void kernel_main() {
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
-                    tile_regs_acquire();
-                    for (uint32_t kt = 0; kt < Kt; ++kt) {
-                        if (tile_row_id == 0) {
-                            cb_in0_obj.wait_front(kt + 1);
-                        }
-                        cb_in1_obj.wait_front(onetile);
-
-                        mm.accumulate(kt, 0, 0, 1, 0, 0, 0);
-
-                        cb_in1_obj.pop_front(onetile);
-                    }
+                    mm.begin_subblock();
+                    mm.accumulate_attn(Kt, tile_row_id == 0);
                     mm.end_to_output(cb_intermed0, onetile);
 
                     // untilize tile and write to CBIndex::c_25 with reconfiguration

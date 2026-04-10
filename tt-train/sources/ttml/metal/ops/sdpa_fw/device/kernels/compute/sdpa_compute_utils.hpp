@@ -269,7 +269,7 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     reduce_cfg.out_cb_id = cb_identity_scaler;
     ckernel::TileMatmulOp mm_reduce(reduce_cfg);
     mm_reduce.init();
-    mm_reduce.accumulate(0, 0, reduce_dst_idx, 1, 0, 0, 0);
+    mm_reduce.matmul_one_tile(0, 0, reduce_dst_idx);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);

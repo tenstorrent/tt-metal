@@ -172,7 +172,7 @@ void compute_u_scalar_row(
     ckernel::TileMatmulOp mm_u_reduce(u_reduce_cfg);
     mm_u_reduce.begin_subblock();
     mm_u_reduce.init_short();
-    mm_u_reduce.accumulate(0, 0, accum_register, 1, 0, 0, 0);
+    mm_u_reduce.matmul_one_tile(0, 0, accum_register);
     tile_regs_commit();
 
     tile_regs_wait();
