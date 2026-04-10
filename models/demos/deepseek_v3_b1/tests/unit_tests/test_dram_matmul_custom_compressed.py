@@ -716,3 +716,242 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
         "CompressedTensor TensorCache round-trip not yet implemented. "
         "Pending: CompressedTensorTarget + _store_compressed/_load_compressed in weights/cache/."
     )
+
+
+def test_dram_matmul_experts_compressed_synthetic(device):
+    """Minimal 2-expert DRAMStreamingExpertsMatmulCompressed smoke test (no BSPM files).
+
+    Uses uniform bfloat4_b on a small K=256, N=256 shape with subblock_k=4 so the
+    triple-buffer pipeline wraps several times per expert.  This is the smallest
+    config that exercises the inter-expert CB handoff and will deadlock if the
+    dangling-slot bug (last-iteration cb_reserve_back) is present.
+    """
+    from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_experts_matmul_compressed import (
+        DRAMStreamingExpertsMatmulCompressed,
+    )
+
+    M, K, N = 1, 256, 256
+    num_experts = 2
+    tile_w = 32
+
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+
+    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        ]
+    )
+    b_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+
+    cts = []
+    torch_bs = []
+    Kt = K // tile_w  # 8
+    for _ in range(num_experts):
+        torch_b = torch.randn((K, n_padded)).float()
+        torch_b_shuffled = shuffle_tensor_tiles(torch_b, tile_w, num_banks)
+        # Uniform bfloat4_b assignment (code 1 = bfp4)
+        assignment = np.ones((Kt, n_padded // tile_w), dtype=np.int32)
+        ct = CompressedTensor.from_bspm(torch_b_shuffled, assignment, device=device, memory_config=b_mem_config)
+        cts.append(ct)
+        torch_bs.append(torch_b)
+
+    # subblock_k=4 tiles → 2 subblocks per expert → per_expert_iterations = 2 * per_core_N/tile_w
+    subblock_k = 4
+
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_a = ttnn.from_torch(
+        torch_a.repeat(num_banks, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N * num_experts], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, n_padded * num_experts), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    ttnn_result = DRAMStreamingExpertsMatmulCompressed.op(ttnn_a, cts, ttnn_output, subblock_k=subblock_k)
+    result_torch = ttnn.to_torch(ttnn_result)
+
+    # The output is WIDTH_SHARDED with each core's shard holding per_core_N * num_experts
+    # elements in expert-outer order: [E0 tiles, E1 tiles, ...] per core.  After assembly
+    # the columns are interleaved by core:
+    #   core k: cols [k*per_core_N*num_experts : (k+1)*per_core_N*num_experts]
+    #     expert e: cols [k*per_core_N*num_experts + e*per_core_N : ... + (e+1)*per_core_N]
+    # De-interleave: gather each expert's tiles from all cores.
+    per_core_N_total = per_core_N * num_experts
+    for e in range(num_experts):
+        expert_parts = []
+        for k in range(num_banks):
+            col_start = k * per_core_N_total + e * per_core_N
+            col_end = col_start + per_core_N
+            expert_parts.append(result_torch[:, col_start:col_end])
+        expert_out = torch.cat(expert_parts, dim=1)[:, :N]
+        torch_expected = (torch_a.float() @ torch_bs[e][:, :N]).bfloat16()
+        passing, pcc = comp_pcc(torch_expected, expert_out, 0.90)
+        logger.info(f"Synthetic expert {e} PCC: {pcc}")
+        assert passing, f"Synthetic expert {e} PCC too low: {pcc}"
+
+    logger.info(f"DRAMStreamingExpertsMatmulCompressed synthetic: all {num_experts} experts pass")
+
+
+def test_dram_matmul_bspm_experts_compressed(device):
+    """3 BSPM experts via DRAMStreamingExpertsMatmulCompressed (F1b kernel).
+
+    Creates 3 compressed experts from a real BSPM assignment (gate_proj shape,
+    layer 4) and runs them through the multi-expert compressed kernel.
+    Output is stacked [M, selected_k * N]; each per-expert slice is compared
+    against the single-expert DRAMStreamingMatmulCompressed golden.
+
+    Validates F1b: per-expert offset table CB drives variable-size DRAM addressing.
+
+    Requires BSPM_DIR env var.
+    """
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set")
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_experts_matmul_compressed import (
+        DRAMStreamingExpertsMatmulCompressed,
+    )
+
+    M, K, N = 1, 7168, 2048
+    num_experts = 3
+    tile_w = 32
+
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+
+    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        ]
+    )
+    b_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch.manual_seed(42)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+
+    cts = []
+    torch_bs = []
+    for expert_idx in range(num_experts):
+        assignment = load_bspm_for_expert(
+            str(bspm_path), expert_idx=expert_idx, proj_idx=0, tile_rows=K // tile_w, tile_cols=N // tile_w
+        )
+        if n_padded > N:
+            pad_cols = (n_padded - N) // tile_w
+            assignment = np.pad(assignment, ((0, 0), (0, pad_cols)), constant_values=1)
+
+        torch_b = torch.randn((K, n_padded)).float()
+        torch_b_shuffled = shuffle_tensor_tiles(torch_b, tile_w, num_banks)
+        ct = CompressedTensor.from_bspm(torch_b_shuffled, assignment, device=device, memory_config=b_mem_config)
+        cts.append(ct)
+        torch_bs.append(torch_b)
+
+    logger.info(f"Expert tile counts: {[ct.tile_counts for ct in cts]}")
+
+    # Expert offsets must be monotonically increasing (variable shard sizes, no padding)
+    base_addr = cts[0].data.buffer_address()
+    expert_offsets = [int(ct.data.buffer_address()) - int(base_addr) for ct in cts]
+    assert expert_offsets[0] == 0
+    assert all(
+        expert_offsets[i + 1] > expert_offsets[i] for i in range(num_experts - 1)
+    ), f"Expert DRAM addresses not monotonically increasing: {expert_offsets}"
+    logger.info(f"Expert byte offsets: {expert_offsets}")
+
+    # Activation tensor — replicated on all compute cores
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_a = ttnn.from_torch(
+        torch_a.repeat(num_banks, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    # Output tensor: stacked per-expert results, shape [M, num_experts * n_padded]
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N * num_experts], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, n_padded * num_experts), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    Kt = K // tile_w
+    subblock_k = Kt // 4 if Kt > 8 else Kt
+    if subblock_k % 2 != 0:
+        subblock_k = max(2, subblock_k - 1)
+
+    ttnn_result = DRAMStreamingExpertsMatmulCompressed.op(ttnn_a, cts, ttnn_output, subblock_k=subblock_k)
+    result_torch = ttnn.to_torch(ttnn_result)  # [M, num_experts * n_padded]
+
+    # De-interleave: each core's shard holds per_core_N * num_experts columns in expert-outer
+    # order ([E0 tiles, E1 tiles, ...]).  Gather each expert's tiles from all cores.
+    per_core_N_total = per_core_N * num_experts
+    for e in range(num_experts):
+        expert_parts = []
+        for k in range(num_banks):
+            col_start = k * per_core_N_total + e * per_core_N
+            col_end = col_start + per_core_N
+            expert_parts.append(result_torch[:, col_start:col_end])
+        expert_out = torch.cat(expert_parts, dim=1)[:, :N]
+
+        torch_expected = (torch_a.float() @ torch_bs[e][:, :N]).bfloat16()
+
+        passing, pcc = comp_pcc(torch_expected, expert_out, 0.90)
+        logger.info(f"Expert {e} PCC: {pcc}")
+        assert passing, f"Expert {e} PCC too low: {pcc}"
+
+    logger.info(f"DRAMStreamingExpertsMatmulCompressed: all {num_experts} experts pass")
