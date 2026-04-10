@@ -102,6 +102,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Comput kernel
     operations::CreateComputeKernel(

@@ -196,6 +196,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    add_recip_legacy_compat_define(softmax_defines, attributes.program_config);
     std::string softmax_kernel_path =
         use_large_kernel ? std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_large_tensor.cpp"
                          : std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax.cpp";
