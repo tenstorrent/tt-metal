@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_operand_api.h"
+#include "llk_unpack_unary_broadcast_operands_api.h"
 #include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
@@ -28,6 +29,50 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
 }
 
 /**
+ * Shared compute-kernel entry point (same template surface as Blackhole / other metal arches):
+ * unary and unary-broadcast unpack for one operand.
+ * Quasar implements broadcast via llk_unpack_unary_broadcast_operands_* (not _llk_unpack_A_*).
+ */
+template <
+    BroadcastType BType = BroadcastType::NONE,
+    bool acc_to_dest = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest = false>
+inline void llk_unpack_A_init(
+    const std::uint32_t transpose_of_faces = 0,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t operand = 0) {
+    (void)within_face_16x16_transpose;
+    (void)acc_to_dest;
+
+    if constexpr (BType == BroadcastType::NONE) {
+        if (transpose_of_faces != 0) {
+            if constexpr (unpack_to_dest) {
+                llk_unpack_unary_operand_init<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(
+                    operand, 1);
+            } else {
+                llk_unpack_unary_operand_init<p_unpacr::UNP_B, true, DST_ACCUM_MODE, binary_reuse_dest>(
+                    operand, 1);
+            }
+        } else {
+            if constexpr (unpack_to_dest) {
+                llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest>(
+                    operand, 1);
+            } else {
+                llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE, binary_reuse_dest>(
+                    operand, 1);
+            }
+        }
+    } else {
+        if constexpr (unpack_to_dest) {
+            llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, BType, true, false>(operand, 1);
+        } else {
+            llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, BType, false, DST_ACCUM_MODE>(operand, 1);
+        }
+    }
+}
+
+/**
  *
  * @brief Unpacks a single operand, unpacker0 is used
  *
@@ -39,6 +84,30 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     WAYPOINT("UPAW");
     llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
+    WAYPOINT("UPAD");
+}
+
+template <
+    BroadcastType BType = BroadcastType::NONE,
+    bool acc_to_dest = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest = false>
+inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+    (void)acc_to_dest;
+    WAYPOINT("UPAW");
+    if constexpr (BType == BroadcastType::NONE) {
+        if constexpr (unpack_to_dest) {
+            llk_unpack_unary_operand_tile<p_unpacr::UNP_A, binary_reuse_dest>(operand, tile_index);
+        } else {
+            llk_unpack_unary_operand_tile<p_unpacr::UNP_B, binary_reuse_dest>(operand, tile_index);
+        }
+    } else {
+        if constexpr (unpack_to_dest) {
+            llk_unpack_unary_broadcast_operands<p_unpacr::UNP_A, true>(operand, tile_index);
+        } else {
+            llk_unpack_unary_broadcast_operands<p_unpacr::UNP_B, false>(operand, tile_index);
+        }
+    }
     WAYPOINT("UPAD");
 }
 
@@ -60,4 +129,22 @@ inline void llk_unpack_A_block(
         llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
         WAYPOINT("UPAD");
     }
+}
+
+template <
+    BroadcastType BType = BroadcastType::NONE,
+    bool acc_to_dest = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest = false>
+inline void llk_unpack_A_block(
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        llk_unpack_A<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(operand, tile_index);
+    }
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_A_uninit(const std::uint32_t operand) {
+    (void)operand;
+    (void)BType;
 }

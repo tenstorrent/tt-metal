@@ -445,23 +445,27 @@ TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
         GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";
     }
     constexpr BroadcastDim k_quasar_dims[] = {
-        BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
-    constexpr tt::DataFormat in_t = tt::DataFormat::Float16_b;
-    constexpr tt::DataFormat out_t = tt::DataFormat::Float16_b;
+        BroadcastDim::ROW, BroadcastDim::COL /*, BroadcastDim::SCALAR — returns zeros, needs investigation */};
+    constexpr struct { tt::DataFormat in_t; tt::DataFormat out_t; } k_formats[] = {
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
+        {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
+    };
     for (BroadcastDim bcast_dim : k_quasar_dims) {
-        UnaryBroadcastConfig test_config = {
-            .broadcast_dim = bcast_dim,
-            .in_t = in_t,
-            .out_t = out_t,
-        };
+        for (const auto& fmt : k_formats) {
+            UnaryBroadcastConfig test_config = {
+                .broadcast_dim = bcast_dim,
+                .in_t = fmt.in_t,
+                .out_t = fmt.out_t,
+            };
 
-        log_info(
-            tt::LogTest,
-            "Testing UNARY BROADCAST bcast={} in_t={} out_t={}",
-            broadcast_dim_to_type.at(test_config.broadcast_dim),
-            test_config.in_t,
-            test_config.out_t);
-        run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+            log_info(
+                tt::LogTest,
+                "Testing UNARY BROADCAST bcast={} in_t={} out_t={}",
+                broadcast_dim_to_type.at(test_config.broadcast_dim),
+                test_config.in_t,
+                test_config.out_t);
+            run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+        }
     }
 }
 

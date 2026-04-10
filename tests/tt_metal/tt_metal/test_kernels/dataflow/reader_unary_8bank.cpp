@@ -67,8 +67,7 @@ void kernel_main() {
 #endif
 
     constexpr auto src_args = TensorAccessorArgs<0>();
-    // Page stride for DRAM must match host buffer aligned_page_size (TensorAccessorArgs), not DFB entry size.
-    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
