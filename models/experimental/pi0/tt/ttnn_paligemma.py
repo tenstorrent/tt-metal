@@ -135,7 +135,8 @@ class PaliGemmaBackboneTTNN:
         )
 
         # Initialize VLM transformer blocks (18 layers for Gemma 2B)
-        # Pass meta cos/sin for native TTNN RoPE (split-half pattern)
+        # Pre-slice RoPE for known prefix_len: 2 images × 256 patches + 32 lang = 544 tokens
+        vlm_seq_len = 2 * config.siglip_config.num_patches + 32  # 544
         self.vlm_blocks = []
         for i in range(config.vlm_config.depth):
             block_weights = self._get_vlm_block_weights_ttnn(weights["vlm_language"], i)
@@ -147,6 +148,7 @@ class PaliGemmaBackboneTTNN:
                     device,
                     self.cos_meta,
                     self.sin_meta,
+                    expected_seq_len=vlm_seq_len,
                 )
             )
 
@@ -455,6 +457,10 @@ class PaliGemmaBackboneTTNN:
             Tuple of (output, optional_new_cache)
         """
         new_cache = [] if use_cache else None
+
+        # Pre-reshape adaRMS conditioning to 3D once (avoids 37 reshapes inside adarms_norm_ttnn)
+        if adarms_cond is not None and len(adarms_cond.shape) == 2:
+            adarms_cond = ttnn.reshape(adarms_cond, (adarms_cond.shape[0], 1, -1))
 
         for i, block in enumerate(self.expert_blocks):
             past_kv = past_key_values[i] if past_key_values else None
