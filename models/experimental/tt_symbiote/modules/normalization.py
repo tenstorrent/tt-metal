@@ -360,12 +360,13 @@ class TTNNQwenLayerNorm(TTNNModule):
             self.tt_bias = None
             return
         # Mesh: sharded ROW_MAJOR gamma in ``move_weights_to_device_impl``, or TILE + replicate when ntiles % width != 0.
+        # ``_symbiote_force_gather_layernorm``: e.g. deepstack vision patch merger (4608-dim LN, long seq) — pre_all_gather
+        # program L1 CB clashes on Wormhole; use gather + full ``layer_norm`` instead.
         if self.device is not None and self.device.get_num_devices() > 1:
             ncol = int(list(self.device.shape)[-1])
             ntiles = self.embedding_dim // 32
-            # Audio tower (etc.): activations are replicated on the mesh, not width-sharded — avoid
-            # ``layer_norm_post_all_gather`` + per-shard gamma (expects local last dim = embed/num_devices).
-            if getattr(self, "_force_replicated_input_layernorm", False) or ntiles % ncol != 0:
+            force_gather = getattr(self, "_symbiote_force_gather_layernorm", False)
+            if force_gather or (ntiles % ncol != 0):
                 self._distributed_gather_layernorm = True
                 # Host TT tensors without mesh placement; ``move_weights_to_device_impl`` uses
                 # ``from_torch(..., device=..., mesh_mapper=...)`` (``to_device`` has no mesh_mapper).

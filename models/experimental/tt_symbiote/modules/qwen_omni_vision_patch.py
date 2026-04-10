@@ -6,6 +6,13 @@
 
 ``Qwen3OmniMoeVisionPatchEmbed`` uses a strided ``Conv3d`` whose kernel equals the patch volume; it is
 numerically equivalent to ``Linear(in_channels * T * H * W, embed_dim)`` on flattened patches.
+<<<<<<< HEAD
+=======
+
+``TTNNQwen3OmniVisionPatchMerger`` matches ``Qwen3OmniMoeVisionPatchMerger.forward`` in HuggingFace; on mesh,
+vision block outputs may be **width-sharded** (e.g. 1152 → 144 per device).  All-gather to full
+``config.hidden_size`` **before** ``view(-1, merged_dim)`` or reshape to ``merged_dim`` will fail volume checks.
+>>>>>>> ign/qwen3_omni_audio_issue
 """
 
 from __future__ import annotations
@@ -129,8 +136,46 @@ class TTNNQwen3OmniVisionPatchEmbed(TTNNModule):
         return self.linear(x)
 
 
+def _all_gather_width_until(h, *, target_w: int, max_steps: int = 16):
+    """Increase last dim toward ``target_w`` (``TTNNQwen3OmniVisionMLP`` pattern; ring may need multiple steps)."""
+    in_w = int(h.shape[-1])
+    if in_w > target_w:
+        rank = len(h.shape)
+        starts = [0] * rank
+        ends = [int(s) for s in h.shape]
+        ends[-1] = target_w
+        return ttnn.slice(h, starts, ends)
+    for _ in range(max_steps):
+        if int(h.shape[-1]) >= target_w:
+            break
+        h = ttnn.all_gather(
+            h,
+            dim=-1,
+            cluster_axis=1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+    in_w = int(h.shape[-1])
+    if in_w < target_w:
+        raise RuntimeError(
+            f"TTNNQwen3OmniVisionPatchMerger: last dim {in_w} still < target width {target_w} after all_gather"
+        )
+    if in_w > target_w:
+        rank = len(h.shape)
+        starts = [0] * rank
+        ends = [int(s) for s in h.shape]
+        ends[-1] = target_w
+        h = ttnn.slice(h, starts, ends)
+    return h
+
+
 class TTNNQwen3OmniVisionPatchMerger(TTNNModule):
     """TTNN ``Qwen3OmniMoeVisionPatchMerger``: LayerNorm + 2× Linear + GELU (TP pattern like vision MLP)."""
+
+    @property
+    def hidden_size(self) -> int:
+        """HF name: merged width ``config.hidden_size * spatial_merge_size**2``."""
+        return int(self.merged_dim)
 
     @classmethod
     def from_torch(cls, merger):
@@ -140,9 +185,39 @@ class TTNNQwen3OmniVisionPatchMerger(TTNNModule):
         m.merged_dim = int(merger.hidden_size)
         m.out_hidden_size = int(merger.mlp[2].out_features)
 
+        ln_dim = int(merger.ln_q.normalized_shape[0])
+        if merger.use_postshuffle_norm:
+            if ln_dim != m.merged_dim:
+                raise ValueError(
+                    "TTNNQwen3OmniVisionPatchMerger: postshuffle merger expects ln_q over merged width "
+                    f"(got normalized_shape={merger.ln_q.normalized_shape}, merged_dim={m.merged_dim})"
+                )
+            cfg = getattr(merger, "config", None)
+            sm = int(getattr(cfg, "spatial_merge_size", 2)) if cfg is not None else 2
+            spatial_merge_sq = sm * sm
+            m.vision_patch_hidden = m.merged_dim // spatial_merge_sq
+            if m.vision_patch_hidden * spatial_merge_sq != m.merged_dim:
+                raise ValueError(
+                    f"TTNNQwen3OmniVisionPatchMerger: merged_dim={m.merged_dim} not divisible by spatial_merge_size^2={spatial_merge_sq}"
+                )
+        else:
+            m.vision_patch_hidden = ln_dim
+
         m.ln_q = TTNNQwenLayerNorm.from_torch(merger.ln_q)
+        if isinstance(m.ln_q, TTNNQwenLayerNorm) and m.use_postshuffle_norm:
+            m.ln_q._symbiote_force_gather_layernorm = True
         m.lin1 = TTNNLinearIReplicatedWColSharded.from_torch(merger.mlp[0])
         m.lin2 = TTNNLinearIColShardedWAllReduced.from_torch(merger.mlp[2])
+
+        # Bypass module_run TorchTTNNTensor wrapping on sub-modules so the MLP
+        # path (lin1 → gelu → lin2) stays as raw ttnn.Tensor throughout.  Without
+        # bypass, lin1 returns a TorchTTNNTensor that ttnn.gelu cannot properly
+        # handle, corrupting the col-sharded feature data.
+        if isinstance(m.ln_q, TTNNModule):
+            m.ln_q._bypass_tensor_wrapping = True
+        m.lin1._bypass_tensor_wrapping = True
+        m.lin2._bypass_tensor_wrapping = True
+
         return m
 
     def preprocess_weights_impl(self):
@@ -188,12 +263,48 @@ class TTNNQwen3OmniVisionPatchMerger(TTNNModule):
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden):
+        """Match HF ``Qwen3OmniMoeVisionPatchMerger.forward`` exactly.
+
+        HF PyTorch reference::
+
+            hidden = self.ln_q(
+                hidden.view(-1, self.hidden_size) if self.use_postshuffle_norm else hidden
+            ).view(-1, self.hidden_size)
+            for layer in self.mlp:        # Linear → GELU → Linear
+                hidden = layer(hidden)
+
+        Sub-modules have ``_bypass_tensor_wrapping=True`` so all intermediate
+        tensors are raw ``ttnn.Tensor`` — no ``TorchTTNNTensor`` wrapping between
+        ``lin1 → gelu → lin2`` which would corrupt col-sharded feature data.
+        """
         mapper = _replicate_mapper(self.device)
         h = _ensure_ttnn(hidden, self.device, mesh_mapper=mapper)
 
-        if self.use_postshuffle_norm:
-            h = ttnn.reshape(h, (-1, self.merged_dim))
+        vph = int(self.vision_patch_hidden)
+        mh = int(self.merged_dim)
 
+        # --- Step 1: gather width-sharded vision hidden to full per-token width ---
+        if self.device is not None and self.device.get_num_devices() > 1:
+            h = _all_gather_width_until(h, target_w=vph)
+        else:
+            in_w = int(h.shape[-1])
+            if in_w > vph:
+                rank = len(h.shape)
+                starts = [0] * rank
+                ends = [int(s) for s in h.shape]
+                ends[-1] = vph
+                h = ttnn.slice(h, starts, ends)
+
+        h = ttnn.reshape(h, (-1, vph))
+
+        # --- Step 2: postshuffle merges patches BEFORE LayerNorm ---
+        if self.use_postshuffle_norm:
+            h = ttnn.reshape(h, (-1, mh))
+
+        if h.layout != ttnn.TILE_LAYOUT:
+            h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # --- Step 3: LayerNorm (bypass returns raw ttnn.Tensor) ---
         if isinstance(self.ln_q, TTNNQwenLayerNorm):
             h = self.ln_q(h)
         else:
@@ -207,32 +318,25 @@ class TTNNQwen3OmniVisionPatchMerger(TTNNModule):
                 mesh_mapper=mapper,
             )
 
-        h = _ensure_ttnn(h, self.device, mesh_mapper=mapper)
+        # Ensure raw ttnn.Tensor after LN (bypass may still return TorchTTNNTensor
+        # if LN is a plain nn.Module; TTNNQwenLayerNorm with bypass returns raw).
+        if isinstance(h, TorchTTNNTensor):
+            h = h.ttnn_tensor if h.ttnn_tensor is not None else _ensure_ttnn(h, self.device, mesh_mapper=mapper)
         if h.layout != ttnn.TILE_LAYOUT:
             h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        h = ttnn.reshape(h, (-1, self.merged_dim))
+        # --- Step 4: non-postshuffle merges patches AFTER LayerNorm ---
+        h = ttnn.reshape(h, (-1, mh))
 
-        in_w = int(h.shape[-1])
-        if in_w < self.merged_dim:
-            h = ttnn.all_gather(
-                h,
-                dim=-1,
-                cluster_axis=1,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
-        elif in_w > self.merged_dim:
-            rank = len(h.shape)
-            starts = [0] * rank
-            ends = [int(s) for s in h.shape]
-            ends[-1] = self.merged_dim
-            h = ttnn.slice(h, starts, ends)
-
+        # --- Step 5: MLP — Linear → GELU → Linear (all raw ttnn.Tensor) ---
         h = self.lin1(h)
+        # Ensure raw ttnn.Tensor for ttnn.gelu (lin1 bypass should already return raw).
+        if isinstance(h, TorchTTNNTensor):
+            h = h.ttnn_tensor if h.ttnn_tensor is not None else _ensure_ttnn(h, self.device, mesh_mapper=mapper)
         h = ttnn.gelu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = self.lin2(h)
 
+        # Trim output width if lin2 all-reduce produced wider than out_hidden_size.
         out_w = int(h.shape[-1])
         if out_w > int(self.out_hidden_size):
             rank = len(h.shape)
