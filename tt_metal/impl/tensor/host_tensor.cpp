@@ -97,7 +97,7 @@ const DistributedHostBuffer& HostTensor::buffer() const {
 }
 
 DistributedHostBuffer& HostTensor::buffer() {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl != nullptr, "HostTensor is in default constructed state.");
     return impl->buffer();
 }
 
