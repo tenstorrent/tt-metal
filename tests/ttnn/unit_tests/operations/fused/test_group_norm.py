@@ -226,7 +226,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     ],
 )
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -293,7 +294,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         use_welford=use_welford,
     )
 
@@ -1007,7 +1008,8 @@ def test_group_norm_negative_tests(
         (1, 1280, 16, 16, 32),
     ],
 )
-def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):
     """Use determine_expected_group_norm_dram_grid_size to pick a grid, then
     run DRAM-interleaved group norm and compare against torch."""
     torch.manual_seed(0)
@@ -1051,7 +1053,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
         weight=gamma_t,
         bias=beta_t,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         inplace=False,
         num_out_blocks=1,
         use_welford=True,
