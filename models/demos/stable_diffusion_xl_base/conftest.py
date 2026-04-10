@@ -418,12 +418,13 @@ def _resolve_local_lora_file_path(path_input):
 
 
 @pytest.fixture(scope="function")
-def lora_path(request, is_ci_env, is_ci_v2_env):
+def lora_path(request, model_location_generator, is_ci_env, is_ci_v2_env):
     """
     Resolve LoRA weights path.
     1) --lora-weights: full path to a local .safetensors file.
-    2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use default weights (HF download).
+    2) CIv2: download from large file cache via model_location_generator.
+    3) CIv1/local: download from Hugging Face via hf_hub_download.
+    4) If nothing provided: use default weights.
     """
     lora_weights_cli_path = request.config.getoption("--lora-weights", default=None)
     hf_repo_id = request.config.getoption("--lora-hf-repo", default=None)
@@ -447,12 +448,23 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
         hf_repo_id = TEST_LORA_REPO_ID
         hf_filename = TEST_LORA_FILENAME
 
+    if is_ci_v2_env:
+        # In CIv2, download from large file cache. LFC uses repo name without owner prefix.
+        repo_name = hf_repo_id.split("/")[-1] if "/" in hf_repo_id else hf_repo_id
+        lora_dir = model_location_generator(repo_name, download_if_ci_v2=True, ci_v2_timeout_in_s=300)
+        lora_file = Path(lora_dir) / hf_filename
+        if lora_file.exists():
+            return str(lora_file)
+        pytest.skip(
+            f"LoRA weights not found in CIv2 large file cache at {lora_file}. "
+            f"Upload them to LFC under '{repo_name}/{hf_filename}'."
+        )
+        return
+
     try:
         from huggingface_hub import hf_hub_download
 
-        return hf_hub_download(
-            repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
-        )
+        return hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env)
     except Exception as _:
         pytest.skip(
             f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
