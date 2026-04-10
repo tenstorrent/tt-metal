@@ -33,19 +33,4 @@ void release_trace(MeshDevice* device, MeshTraceId trace_id) {
     device->release_mesh_trace(trace_id);
 }
 
-void mark_allocations_safe(MeshDevice* device) {
-    ZoneScoped;
-    device->mark_allocations_safe();
-}
-
-void mark_allocations_unsafe(MeshDevice* device) {
-    ZoneScoped;
-    device->mark_allocations_unsafe();
-}
-
-bool allocations_unsafe(MeshDevice* device) {
-    ZoneScoped;
-    return device->allocations_unsafe();
-}
-
 }  // namespace ttnn::operations::trace
