@@ -196,8 +196,8 @@ static void RunTest(
     }
     const std::string msg = get_debug_assert_message(
         assert_type,
-        0,
-        // hard code cause/line info for hW faults, as we know them exactly
+        0,  // msg_ptr: 0 — no ELF available at test time, resolves to "unknown file on line 0"
+        // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
@@ -214,8 +214,15 @@ static void RunTest(
         kernel);
 
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
+        // Build regex pattern from string expected, replacing "unknown file" with a wildcard
+        // (the kernel reports its actual file hash which the watcher resolves to a real path)
+        // and replacing "on line 0" with "\d+" (line number shifts as kernel code changes).
         std::string pattern = regex_escape(expected);
+        const std::string file_placeholder = "unknown file";
+        size_t file_pos = pattern.find(file_placeholder);
+        ASSERT_NE(file_pos, std::string::npos)
+            << "Expected placeholder '" << file_placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(file_pos, file_placeholder.length(), ".+");
         const std::string placeholder = "on line 0";
         size_t pos = pattern.find(placeholder);
         ASSERT_NE(pos, std::string::npos)

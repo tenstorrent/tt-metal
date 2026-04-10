@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -782,22 +784,48 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
         assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
-        if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-            assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+        if (assert_status.msg_ptr() != 0 || assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
-                "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
+                "Watcher unexpected assert state on core {}, reported OK but got processor {}, msg_ptr 0x{:08x}.",
                 virtual_coord_.str(),
                 assert_status.which(),
-                assert_status.line_num());
+                assert_status.msg_ptr());
         }
         return;  // no assert tripped, nothing to do
     }
+    // Look up kernel ELF paths from generated/watcher/kernel_elf_paths.txt.
+    // These are used both by the C++ file resolver (DWARF-based) and the Python callstack script.
+    uint16_t k_id = launch_msg_.kernel_config().watcher_kernel_ids()[assert_status.which()];
+    std::vector<std::string> elf_paths;
+    {
+        std::string elf_index_path =
+            reader_.env.get_rtoptions().get_logs_dir() + "generated/watcher/kernel_elf_paths.txt";
+        std::ifstream elf_index(elf_index_path);
+        std::string line_buf;
+        while (std::getline(elf_index, line_buf)) {
+            int id = -1;
+            if (std::sscanf(line_buf.c_str(), "%d:", &id) == 1 && id == k_id) {
+                // Format: "id: path1:path2:..."
+                std::string paths_str = line_buf.substr(line_buf.find(':') + 2);
+                std::stringstream ss(paths_str);
+                std::string p;
+                while (std::getline(ss, p, ':')) {
+                    if (!p.empty()) {
+                        elf_paths.push_back(p);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
         static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
-        assert_status.line_num(),
-        assert_status.hw_fault_info());
+        assert_status.msg_ptr(),
+        assert_status.hw_fault_info(),
+        elf_paths);
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(
@@ -812,6 +840,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }

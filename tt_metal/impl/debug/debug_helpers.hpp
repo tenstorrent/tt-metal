@@ -5,9 +5,14 @@
 #pragma once
 
 #include <algorithm>
-#include <set>
-#include <vector>
 #include <cctype>
+#include <cstring>
+#include <elf.h>
+#include <filesystem>
+#include <fstream>
+#include <set>
+#include <string>
+#include <vector>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -97,17 +102,143 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Returns the assert message portion for a given assert type
-// Returns empty string for unknown types (callers must handle this)
-// For DebugAssertTripped, line_num is used in the message
+// Resolve a debug_assert_info_t struct by its device VMA (msg_ptr) from the .debug_assert_msgs
+// section in a kernel ELF.  Struct layout (packed, bit 31 clear):
+//   [uint32_t filename_ptr][uint16_t line_num][uint32_t message_ptr]
+// Packed (bit 31 set): bits[15:0] = line_num only, no filename.
+// Returns {line_num, filename, message} — filename/message empty when not resolvable.
+struct AssertInfo {
+    uint16_t line_num = 0;
+    std::string file;  // filename from struct-pointer asserts; empty for packed (line-only) asserts
+    std::string msg;
+};
+
+inline AssertInfo resolve_assert_info(uint32_t msg_ptr, const std::vector<std::string>& elf_paths) {
+    if (msg_ptr == 0) {
+        return {};
+    }
+    // Packed encoding (bit 31 set): bits[15:0] = line_num only, no filename.
+    if (msg_ptr & 0x80000000u) {
+        return {static_cast<uint16_t>(msg_ptr & 0xFFFFu), "", ""};
+    }
+    // Otherwise: VMA pointer to a debug_assert_info_t struct in .debug_assert_msgs.
+    for (const auto& elf_path : elf_paths) {
+        std::ifstream f(elf_path, std::ios::binary);
+        if (!f) {
+            continue;
+        }
+
+        unsigned char ident[EI_NIDENT];
+        f.read(reinterpret_cast<char*>(ident), EI_NIDENT);
+        if (f.gcount() != EI_NIDENT || ident[EI_MAG0] != ELFMAG0 || ident[EI_MAG1] != ELFMAG1 ||
+            ident[EI_MAG2] != ELFMAG2 || ident[EI_MAG3] != ELFMAG3 || ident[EI_CLASS] != ELFCLASS32) {
+            continue;
+        }
+
+        f.seekg(0);
+        Elf32_Ehdr ehdr;
+        f.read(reinterpret_cast<char*>(&ehdr), sizeof(ehdr));
+        if (f.fail() || ehdr.e_shnum == 0 || ehdr.e_shstrndx >= ehdr.e_shnum) {
+            continue;
+        }
+
+        std::vector<Elf32_Shdr> shdrs(ehdr.e_shnum);
+        f.seekg(ehdr.e_shoff);
+        f.read(reinterpret_cast<char*>(shdrs.data()), ehdr.e_shnum * sizeof(Elf32_Shdr));
+        if (f.fail()) {
+            continue;
+        }
+
+        const auto& shstrtab_hdr = shdrs[ehdr.e_shstrndx];
+        std::vector<char> shstrtab(shstrtab_hdr.sh_size);
+        f.seekg(shstrtab_hdr.sh_offset);
+        f.read(shstrtab.data(), shstrtab_hdr.sh_size);
+        if (f.fail()) {
+            continue;
+        }
+
+        auto section_name = [&](const Elf32_Shdr& sh) -> const char* {
+            if (sh.sh_name >= shstrtab.size()) {
+                return "";
+            }
+            return shstrtab.data() + sh.sh_name;
+        };
+
+        const Elf32_Shdr* msgs_shdr = nullptr;
+        for (const auto& sh : shdrs) {
+            if (std::strcmp(section_name(sh), ".debug_assert_msgs") == 0) {
+                msgs_shdr = &sh;
+                break;
+            }
+        }
+        if (!msgs_shdr || msgs_shdr->sh_size == 0) {
+            continue;
+        }
+
+        // Check that msg_ptr falls within this section's VMA range.
+        if (msg_ptr < msgs_shdr->sh_addr || msg_ptr >= msgs_shdr->sh_addr + msgs_shdr->sh_size) {
+            continue;
+        }
+
+        uint32_t offset = msg_ptr - msgs_shdr->sh_addr;
+        // Struct layout (packed): [uint32_t filename_ptr][uint16_t line_num][char msg...\0]
+        if (offset + 6 > msgs_shdr->sh_size) {
+            continue;
+        }
+
+        std::vector<char> section_data(msgs_shdr->sh_size);
+        f.seekg(msgs_shdr->sh_offset);
+        f.read(section_data.data(), msgs_shdr->sh_size);
+        if (f.fail()) {
+            continue;
+        }
+
+        uint32_t filename_ptr = 0;
+        uint16_t line_num = 0;
+        std::memcpy(&filename_ptr, section_data.data() + offset, 4);
+        std::memcpy(&line_num, section_data.data() + offset + 4, 2);
+
+        // Inline message starts at offset+6, null-terminated.
+        const char* msg_start = section_data.data() + offset + 6;
+        const char* msg_end =
+            static_cast<const char*>(std::memchr(msg_start, '\0', section_data.size() - (offset + 6)));
+        std::string msg = (msg_end && msg_end > msg_start) ? std::string(msg_start, msg_end) : "";
+
+        // Read filename string via its VMA pointer (also in this section).
+        auto read_str_at_ptr = [&](uint32_t ptr) -> std::string {
+            if (ptr == 0 || ptr < msgs_shdr->sh_addr || ptr >= msgs_shdr->sh_addr + msgs_shdr->sh_size) {
+                return {};
+            }
+            uint32_t str_off = ptr - msgs_shdr->sh_addr;
+            const char* start = section_data.data() + str_off;
+            const char* end = static_cast<const char*>(std::memchr(start, '\0', section_data.size() - str_off));
+            return end ? std::string(start, end) : std::string(start);
+        };
+
+        std::string filename = read_str_at_ptr(filename_ptr);
+
+        return {line_num, std::move(filename), std::move(msg)};
+    }
+    return {};
+}
+
+// Returns the assert message portion for a given assert type.
+// Returns empty string for unknown types (callers must handle this).
+// msg_ptr: device VMA of debug_assert_info_t in .debug_assert_msgs (or mepc for DebugAssertHwFault).
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint64_t hw_fault_info = 0) {
+    dev_msgs::debug_assert_type_t type,
+    uint32_t msg_ptr = 0,
+    uint64_t hw_fault_info = 0,
+    const std::vector<std::string>& elf_paths = {}) {
     switch (type) {
-        case dev_msgs::DebugAssertTripped:
-            return fmt::format(
-                "tripped an assert on line {}. Note that file name reporting is not yet "
-                "implemented, and the reported line number for the assert may be from a different file.",
-                line_num);
+        case dev_msgs::DebugAssertTripped: {
+            auto info = resolve_assert_info(msg_ptr, elf_paths);
+            std::string file_str = info.file.empty() ? "unknown file" : info.file;
+            if (!info.msg.empty()) {
+                return fmt::format("tripped an assert in {} on line {}: \"{}\".", file_str, info.line_num, info.msg);
+            }
+            return fmt::format("tripped an assert in {} on line {}.", file_str, info.line_num);
+        }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC reads flushed barrier).";
@@ -123,9 +254,10 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
+            // msg_ptr holds mepc (faulting instruction address) for hardware faults
             return fmt::format(
                 "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                line_num,
+                msg_ptr,
                 hw_fault_info & 0xffffffff,
                 (hw_fault_info >> 32) & 0xffffffff);
         default: return "";
