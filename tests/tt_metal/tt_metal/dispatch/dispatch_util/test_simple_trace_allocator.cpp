@@ -65,6 +65,28 @@ protected:
         return std::nullopt;
     }
 
+    // Returns the first non-TENSIX core type index that stores binaries in the config buffer.
+    // This is the case where the dispatcher has no dedicated binary write offset, so the binary
+    // must be allocated contiguously with the non-binary config.
+    std::optional<uint32_t> first_non_tensix_binary_in_config_index() const {
+        for (uint32_t index = 0; index < hal_.get_programmable_core_type_count(); ++index) {
+            auto core_type = hal_.get_programmable_core_type(index);
+            if (core_type != HalProgrammableCoreType::TENSIX && core_type != HalProgrammableCoreType::IDLE_ETH &&
+                hal_.get_core_kernel_stored_in_config_buffer(core_type)) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Creates program specs that target a single specific core type index.
+    std::vector<ProgramSpec> make_program_specs_for_index(
+        uint32_t core_type_index, uint32_t nonbinary_size, uint32_t binary_size) const {
+        std::vector<ProgramSpec> specs(hal_.get_programmable_core_type_count());
+        specs[core_type_index] = {.nonbinary_size = nonbinary_size, .binary_size = binary_size};
+        return specs;
+    }
+
     std::vector<ProgramSpec> make_program_specs(
         uint32_t nonbinary_size, uint32_t binary_size, BinaryPlacement placement) const {
         std::vector<ProgramSpec> specs(hal_.get_programmable_core_type_count());
@@ -144,6 +166,10 @@ protected:
                 program.get_kernel_groups(index).push_back(nullptr);
             }
         }
+    }
+
+    void populate_kernel_groups_for_index(detail::ProgramImpl& program, uint32_t core_type_index) const {
+        program.get_kernel_groups(core_type_index).push_back(nullptr);
     }
 
     void allocate_on_subdevice(
@@ -619,12 +645,14 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, NonBinaryEvictionSetsStallFirst) {
 }
 
 TEST_F(SimpleTraceAllocatorDeviceFixture, BinaryOnlyEvictionSetsStallBeforeProgram) {
+    // Target only TENSIX (which has a dedicated binary write offset) so that
+    // binary eviction doesn't trigger a non-binary eviction on other core types.
     auto core_index = first_core_type_index(BinaryPlacement::InConfig);
     if (!core_index.has_value()) {
         GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
     }
 
-    auto specs = make_program_specs(0, 40, BinaryPlacement::InConfig);
+    auto specs = make_program_specs_for_index(*core_index, 0, 40);
     std::vector<TraceNode> trace_nodes = {
         make_trace_node(specs, SubDeviceId{0}, 2), make_trace_node(specs, SubDeviceId{0}, 5)};
     auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
@@ -746,6 +774,135 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, LargeTraceSequence) {
         EXPECT_LT(metadata.nonbinary_kernel_config_addrs[*core_index].addr, 128u);
         EXPECT_LT(metadata.binary_kernel_config_addrs[*core_index].addr, 128u);
         EXPECT_LE(metadata.sync_count, workers_completed_before);
+        workers_completed_before += trace_node.num_workers;
+    }
+}
+
+// Tests for non-TENSIX core types with binary in config buffer (e.g. Active ETH on Blackhole).
+// The dispatcher has no dedicated binary write offset for these core types, so the allocator
+// must keep the binary contiguous with the non-binary config.
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigContiguousAllocation) {
+    auto core_index = first_non_tensix_binary_in_config_index();
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No non-TENSIX core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs_for_index(*core_index, 32, 16);
+    auto program = make_program(specs);
+    populate_kernel_groups_for_index(*program, *core_index);
+    std::vector<TraceNode> trace_nodes = {make_trace_node(specs, SubDeviceId{0}, 3, program)};
+
+    auto allocator = make_allocator(256);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    // The non-binary allocation covers the full config size (32 + 16 = 48) because
+    // there is no separate binary write offset for non-TENSIX core types.
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    // Binary is not separately allocated; binary_addr stays at 0.
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigTwoPrograms) {
+    auto core_index = first_non_tensix_binary_in_config_index();
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No non-TENSIX core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs_for_index(*core_index, 32, 16);
+    auto program_a = make_program(specs);
+    auto program_b = make_program(specs);
+    populate_kernel_groups_for_index(*program_a, *core_index);
+    populate_kernel_groups_for_index(*program_b, *core_index);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 1, program_a), make_trace_node(specs, SubDeviceId{0}, 1, program_b)};
+
+    auto allocator = make_allocator(256);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    // Each program gets a full config allocation (32 + 16 = 48 bytes each).
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigNoCaching) {
+    auto core_index = first_non_tensix_binary_in_config_index();
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No non-TENSIX core type stores kernels in the config buffer on this architecture.";
+    }
+
+    // Reuse the same program twice. For non-TENSIX core types, the binary cannot be cached
+    // separately, so send_binary must remain true on the second invocation.
+    auto specs = make_program_specs_for_index(*core_index, 32, 16);
+    auto shared_program = make_program(specs);
+    populate_kernel_groups(*shared_program, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 1, shared_program),
+        make_trace_node(specs, SubDeviceId{0}, 1, shared_program)};
+
+    auto allocator = make_allocator(256);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigEvictionSyncs) {
+    auto core_index = first_non_tensix_binary_in_config_index();
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No non-TENSIX core type stores kernels in the config buffer on this architecture.";
+    }
+
+    // Two programs that don't both fit in the ring buffer. The second must evict the first and sync.
+    auto specs = make_program_specs_for_index(*core_index, 40, 20);
+    auto program_a = make_program(specs);
+    auto program_b = make_program(specs);
+    populate_kernel_groups_for_index(*program_a, *core_index);
+    populate_kernel_groups_for_index(*program_b, *core_index);
+    std::vector<TraceNode> trace_nodes = {
+        make_trace_node(specs, SubDeviceId{0}, 3, program_a), make_trace_node(specs, SubDeviceId{0}, 4, program_b)};
+
+    // Ring buffer of 60 bytes; each program needs 60 (40 nonbinary + 20 binary), so they can't coexist.
+    auto allocator = make_allocator(60);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 3u);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_first);
+    EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
+}
+
+TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigLargeSequence) {
+    auto core_index = first_non_tensix_binary_in_config_index();
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No non-TENSIX core type stores kernels in the config buffer on this architecture.";
+    }
+
+    auto specs = make_program_specs_for_index(*core_index, 20, 12);
+    std::vector<TraceNode> trace_nodes;
+    trace_nodes.reserve(15);
+    for (uint32_t i = 0; i < 15; ++i) {
+        auto program = make_program(specs);
+        populate_kernel_groups_for_index(*program, *core_index);
+        trace_nodes.push_back(make_trace_node(specs, SubDeviceId{0}, (i % 3) + 1, program));
+    }
+
+    // Small ring buffer to force evictions.
+    auto allocator = make_allocator(96);
+    allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
+
+    uint32_t workers_completed_before = 0;
+    for (auto& trace_node : trace_nodes) {
+        const auto& metadata = trace_node.dispatch_metadata;
+        // Non-binary addr must fit within the ring buffer.
+        EXPECT_LT(metadata.nonbinary_kernel_config_addrs[*core_index].addr, 96u);
+        // Sync count must not exceed what previous programs produced.
+        EXPECT_LE(metadata.sync_count, workers_completed_before);
+        // Binary must always be sent for non-TENSIX core types (no separate caching).
+        EXPECT_TRUE(metadata.send_binary);
         workers_completed_before += trace_node.num_workers;
     }
 }
