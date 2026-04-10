@@ -420,9 +420,9 @@ class TTNNTurboQuantCache:
         # ------------------------------------------------------------------ #
         # On-device cache                                                     #
         #                                                                     #
-        # memory_efficient=True (default): BFP8 indices + BF16 norms.         #
-        # At 3-bit: 105 MB at seq=4096 vs 293 MB BFP8 baseline (2.8× smaller)#
-        # Dequantize: typecast + gather + mul per step (O(max_seq)).          #
+        # memory_efficient=True (default): BFP4 indices + BF16 norms.         #
+        # BFP4 = ~0.5 bytes/elem (integers 0-7 exact). 2× smaller than       #
+        # baseline BFP8. Dequantize: typecast + gather + mul (O(max_seq)).    #
         #                                                                     #
         # memory_efficient=False: BF16 pre-rescaled centroid×norm values.     #
         # Same memory as FP16 (537 MB at seq=4096).                           #
@@ -431,7 +431,7 @@ class TTNNTurboQuantCache:
         max_seq_padded = ((max_seq_len + 31) // 32) * 32
         self.max_seq_padded = max_seq_padded
 
-        idx_dtype = ttnn.bfloat8_b if memory_efficient else ttnn.bfloat16
+        idx_dtype = ttnn.bfloat4_b if memory_efficient else ttnn.bfloat16
         zero_idx = torch.zeros(max_batch_size, num_kv_heads, max_seq_padded, head_dim, dtype=torch.bfloat16)
         self.k_indices_dev = [
             ttnn.from_torch(

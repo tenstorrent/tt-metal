@@ -167,7 +167,7 @@ ttnn/cpp/ttnn/operations/experimental/turbo_quant/
 | Absorb Π into W_v/W_o | Bake rotation into projection weights (V has no RoPE) | Saves 64 matmuls/step |
 | Pre-rescale centroids×norms | Store final values, dequantize = identity | O(1) dequantize |
 | Paged BF16 cache | Use paged SDPA on pre-rescaled BF16 values | Flat latency, 128K context |
-| BFP8 index cache | Integers 0-7 exact in BFP8 (~1 byte/elem) | 1.88× memory savings |
+| BFP4 index cache | Integers 0-7 exact in BFP4 (~0.5 byte/elem) | 2× smaller than baseline |
 | rsqrt norm | Replace square+sum+sqrt+div with rsqrt | Fewer ops in quantize |
 | Free layer_past | Deallocate BFP8 layer_past when TQ active | Doubles available DRAM |
 
@@ -212,16 +212,17 @@ already in the format SDPA expects). Rotation absorbed into W_v/W_o weights.
 - **Max context:** 128K tested, no OOM on N150
 - **Tradeoff:** 2× more KV memory than baseline
 
-### 4.3 — TurboQuant Memory-Efficient (BFP8 indices, contiguous)
+### 4.3 — TurboQuant Memory-Efficient (BFP4 indices, contiguous)
 
-Optimised for **minimal KV cache memory**. Stores BFP8 quantization indices
-(~1 byte/elem) + BF16 norms in a contiguous (non-paged) cache. Dequantize
-requires typecast + gather + mul per step, proportional to max_seq_len.
+Optimised for **minimal KV cache memory**. Stores BFP4 quantization indices
+(~0.5 bytes/elem) + BF16 norms in a contiguous (non-paged) cache. BFP4 exactly
+represents integers 0-7 (verified on hardware). Dequantize requires typecast +
+gather + mul per step, proportional to max_seq_len.
 
 - **Flag:** `memory_efficient=True` in `TTNNTurboQuantCache`
-- **KV memory:** ~1.02 bytes/element (BFP8 indices + BF16 norms) — same as baseline
-- **Latency:** 55–65ms/tok (higher, without trace/paging)
-- **Max context:** 16K (OOM at 32K on N150)
+- **KV memory:** ~0.52 bytes/element (BFP4 indices + BF16 norms) — **2× smaller than baseline**
+- **Latency:** 57–61ms/tok (higher, without trace/paging)
+- **Max context:** 16K (OOM at 32K due to contiguous dequantize temp allocation)
 - **Tradeoff:** slower decode due to contiguous SDPA + full-cache dequantize
 
 ---
@@ -234,15 +235,15 @@ All measurements on **Wormhole N150, Llama-3.1-8B-Instruct, batch=1, 3-bit**.
 
 Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
 
-| max_seq | Baseline BFP8 | TQ Performance | TQ Memory-Efficient |
-|---------|--------------|----------------|---------------------|
-| 128 | 36.9 | 37.2 | 57.6 |
-| 256 | 36.9 | 37.3 | 59.3 |
-| 512 | 37.0 | 37.2 | 62.2 |
-| 1024 | 37.0 | 37.2 | 56.4 |
-| 2048 | 36.9 | 37.2 | 58.7 |
+| max_seq | Baseline BFP8 | TQ Performance | TQ Memory-Efficient (BFP4) |
+|---------|--------------|----------------|----------------------------|
+| 128 | 36.9 | 37.2 | 59.4 |
+| 256 | 36.9 | 37.3 | 61.2 |
+| 512 | 37.0 | 37.2 | 59.3 |
+| 1024 | 37.0 | 37.2 | 56.6 |
+| 2048 | 36.9 | 37.2 | 59.0 |
 | 4096 | 36.9 | 37.2 | 60.1 |
-| 8192 | 37.0 | 37.3 | 57.5 |
+| 8192 | 37.0 | 37.3 | 57.4 |
 | 16384 | 37.0 | 37.2 | 57.4 |
 | 32768 | 36.9 | 37.2 | OOM |
 | 65536 | 37.0 | 37.2 | OOM |
@@ -250,19 +251,19 @@ Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
 
 ### KV Cache Memory (per batch, 32 layers × 2 K/V × 8 heads × 128 dim)
 
-| max_seq | Baseline BFP8 | TQ Performance | TQ Memory-Efficient |
-|---------|--------------|----------------|---------------------|
-| 128 | 9 MB | 17 MB | 9 MB |
-| 256 | 18 MB | 34 MB | 18 MB |
-| 512 | 36 MB | 67 MB | 36 MB |
-| 1024 | 71 MB | 134 MB | 72 MB |
-| 2048 | 143 MB | 268 MB | 145 MB |
-| 4096 | 285 MB | 537 MB | 289 MB |
-| 8192 | 570 MB | 1.1 GB | 579 MB |
-| 16384 | 1.1 GB | 2.1 GB | 1.2 GB |
-| 32768 | 2.3 GB | 4.3 GB | 2.3 GB |
-| 65536 | 4.6 GB | 8.6 GB | 4.6 GB |
-| 131072 | 9.1 GB | 17.2 GB | 9.3 GB |
+| max_seq | Baseline BFP8 (~1 B/elem) | TQ Performance (2 B/elem) | TQ Memory-Efficient (~0.5 B/elem) |
+|---------|--------------------------|--------------------------|-----------------------------------|
+| 128 | 9 MB | 17 MB | **4 MB** |
+| 256 | 18 MB | 34 MB | **9 MB** |
+| 512 | 36 MB | 67 MB | **18 MB** |
+| 1024 | 71 MB | 134 MB | **36 MB** |
+| 2048 | 143 MB | 268 MB | **72 MB** |
+| 4096 | 285 MB | 537 MB | **145 MB** |
+| 8192 | 570 MB | 1.1 GB | **289 MB** |
+| 16384 | 1.1 GB | 2.1 GB | **579 MB** |
+| 32768 | 2.3 GB | 4.3 GB | **1.2 GB** |
+| 65536 | 4.6 GB | 8.6 GB | **2.3 GB** |
+| 131072 | 9.1 GB | 17.2 GB | **4.6 GB** |
 
 ### Quality (real prefill + decode, greedy sampling)
 
@@ -294,23 +295,27 @@ Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
 
 ## 6. Next Steps
 
-### BFP8 Paged Indices (best of both worlds)
+### BFP4 Paged Indices (best of both worlds)
 
-Combine baseline-level memory with baseline-level latency:
-- Store BFP8 indices + BF16 norms in **paged** caches (not contiguous)
-- Use paged SDPA to read the paged BFP8 cache
+Combine memory savings (2× smaller than baseline) with baseline-level latency:
+- Store BFP4 indices + BF16 norms in **paged** caches (not contiguous)
+- Use paged SDPA to read the paged BFP4 cache
 - After paged cache read, dequantize (gather centroids + mul norms) before SDPA compute
-- Expected: ~37ms latency + ~1 byte/element memory → full 128K context
+- Expected: ~37ms latency + ~0.5 bytes/element memory → 2× longer contexts than baseline
 
 This requires the paged cache read output to be dequantized before entering the
 SDPA attention computation. The dequantize operates only on the filled positions
 (not max_seq), so overhead scales with actual context, not allocation.
 
+The memory-efficient variant currently OOMs at 32K not from index storage (BFP4
+is small enough) but from the full-cache BF16 dequantize temporary. Paged mode
+avoids this by only dequantizing the active chunk.
+
 ### True 3-bit Packing
 
-Pack indices to 3 bits/element (0.375 bytes) instead of BFP8's ~1 byte.
+Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
 Would give 2.6× smaller KV cache than baseline. Requires custom pack/unpack
-kernels + ROW_MAJOR scatter (paged_update_cache only supports TILE BF16/FP32/BFP8).
+kernels + ROW_MAJOR scatter (paged_update_cache only supports TILE BF16/FP32/BFP4/BFP8).
 CPU implementation exists in `bitpack.py`.
 
 ### Quality Benchmarks
