@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -70,7 +69,6 @@ class _BsprnStateDict:
         bspm_model: str,
         variant: str,
         budget: float,
-        bspm_root: Path,
     ):
         self._base = base
         self._first_k_dense = getattr(hf_config, "first_k_dense_replace", 3)
@@ -80,10 +78,7 @@ class _BsprnStateDict:
         self._budget = budget
         self._codes_cache: dict[int, np.ndarray | None] = {}  # layer → codes or None
 
-        sys.path.insert(0, str(bspm_root))
-        # Import once here so failures surface immediately, not mid-conversion.
-        from integration.ttnn.bspm_loader import load_bspm_for_layer
-
+        from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
         from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 
         self._load_bspm = load_bspm_for_layer
@@ -239,9 +234,6 @@ def main() -> None:
     hf_config = AutoConfig.from_pretrained(args.model_path.resolve(), trust_remote_code=True)
     logger.info(f"Model: {hf_config.num_hidden_layers} layers, {hf_config.n_routed_experts} experts/layer")
 
-    # ── Derive bspm_root from bspm_dir ──────────────────────────────────────
-    bspm_root = args.bspm_dir.parent
-
     # ── Build lazy BSPM state dict ──────────────────────────────────────────
     # Quantization is computed on demand in __getitem__; no preprocessing loop.
     logger.info(
@@ -255,7 +247,6 @@ def main() -> None:
         args.bspm_model,
         args.bspm_variant,
         args.bspm_budget,
-        bspm_root,
     )
 
     if args.dry_run:

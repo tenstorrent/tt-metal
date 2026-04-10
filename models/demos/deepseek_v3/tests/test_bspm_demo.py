@@ -147,21 +147,8 @@ def _preprocess_experts_with_bspm(
     2 → bfp2  (1 mantissa bit,  low-saliency tiles)
     3 → zero  (tile zeroed out, dead/pruned tiles)
     """
-    try:
-        from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
-    except ImportError as e:
-        pytest.skip(f"Required module not importable for BSPM preprocessing: {e}")
-
-    # Lazy import — derive the bit_sculpt root from BSPM_RESULTS_DIR (most reliable)
-    # or fall back to a sibling-of-tt-metal guess.
-    bspm_root = Path(os.environ.get("BSPM_RESULTS_DIR", "")).parent
-    if not bspm_root.exists():
-        bspm_root = Path(__file__).resolve().parents[4].parent / "bit_sculpt"
-    sys.path.insert(0, str(bspm_root))
-    try:
-        from integration.ttnn.bspm_loader import load_bspm_for_layer
-    except ImportError as e:
-        pytest.skip(f"bspm_loader not importable: {e}")
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 
     # tt-metal code → mantissa bits (None = zero tile)
     TT_CODE_TO_MANT: dict[int, int | None] = {0: 7, 1: 3, 2: 1, 3: None}
@@ -201,8 +188,10 @@ def _preprocess_experts_with_bspm(
                 if key not in state_dict:
                     continue
 
-                # Load as float32 — state_dict must be dequantized (BF16) before calling this
-                w_f32 = overrides[key].float() if key in overrides else state_dict[key].float()  # (N, K)
+                # Load weight — capture dtype before float() cast so we restore to checkpoint dtype (bf16)
+                w_orig = overrides[key] if key in overrides else state_dict[key]
+                orig_dtype = w_orig.dtype
+                w_f32 = w_orig.float()  # (N, K)
 
                 # Transpose to (K, N) — BitSculpt's tile convention
                 w_kn = w_f32.T.contiguous().numpy()  # (K, N)
@@ -236,7 +225,7 @@ def _preprocess_experts_with_bspm(
 
                 # Restore (tiles_h, 32, tiles_w, 32) → (K, N) → transpose to (N, K)
                 w_out = w_tiled.transpose(0, 2, 1, 3).reshape(K, N)
-                overrides[key] = torch.from_numpy(w_out).T.to(w_f32.dtype)
+                overrides[key] = torch.from_numpy(w_out).T.to(orig_dtype)
 
         layers_processed += 1
 
