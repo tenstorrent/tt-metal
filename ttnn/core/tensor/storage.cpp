@@ -6,7 +6,7 @@
 #include <numeric>
 #include <functional>
 #include <tt-logger/tt-logger.hpp>
-#include <unordered_set>
+#include <set>
 #include <vector>
 
 #include <ttnn/tensor/layout/layout.hpp>
@@ -262,16 +262,18 @@ DeviceStorage DeviceStorage::combine_device_storages(
             }),
         "All DeviceStorages must point to the same device memory");
 
-    auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
-        return sum + storage.get().get_coords().size();
-    });
-
-    std::unordered_set<distributed::MeshCoordinate> joint_coords;
-    joint_coords.reserve(num_coords);
+    std::set<distributed::MeshCoordinate> seen_coords;
+    std::vector<distributed::MeshCoordinate> joint_coords;
     for (const auto& storage : storages) {
-        auto other_coords = storage.get().get_coords();
-        joint_coords.insert(other_coords.begin(), other_coords.end());
+        for (const auto& coord : storage.get().get_coords()) {
+            TT_FATAL(
+                seen_coords.insert(coord).second,
+                "Found a tensor shard at duplicate coordinate {}",
+                coord);
+            joint_coords.push_back(coord);
+        }
     }
+    std::sort(joint_coords.begin(), joint_coords.end());
 
     const int tensor_rank = static_cast<int>(model_storage.get_tensor_spec().logical_shape().rank());
     TT_FATAL(
@@ -284,8 +286,7 @@ DeviceStorage DeviceStorage::combine_device_storages(
     TensorTopology topology =
         TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(joint_coords.size()), shard_dim);
 
-    DeviceStorage res(
-        model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
+    DeviceStorage res(model_storage, std::move(joint_coords));
     res.get_mesh_tensor().update_tensor_topology(topology);
     return res;
 }
