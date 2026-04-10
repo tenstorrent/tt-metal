@@ -260,7 +260,7 @@ class WanAttention(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
