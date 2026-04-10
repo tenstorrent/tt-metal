@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -721,6 +722,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         if (!link_objs.empty()) {
             return;
         }
+        uint32_t reused_objs = 0;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
@@ -731,9 +733,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                ++reused_objs;
             }
             link_objs += temp_obj;
             link_objs += " ";
+        }
+        if (reused_objs != 0) {
+            BuildCacheTelemetry::inst().record_merge(reused_objs);
         }
     };
 

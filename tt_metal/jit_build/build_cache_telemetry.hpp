@@ -49,14 +49,14 @@ private:
     TelemetryTokenData data_;
 };
 
-struct BuildCacheTelemetryImpl;  // fwd delcaration
+struct BuildCacheTelemetryImpl;  // forward declaration
 
 // Process-wide telemetry for JIT build cache merge diagnostics.
 //
 // register_metric() returns a TelemetryToken (running aggregate stats) that is
 // owned in owned_tokens_ for the life of the inst() singleton; disable()/enable()
-// tear down impl_ and the token registry but do not destroy tokens, so returned
-// references stay valid across disable/enable; only recording is toggled.
+// tear down impl_ and rebuild the token registry (enable() is a no-op if already
+// enabled). Tokens are not destroyed across disable/enable; only recording is toggled.
 // dump_metrics() is called from the destructor body (before member dtors run), so impl_
 // is still valid. tt::LoggerRegistry is a leaky singleton (allocated with `new`, never freed),
 // so its loggers and sinks are alive for the entire process lifetime and are safe to use
@@ -67,6 +67,7 @@ public:
 
     // enable()/disable() are NOT thread-safe with respect to recording methods;
     // call them only during setup/teardown when no concurrent builds are running.
+    // enable() is a no-op if telemetry is already enabled.
     void enable();
     void disable();
     bool is_enabled() const { return impl_ != nullptr; }
@@ -74,6 +75,7 @@ public:
     void record_compile(uint32_t num_srcs, uint32_t num_compiled);
     void record_cache_hit();
     void record_merge(uint32_t count);
+    // Counter for future genfile cache reuse; generation paths currently always rewrite files.
     void record_genfile_merge(uint32_t count);
     void record_jit_once_dedup();
 

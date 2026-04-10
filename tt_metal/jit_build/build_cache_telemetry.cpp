@@ -74,6 +74,9 @@ BuildCacheTelemetry& BuildCacheTelemetry::inst() {
 }
 
 void BuildCacheTelemetry::enable() {
+    if (impl_) {
+        return;
+    }
     impl_ = std::make_unique<BuildCacheTelemetryImpl>();
     std::lock_guard owned_lk(owned_tokens_mutex_);
     for (auto& token : owned_tokens_) {
