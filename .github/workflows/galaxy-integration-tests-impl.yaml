@@ -42,14 +42,13 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "integration" \
-            --skip-budget-check
+            "integration"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            ALL_SKUS_IN_TESTS
+            ALL_SKUS_IN_TESTS \
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
