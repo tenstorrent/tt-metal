@@ -30,7 +30,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Setup: 1 DFB with 1 DM producer -> 4 NEO unpacker consumers
 // Producer posts tiles, some consumers exit early -> TC mismatches
-constexpr uint32_t NUM_DFBS = 1;
 constexpr uint32_t NUM_PRODUCERS = 1;
 constexpr uint32_t NUM_CONSUMERS = 4;  // 4 NEO unpackers
 constexpr uint32_t NUM_ENTRIES_PER_DFB = 16;

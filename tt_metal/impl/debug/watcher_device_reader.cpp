@@ -1176,7 +1176,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
-    auto read_tiles_to_consume = [&](uint8_t client_id, uint8_t tc_id) -> std::pair<uint32_t, uint32_t> {
+    auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
         uint32_t neo_id = client_id % NEO_0;
         uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
         auto capacity_data = reader_.env.get_cluster().read_core(
@@ -1206,21 +1206,21 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             continue;
         }
 
-        uint8_t id_R[4] = {clientR.f.id_0, clientR.f.id_1, clientR.f.id_2, clientR.f.id_3};
-        uint8_t cnt_sel_R[4] = {clientR.f.cnt_sel_0, clientR.f.cnt_sel_1, clientR.f.cnt_sel_2, clientR.f.cnt_sel_3};
+        uint32_t id_R[4] = {clientR.f.id_0, clientR.f.id_1, clientR.f.id_2, clientR.f.id_3};
+        uint32_t cnt_sel_R[4] = {clientR.f.cnt_sel_0, clientR.f.cnt_sel_1, clientR.f.cnt_sel_2, clientR.f.cnt_sel_3};
         bool clientL_is_producer = clientL.f.clientl_is_producer;
 
         if (clientL_is_producer) {
             // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
-            uint8_t prod_id = clientL.f.id_L;
-            uint8_t prod_tc_id = clientL.f.cnt_sel_L;
+            uint32_t prod_id = clientL.f.id_L;
+            uint32_t prod_tc_id = clientL.f.cnt_sel_L;
 
-            for (uint8_t slot = 0; slot < 4; slot++) {
+            for (uint32_t slot = 0; slot < 4; slot++) {
                 if (!(clientL.f.valid & (1 << slot))) {
                     continue;
                 }
-                uint8_t cons_id = id_R[slot];
-                uint8_t cons_tc_id = cnt_sel_R[slot];
+                uint32_t cons_id = id_R[slot];
+                uint32_t cons_tc_id = cnt_sel_R[slot];
 
                 auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
                 if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1233,13 +1233,13 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             }
         } else {
             // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
-            uint8_t cons_id = clientL.f.id_L;
-            uint8_t cons_tc_id = clientL.f.cnt_sel_L;
+            uint32_t cons_id = clientL.f.id_L;
+            uint32_t cons_tc_id = clientL.f.cnt_sel_L;
 
             auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
             if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
                 fprintf(reader_.f, "\n  remapper[%u] ", pair_idx);
-                for (uint8_t slot = 0; slot < 4; slot++) {
+                for (uint32_t slot = 0; slot < 4; slot++) {
                     if (!(clientL.f.valid & (1 << slot))) {
                         continue;
                     }

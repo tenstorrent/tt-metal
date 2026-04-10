@@ -356,6 +356,8 @@ void Hal::initialize_wh(
     this->eth_fw_is_cooperative_ = true;
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = false;
+    this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
