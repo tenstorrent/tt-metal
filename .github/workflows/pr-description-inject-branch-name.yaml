@@ -1,10 +1,11 @@
-name: Inject branch name into PR description
+name: Inject branch name and CI status into PR description
 
 on:
   pull_request:
     types:
       - opened
       - reopened
+      - synchronize
 
 permissions:
   pull-requests: write
@@ -19,16 +20,91 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const branchName = pr.head.ref;
-            const placeholder = "{{branch_name}}";
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Replace branch name placeholder (no-op on synchronize, idempotent)
             let body = pr.body || "";
+            body = body.replaceAll("{{branch_name}}", branchName);
 
-            if (body.includes(placeholder)) {
-              const newBody = body.replaceAll(placeholder, branchName);
+            // Pipelines to report on.
+            // optional: true  → shown as opt-in, "no run" is expected
+            // optional: false → required, "no run" is a signal something's missing
+            const pipelines = [
+              { name: "Sanity tests",           workflow: "sanity-tests.yaml",               optional: false },
+              { name: "Blackhole post-commit",   workflow: "blackhole-post-commit.yaml",      optional: false },
+              { name: "cpp-unit-tests",          workflow: "tt-metal-l2-nightly.yaml",        optional: false },
+              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",      optional: true  },
+              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",  optional: true  },
+              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml", optional: true },
+            ];
 
-              await github.rest.pulls.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pr.number,
-                body: newBody
-              });
+            const rows = [];
+            for (const p of pipelines) {
+              const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}`;
+              const optionalTag = p.optional ? " *(opt-in)*" : "";
+
+              let statusEmoji, runLink;
+              try {
+                const runsResp = await github.rest.actions.listWorkflowRuns({
+                  owner,
+                  repo,
+                  workflow_id: p.workflow,
+                  branch: branchName,
+                  per_page: 1,
+                });
+
+                if (runsResp.data.total_count === 0) {
+                  statusEmoji = "➖";
+                  runLink = `[Launch ↗](${dispatchUrl})`;
+                } else {
+                  const run = runsResp.data.workflow_runs[0];
+                  const status = run.status;
+                  const conclusion = run.conclusion;
+
+                  if (status === "in_progress" || status === "queued" || status === "waiting" || status === "requested") {
+                    statusEmoji = "⏳";
+                  } else if (conclusion === "success") {
+                    statusEmoji = "✅";
+                  } else if (conclusion === "failure") {
+                    statusEmoji = "❌";
+                  } else if (conclusion === "cancelled") {
+                    statusEmoji = "🚫";
+                  } else if (conclusion === "skipped") {
+                    statusEmoji = "⏭️";
+                  } else {
+                    statusEmoji = "❓";
+                  }
+                  runLink = `[#${run.run_number}](${run.html_url})`;
+                }
+              } catch (e) {
+                statusEmoji = "❓";
+                runLink = `[Launch ↗](${dispatchUrl})`;
+              }
+
+              rows.push(`| [${p.name}](${dispatchUrl})${optionalTag} | ${statusEmoji} | ${runLink} |`);
             }
+
+            const statusSection = [
+              "### CI Status",
+              "_Auto-generated on every push. Click a pipeline name to open the workflow dispatch page._",
+              "",
+              "| Pipeline | Status | Latest Run |",
+              "|---|:---:|---|",
+              ...rows,
+            ].join("\n");
+
+            // Replace existing CI Status section if present, otherwise append
+            const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;
+            if (ciStatusRegex.test(body)) {
+              body = body.replace(ciStatusRegex, statusSection);
+            } else {
+              body = body.trimEnd() + "\n\n" + statusSection;
+            }
+
+            await github.rest.pulls.update({
+              owner,
+              repo,
+              pull_number: pr.number,
+              body,
+            });
