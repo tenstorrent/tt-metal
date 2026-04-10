@@ -1596,3 +1596,56 @@ def prepare_mtp_weights(
         e_gamma=e_gamma_tt,
         eh_projection=eh_proj_tt,
     )
+
+
+def _reconstruct_expert_memory_config(device, K: int, N_padded: int):
+    """Reconstruct the original WIDTH_SHARDED DRAM MemoryConfig for a routed expert projection.
+
+    Mirrors the shard spec built in _prepare_moe_routed_experts_bspm().
+    Needed to reconstruct shard-page mapping when loading cached CompressedTensors.
+    """
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        }
+    )
+    num_banks = device.dram_grid_size().x * device.dram_grid_size().y
+    per_core_N = N_padded // num_banks
+    shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+def _load_expert_proj(expert_dir, proj_name: str, device):
+    """Load one expert projection from a legacy BSPM cache directory.
+
+    If a companion *_assignment.npy file exists the projection was packed as a
+    CompressedTensor (BSPM mixed-precision). In that case the data tensor and
+    the saved assignment are used to reconstruct a CompressedTensor via
+    CompressedTensor.from_packed_data(). Otherwise returns a plain ttnn.Tensor.
+
+    Args:
+        expert_dir: Path to expert directory (e.g. ``cache/layer_004/experts/e_000``).
+        proj_name: Projection name (``gate_proj``, ``up_proj``, or ``down_proj``).
+        device: ttnn device.
+    """
+    from pathlib import Path as _Path
+
+    expert_dir = _Path(expert_dir)
+    data_tensor = ttnn.load_tensor(expert_dir / f"{proj_name}.tensorbin", device=device)
+    assignment_path = expert_dir / f"{proj_name}_assignment.npy"
+    if not (HAS_BSPM_SUPPORT and assignment_path.exists()):
+        return data_tensor
+    assignment_2d = np.load(assignment_path)  # shape (tiles_h, tiles_w), int8
+    tiles_h, tiles_w = assignment_2d.shape
+    K = tiles_h * 32
+    N_padded = tiles_w * 32
+    original_mem_config = _reconstruct_expert_memory_config(device, K, N_padded)
+    return CompressedTensor.from_packed_data(
+        data_tensor,
+        assignment_2d,
+        original_mem_config,
+        device=device,
+    )
