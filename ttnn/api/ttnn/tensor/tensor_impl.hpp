@@ -106,7 +106,7 @@ Tensor to_device(
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor);
+void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
 //                      Non-uniform .to_host() and .to_device()
@@ -134,7 +134,7 @@ std::pair<Tensor, std::vector<distributed::MeshCoordinate>> to_device(
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
 std::vector<distributed::MeshCoordinate> copy_to_device(
-    distributed::MeshCommandQueue& cq, const Tensor& host_tensor, Tensor& device_tensor);
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 }  // namespace non_uniform_data_movement
 
