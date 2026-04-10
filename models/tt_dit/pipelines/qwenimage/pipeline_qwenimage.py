@@ -119,7 +119,7 @@ class QwenImagePipeline:
         # setup parallel configs
         self._encoder_parallel_config = encoder_parallel_config
         self._vae_parallel_config = vae_parallel_config
-        self._wan_vae_parallel_config = self.get_wan_vae_parallel_config()
+        self._wan_vae_parallel_config = self.get_wan_vae_parallel_config() if self.vae_device is not None else None
 
         self.encoder_mesh_shape = self.get_mesh_shape(
             self.encoder_device, self._encoder_parallel_config.tensor_parallel

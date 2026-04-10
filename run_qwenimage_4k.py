@@ -50,9 +50,8 @@ def main():
         encoder_tp=(2, 1),  # Encoder TP
         vae_tp=(2, 1),  # VAE TP
         num_links=2,
-        use_torch_vae_decoder=False,  # TT VAE with dynamic loading
+        use_torch_vae_decoder=True,  # CPU VAE — frees device DRAM for transformer
         dynamic_load_encoder=True,  # Free memory for transformer
-        dynamic_load_vae=True,  # Load/unload VAE to save memory
         is_fsdp=True,  # Required — OOM without FSDP at 4K
     )
     print("Pipeline created successfully!")
