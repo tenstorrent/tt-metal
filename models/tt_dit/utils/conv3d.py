@@ -125,41 +125,29 @@ _BLOCKINGS = {
     (4, 8, 96, 96, (3, 3, 3), 83, 184, 160): (96, 96, 5, 8, 8),  # up3_res
     (4, 8, 96, 3, (3, 3, 3), 83, 184, 160): (96, 32, 3, 8, 16),  # conv_out
     # ===================================================================
-    # TODO: BH Galaxy 4x8, 720p, t_chunk_size=16 cached (vae_t_chunk_size=16)
-    # Per-device: same spatial as full-T above
-    # Cached T (from compute_decoder_dims(720, 1280, 4, 8, 16, cached=True)):
-    #   stage 0 (cur_T=16): T_res=18, T_tconv=18, T_spatial=32
-    #   stage 1 (cur_T=32): T_res=34, T_tconv=34, T_spatial=64
-    #   stage 2 (cur_T=64): T_res=66, T_spatial=64 (no temporal upsample)
-    #   stage 3 (cur_T=64): T_res=66
-    # Needs sweep to fill in blocking values.
-    # ===================================================================
-    # ===================================================================
-    # BH Galaxy 6U 4x32, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
-    # BH (4,32): tp_axis=1, sp_axis=0 → h_factor=4, w_factor=32
-    # Per-device (unpadded): lat(23,5) mid(46,10) hi(92,20) full(184,40)
-    # Padded (int_pad=(0,1,1)): lat(25,7) mid(48,12) hi(94,22) full(186,42)
+    # BH Galaxy 4x8, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
+    # BH (4,8): h_factor=4, w_factor=8. Per-device: same spatial as full-T above.
+    # Padded (int_pad=(0,1,1)): lat(25,22) mid(48,42) hi(94,82) full(186,162)
     # Cached T: stage0(T_res=18,T_tconv=18,T_sp=32) stage1(34,34,64) stage2/3(66,_,64)
-    # Swept 2026-04-10 on 1x1 mesh; results in sweep_results_h4w32_720p_t16/.
-    # T=3-4 wins for large stages; T=2-3 for small stages. T=5+ hangs on device.
-    # Layers marked partial were killed before full completion — best observed.
+    # TODO: blockings are _DEFAULT_BLOCKINGS placeholders — sweep needed
+    # Sweep: sweep_results_h4w8_720p_t16/, run on 1x1 mesh (single P150b)
     # ===================================================================
     # Stage 0 (cur_T=16)
-    (4, 32, 32, 384, (3, 3, 3), 18, 23, 5): (32, 64, 3, 8, 4),  # conv_in — 174us
-    (4, 32, 384, 384, (3, 3, 3), 18, 23, 5): (96, 96, 2, 8, 4),  # lat_mid_res — 575us
-    (4, 32, 384, 768, (3, 1, 1), 18, 23, 5): (192, 256, 1, 8, 4),  # up0_tconv — 257us partial
-    (4, 32, 384, 192, (1, 3, 3), 32, 46, 10): (192, 96, 1, 16, 2),  # up0_spatial — 484us
+    (4, 8, 32, 384, (3, 3, 3), 18, 23, 20): (32, 128, 1, 8, 4),  # conv_in — TODO
+    (4, 8, 384, 384, (3, 3, 3), 18, 23, 20): (96, 96, 1, 8, 4),  # lat_mid_res — TODO
+    (4, 8, 384, 768, (3, 1, 1), 18, 23, 20): (192, 256, 1, 8, 4),  # up0_tconv — TODO
+    (4, 8, 384, 192, (1, 3, 3), 32, 46, 40): (192, 96, 1, 8, 4),  # up0_spatial — TODO
     # Stage 1 (cur_T=32)
-    (4, 32, 192, 384, (3, 3, 3), 34, 46, 10): (96, 128, 2, 16, 2),  # up1_res0 — 1055us
-    (4, 32, 384, 384, (3, 3, 3), 34, 46, 10): (96, 96, 4, 16, 2),  # up1_res — 1773us
-    (4, 32, 384, 768, (3, 1, 1), 34, 46, 10): (384, 128, 4, 8, 4),  # up1_tconv — 669us partial
-    (4, 32, 384, 192, (1, 3, 3), 64, 92, 20): (192, 96, 1, 8, 4),  # up1_spatial — 2086us table
+    (4, 8, 192, 384, (3, 3, 3), 34, 46, 40): (96, 128, 1, 8, 4),  # up1_res0 — TODO
+    (4, 8, 384, 384, (3, 3, 3), 34, 46, 40): (96, 96, 1, 8, 4),  # up1_res — TODO
+    (4, 8, 384, 768, (3, 1, 1), 34, 46, 40): (192, 256, 1, 8, 4),  # up1_tconv — TODO
+    (4, 8, 384, 192, (1, 3, 3), 64, 92, 80): (192, 96, 1, 8, 4),  # up1_spatial — TODO
     # Stage 2 (cur_T=64, no temporal upsample)
-    (4, 32, 192, 192, (3, 3, 3), 66, 92, 20): (96, 96, 4, 16, 2),  # up2_res — 3091us
-    (4, 32, 192, 96, (1, 3, 3), 64, 184, 40): (192, 96, 1, 8, 4),  # up2_spatial — 1934us table
+    (4, 8, 192, 192, (3, 3, 3), 66, 92, 80): (96, 96, 1, 8, 4),  # up2_res — TODO
+    (4, 8, 192, 96, (1, 3, 3), 64, 184, 160): (192, 96, 1, 8, 4),  # up2_spatial — TODO
     # Stage 3 (cur_T=64, no temporal upsample)
-    (4, 32, 96, 96, (3, 3, 3), 66, 184, 40): (96, 96, 4, 8, 4),  # up3_res — 3070us
-    (4, 32, 96, 3, (3, 3, 3), 66, 184, 40): (96, 32, 3, 16, 2),  # conv_out — 2459us
+    (4, 8, 96, 96, (3, 3, 3), 66, 184, 160): (96, 96, 1, 8, 4),  # up3_res — TODO
+    (4, 8, 96, 3, (3, 3, 3), 66, 184, 160): (96, 32, 1, 8, 4),  # conv_out — TODO
     # ===================================================================
     # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7)
     # BH (2,4): tp_axis=0, sp_axis=1 → h_factor=2, w_factor=4

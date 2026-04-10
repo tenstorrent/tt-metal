@@ -601,61 +601,60 @@ def test_bruteforce_sweep_h2w4_480p_t7(
 
 
 # ---------------------------------------------------------------------------
-# BH Galaxy 6U 4x32, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
+# BH Galaxy 4x8, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
 # ---------------------------------------------------------------------------
-# Mesh: h_factor=4, w_factor=32.  Per-device spatial (unpadded):
-#   lat(23,5)  mid(46,10)  hi(92,20)  full(184,40)
+# Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded, same as full-T):
+#   lat(23,20)  mid(46,40)  hi(92,80)  full(184,160)
 #
 # Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
-#   lat(25,7)  mid(48,12)  hi(94,22)  full(186,42)
-# (3,1,1) kernels use no spatial padding: lat(23,5) mid(46,10)
+#   lat(25,22)  mid(48,42)  hi(94,82)  full(186,162)
+# (3,1,1) kernels use no spatial padding: lat(23,20) mid(46,40)
 #
-# Cached T from compute_decoder_dims(720, 1280, 4, 32, 16, cached=True):
+# Cached T from compute_decoder_dims(720, 1280, 4, 8, 16, cached=True):
 #   stage 0 (cur_T=16): T_res=18, T_tconv=18, T_spatial=32
 #   stage 1 (cur_T=32): T_res=34, T_tconv=34, T_spatial=64
 #   stage 2 (cur_T=64): T_res=66, T_spatial=64  (no temporal upsample)
 #   stage 3 (cur_T=64): T_res=66
 #
-# Layers ordered most-to-least compute (T × H × W volume) so the biggest
-# wins are captured first and inform later heuristic tuning.
+# Layers ordered most-to-least compute (T × H × W volume).
 # ---------------------------------------------------------------------------
-_SWEEP_LAYERS_H4W32_720P_T16 = [
+_SWEEP_LAYERS_H4W8_720P_T16 = [
     # (name,           C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
     # --- stage 3 / 2 (largest spatial, cur_T=64) ---
-    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 42, 4, 32),  # T=66
-    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 42, 4, 32),  # T=66
-    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 186, 42, 4, 32),  # T=64
-    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 94, 22, 4, 32),  # T=66
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 162, 4, 8),  # T=66
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 186, 162, 4, 8),  # T=66
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 186, 162, 4, 8),  # T=64
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 66, 94, 82, 4, 8),  # T=66
     # --- stage 1 (cur_T=32) ---
-    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 94, 22, 4, 32),  # T=64
-    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 12, 4, 32),  # T=34
-    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 12, 4, 32),  # T=34
-    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 34, 46, 10, 4, 32),  # T=34
-    # --- stage 0 (cur_T=16, small spatial) ---
-    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 32, 48, 12, 4, 32),  # T=32
-    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 7, 4, 32),  # T=18
-    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 7, 4, 32),  # T=18
-    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 18, 23, 5, 4, 32),  # T=18
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 64, 94, 82, 4, 8),  # T=64
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 42, 4, 8),  # T=34
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 34, 48, 42, 4, 8),  # T=34
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 34, 46, 40, 4, 8),  # T=34
+    # --- stage 0 (cur_T=16) ---
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 32, 48, 42, 4, 8),  # T=32
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 22, 4, 8),  # T=18
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 18, 25, 22, 4, 8),  # T=18
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 18, 23, 20, 4, 8),  # T=18
 ]
 
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
     [[(1, 1), (1, 1), {}]],
-    ids=["bh_4x32_1x1"],
+    ids=["bh_4x8_1x1"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
-    _SWEEP_LAYERS_H4W32_720P_T16,
-    ids=[l[0] for l in _SWEEP_LAYERS_H4W32_720P_T16],
+    _SWEEP_LAYERS_H4W8_720P_T16,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_720P_T16],
 )
-def test_bruteforce_sweep_h4w32_720p_t16(
+def test_bruteforce_sweep_h4w8_720p_t16(
     mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
 ):
     parent_mesh = mesh_device
     device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
-    output = f"sweep_results_h4w32_720p_t16/{layer_name}_{C_in}x{C_out}.json"
+    output = f"sweep_results_h4w8_720p_t16/{layer_name}_{C_in}x{C_out}.json"
     run_sweep(
         device,
         C_in,
@@ -670,9 +669,8 @@ def test_bruteforce_sweep_h4w32_720p_t16(
         h_factor=h_factor,
         w_factor=w_factor,
         max_combos=500,
-        # BH hardware hang mitigations: h*w≠32 hangs (confirmed on all shapes).
-        # T=5+ hangs intermittently (large-C_in L1 pressure). T≤4 is safe.
-        # Sweet spot for 4x32 720p is T=3-4.
+        # BH hardware hang mitigations (same as 2x4/4x32): h*w≠32 and T>4
+        # cause device hangs on large-channel layers.
         max_t_block=4,
         hw_product=32,
     )
