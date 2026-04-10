@@ -28,6 +28,7 @@ target_link_libraries(
         umd::tt-umd
         simde::simde
         Taskflow::Taskflow
+        xxHash
     PRIVATE
         Metalium::Metal::Hardware
         Tracy::TracyClient

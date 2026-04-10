@@ -15,13 +15,14 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "jit_build/jit_build_options.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
+
+class JitBuildOptions;
 
 enum Eth : uint8_t {
     SENDER = 0,
