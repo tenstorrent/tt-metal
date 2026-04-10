@@ -296,7 +296,7 @@ static Tensor std_var_impl(
             input_tensor_arg.logical_shape(),
             fill_value,
             input_tensor_arg.dtype(),
-            input_tensor_arg.layout(),
+            Layout::TILE,
             std::ref(*input_tensor_arg.device()),
             memory_config);
 
@@ -310,7 +310,7 @@ static Tensor std_var_impl(
 
     // Validate that the divisor is positive (Bessel's correction subtracts 1).
     // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
-    int divisor = correction ? (reduced_volume - 1) : reduced_volume;
+    uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
     if (use_legacy) {
