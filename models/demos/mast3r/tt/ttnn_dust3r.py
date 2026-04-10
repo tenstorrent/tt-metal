@@ -137,8 +137,7 @@ def encoder_block_device_pre(
     tt_k = _t2d(k, device)  # (B, H, N, dh)
     tt_v = _t2d(v, device)  # (B, H, N, dh)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
-    tt_ctx = ttnn.permute(tt_ctx, (0, 2, 1, 3))  # (B, N, H, dh)
-    tt_ctx = ttnn.reshape(tt_ctx, (B, N, D))
+    tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)  # (B, N, D)
     tt_proj = ttnn.linear(tt_ctx, tt_w["pw"], bias=tt_w["pb"])
 
     tt_x = ttnn.add(tt_x, tt_proj)
@@ -500,8 +499,7 @@ def decoder_block_device_pre(
     tt_k = _t2d(k, device)
     tt_v = _t2d(v_h, device)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
-    tt_ctx = ttnn.permute(tt_ctx, (0, 2, 1, 3))
-    tt_ctx = ttnn.reshape(tt_ctx, (B, N, D))
+    tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)
     tt_cproj = ttnn.linear(tt_ctx, tt_w["cp_w"], bias=tt_w["cp_b"])
     tt_x = ttnn.add(tt_x, tt_cproj)
 
