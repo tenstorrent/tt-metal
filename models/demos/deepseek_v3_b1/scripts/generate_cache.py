@@ -181,6 +181,29 @@ def _create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip warm; only run the double-load check (use on an already-populated cache-root).",
     )
+    parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Model-specific BitSculpt BSPM directory "
+            "(e.g. /path/to/bit_sculpt/results/deepseek-r1-0528). "
+            "When provided, routed MoE expert weights use BSPM-driven mixed-precision "
+            "CompressedTensor instead of uniform bfloat4_b.  Falls back to bfloat4_b for "
+            "layers whose BSPM file is not found.  Only used with --type moe."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-variant",
+        default="B",
+        help="BitSculpt allocation variant letter (default: B)",
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert (default: 3.5)",
+    )
     return parser
 
 
@@ -221,6 +244,9 @@ def _validate_args(args: argparse.Namespace, cache_root: Path) -> None:
                 )
                 sys.exit(1)
 
+    if args.bspm_dir is not None and mode != "moe":
+        logger.warning("--bspm-dir is only used with --type moe; ignoring for type={}", mode)
+
     if args.model_path is None:
         logger.error("--model-path is required")
         sys.exit(1)
@@ -248,6 +274,9 @@ def _warm(
     hf_model_id: str,
     hf_revision: str,
     schema_version: int,
+    bspm_dir: Path | None = None,
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> None:
     _ensure_fabric_env()
     device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
@@ -284,6 +313,9 @@ def _warm(
                         num_routed_experts=NUM_ROUTED_EXPERTS,
                         move_to_device=True,
                         cache_config=cfg,
+                        bspm_dir=bspm_dir,
+                        bspm_variant=bspm_variant,
+                        bspm_budget=bspm_budget,
                     )
                     logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - t0)
             elif mode == "embedding":
@@ -415,6 +447,9 @@ def main() -> int:
             hf_model_id=hf_model_id,
             hf_revision=args.hf_revision,
             schema_version=args.schema_version,
+            bspm_dir=args.bspm_dir,
+            bspm_variant=args.bspm_variant,
+            bspm_budget=args.bspm_budget,
         )
         logger.info("Warm complete in {:.3f}s", time.perf_counter() - t_all)
 
