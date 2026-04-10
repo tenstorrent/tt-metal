@@ -264,6 +264,15 @@ void MeshBuffer::wait_for_pending_events() {
     if (!mesh_device) {
         return;  // MeshDevice destroyed, nothing to wait for
     }
+    if (!mesh_device->is_initialized()) {
+        // Device was closed (e.g. ttnn.close_device() called before Python GC runs on tensors).
+        // close_impl() already flushed all outstanding work via ~FDMeshCommandQueue(), so the
+        // operations behind these events have already completed.  Calling EventSynchronize() here
+        // would hit Device::sysmem_manager()'s lazy-reinit path — new SystemMemoryManager starts
+        // with last_completed_event=0, so the busy-spin "while (0 < event_N)" never exits → 40 min
+        // CI hang.  Skip safely: the work is done, the device just isn't alive anymore.
+        return;
+    }
 
     // For the device_operation.hpp dispatch path, enqueue_record_event_to_host() is called
     // without an explicit range, so it always targets the full mesh.
