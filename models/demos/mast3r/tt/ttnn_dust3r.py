@@ -339,3 +339,17 @@ def full_decoder(
     out1 = _ttnn_layer_norm(f1, g, b, device)
     out2 = _ttnn_layer_norm(f2, g, b, device)
     return out1, out2
+
+
+def dpt_head(feats_list, hw, state: dict, branch: int, device):
+    """DPT head — currently host-torch fallback (conv-heavy, ttnn.conv2d path
+    through fold has tooling issues in this build env; TODO: move to device).
+
+    feats_list: list of 4 (B, N, D) token tensors (enc + 3 decoder depths).
+    hw: (H, W) token grid (e.g. 32, 32 for 512 input).
+    Returns (B, 4, H_img, W_img) on host.
+    """
+    from reference.torch_dust3r import load_dpt_head
+    head = load_dpt_head(state, branch=branch)
+    with torch.no_grad():
+        return head(feats_list, hw)

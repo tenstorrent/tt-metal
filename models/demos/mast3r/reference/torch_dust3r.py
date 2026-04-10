@@ -231,32 +231,150 @@ class DecoderBlock(nn.Module):
 
 # ---------- DPT head ----------
 
-class DPTHead(nn.Module):
-    """Simplified DPT head matching checkpoint structure.
-
-    act_postprocess: 4 stages that reshape encoder tokens back to 2D and
-      project to different channels (96, 192, 384, 768).
-    Refinement + head convs produce the final 4-channel (pts3d + conf) map.
-    """
-
-    def __init__(self, enc_dim: int = 1024, dec_dim: int = 768):
+class ResConvUnit(nn.Module):
+    def __init__(self, ch=256):
         super().__init__()
-        # Stage 0 uses encoder features (1024), stages 1-3 use decoder (768).
-        self.reassemble = nn.ModuleList([
-            nn.Sequential(nn.Conv2d(enc_dim, 96, 1), nn.ConvTranspose2d(96, 96, 4, 4)),
-            nn.Sequential(nn.Conv2d(dec_dim, 192, 1), nn.ConvTranspose2d(192, 192, 2, 2)),
-            nn.Sequential(nn.Conv2d(dec_dim, 384, 1)),
-            nn.Sequential(nn.Conv2d(dec_dim, 768, 1), nn.Conv2d(768, 768, 3, padding=1)),
-        ])
-        # Refinement / fusion convs are the remaining keys in downstream_head1/2.
-        # We keep a placeholder so tests can instantiate before full wiring.
-        self.head = nn.Sequential(
-            nn.Conv2d(256, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 4, 1),
-        )
+        self.conv1 = nn.Conv2d(ch, ch, 3, padding=1, bias=True)
+        self.conv2 = nn.Conv2d(ch, ch, 3, padding=1, bias=True)
+
+    def forward(self, x):
+        out = F.relu(x)
+        out = self.conv1(out)
+        out = F.relu(out)
+        out = self.conv2(out)
+        return out + x
+
+
+class FeatureFusionBlock(nn.Module):
+    def __init__(self, ch=256):
+        super().__init__()
+        self.resConfUnit1 = ResConvUnit(ch)
+        self.resConfUnit2 = ResConvUnit(ch)
+        self.out_conv = nn.Conv2d(ch, ch, 1, bias=True)
+
+    def forward(self, x, skip=None):
+        if skip is not None:
+            x = x + self.resConfUnit1(skip)
+        x = self.resConfUnit2(x)
+        x = F.interpolate(x, scale_factor=2.0, mode="bilinear", align_corners=True)
+        x = self.out_conv(x)
+        return x
+
+
+class DPTHead(nn.Module):
+    """Full DPT head matching downstream_head{1,2} checkpoint layout."""
+
+    def __init__(self, enc_dim: int = 1024, dec_dim: int = 768, patch: int = 16):
+        super().__init__()
+        self.patch = patch
+        # act_postprocess: 4 stages. Each stage: 1x1 projection, then resample.
+        self.ap0_proj = nn.Conv2d(enc_dim, 96, 1, bias=True)
+        self.ap0_up = nn.ConvTranspose2d(96, 96, 4, stride=4, bias=True)
+        self.ap1_proj = nn.Conv2d(dec_dim, 192, 1, bias=True)
+        self.ap1_up = nn.ConvTranspose2d(192, 192, 2, stride=2, bias=True)
+        self.ap2_proj = nn.Conv2d(dec_dim, 384, 1, bias=True)
+        self.ap3_proj = nn.Conv2d(dec_dim, 768, 1, bias=True)
+        self.ap3_down = nn.Conv2d(768, 768, 3, stride=2, padding=1, bias=True)
+
+        # scratch: 3x3 no-bias convs from each scale to 256 channels.
+        self.layer1_rn = nn.Conv2d(96, 256, 3, padding=1, bias=False)
+        self.layer2_rn = nn.Conv2d(192, 256, 3, padding=1, bias=False)
+        self.layer3_rn = nn.Conv2d(384, 256, 3, padding=1, bias=False)
+        self.layer4_rn = nn.Conv2d(768, 256, 3, padding=1, bias=False)
+
+        self.refinenet4 = FeatureFusionBlock(256)
+        self.refinenet3 = FeatureFusionBlock(256)
+        self.refinenet2 = FeatureFusionBlock(256)
+        self.refinenet1 = FeatureFusionBlock(256)
+
+        self.head0 = nn.Conv2d(256, 128, 3, padding=1, bias=True)
+        self.head2 = nn.Conv2d(128, 128, 3, padding=1, bias=True)
+        self.head4 = nn.Conv2d(128, 4, 1, bias=True)
+
+    def _tokens_to_2d(self, feat, hw):
+        H, W = hw
+        B, N, D = feat.shape
+        return feat.transpose(1, 2).reshape(B, D, H, W).contiguous()
+
+    def forward(self, feats_list, hw):
+        # feats_list: 4 token tensors (B, N, D). [0] is enc (1024), [1..3] are decoder at 3 depths (768).
+        H, W = hw
+        f0 = self._tokens_to_2d(feats_list[0], hw)
+        f1 = self._tokens_to_2d(feats_list[1], hw)
+        f2 = self._tokens_to_2d(feats_list[2], hw)
+        f3 = self._tokens_to_2d(feats_list[3], hw)
+
+        l1 = self.ap0_up(self.ap0_proj(f0))      # (B, 96,  4H, 4W)
+        l2 = self.ap1_up(self.ap1_proj(f1))      # (B, 192, 2H, 2W)
+        l3 = self.ap2_proj(f2)                    # (B, 384, H,  W)
+        l4 = self.ap3_down(self.ap3_proj(f3))    # (B, 768, H/2,W/2)
+
+        l1 = self.layer1_rn(l1)
+        l2 = self.layer2_rn(l2)
+        l3 = self.layer3_rn(l3)
+        l4 = self.layer4_rn(l4)
+
+        p4 = self.refinenet4(l4)
+        p3 = self.refinenet3(p4, l3)
+        p2 = self.refinenet2(p3, l2)
+        p1 = self.refinenet1(p2, l1)
+
+        x = self.head0(p1)
+        x = F.interpolate(x, scale_factor=2.0, mode="bilinear", align_corners=True)
+        x = self.head2(x)
+        x = F.relu(x)
+        x = self.head4(x)
+        return x  # (B, 4, H_img, W_img)
+
+
+def load_dpt_head(state: dict, branch: int = 1) -> DPTHead:
+    h = DPTHead()
+    prefix = f"downstream_head{branch}.dpt."
+    sub = _prefix(state, prefix)
+    # Remap flat state into our attribute names.
+    mapping = {
+        "act_postprocess.0.0.weight": "ap0_proj.weight",
+        "act_postprocess.0.0.bias": "ap0_proj.bias",
+        "act_postprocess.0.1.weight": "ap0_up.weight",
+        "act_postprocess.0.1.bias": "ap0_up.bias",
+        "act_postprocess.1.0.weight": "ap1_proj.weight",
+        "act_postprocess.1.0.bias": "ap1_proj.bias",
+        "act_postprocess.1.1.weight": "ap1_up.weight",
+        "act_postprocess.1.1.bias": "ap1_up.bias",
+        "act_postprocess.2.0.weight": "ap2_proj.weight",
+        "act_postprocess.2.0.bias": "ap2_proj.bias",
+        "act_postprocess.3.0.weight": "ap3_proj.weight",
+        "act_postprocess.3.0.bias": "ap3_proj.bias",
+        "act_postprocess.3.1.weight": "ap3_down.weight",
+        "act_postprocess.3.1.bias": "ap3_down.bias",
+        "scratch.layer1_rn.weight": "layer1_rn.weight",
+        "scratch.layer2_rn.weight": "layer2_rn.weight",
+        "scratch.layer3_rn.weight": "layer3_rn.weight",
+        "scratch.layer4_rn.weight": "layer4_rn.weight",
+        "head.0.weight": "head0.weight",
+        "head.0.bias": "head0.bias",
+        "head.2.weight": "head2.weight",
+        "head.2.bias": "head2.bias",
+        "head.4.weight": "head4.weight",
+        "head.4.bias": "head4.bias",
+    }
+    # refinenets
+    for r in (1, 2, 3, 4):
+        for cu in (1, 2):
+            mapping[f"scratch.refinenet{r}.resConfUnit{cu}.conv1.weight"] = f"refinenet{r}.resConfUnit{cu}.conv1.weight"
+            mapping[f"scratch.refinenet{r}.resConfUnit{cu}.conv1.bias"] = f"refinenet{r}.resConfUnit{cu}.conv1.bias"
+            mapping[f"scratch.refinenet{r}.resConfUnit{cu}.conv2.weight"] = f"refinenet{r}.resConfUnit{cu}.conv2.weight"
+            mapping[f"scratch.refinenet{r}.resConfUnit{cu}.conv2.bias"] = f"refinenet{r}.resConfUnit{cu}.conv2.bias"
+        mapping[f"scratch.refinenet{r}.out_conv.weight"] = f"refinenet{r}.out_conv.weight"
+        mapping[f"scratch.refinenet{r}.out_conv.bias"] = f"refinenet{r}.out_conv.bias"
+
+    remapped = {}
+    for src, dst in mapping.items():
+        if src in sub:
+            remapped[dst] = sub[src]
+    missing, unexpected = h.load_state_dict(remapped, strict=False)
+    assert not missing, f"DPT head missing keys: {missing[:5]}..."
+    return h.eval()
 
 
 # ---------- Weight loading helpers ----------
