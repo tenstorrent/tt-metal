@@ -1380,6 +1380,7 @@ class MLA1D(AbstractModule):
             "mtp_alias_mask": None,
             "mtp_alias_runtime_cache": {},
             "ccl": ccl,
+            "fused_qkv_norm": None,  # Created lazily on first decode forward
         }
 
     @classmethod
@@ -2032,14 +2033,19 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Parallel Q and KV Norms
-        # Q: 1,1,32,1536, width sharded 8x2 [32,96]
-        # KV: 1,1,32,512 8x2 [32,32]
-        q_norm_desc = descriptors.rms_norm(tt_q, program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"])
-        kv_norm_desc = descriptors.rms_norm(
-            tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
-        )
-        tt_q, tt_kv_nope = Parallel(q_norm_desc, kv_norm_desc).run()
+        # Parallel Q and KV Norms (persistent mode — built lazily on first call)
+        # Q: 1,1,32,1536, width sharded 4x4 [32,96]
+        # KV: 1,1,32,512, width sharded 2x8 [32,32]
+        fused = cfg["fused_qkv_norm"]
+        if fused is None:
+            fused = Parallel(
+                q=descriptors.rms_norm(program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"]),
+                kv=descriptors.rms_norm(program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]),
+            )
+            cfg["fused_qkv_norm"] = fused
+        fused.q.update(input_tensor=tt_q)
+        fused.kv.update(input_tensor=tt_kv_nope)
+        tt_q, tt_kv_nope = fused.run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
