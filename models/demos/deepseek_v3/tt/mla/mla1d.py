@@ -30,10 +30,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
     SliceConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import K_CHUNK_SIZE, Q_CHUNK_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import (
-    K_CHUNK_SIZE,
-    Q_CHUNK_SIZE,
-    SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE,
     USERS_PER_ROW,
     even_int_div,
     get_mesh_coords,
