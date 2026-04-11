@@ -897,10 +897,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
+        // Signal the device as closed BEFORE freeing allocator state.  Any concurrent
+        // MeshBuffer::deallocate() racing with teardown will now see is_initialized()==false
+        // and take the safe "device already closed" path instead of touching the (now-freed)
+        // sub_device_manager_tracker_ allocators.  See race analysis: Finding B.1.
+        is_internal_state_initialized = false;
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
-        is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();
         }

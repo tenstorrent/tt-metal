@@ -270,7 +270,13 @@ bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty();
 void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
-        distributed::EventSynchronize(event);
+        // Skip EventSynchronize if the device has already been closed.  Calling it on a closed
+        // device hits Device::sysmem_manager()'s lazy-reinit path (last_completed_event=0) and
+        // spins forever.  ~FDMeshCommandQueue() already flushed all outstanding work during
+        // close_impl(), so the operations behind these events are complete.  See Finding B.3.
+        if (event.device() && event.device()->is_initialized()) {
+            distributed::EventSynchronize(event);
+        }
         barrier_events_.pop_front();
     }
 }

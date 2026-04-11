@@ -378,10 +378,12 @@ void MeshBuffer::deallocate() {
         // This prevents address reuse while operations are still in-flight on other CQs.
         wait_for_pending_events();
 
-        // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
-        // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-        // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        // Guard allocator calls with is_initialized(): if close_impl() raced with deallocate(),
+        // sub_device_manager_tracker_ may now be null even though mesh_device_ is still alive.
+        // close_impl() now sets is_internal_state_initialized=false BEFORE resetting the tracker,
+        // so this check is a safe barrier.  See race analysis: Findings B.1 / B.4.
+        if (MetalContext::instance().rtoptions().get_allocator_mode_hybrid() &&
+            mesh_device->is_initialized()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
