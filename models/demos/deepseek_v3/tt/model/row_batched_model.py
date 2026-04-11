@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -100,6 +100,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 (sub_state_dict(state_dict, mtp_layer_prefix),),
                 output_path / "mtp",
                 mesh_device,
+                reuse_embedding_weight_cfg=weight_cfg["embedding"],
+                reuse_head_weight_cfg=weight_cfg["lm_head"],
             )
         return weight_cfg
 

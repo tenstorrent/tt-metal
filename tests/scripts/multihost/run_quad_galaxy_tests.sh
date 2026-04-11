@@ -66,7 +66,8 @@ _resolve_deepseekv3_cache() {
 
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    export HOSTS="g02glx01,g02glx02"
+    # heuristic to extract only 2 first hosts from the hostfile
+    export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
@@ -92,7 +93,8 @@ setup_dual_galaxy_env() {
 
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
-    export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    # heuristic to extract only 4 first hosts from the hostfile
+    export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 4 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"

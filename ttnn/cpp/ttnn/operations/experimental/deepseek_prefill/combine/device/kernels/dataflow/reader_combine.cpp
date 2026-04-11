@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -179,6 +179,9 @@ void kernel_main() {
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
+        if (expert_tokens > max_dispatched_tokens_per_expert) {
+            expert_tokens = max_dispatched_tokens_per_expert;
+        }
         uint32_t end_page = start_page + expert_tokens;
 
         DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();

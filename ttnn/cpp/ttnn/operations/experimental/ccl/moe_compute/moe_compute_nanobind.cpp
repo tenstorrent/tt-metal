@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,13 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("layer_id"),
         nb::arg("output_height_shard_dim"),
         nb::arg("output_width_shard_dim"),
-        nb::arg("cluster_axis") = nb::none());
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("topology") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("mux_core_range_set") = nb::none(),
+        nb::arg("output_memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("optional_cross_device_semaphore") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
@@ -40,7 +46,6 @@ void bind_get_moe_combine_cores(nb::module_& mod) {
     ttnn::bind_function<"get_moe_combine_cores", "ttnn.experimental.">(
         mod,
         doc,
-        // Overload 1: single split_size (int64_t)
         ttnn::overload_t(
             nb::overload_cast<ttnn::MeshDevice*>(&ttnn::experimental::get_moe_combine_cores), nb::arg("input_tensor")));
 }

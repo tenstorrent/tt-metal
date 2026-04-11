@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -79,14 +80,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--model-path",
         type=Path,
         default=None,
-        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights real/state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
         choices=("synthetic", "real", "state_dict"),
         default="real",
-        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
+        help="synthetic: random prepare path; real: TensorCache + HF safetensors; state_dict: HF safetensors + prepare path (no cache)",
     )
     parser.add_argument(
         "--fp32",
@@ -123,8 +124,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--io-socket-descriptor-prefix",
         type=str,
-        default="deepseek_v3_b1",
-        help="Prefix used when exporting H2D/D2H socket descriptors; sockets will be named <prefix>_h2d and <prefix>_d2h.",
+        default=None,
+        help=(
+            "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
+            "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
+            "this is omitted, defaults to deepseek_v3_b1."
+        ),
     )
     return parser
 
@@ -203,8 +208,8 @@ def run_demo(
             except KeyboardInterrupt:
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
-    model_pipeline.barrier()
-    logger.info("Pod pipeline complete")
+        model_pipeline.barrier()
+        logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -212,14 +217,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    if args.weights == "real" and args.cache_path is None:
-        parser.error("--cache-path is required when --weights real")
-    if args.weights == "state_dict":
+    if args.weights == "real":
+        if args.cache_path is None:
+            parser.error("--cache-path is required when --weights real")
         if args.model_path is None:
-            parser.error("--model-path is required when --weights state_dict")
+            parser.error("--model-path is required when --weights real")
+    if args.weights in ("real", "state_dict"):
+        if args.model_path is None:
+            parser.error(f"--model-path is required when --weights {args.weights}")
         index_path = args.model_path / "model.safetensors.index.json"
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
+
+    io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
+    if args.launch_only and io_socket_descriptor_prefix is None:
+        io_socket_descriptor_prefix = "deepseek_v3_b1"
 
     run_demo(
         prompt=args.prompt,
@@ -233,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
-        io_socket_descriptor_prefix=args.io_socket_descriptor_prefix,
+        io_socket_descriptor_prefix=io_socket_descriptor_prefix,
     )
     print(file=sys.stdout, flush=True)
     return 0

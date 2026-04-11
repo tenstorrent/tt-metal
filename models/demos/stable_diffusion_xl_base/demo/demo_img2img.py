@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,8 @@ from loguru import logger
 from PIL import Image
 from transformers import CLIPTextModelWithProjection
 
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
+from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
     MAX_SEQUENCE_LENGTH,

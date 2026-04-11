@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,12 +61,10 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     const auto& input_tensor = tensor_args.input_tensor;
     return TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
-            operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+            operation_attributes.output_mem_config));
 }
 
 InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,6 +72,11 @@ public:
         std::vector<uint8_t> data;
     };
 
+    struct TypedArray {
+        tt::DataFormat type;
+        std::vector<uint32_t> data;
+    };
+
     using ArgumentValue = std::variant<
         bool,
         int8_t,
@@ -84,7 +89,8 @@ public:
         uint64_t,
         float,
         double,
-        TileSliceDynamic>;
+        TileSliceDynamic,
+        TypedArray>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;
@@ -140,7 +146,7 @@ private:
         std::span<char> argument_types,
         std::span<const std::byte> payload_bytes,
         std::vector<ArgumentValue>& arguments);
-    static std::string_view format_message(
+    std::string_view format_message(
         ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
     // Loads all enum type definitions from DWARF debug info in the ELF file.

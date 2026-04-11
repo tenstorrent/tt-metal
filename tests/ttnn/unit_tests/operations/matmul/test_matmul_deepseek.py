@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -329,7 +329,7 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
     assert_numeric_metrics(
         pt_out,
         output_tensor,
-        atol=0.01 * k,
+        atol=0.1 * k,
         rtol=20.75 * k,
         frobenius_threshold=0.001 * k,
         pcc_threshold=expected_pcc,

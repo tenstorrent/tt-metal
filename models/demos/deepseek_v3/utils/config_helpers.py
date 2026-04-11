@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -22,6 +22,8 @@ NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
 DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
+Q_CHUNK_SIZE = 128
+K_CHUNK_SIZE = 128
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
 # Default sampling parameters, huggingface recommended values

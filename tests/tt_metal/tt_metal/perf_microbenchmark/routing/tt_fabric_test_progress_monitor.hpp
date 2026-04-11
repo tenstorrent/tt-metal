@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,8 +60,9 @@ public:
     TestProgressMonitor(TestProgressMonitor&&) = delete;
     TestProgressMonitor& operator=(TestProgressMonitor&&) = delete;
 
-    // Poll until programs complete (runs in calling thread)
-    void poll_until_complete();
+    // Poll until programs complete or all remaining devices are hung.
+    // Returns true if all devices completed normally, false if aborted due to hang.
+    bool poll_until_complete();
 
 private:
     // Poll all devices and collect progress
@@ -70,8 +71,11 @@ private:
     // Poll a single device's senders
     DeviceProgress poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device);
 
-    // Check for hung devices and display warnings
-    void check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+    // Check for hung devices and display warnings. Returns true if all remaining devices are hung.
+    bool check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+
+    // Generate a detailed report of all device states at abort time
+    void generate_hung_report(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
 
     // Display progress (single line summary)
     void display_progress(

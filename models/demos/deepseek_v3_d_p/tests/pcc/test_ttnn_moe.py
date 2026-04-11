@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -156,8 +156,8 @@ def test_ttnn_moe(
     # ========================================
     if run_pcc_check:
         profiler.start("weights_creation")
-        all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=42)
-        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
+        all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
+        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
         profiler.end("weights_creation")
     else:
         all_routed_weights = None

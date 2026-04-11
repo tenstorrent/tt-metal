@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -91,7 +91,6 @@ int main(int argc, char** argv) {
         progress_config.enabled = true;
         progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
         progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
-
         test_context.enable_progress_monitoring(progress_config);
     }
 
@@ -267,6 +266,17 @@ int main(int argc, char** argv) {
 
                 log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs_with_progress();
+
+                if (test_context.did_last_test_hang()) {
+                    log_error(
+                        tt::LogTest,
+                        "Test {} HUNG - aborting test suite. System may be in a bad state.",
+                        built_test.parametrized_name);
+                    test_context.record_hung_test(built_test.parametrized_name);
+                    test_context.reset_devices();
+                    break;
+                }
+
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
@@ -297,6 +307,12 @@ int main(int argc, char** argv) {
                 fixture->barrier();
                 test_context.reset_devices();
             }
+            if (test_context.did_last_test_hang()) {
+                break;
+            }
+        }
+        if (test_context.did_last_test_hang()) {
+            break;
         }
     }
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,6 +30,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
     SliceConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import K_CHUNK_SIZE, Q_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
@@ -48,6 +49,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -176,25 +178,6 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
 
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
-
-
-def _launch_merged_descriptors(op_descriptors):
-    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
-    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
-    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
-    if not op_descriptors:
-        raise ValueError("op_descriptors cannot be empty")
-
-    merged_descriptor = op_descriptors[0].descriptor
-    if len(op_descriptors) > 1:
-        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
-
-    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
-        tensor for op in op_descriptors for tensor in op.output_tensors
-    ]
-    ttnn.generic_op(io_tensors, merged_descriptor)
-
-    return [op.output_tensors for op in op_descriptors]
 
 
 class MLA1D(AbstractModule):
@@ -506,8 +489,8 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
-        q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        q_chunk_size = Q_CHUNK_SIZE
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -981,7 +964,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -2056,12 +2039,7 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
-        # avoid the fusion cache/rebind path here until
-        # Parallel(...).build().launch() is fixed for this decode flow.
-        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
-        tt_q = results[0][0]
-        tt_kv_nope = results[1][0]
+        tt_q, tt_kv_nope = Parallel(q_norm_desc, kv_norm_desc).run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE

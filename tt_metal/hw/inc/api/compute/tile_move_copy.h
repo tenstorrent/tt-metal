@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -39,7 +40,8 @@ ALWI void copy_tile_to_dst_init_short(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 #else
-    // TODO: Once runtime asserts are added for Quasar, assert that transpose and transpose_within_16x16_face are unused
+    LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
+    LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
     UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
 #endif

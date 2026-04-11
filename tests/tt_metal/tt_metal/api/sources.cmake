@@ -23,6 +23,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_program_spec.cpp
+    metal2_host_api/test_program_run_params.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp
@@ -33,6 +35,7 @@ set(UNIT_TESTS_API_SOURCES
     test_compile_time_args.cpp
     test_compile_defines.cpp
     test_direct.cpp
+    test_dram_kernels.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp

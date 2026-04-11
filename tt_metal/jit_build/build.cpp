@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -209,6 +209,10 @@ void JitBuildEnv::init(
         if (rtoptions.get_use_device_print()) {
             this->defines_ += "-DUSE_DEVICE_PRINT ";
         }
+    }
+
+    if (rtoptions.get_checkpoint_enabled()) {
+        this->defines_ += "-DDEBUG_CHECKPOINT_ENABLED ";
     }
 
     if (rtoptions.get_record_noc_transfers()) {
@@ -806,6 +810,9 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     JitBuildCache::inst().build_once(hash, build_fn);
 }
 
-void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
+void jit_build_cache_clear() {
+    JitBuildCache::inst().clear();
+    jit_build::clear_file_hash_cache();
+}
 
 }  // namespace tt::tt_metal

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -6,7 +6,13 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
 from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock
 from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
-from models.demos.wormhole.bge_m3.tt.weight_adapter import LayerNormWeights, build_embedding_weights
+from models.demos.wormhole.bge_m3.tt.tiny_model import ColBERTLinear, SparseLinear, TinyLinearConfig
+from models.demos.wormhole.bge_m3.tt.weight_adapter import (
+    LayerNormWeights,
+    build_colbert_linear_weights,
+    build_embedding_weights,
+    build_sparse_linear_weights,
+)
 
 
 class BgeM3Model(LightweightModule):
@@ -52,6 +58,30 @@ class BgeM3Model(LightweightModule):
             for layer_num in range(args.n_layers)
         ]
 
+        self.colbert_linear = None
+        if "colbert_linear.weight" in state_dict:
+            colbert_linear_weights = build_colbert_linear_weights(state_dict, dtype)
+            self.colbert_linear = ColBERTLinear.from_config(
+                TinyLinearConfig(
+                    weight=colbert_linear_weights.weight,
+                    bias=colbert_linear_weights.bias,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                )
+            )
+
+        self.sparse_linear = None
+        if "sparse_linear.weight" in state_dict:
+            sparse_linear_weights = build_sparse_linear_weights(state_dict, dtype)
+            self.sparse_linear = SparseLinear.from_config(
+                TinyLinearConfig(
+                    weight=sparse_linear_weights.weight,
+                    bias=sparse_linear_weights.bias,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                )
+            )
+
     def create_position_ids_from_input_ids(
         self,
         input_ids: ttnn.Tensor,
@@ -91,18 +121,18 @@ class BgeM3Model(LightweightModule):
         """
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]
+        pad_mask = None
+        additive_mask = None
 
         if attention_mask is None:
             pad_mask = ttnn.eq(input_ids, self.pad_token_id)
             if not self._has_any_masked_positions(pad_mask):
                 return None
-            additive_mask = self._build_additive_attention_mask(pad_mask)
         else:
             rank = len(attention_mask.shape)
             if rank == 2:
                 # HF convention: 1=keep, 0=pad.
                 pad_mask = ttnn.eq(attention_mask, 0)
-                additive_mask = self._build_additive_attention_mask(pad_mask)
             elif rank == 4:
                 if attention_mask.shape[1] != 1 or attention_mask.shape[2] != 1 or attention_mask.shape[3] != seq_len:
                     raise ValueError(
@@ -112,8 +142,16 @@ class BgeM3Model(LightweightModule):
             else:
                 raise ValueError(f"attention_mask rank must be 2 or 4, got shape={attention_mask.shape}")
 
-        if additive_mask.layout != ttnn.TILE_LAYOUT:
-            additive_mask = ttnn.to_layout(additive_mask, ttnn.TILE_LAYOUT)
+        if pad_mask is not None:
+            if pad_mask.layout != ttnn.TILE_LAYOUT:
+                pad_mask = ttnn.to_layout(pad_mask, ttnn.TILE_LAYOUT)
+            additive_mask = self._build_additive_attention_mask(pad_mask)
+        elif additive_mask is not None:
+            if additive_mask.layout != ttnn.TILE_LAYOUT:
+                additive_mask = ttnn.to_layout(additive_mask, ttnn.TILE_LAYOUT)
+        else:
+            return None
+
         if additive_mask.dtype != self._MASK_DTYPE:
             additive_mask = ttnn.typecast(additive_mask, self._MASK_DTYPE)
 
