@@ -428,7 +428,7 @@
 
 - name: Gemma4 A4B unit tests (single card)
   cmd: |
-    export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
     pytest models/demos/gemma4/tests/unit -k "1x1" --timeout 300
   model: gemma4-a4b
   skus:
@@ -440,7 +440,7 @@
 
 - name: Gemma4 A4B unit tests (T3K)
   cmd: |
-    export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
     pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
   model: gemma4-a4b-t3k
   skus:
@@ -452,7 +452,7 @@
 
 - name: Gemma4 31B unit tests (T3K)
   cmd: |
-    export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-31B-it
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
     pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
   model: gemma4-31b-t3k
   skus:

@@ -18,7 +18,7 @@ import ttnn
 from ..config import MeshConfig, ModeConfig
 from ..tt.model_config import Gemma4ModelArgs
 
-_DEFAULT_MODEL_PATH = "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it"
+_DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
 
 
 def _get_model_path():

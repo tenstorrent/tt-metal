@@ -40,7 +40,7 @@ def create_tt_model(
     model_path = (
         model_path
         or os.getenv("HF_MODEL")
-        or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+        or os.getenv("GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it")
     )
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)

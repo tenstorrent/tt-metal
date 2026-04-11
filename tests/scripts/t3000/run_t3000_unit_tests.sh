@@ -223,12 +223,12 @@ run_t3000_gemma3-small_tests() {
 }
 
 run_t3000_gemma4_a4b_tests() {
-  export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it
+  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
   pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
 }
 
 run_t3000_gemma4_31b_tests() {
-  export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-31B-it
+  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
   pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
 }
 

@@ -287,7 +287,9 @@ def test_full_model(mesh_device):
 
     from models.demos.gemma4.tt.common import create_tt_model
 
-    model_path = os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+    model_path = os.getenv("HF_MODEL") or os.getenv(
+        "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+    )
 
     # Skip if model is too large for this mesh — estimate DRAM from config
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1

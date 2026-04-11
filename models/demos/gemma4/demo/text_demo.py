@@ -511,7 +511,9 @@ def run_generation(
 
 @pytest.fixture
 def model_path():
-    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+    return os.getenv("HF_MODEL") or os.getenv(
+        "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+    )
 
 
 def test_demo_single_layer(device, model_path):
