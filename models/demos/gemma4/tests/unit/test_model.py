@@ -268,16 +268,17 @@ def test_single_layer_model(mesh_device, num_layers):
 
 
 # ── Full Model PCC Test ─────────────────────────────────────────────────
-# Full model with real weights — only runs on multi-device (full model doesn't fit on 1 card)
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 2), (1, 8)])
+@parametrize_mesh_with_fabric()
 def test_full_model(mesh_device):
-    """
-    Test full model (all layers, real weights) against HuggingFace reference.
+    """Test full model (all layers, real weights) against HuggingFace reference.
 
-    Loads the real checkpoint, runs a short prefill on both HF and TT,
-    and compares logits PCC.
+    Runs on any mesh where the model fits in DRAM. Smaller models (E2B, E4B)
+    fit on single device; larger models (A4B, 31B) require TP>=2.
+
+        pytest -k "1x1"   # E2B/E4B on single card
+        pytest -k "1x8"   # all models on T3K
     """
     import os
 
@@ -287,6 +288,16 @@ def test_full_model(mesh_device):
     from models.demos.gemma4.tt.common import create_tt_model
 
     model_path = os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+
+    # Skip if model is too large for this mesh — estimate DRAM from config
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    hf_config_check = TestFactory.create_hf_config()
+    is_moe = getattr(hf_config_check, "enable_moe_block", False)
+    # MoE experts are replicated: ~764 MB/layer at bf8. Dense MLP: ~3*H*I/TP*2 bytes.
+    if is_moe and tp < 8:
+        pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
+    if hf_config_check.hidden_size > 4096 and tp < 2:
+        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
 
     # ── HF reference ─────────────────────────────────────────────────
     logger.info(f"Loading HF reference model from {model_path}...")
