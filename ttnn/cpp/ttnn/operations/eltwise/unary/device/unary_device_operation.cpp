@@ -89,8 +89,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
-    // Allow sharded output from non-sharded input when shard_spec will be auto-created
-    bool auto_shard = out_memory_config.is_sharded() && !out_memory_config.shard_spec().has_value();
+    // Allow sharded output from non-sharded input when shard_spec will be auto-created.
+    // Only treat as auto-shard when input is NOT already sharded; if input is sharded,
+    // normal layout-compatibility checks must still be enforced.
+    bool auto_shard =
+        !input_tensor.is_sharded() && out_memory_config.is_sharded() && !out_memory_config.shard_spec().has_value();
 
     if (!auto_shard) {
         TT_FATAL(
@@ -138,11 +141,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
     // Automatically compute shard_spec if output is sharded but missing shard_spec
     auto output_memory_config = compute_auto_shard_spec(tensor_args.input, args.output_memory_config);
 
-    auto output_layout = tensor_args.input.layout();
-    if (output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.layout();
-    }
-
+    const auto output_layout = tensor_args.input.layout();
     const auto output_shape = tensor_args.input.logical_shape();
     return TensorSpec(
         output_shape,

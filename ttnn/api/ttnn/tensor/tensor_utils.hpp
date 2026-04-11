@@ -100,10 +100,15 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
  * - L1 alignment constraints
  * - Device core grid limits
  * - Even shard preference (avoids uneven shards for better perf)
+ * - L1 memory capacity (fatals if computed shard exceeds per-core L1 size)
  *
- * @param input_tensor  The input tensor (must be on device)
+ * @param input_tensor  The input tensor (must be on device with non-null device pointer;
+ *                       fatals with a descriptive message if either condition is violated)
  * @param output_memory_config  The desired output memory config (possibly missing shard_spec)
  * @return MemoryConfig with shard_spec filled in if needed, otherwise the original config
+ *
+ * @note BLOCK_SHARDED always uses COL_MAJOR orientation, mapping height shards to grid.x
+ *       and width shards to grid.y.
  *
  * Example usage:
  * @code

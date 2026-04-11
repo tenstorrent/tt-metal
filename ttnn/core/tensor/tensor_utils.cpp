@@ -6,6 +6,8 @@
 
 #include <tt_stl/overloaded.hpp>
 
+#include <limits>
+
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -89,14 +91,23 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
         return output_memory_config;
     }
 
-    // If input tensor has a shard_spec, reuse it for the output
+    // If input tensor has a shard_spec AND the output uses the same sharding scheme, reuse it.
+    // If the sharding layouts differ (e.g., input HEIGHT_SHARDED, output WIDTH_SHARDED),
+    // we must compute a new spec for the requested scheme rather than blindly reusing.
     if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()) {
-        return output_memory_config.with_shard_spec(input_tensor.shard_spec().value());
+        if (input_tensor.memory_config().memory_layout() == output_memory_config.memory_layout()) {
+            return output_memory_config.with_shard_spec(input_tensor.shard_spec().value());
+        }
+        // Fall through to compute a new shard spec for the different output layout
     }
 
     TT_FATAL(
-        input_tensor.storage_type() == StorageType::DEVICE && input_tensor.device() != nullptr,
-        "Input tensor must be on device for automatic shard spec computation");
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Input tensor must be on device for automatic shard spec computation. Got storage type: {}",
+        static_cast<int>(input_tensor.storage_type()));
+    TT_FATAL(
+        input_tensor.device() != nullptr,
+        "Input tensor device pointer is null. Cannot compute automatic shard spec without a valid device.");
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto* device = input_tensor.device();
@@ -122,9 +133,21 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
     uint32_t min_width_for_l1 = tt::div_up(l1_alignment, datum_size_bytes);
     uint32_t l1_aligned_tile_w = tt::round_up(min_width_for_l1, TILE_W);
 
-    // Compute 2D tensor dimensions: height = product of all dims except last, width = last dim
-    uint32_t total_height = input_tensor.physical_volume() / input_shape[-1];
-    uint32_t total_width = input_shape[-1];
+    // Compute 2D tensor dimensions using uint64_t to avoid overflow for large tensors.
+    // physical_volume() returns uint64_t, and input_shape[-1] may also be large.
+    uint64_t volume = input_tensor.physical_volume();
+    uint64_t width_64 = static_cast<uint64_t>(input_shape[-1]);
+    TT_FATAL(width_64 > 0, "Tensor width (last dimension) must be > 0");
+    uint64_t height_64 = volume / width_64;
+
+    TT_FATAL(
+        height_64 <= std::numeric_limits<uint32_t>::max() && width_64 <= std::numeric_limits<uint32_t>::max(),
+        "Tensor dimensions exceed uint32_t range: height={}, width={}",
+        height_64,
+        width_64);
+
+    uint32_t total_height = static_cast<uint32_t>(height_64);
+    uint32_t total_width = static_cast<uint32_t>(width_64);
 
     std::array<uint32_t, 2> shard_shape = {0, 0};
     uint32_t num_cores = 0;
@@ -177,6 +200,19 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
                 total_height,
                 TILE_H);
 
+            // Validate that total_width satisfies L1 alignment — sharded kernels enforce
+            // (shard_width * datum_size) % l1_alignment == 0.  Since HEIGHT_SHARDED uses
+            // total_width as the shard width, it must be L1-aligned.
+            TT_FATAL(
+                (total_width * datum_size_bytes) % l1_alignment == 0,
+                "HEIGHT_SHARDED: total_width ({}) * datum_size ({}) = {} bytes is not aligned to L1 alignment ({} "
+                "bytes). Consider padding the width to a multiple of {} elements.",
+                total_width,
+                datum_size_bytes,
+                total_width * datum_size_bytes,
+                l1_alignment,
+                l1_aligned_tile_w);
+
             uint32_t max_possible_cores = std::min(max_grid_cores, total_height / TILE_H);
             max_possible_cores = std::max(1u, max_possible_cores);
 
@@ -209,7 +245,7 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
         }
         case TensorMemoryLayout::BLOCK_SHARDED: {
             // For block sharding with COL_MAJOR orientation:
-            // num_shards_height <= grid.x, num_shards_width <= grid.y
+            // height shards map to grid.x (columns), width shards map to grid.y (rows)
             uint32_t best_total_cores = 0;
             uint32_t best_shard_h = 0;
             uint32_t best_shard_w = 0;
@@ -278,6 +314,21 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
                 "Unsupported memory layout for automatic shard_spec creation: {}",
                 static_cast<int>(memory_layout));
     }
+
+    // Validate shard size against L1 capacity.
+    // Each shard must fit within a single core's L1 memory. We use a conservative estimate
+    // (shard elements * datum size) -- actual overhead from headers/alignment is small.
+    uint64_t shard_size_bytes =
+        static_cast<uint64_t>(shard_shape[0]) * static_cast<uint64_t>(shard_shape[1]) * datum_size_bytes;
+    uint64_t l1_capacity = device->l1_size_per_core();
+    TT_FATAL(
+        shard_size_bytes <= l1_capacity,
+        "Computed shard {}x{} ({} bytes) exceeds L1 capacity ({} bytes per core). "
+        "Consider using a smaller tensor or a different sharding strategy.",
+        shard_shape[0],
+        shard_shape[1],
+        shard_size_bytes,
+        l1_capacity);
 
     // For WIDTH_SHARDED and HEIGHT_SHARDED: create core range set
     bool row_wise = (memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
