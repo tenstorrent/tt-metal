@@ -34,10 +34,14 @@ def collect_test_results(results_dir: str) -> list[dict]:
     oprun_files = sorted(results_path.glob("oprun_*.json"))
     if oprun_files:
         json_files = oprun_files
-        print(f"Found {len(oprun_files)} run-level files (oprun_*.json); using only these for ingestion")
+        print(
+            f"Found {len(oprun_files)} run-level files (oprun_*.json); using only these for ingestion"
+        )
     else:
         # Fallback for older/non-consolidated layouts: ingest non-oprun JSON result files.
-        json_files = sorted(p for p in results_path.glob("*.json") if not p.name.startswith("oprun_"))
+        json_files = sorted(
+            p for p in results_path.glob("*.json") if not p.name.startswith("oprun_")
+        )
         print(f"No run-level files found; using {len(json_files)} non-oprun JSON files")
 
     tests = []
@@ -71,6 +75,24 @@ def _is_failure(status: str) -> bool:
 def _normalize_run_type(run_type: str) -> str:
     """Normalize run type to underscore format (e.g. 'lead models' -> 'lead_models')."""
     return run_type.strip().replace(" ", "_")
+
+
+def _short_hardware_label(card_type: str) -> str:
+    """Extract a concise hardware label from card_type strings like 'wormhole_b0 (N300)'."""
+    if not card_type:
+        return "—"
+    ct = card_type.lower()
+    if "t3000" in ct or "t3k" in ct or "4c" in ct:
+        return "T3K"
+    if "n300" in ct or "2 device" in ct:
+        return "N300"
+    if "n150" in ct or "1 device" in ct:
+        return "N150"
+    if "blackhole" in ct or "p150b" in ct:
+        return "BH"
+    if "galaxy" in ct:
+        return "Galaxy"
+    return card_type
 
 
 def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) -> None:
@@ -132,24 +154,29 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
             by_module[module].append(t)
 
         # Sort modules by failure count descending
-        sorted_modules = sorted(by_module.items(), key=lambda x: len(x[1]), reverse=True)
+        sorted_modules = sorted(
+            by_module.items(), key=lambda x: len(x[1]), reverse=True
+        )
 
         lines.append("<details>")
-        lines.append(f"<summary>❌ {failed} Failed Tests ({len(sorted_modules)} modules)</summary>")
+        lines.append(
+            f"<summary>❌ {failed} Failed Tests ({len(sorted_modules)} modules)</summary>"
+        )
         lines.append("")
 
         for module, module_tests in sorted_modules:
             lines.append(f"**{module}** ({len(module_tests)} failures)")
             lines.append("")
-            lines.append("| Test Name | Config Hash | Status |")
-            lines.append("|-----------|-------------|--------|")
+            lines.append("| Test Name | Config Hash | Status | Hardware |")
+            lines.append("|-----------|-------------|--------|----------|")
             for t in module_tests[:4]:
                 name = t.get("full_test_name", "unknown")
                 config_hash = t.get("input_hash", "—")
                 status = t.get("status", "fail")
-                lines.append(f"| `{name}` | `{config_hash}` | {status} |")
+                hardware = _short_hardware_label(t.get("card_type", ""))
+                lines.append(f"| `{name}` | `{config_hash}` | {status} | {hardware} |")
             if len(module_tests) > 4:
-                lines.append(f"| ... and {len(module_tests) - 4} more | | |")
+                lines.append(f"| ... and {len(module_tests) - 4} more | | | |")
             lines.append("")
 
         lines.append("</details>")
@@ -161,7 +188,9 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
     try:
         with open(summary_path, "a") as f:
             f.write("\n".join(lines) + "\n")
-        print(f"Summary written to GITHUB_STEP_SUMMARY ({total} tests, {failed} failed)")
+        print(
+            f"Summary written to GITHUB_STEP_SUMMARY ({total} tests, {failed} failed)"
+        )
     except OSError as e:
         print(f"WARNING: Could not write job summary: {e}")
 
@@ -326,7 +355,9 @@ def push_results(
                 print(f"Inserted {inserted}/{len(tests)} test records...")
 
         conn.commit()
-        print(f"Successfully pushed run_id={run_id} with {len(tests)} tests to database")
+        print(
+            f"Successfully pushed run_id={run_id} with {len(tests)} tests to database"
+        )
 
         # Print summary
         print(f"\nSummary:")
@@ -337,7 +368,9 @@ def push_results(
         print(f"  Total Tests: {len(tests)}")
         print(f"  Pass Count: {pass_count}")
         print(f"  Fail Count: {fail_count}")
-        print(f"  Pass Rate: {pass_count * 100.0 / len(tests):.2f}%" if tests else "N/A")
+        print(
+            f"  Pass Rate: {pass_count * 100.0 / len(tests):.2f}%" if tests else "N/A"
+        )
 
         return run_id
 
@@ -354,7 +387,10 @@ def main():
     # --summary-only mode: write GitHub Step Summary without DB push
     if len(sys.argv) >= 2 and sys.argv[1] == "--summary-only":
         if len(sys.argv) < 3:
-            print("Usage: push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+            print(
+                "Usage: push_sweep_results.py --summary-only <results_dir> [run_type]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         results_dir = sys.argv[2]
         run_type = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -378,8 +414,13 @@ def main():
         return
 
     if len(sys.argv) < 3:
-        print("Usage: push_sweep_results.py <results_dir> <run_contents>", file=sys.stderr)
-        print("       push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+        print(
+            "Usage: push_sweep_results.py <results_dir> <run_contents>", file=sys.stderr
+        )
+        print(
+            "       push_sweep_results.py --summary-only <results_dir> [run_type]",
+            file=sys.stderr,
+        )
         print("")
         print("  results_dir: Directory containing JSON result files")
         print("  run_contents: Type of run (e.g., 'lead models')")
@@ -404,7 +445,9 @@ def main():
         sys.exit(1)
 
     card_type = os.environ.get("ARCH_NAME", "unknown")
-    git_sha = os.environ.get("GITHUB_SHA", "")[:8] if os.environ.get("GITHUB_SHA") else ""
+    git_sha = (
+        os.environ.get("GITHUB_SHA", "")[:8] if os.environ.get("GITHUB_SHA") else ""
+    )
     git_branch = os.environ.get("GITHUB_REF_NAME", "")
 
     print(f"Pushing results to database...")
