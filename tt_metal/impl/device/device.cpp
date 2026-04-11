@@ -161,9 +161,6 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         this->ethernet_cores_.insert({core.x, core.y});
     }
 
-    // Set device pointer for SHM tracking
-    config.device = this;
-
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     return std::make_unique<L1BankingAllocator>(config);
@@ -469,8 +466,7 @@ bool Device::initialize(
     }
 
     // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
-    const char* shm_disabled = std::getenv("TT_METAL_SHM_TRACKING_DISABLED");
-    if (!shm_disabled || std::string(shm_disabled) != "1") {
+    if (!MetalContext::instance().rtoptions().get_shm_tracking_disabled()) {
         // Compute composite asic_id for globally unique chip identification
         // asic_id = (board_id << 8) | asic_location_composite
         uint64_t asic_id = 0;

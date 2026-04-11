@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 #include <sys/mman.h>
@@ -90,16 +91,13 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     region_->device_id = device_id_;
 
     // Check if tracking should be disabled (enabled by default)
-    const char* tracking_disabled = std::getenv("TT_METAL_SHM_TRACKING_DISABLED");
-    if (tracking_disabled && std::string(tracking_disabled) == "1") {
+    const auto& rtopts = MetalContext::instance().rtoptions();
+    if (rtopts.get_shm_tracking_disabled()) {
         per_pid_tracking_enabled_ = false;
     }
 
     // Verbose logging for initialization
-    static bool verbose_enabled = [] {
-        const char* env = std::getenv("TT_METAL_SHM_VERBOSE");
-        return env && std::string(env) == "1";
-    }();
+    bool verbose_enabled = rtopts.get_shm_verbose();
 
     if (verbose_enabled) {
         log_info(
@@ -275,19 +273,7 @@ void SharedMemoryStatsProvider::initialize_region() {
 }
 
 void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    // Optional verbose logging
-    static bool verbose_enabled = [] {
-        const char* env = std::getenv("TT_METAL_SHM_VERBOSE");
-        return env && std::string(env) == "1";
-    }();
-
-    // Optional timing instrumentation
-    static bool timing_enabled = [] {
-        const char* env = std::getenv("TT_METAL_SHM_TIMING_ENABLED");
-        return env && std::string(env) == "1";
-    }();
-    auto start_time =
-        timing_enabled ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
 
     if (!region_) {
         if (verbose_enabled) {
@@ -364,37 +350,10 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
             pid_entry->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
         }
     }
-
-    // Log timing if enabled
-    if (timing_enabled) {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
-        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
-        const char* type_name = (static_cast<int>(type) < 5) ? type_names[static_cast<int>(type)] : "UNKNOWN";
-        log_info(
-            tt::LogMetal,
-            "SHM record_allocation: type={}, size={} B, chip={}, duration={} ns",
-            type_name,
-            size,
-            chip_id,
-            duration_ns);
-    }
 }
 
 void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    // Optional verbose logging
-    static bool verbose_enabled = [] {
-        const char* env = std::getenv("TT_METAL_SHM_VERBOSE");
-        return env && std::string(env) == "1";
-    }();
-
-    // Optional timing instrumentation
-    static bool timing_enabled = [] {
-        const char* env = std::getenv("TT_METAL_SHM_TIMING_ENABLED");
-        return env && std::string(env) == "1";
-    }();
-    auto start_time =
-        timing_enabled ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
 
     if (!region_) {
         if (verbose_enabled) {
@@ -488,21 +447,6 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
             }
             pid_entry->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
         }
-    }
-
-    // Log timing if enabled
-    if (timing_enabled) {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
-        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
-        const char* type_name = (static_cast<int>(type) < 5) ? type_names[static_cast<int>(type)] : "UNKNOWN";
-        log_info(
-            tt::LogMetal,
-            "SHM record_deallocation: type={}, size={} B, chip={}, duration={} ns",
-            type_name,
-            size,
-            chip_id,
-            duration_ns);
     }
 }
 

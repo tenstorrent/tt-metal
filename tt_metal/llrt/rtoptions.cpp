@@ -217,6 +217,12 @@ enum class EnvVarID {
     // ALLOCATOR CONFIGURATION
     // ========================================
     TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+
+    // ========================================
+    // SHM TRACKING
+    // ========================================
+    TT_METAL_SHM_TRACKING_DISABLED,  // Disable shared memory tracking for tt-smi
+    TT_METAL_SHM_VERBOSE,            // Enable verbose logging for SHM tracking
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1436,6 +1442,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (lockstep-only allocation)
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
+
+        // TT_METAL_SHM_TRACKING_DISABLED
+        // Disable shared memory tracking for tt-smi.
+        // Default: 0 (SHM tracking enabled)
+        // Usage: export TT_METAL_SHM_TRACKING_DISABLED=1
+        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: this->shm_tracking_disabled = is_env_enabled(value); break;
+
+        // TT_METAL_SHM_VERBOSE
+        // Enable verbose logging for SHM tracking.
+        // Default: 0 (disabled)
+        // Usage: export TT_METAL_SHM_VERBOSE=1
+        case EnvVarID::TT_METAL_SHM_VERBOSE: this->shm_verbose = is_env_enabled(value); break;
     }
 }
 

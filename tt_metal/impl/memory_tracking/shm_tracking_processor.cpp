@@ -4,6 +4,7 @@
 
 #include "impl/memory_tracking/shm_tracking_processor.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/device/device_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -25,9 +26,7 @@ static ShmBufferType to_shm_buffer_type(BufferType type) {
 }
 
 ShmTrackingProcessor::ShmTrackingProcessor() {
-    // Check for verbose logging at construction time
-    const char* env = std::getenv("TT_METAL_SHM_VERBOSE");
-    verbose_enabled_ = (env && std::string(env) == "1");
+    verbose_enabled_ = MetalContext::instance().rtoptions().get_shm_verbose();
 }
 
 void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {

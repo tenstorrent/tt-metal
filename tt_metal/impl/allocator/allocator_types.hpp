@@ -48,9 +48,6 @@ struct AllocatorConfig {
     bool disable_interleaved = false;
     AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP;
 
-    // Device pointer for SHM tracking (optional, can be null)
-    const class Device* device = nullptr;
-
     void reset();
     ~AllocatorConfig() { reset(); }
 };
