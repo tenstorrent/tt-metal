@@ -64,8 +64,8 @@ def load_checkpoint(model, checkpoint_path, dp_mapper=None):
             print(f"  - {n}")
 
 
-def setup_inference(grpo_config, transformer_config, device_config) -> InferenceCtx:
-    tokenizer = AutoTokenizer.from_pretrained(grpo_config.model_source)
+def setup_inference(grpo_config, transformer_config, device_config, model_source: str) -> InferenceCtx:
+    tokenizer = AutoTokenizer.from_pretrained(model_source)
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
@@ -114,18 +114,16 @@ def setup_inference(grpo_config, transformer_config, device_config) -> Inference
         dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
         total_devices = device_config.total_devices()
 
-    local_safetensors = os.path.isdir(grpo_config.model_source) and any(
-        f == "model.safetensors" for f in os.listdir(grpo_config.model_source)
-    )
+    local_safetensors = os.path.isdir(model_source) and any(f == "model.safetensors" for f in os.listdir(model_source))
     if local_safetensors:
-        logging.info("Loading model from local safetensors: %s", grpo_config.model_source)
-        logging.info(f"load_checkpoint({grpo_config.model_source}/model.safetensors)")
-        load_checkpoint(tt_model, grpo_config.model_source, dp_mapper=dp_mapper)
+        logging.info("Loading model from local safetensors: %s", model_source)
+        logging.info(f"load_checkpoint({model_source}/model.safetensors)")
+        load_checkpoint(tt_model, model_source, dp_mapper=dp_mapper)
     else:
-        logging.info("Downloading model from HuggingFace: %s", grpo_config.model_source)
-        logging.info(f"snapshot_download({grpo_config.model_source})")
+        logging.info("Downloading model from HuggingFace: %s", model_source)
+        logging.info(f"snapshot_download({model_source})")
         model_repo_path = snapshot_download(
-            repo_id=grpo_config.model_source,
+            repo_id=model_source,
             allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
         )
         load_from_safetensors(tt_model, model_repo_path, llama_cfg)
@@ -135,9 +133,9 @@ def setup_inference(grpo_config, transformer_config, device_config) -> Inference
         tokenizer=tokenizer,
         pad_token=pad_token,
         temperature=grpo_config.temperature,
-        max_tokens_to_complete=grpo_config.max_tokens_to_complete,
+        max_tokens_to_complete=grpo_config.max_completion_length,
         transformer_config=transformer_config,
-        group_size=grpo_config.group_size,
+        group_size=grpo_config.num_generations,
         tile_size=32,
         sample_seed=42,
         dp_mapper=dp_mapper,

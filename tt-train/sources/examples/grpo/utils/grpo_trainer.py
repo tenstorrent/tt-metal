@@ -16,10 +16,10 @@ from ttml.common.utils import create_optimizer, no_grad
 
 @dataclass
 class GrpoConfig:
-    clip_eps: float
+    epsilon: float
     batch_size: int
     micro_batch_size: int
-    num_mini_epochs: int
+    num_iterations: int
     gradient_accumulation_steps: int
     logging_steps: int
     output_dir: str
@@ -27,10 +27,9 @@ class GrpoConfig:
     checkpoint_interval: int
     prompts_to_train: int
     temperature: float
-    max_tokens_to_complete: int
-    group_size: int
+    max_completion_length: int
+    num_generations: int
     warmup_steps: int
-    model_source: str  # hugging face model id or a directory path. In case its a directory, '/model.safetensors' is appended
 
 
 def dispatch_reward(reward_func, completions, prompts, batch_columns):
@@ -91,6 +90,7 @@ def iter_micro_batch(prompts, completions, micro_batch_size=16):
 class GrpoTrainer:
     def __init__(
         self,
+        model_source: str,  # hugging face model id or a directory path. The directory must have model.safetensors and config.json inside
         dataset,  # from datasets library
         config: GrpoConfig,
         reward_func: Callable,
@@ -98,6 +98,7 @@ class GrpoTrainer:
         optimizer_config: dict,
         device_config: dict,
     ):
+        self.model_source = model_source
         self.dataset = dataset
         self.config = config
         self.reward_func = reward_func
@@ -120,7 +121,7 @@ class GrpoTrainer:
             self.device_config.mesh_shape, self.device_config.device_ids
         )
 
-        inference_ctx = setup_inference(self.config, self.transformer_config, self.device_config)
+        inference_ctx = setup_inference(self.config, self.transformer_config, self.device_config, self.model_source)
 
         optimizer = create_optimizer(inference_ctx.tt_model, self.optimizer_config_dict)
         base_lr = optimizer.get_lr()
@@ -136,7 +137,7 @@ class GrpoTrainer:
         accum_rewards = []
         accum_completion_lens = []
 
-        expected_steps = len(prompts) // grpo_cfg.batch_size * grpo_cfg.num_mini_epochs // grad_accum
+        expected_steps = len(prompts) // grpo_cfg.batch_size * grpo_cfg.num_iterations // grad_accum
         run.logger.info(f"optimizer.step() will be called {expected_steps} times during training")
 
         optimizer.zero_grad()
@@ -165,7 +166,7 @@ class GrpoTrainer:
                     mask.set_requires_grad(False)
                     probs_old_list.append((nlog_old, mask, Tp))
 
-            for mini_epoch in range(grpo_cfg.num_mini_epochs):
+            for mini_epoch in range(grpo_cfg.num_iterations):
                 inference_ctx.tt_model.train()
 
                 for i, (p, c) in enumerate(
@@ -193,7 +194,7 @@ class GrpoTrainer:
                         B,
                         Tp,
                         len(prompts_batch) * grad_accum,
-                        grpo_cfg.clip_eps,
+                        grpo_cfg.epsilon,
                         inference_ctx,
                     )
 
