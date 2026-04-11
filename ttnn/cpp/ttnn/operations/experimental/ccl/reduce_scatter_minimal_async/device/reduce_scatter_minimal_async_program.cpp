@@ -499,9 +499,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
-    const MathFidelity math_fidelity = compute_kernel_config.has_value()
+    const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
         ? ttnn::get_math_fidelity(compute_kernel_config)
-        : MathFidelity::HiFi4;
+        : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
@@ -1100,9 +1100,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
-    const MathFidelity math_fidelity = compute_kernel_config.has_value()
+    const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
         ? ttnn::get_math_fidelity(compute_kernel_config)
-        : MathFidelity::HiFi4;
+        : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
