@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import csv
+import os
+import time
+from datetime import datetime, timezone
+from typing import Sequence, Iterator
+
+from datasets import load_dataset
+from transformers import AutoTokenizer
+import ttml
+
+from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import get_tt_metal_runtime_root
+from utils.inference import InferenceCtx, setup_inference, generate_answers_multiple_prompts
+
+MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."
+BATCH_SIZE = 16
+MAX_COMPLETION_LENGTH = 256
+TEMPERATURE = 0.0
+NUM_GENERATIONS = 1
+PROMPTS_TO_VALIDATE = 20
+
+TRANSFORMER_CONFIG = {
+    "model_type": "llama",
+    "num_heads": 32,
+    "num_groups": 8,
+    "embedding_dim": 2048,
+    "intermediate_dim": 8192,
+    "dropout_prob": 0.0,
+    "num_blocks": 16,
+    "weight_tying": "enabled",
+    "vocab_size": 32000,
+    "max_sequence_length": 1024,
+    "runner_type": "memory_efficient",
+    "theta": 500000.0,
+    "rope_scaling": {
+        "scaling_factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_context_length": 8192,
+    },
+}
+
+DEVICE_CONFIG = {
+    "enable_ddp": True,
+    "mesh_shape": [1, 2],
+}
+
+
+def iter_generated_completions(
+    ctx: InferenceCtx,
+    prompts: Sequence[str],
+    batch_size: int = 32,
+) -> Iterator[tuple[int, str, str]]:
+    for start in range(0, len(prompts), batch_size):
+        end = min(start + batch_size, len(prompts))
+        prompt_batch = list(prompts[start:end])
+        batch_completions = generate_answers_multiple_prompts(ctx, prompt_batch)
+        if ctx.group_size != 1:
+            raise ValueError(f"Expected group_size=1, got {ctx.group_size}")
+        for offset, completion in enumerate(batch_completions):
+            i = start + offset
+            yield i, prompts[i], completion
+
+
+def compare_boolq_answers(completion, golden_answer) -> tuple[bool, str]:
+    clean = completion.strip().lower()
+    model_answer = clean.split()[0] if clean else "[EMPTY]"
+    correct = model_answer.startswith(golden_answer.lower())
+    return correct, model_answer
+
+
+if __name__ == "__main__":
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    def format_boolq(example):
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Question: {example['question']}? Context: {example['passage']}"},
+        ]
+        return {
+            "prompt": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
+            "answer": "yes" if example["answer"] else "no",
+        }
+
+    dataset = load_dataset("google/boolq", split="validation").map(format_boolq)
+    prompts = list(dataset["prompt"])
+    answers = list(dataset["answer"])
+
+    output_dir = os.path.join(
+        get_tt_metal_runtime_root(),
+        "generated/tt-train/grpo_model_accuracy_runs",
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+    )
+    os.makedirs(output_dir, exist_ok=True)
+
+    csv_path = os.path.join(output_dir, "accuracy_results.csv")
+    csv_file = open(csv_path, "w", newline="")
+    csv_writer = csv.DictWriter(
+        csv_file,
+        fieldnames=[
+            "question_idx",
+            "correct",
+            "golden_answer",
+            "model_answer",
+            "correct_so_far",
+            "total_so_far",
+            "running_accuracy",
+        ],
+    )
+    csv_writer.writeheader()
+
+    transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
+    device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
+
+    if device_config.total_devices() > 1:
+        ttml.core.distributed.enable_fabric(device_config.total_devices())
+    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
+
+    ctx = setup_inference(
+        TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, MODEL_ID
+    )
+
+    correct_answers = 0
+    wrong_answers = 0
+    total_chars = 0
+    start_time = time.perf_counter()
+
+    for i, prompt, completion in iter_generated_completions(ctx, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE):
+        correct, model_answer = compare_boolq_answers(completion, answers[i])
+        total_chars += len(completion)
+        if correct:
+            correct_answers += 1
+        else:
+            wrong_answers += 1
+
+        total = correct_answers + wrong_answers
+        accuracy = correct_answers / total
+        status = "CORRECT" if correct else "WRONG"
+        print(
+            f"Q{i}: {status} | model={model_answer}, golden={answers[i]} | Accuracy: {accuracy:.4f} ({correct_answers}/{total})"
+        )
+
+        csv_writer.writerow(
+            {
+                "question_idx": i,
+                "correct": correct,
+                "golden_answer": answers[i],
+                "model_answer": model_answer,
+                "correct_so_far": correct_answers,
+                "total_so_far": total,
+                "running_accuracy": f"{accuracy:.4f}",
+            }
+        )
+        csv_file.flush()
+
+    total_answered = correct_answers + wrong_answers
+    elapsed = time.perf_counter() - start_time
+    avg_chars = total_chars / total_answered if total_answered > 0 else 0
+    print(
+        f"Done: correct={correct_answers}, wrong={wrong_answers}, "
+        f"total={total_answered}, "
+        f"accuracy={correct_answers / total_answered:.4f}, "
+        f"avg_response_chars={avg_chars:.2f}, "
+        f"elapsed={elapsed:.1f}s"
+    )
+    csv_file.close()
