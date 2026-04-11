@@ -59,6 +59,11 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     CoreRangeSet in0_cores({CoreRange(in0_logical_start_coord, in0_logical_end_coord)});
     vector<CoreCoord> in0_cores_list = corerange_to_cores(in0_cores);
 
+    CoreCoord matmul_physical_start_coord = device->worker_core_from_logical_core(test_config.start_logical_core);
+    CoreCoord matmul_physical_end_coord = device->worker_core_from_logical_core(test_config.end_logical_core);
+
+    log_info(tt::LogTest, "in0_core_list: {}, {}", in0_cores_list[0].str(), in0_cores_list[1].str());
+
     // Logical core sets for in1. All cores in matmul_cores will read in1 from DRAM.
     // vector<CoreCoord> in1_cores_list = corerange_to_cores(matmul_cores);
 
@@ -85,18 +90,24 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     log_info(tt::LogTest, "Size of bfloat16: {} bytes", sizeof(bfloat16));
 
     // in0 Input
-    // vector<uint32_t> in0_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-    //     -100.0f,
-    //     100.0f,
-    //     in0_pages_bytes / sizeof(bfloat16),
-    //     chrono::system_clock::now().time_since_epoch().count());
+    vector<uint32_t> in0_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, in0_pages_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
-    vector<uint32_t> in0_input =
-        generate_packed_constant_vector<uint32_t, bfloat16>(1.0f, in0_pages_bytes / sizeof(bfloat16));
+    // Clear all matmul cores L1 with zeros before writing in0 input
+    vector<uint32_t> zeros(((in0_pages_bytes + in1_pages_bytes) << 1) / sizeof(uint32_t), 0);
+    for (const auto& core : matmul_cores_list) {
+        detail::WriteToDeviceL1(device, core, l1_base_address, zeros);
+    }
+
+    // vector<uint32_t> in0_input =
+    //     generate_packed_constant_vector<uint32_t, bfloat16>(1.0f, in0_pages_bytes / sizeof(bfloat16));
 
     // Write in0 input to L1 of the first column of cores
     log_info(tt::LogTest, "in0_input size (in uint32_t): {}", in0_input.size());
     vector<uint32_t> in0_per_core_pages;
+    unordered_map<uint32_t, vector<uint32_t>>
+        dim_r_to_in0_pages_map;  // mapping between dim_r index to the in0 pages needed for that dim_r index, used for
+                                 // verification later
     uint32_t pages_per_core = in0_input.size() / in0_cores_list.size();
     uint32_t pages_per_core_size_bytes = pages_per_core * sizeof(uint32_t);
     log_info(tt::LogTest, "Number of in0 cores: {}", in0_cores_list.size());
@@ -106,6 +117,8 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         for (uint32_t j = 0; j < pages_per_core; j++) {
             in0_per_core_pages.push_back(in0_input[i * pages_per_core + j]);
         }
+        dim_r_to_in0_pages_map[in0_cores_list[i].y] =
+            vector<uint32_t>(in0_per_core_pages.begin(), in0_per_core_pages.end());
         log_info(
             tt::LogTest,
             "Writing to L1 of core {} with {} bytes of data",
@@ -122,18 +135,16 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     }
 
     // in1 Input
-    // vector<uint32_t> in1_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-    //     -100.0f,
-    //     100.0f,
-    //     in1_pages_bytes / sizeof(bfloat16),
-    //     chrono::system_clock::now().time_since_epoch().count());
+    vector<uint32_t> in1_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, in1_pages_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
-    vector<uint32_t> in1_input =
-        generate_packed_constant_vector<uint32_t, bfloat16>(1.0f, in1_pages_bytes / sizeof(bfloat16));
+    // vector<uint32_t> in1_input =
+    //     generate_packed_constant_vector<uint32_t, bfloat16>(1.0f, in1_pages_bytes / sizeof(bfloat16));
 
     // DRAM Address
     DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
     uint32_t input_dram_address = dram_info.base_address;
+    log_info(tt::LogTest, "DRAM input address for bank {}: {:#x}", test_config.dram_bank_id, input_dram_address);
 
     // Write Input to DRAM
     detail::WriteToDeviceDRAMChannel(device, test_config.dram_bank_id, input_dram_address, in1_input);
@@ -166,10 +177,13 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
     // in0_mcast_output_addr is the memory address where each core will leave the in0 mcast output in L1
-    // uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + 0x10;
+
     // in1_output_addr is the memory address where each core will leave the in1 read output in L1. It is placed after
-    // in0 mcast output in L1.
-    uint32_t in1_output_addr = l1_base_address + ((pages_per_core_size_bytes + 0x10) << 1);
+    // in0 mcast output in L1. Must be aligned to NOC_DRAM_READ_ALIGNMENT_BYTES (64 on Blackhole) so the low bits match
+    // the DRAM source address.
+    uint32_t in1_output_addr_unaligned = l1_base_address + ((pages_per_core_size_bytes + 0x10) << 1);
+    uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
 
     log_info(tt::LogTest, "\n\n\nEach core will read {} bytes from DRAM", in1_per_core_read_size_bytes);
     log_info(
@@ -179,20 +193,50 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         in1_per_core_read_addr[1]);
     log_info(tt::LogTest, "Each core will write in1 read output to L1 address starting from: {:#x}", in1_output_addr);
 
+    // ---- in0 multicast semaphores ----
+    // sender_sem: lives on every core, but only the sender (first-column) core waits on it.
+    //   Receivers increment it via noc_semaphore_inc to signal they are ready.
+    //   Sender waits until value == (num_subblocks_c_dim - 1).
+    uint32_t sender_sem_id = CreateSemaphore(program, matmul_cores, 0);
+
+    // sender_valid_sem: lives on every core, initialised to 1.
+    //   The sender uses its local copy as the *source value* when it calls
+    //   noc_semaphore_set_multicast_loopback_src to set the receiver_sem on
+    //   all cores in the row to 1.
+    uint32_t sender_valid_sem_id = CreateSemaphore(program, matmul_cores, 1);
+
+    // receiver_sem: lives on every core, initialised to 0.
+    //   After the sender multicasts data, it also multicasts sender_valid_sem's
+    //   value (1) into receiver_sem on every core in the row.
+    //   Each receiver waits until receiver_sem == 1, then resets it to 0.
+    uint32_t receiver_sem_id = CreateSemaphore(program, matmul_cores, 0);
+
+    vector<uint32_t> risc0_compile_args = {
+        test_config.test_id,                      // 0  Test ID
+        (uint32_t)matmul_physical_start_coord.x,  // 1  Physical start x (== sender column x)
+        (uint32_t)matmul_physical_start_coord.y,  // 2  Physical start y
+        (uint32_t)matmul_physical_end_coord.x,    // 3  Physical end x
+        (uint32_t)matmul_physical_end_coord.y,    // 4  Physical end y
+        test_config.num_subblocks_c_dim,          // 5  Number of cores per row (C dim)
+        sender_sem_id,                            // 6  Sender semaphore ID
+        sender_valid_sem_id,                      // 7  Sender-valid semaphore ID (init 1)
+        receiver_sem_id,                          // 8  Receiver semaphore ID
+    };
+
     vector<uint32_t> risc1_compile_args = {
         test_config.test_id,      // Test ID
         test_config.dram_bank_id  // DRAM bank that all cores will read from
     };
 
     // Kernels
-    // auto risc0_kernel = CreateKernel(
-    //     program,
-    //     "tests/tt_metal/tt_metal/data_movement/1d_matmul/kernels/2cluster-1d_matmul.cpp",
-    //     matmul_cores,
-    //     DataMovementConfig{
-    //         .processor = DataMovementProcessor::RISCV_0,
-    //         .noc = NOC::RISCV_0_default,
-    //         .compile_args = risc0_compile_args});
+    auto risc0_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/data_movement/1d_matmul/kernels/in0_kernel.cpp",
+        matmul_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = risc0_compile_args});
 
     auto risc1_kernel = CreateKernel(
         program,
@@ -205,6 +249,11 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     // Assign Runtime Args
     for (int i = 0; i < matmul_cores_list.size(); i++) {
+        vector<uint32_t> risc0_core_runtime_args = {
+            l1_base_address,            // 0  Sender: source addr of in0 data in L1
+            pages_per_core_size_bytes,  // 1  Sender: number of bytes to multicast
+            in0_mcast_output_addr       // 2  All cores: L1 dest addr for multicast data
+        };
         vector<uint32_t> risc1_core_runtime_args = {
             in1_per_core_read_addr[(
                 matmul_cores_list[i].x %
@@ -212,6 +261,7 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
             in1_per_core_read_size_bytes,           // Each core reads the same amount of data
             in1_output_addr                         // Each core writes to the same address in L1
         };
+        tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, matmul_cores_list[i], risc0_core_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, matmul_cores_list[i], risc1_core_runtime_args);
     }
 
@@ -228,6 +278,27 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
+
+    // Verify in0 read output in L1 for each core
+    for (int i = 0; i < matmul_cores_list.size(); i++) {
+        vector<uint32_t> in0_read_output;
+        detail::ReadFromDeviceL1(
+            device, matmul_cores_list[i], in0_mcast_output_addr, pages_per_core_size_bytes, in0_read_output);
+        const vector<uint32_t>& expected_in0_read_output = dim_r_to_in0_pages_map[matmul_cores_list[i].y];
+        bool is_equal = (expected_in0_read_output == in0_read_output);
+        if (!is_equal) {
+            log_error(
+                tt::LogTest, "Core {}: in0 read output does not match golden output!", matmul_cores_list[i].str());
+            log_info(tt::LogTest, "Golden vector");
+            print_vector(unpack_vector<bfloat16, uint32_t>(in0_input));
+            log_info(tt::LogTest, "Output vector");
+            print_vector(unpack_vector<bfloat16, uint32_t>(in0_read_output));
+
+            return is_equal;
+        } else {
+            log_info(tt::LogTest, "Core {}: in0 read output matches golden output!", matmul_cores_list[i].str());
+        }
+    }
 
     // Verify in1 read output in L1 for each core
     vector<uint32_t> golden_in1_read_output;
