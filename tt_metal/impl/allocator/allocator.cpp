@@ -6,6 +6,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
@@ -124,7 +125,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
 
     // Per-core allocation path: each core gets an independent address
-    if (buffer->per_core_allocation_) {
+    if (buffer->pimpl_->per_core_allocation_) {
         TT_FATAL(
             config_->allocator_mode == AllocatorMode::HYBRID,
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
@@ -145,7 +146,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        return buffer->per_core_addresses_.at(cores[0]);
+        return buffer->pimpl_->per_core_addresses_.at(cores[0]);
     }
 
     switch (buffer_type) {
@@ -178,10 +179,10 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
 
     // Per-core deallocation path
-    if (buffer->per_core_allocation_) {
+    if (buffer->pimpl_->per_core_allocation_) {
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+        for (const auto& [core, addr] : buffer->pimpl_->per_core_addresses_) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
@@ -458,7 +459,7 @@ AllocatorImpl::~AllocatorImpl() {
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->pimpl_->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
     }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
@@ -491,7 +492,7 @@ AllocatorState AllocatorImpl::extract_state() const {
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->pimpl_->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
     }
 
     // Clear all buffer types

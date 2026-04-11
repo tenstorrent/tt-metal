@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include "buffer_impl.hpp"
 #include "context/context_types.hpp"
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -179,7 +180,41 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 
 }  // namespace
 
-std::atomic<size_t> Buffer::next_unique_id = 0;
+// BufferImpl static member definition
+std::atomic<size_t> BufferImpl::next_unique_id = 0;
+
+// BufferImpl constructor — handles all initialization logic that was in Buffer::Buffer
+BufferImpl::BufferImpl(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    std::optional<bool> bottom_up,
+    std::optional<SubDeviceId> sub_device_id,
+    bool owns_data) :
+    device_(device),
+    size_(size),
+    buffer_type_(buffer_type),
+    buffer_layout_(sharding_args.buffer_layout()),
+    bottom_up_(bottom_up.value_or(buffer_type == BufferType::DRAM || buffer_type == BufferType::TRACE)),
+    sub_device_id_(sub_device_id),
+    owns_data_(owns_data),
+    page_size_(page_size),
+    shard_spec_(sharding_args.shard_spec()),
+    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
+    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
+    TT_FATAL(device_ != nullptr, "Device needs to not be null.");
+    if (sub_device_id_.has_value()) {
+        validate_sub_device_id(sub_device_id_, device_, buffer_type_, shard_spec_);
+        sub_device_manager_id_ = device_->get_active_sub_device_manager_id();
+        allocator_ = device_->allocator_impl(*sub_device_id_).get();
+    } else {
+        allocator_ = device_->allocator_impl().get();
+    }
+    validate_buffer_parameters(size_, page_size_, buffer_type_, buffer_layout_, shard_spec_, buffer_distribution_spec_);
+    unique_id_ = next_unique_id.fetch_add(1);
+}
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
     os << "ShardSpec{";
@@ -282,28 +317,8 @@ Buffer::Buffer(
     const std::optional<SubDeviceId> sub_device_id,
     const bool owns_data,
     Private) :
-    device_(device),
-    size_(size),
-    buffer_type_(buffer_type),
-    buffer_layout_(sharding_args.buffer_layout()),
-    bottom_up_(bottom_up.value_or(this->is_dram())),
-    sub_device_id_(sub_device_id),
-    owns_data_(owns_data),
-    page_size_(page_size),
-    shard_spec_(sharding_args.shard_spec()),
-    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
-    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
-    TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
-    if (this->sub_device_id_.has_value()) {
-        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
-        this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
-    } else {
-        this->allocator_ = device->allocator_impl().get();
-    }
-    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
-    unique_id_ = next_unique_id.fetch_add(1);
-}
+    pimpl_(std::make_unique<BufferImpl>(
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, owns_data)) {}
 
 std::shared_ptr<Buffer> Buffer::create(
     IDevice* device,
@@ -318,8 +333,8 @@ std::shared_ptr<Buffer> Buffer::create(
     auto buffer = std::make_shared<Buffer>(
         device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
 
-    if (buffer->size_ == 0) {
-        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+    if (buffer->pimpl_->size_ == 0) {
+        buffer->pimpl_->allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
         return buffer;
     }
 
@@ -361,8 +376,8 @@ std::shared_ptr<Buffer> Buffer::create(
         false /* owns data */,
         Private());
 
-    buffer->address_ = address;
-    buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+    buffer->pimpl_->address_ = address;
+    buffer->pimpl_->allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -388,90 +403,95 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
-    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
+    TT_FATAL(
+        !pimpl_->per_core_allocation_,
+        "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
     auto buffer = Buffer::create(
-        device_,
-        address_,
+        pimpl_->device_,
+        pimpl_->address_,
         region.size,
-        page_size_,
-        buffer_type_,
-        BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_),
-        bottom_up_,
-        sub_device_id_);
+        pimpl_->page_size_,
+        pimpl_->buffer_type_,
+        BufferShardingArgs(pimpl_->buffer_distribution_spec_, pimpl_->shard_spec_, pimpl_->buffer_layout_),
+        pimpl_->bottom_up_,
+        pimpl_->sub_device_id_);
 
     std::shared_ptr<const BufferPageMapping> new_page_mapping;
-    if (is_sharded(buffer_layout_)) {
+    if (is_sharded(pimpl_->buffer_layout_)) {
         new_page_mapping = std::make_shared<const BufferPageMapping>(get_buffer_page_mapping()->filter_by_host_range(
             region.offset / page_size(), (region.offset + region.size) / page_size()));
     }
 
-    buffer->root_buffer_ = root_buffer();
-    buffer->root_buffer_offset_ = root_buffer_offset_ + region.offset;
-    buffer->buffer_page_mapping_ = new_page_mapping;
+    buffer->pimpl_->root_buffer_ = root_buffer();
+    buffer->pimpl_->root_buffer_offset_ = pimpl_->root_buffer_offset_ + region.offset;
+    buffer->pimpl_->buffer_page_mapping_ = new_page_mapping;
 
     return buffer;
 }
 
-Allocator* Buffer::allocator() const { return allocator_->view().get(); }
+Allocator* Buffer::allocator() const { return pimpl_->allocator_->view().get(); }
 
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {
-        address_ = 0;
-        hooked_allocation_ = true;
+        pimpl_->address_ = 0;
+        pimpl_->hooked_allocation_ = true;
     } else {
-        validate_sub_device_manager_id(sub_device_manager_id_, device_);
+        validate_sub_device_manager_id(pimpl_->sub_device_manager_id_, pimpl_->device_);
 
-        address_ = allocator_->allocate_buffer(this);
+        pimpl_->address_ = pimpl_->allocator_->allocate_buffer(this);
 
         // Assertion here because buffer class returns a u32 when address is queried
         // Requires updating all use cases of buffer address to accept a u64 to remove
-        TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
+        TT_ASSERT(pimpl_->address_ <= std::numeric_limits<uint32_t>::max());
 
 #if defined(TRACY_ENABLE)
-        if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+        if (tt::tt_metal::MetalContext::instance(extract_context_id(pimpl_->device_))
                 .rtoptions()
                 .get_profiler_buffer_usage_enabled()) {
             TracyAllocN(
-                reinterpret_cast<const void*>(address_), size_, get_buffer_location_name(buffer_type_, device_->id()));
+                reinterpret_cast<const void*>(pimpl_->address_),
+                pimpl_->size_,
+                get_buffer_location_name(pimpl_->buffer_type_, pimpl_->device_->id()));
         }
 #endif
     }
 
     // Important! Graph tracker must called after the allocation status is updated.
-    allocation_status_ = AllocationStatus::ALLOCATED;
+    pimpl_->allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     GraphTracker::instance().track_allocate(this);
 }
 
 void Buffer::deallocate() {
-    if (!owns_data_) {
+    if (!pimpl_->owns_data_) {
         return;
     }
     this->deallocate_impl();
 }
 
-void Buffer::mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
+void Buffer::mark_as_deallocated() { pimpl_->allocation_status_ = BufferImpl::AllocationStatus::DEALLOCATED; }
 
 void Buffer::deallocate_impl() {
-    if (allocation_status_ != AllocationStatus::ALLOCATED) {
+    if (pimpl_->allocation_status_ != BufferImpl::AllocationStatus::ALLOCATED) {
         return;
     }
 
-    if (device_->is_initialized() && size_ != 0) {
+    if (pimpl_->device_->is_initialized() && pimpl_->size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
-        if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
+        if (!GraphTracker::instance().hook_deallocate(this) && !pimpl_->hooked_allocation_) {
 #if defined(TRACY_ENABLE)
-            if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+            if (tt::tt_metal::MetalContext::instance(extract_context_id(pimpl_->device_))
                     .rtoptions()
                     .get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
-                    reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
+                    reinterpret_cast<const void*>(address()),
+                    get_buffer_location_name(pimpl_->buffer_type_, pimpl_->device_->id()));
             }
 #endif
-            validate_sub_device_manager_id(sub_device_manager_id_, device_);
-            allocator_->deallocate_buffer(this);
+            validate_sub_device_manager_id(pimpl_->sub_device_manager_id_, pimpl_->device_);
+            pimpl_->allocator_->deallocate_buffer(this);
         }
 
         // Capture deallocates here instead of higher levels.
@@ -479,45 +499,57 @@ void Buffer::deallocate_impl() {
         LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, *this);
     }
 
-    allocation_status_ = AllocationStatus::DEALLOCATED;
+    pimpl_->allocation_status_ = BufferImpl::AllocationStatus::DEALLOCATED;
 }
 
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
-    if (this->allocation_status_ != AllocationStatus::DEALLOCATED) {
+    if (pimpl_->allocation_status_ != BufferImpl::AllocationStatus::DEALLOCATED) {
         this->deallocate();
     }
 }
 
-bool Buffer::is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
+bool Buffer::is_allocated() const { return pimpl_->allocation_status_ == BufferImpl::AllocationStatus::ALLOCATED; }
 
 uint32_t Buffer::address() const {
     TT_FATAL(
-        allocation_status_ != AllocationStatus::ALLOCATION_REQUESTED,
+        pimpl_->allocation_status_ != BufferImpl::AllocationStatus::ALLOCATION_REQUESTED,
         "Can only query the address of a buffer that has been allocated");
-    return address_;
+    return pimpl_->address_;
 }
 
-DeviceAddr Buffer::page_size() const { return page_size_; }
+IDevice* Buffer::device() const { return pimpl_->device_; }
+DeviceAddr Buffer::size() const { return pimpl_->size_; }
+BufferType Buffer::buffer_type() const { return pimpl_->buffer_type_; }
+TensorMemoryLayout Buffer::buffer_layout() const { return pimpl_->buffer_layout_; }
+bool Buffer::bottom_up() const { return pimpl_->bottom_up_; }
+std::optional<SubDeviceId> Buffer::sub_device_id() const { return pimpl_->sub_device_id_; }
+size_t Buffer::unique_id() const { return pimpl_->unique_id_; }
+bool Buffer::has_shard_spec() const { return pimpl_->shard_spec_.has_value(); }
+BufferRegion Buffer::root_buffer_region() const { return BufferRegion(pimpl_->root_buffer_offset_, pimpl_->size_); }
+
+DeviceAddr Buffer::page_size() const { return pimpl_->page_size_; }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
-    TT_FATAL(page_size == 0 ? size_ == 0 : size_ % page_size == 0, "buffer size must be divisible by new page size");
-    page_size_ = page_size;
-    this->buffer_distribution_spec_ = std::nullopt;
-    this->buffer_page_mapping_ = nullptr;
+    TT_FATAL(
+        page_size == 0 ? pimpl_->size_ == 0 : pimpl_->size_ % page_size == 0,
+        "buffer size must be divisible by new page size");
+    pimpl_->page_size_ = page_size;
+    pimpl_->buffer_distribution_spec_ = std::nullopt;
+    pimpl_->buffer_page_mapping_ = nullptr;
 }
 
 uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }
 
 uint32_t Buffer::num_dev_pages() const {
-    if (!is_sharded(this->buffer_layout_)) {
+    if (!is_sharded(pimpl_->buffer_layout_)) {
         return this->num_pages();
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->num_pages() * this->num_cores().value();
+    if (pimpl_->shard_spec_.has_value()) {
+        return pimpl_->shard_spec_->num_pages() * this->num_cores().value();
     }
-    return buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
+    return pimpl_->buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
 }
 
 HalMemType Buffer::memory_type() const {
@@ -531,11 +563,11 @@ HalMemType Buffer::memory_type() const {
 }
 
 CoreType Buffer::core_type() const {
-    switch (this->buffer_type_) {
+    switch (pimpl_->buffer_type_) {
         case BufferType::DRAM: return CoreType::DRAM;
         case BufferType::L1:
         case BufferType::L1_SMALL: return CoreType::WORKER;
-        default: TT_THROW("Unknown CoreType {} for buffer", this->buffer_type_);
+        default: TT_THROW("Unknown CoreType {} for buffer", this->buffer_type());
     }
 }
 
@@ -550,73 +582,73 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
 }
 
 DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const {
-    DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
+    DeviceAddr num_banks = static_cast<DeviceAddr>(pimpl_->allocator_->get_num_banks(pimpl_->buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
     auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
-uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
+uint32_t Buffer::alignment() const { return pimpl_->allocator_->get_alignment(this->buffer_type()); }
 
 DeviceAddr Buffer::aligned_page_size() const { return align(page_size(), this->alignment()); }
 DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
-    uint32_t num_banks =
-        is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
+    uint32_t num_banks = is_sharded(pimpl_->buffer_layout_) ? this->num_cores().value()
+                                                            : pimpl_->allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
 void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
-    per_core_addresses_ = std::move(addrs);
+    pimpl_->per_core_addresses_ = std::move(addrs);
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {
-    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    TT_FATAL(shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");
-    return this->shard_spec_.value();
+    TT_FATAL(is_sharded(pimpl_->buffer_layout_), "Buffer not sharded");
+    TT_FATAL(pimpl_->shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    return pimpl_->shard_spec_.value();
 }
 
 void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
-    this->shard_spec_ = shard_spec;
-    this->buffer_distribution_spec_ = std::nullopt;
-    this->buffer_page_mapping_ = nullptr;
+    pimpl_->shard_spec_ = shard_spec;
+    pimpl_->buffer_distribution_spec_ = std::nullopt;
+    pimpl_->buffer_page_mapping_ = nullptr;
 }
 
 std::optional<uint32_t> Buffer::num_cores() const {
-    if (!is_sharded(this->buffer_layout_)) {
+    if (!is_sharded(pimpl_->buffer_layout_)) {
         return std::nullopt;
     }
-    if (buffer_distribution_spec_.has_value()) {
-        return buffer_distribution_spec_.value().num_cores_with_data();
+    if (pimpl_->buffer_distribution_spec_.has_value()) {
+        return pimpl_->buffer_distribution_spec_.value().num_cores_with_data();
     }
-    return shard_spec_->tensor_shard_spec.grid.num_cores();
+    return pimpl_->shard_spec_->tensor_shard_spec.grid.num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + pimpl_->allocator_->get_bank_offset(pimpl_->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
 const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
-    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    if (!this->buffer_page_mapping_) {
-        this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
+    TT_FATAL(is_sharded(pimpl_->buffer_layout_), "Buffer not sharded");
+    if (!pimpl_->buffer_page_mapping_) {
+        pimpl_->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
-    return this->buffer_page_mapping_;
+    return pimpl_->buffer_page_mapping_;
 }
 
 std::shared_ptr<Buffer> Buffer::root_buffer() {
-    if (root_buffer_) {
-        return root_buffer_;
+    if (pimpl_->root_buffer_) {
+        return pimpl_->root_buffer_;
     }
     return shared_from_this();
 }
 
 const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() const {
-    return this->buffer_distribution_spec_;
+    return pimpl_->buffer_distribution_spec_;
 }
 
 bool ShardSpec::operator==(const ShardSpec&) const = default;
