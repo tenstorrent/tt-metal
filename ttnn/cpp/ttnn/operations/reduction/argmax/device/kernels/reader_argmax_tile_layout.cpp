@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr bool reduce_all = (bool)get_compile_time_arg_val(10);
     constexpr bool keepdim = (bool)get_compile_time_arg_val(11);
 
-    constexpr uint32_t num_c_time_args = 13;
+    constexpr uint32_t num_c_time_args = 12;
 
     // Runtime args
     // ------------
