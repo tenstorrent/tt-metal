@@ -291,7 +291,6 @@ void matmul_blocks(
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
-                    dst_index++;
                 }
             }
             tile_regs_release();
