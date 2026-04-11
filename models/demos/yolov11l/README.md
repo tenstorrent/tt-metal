@@ -64,6 +64,14 @@ Note: Output images will be saved in the `models/demos/yolov11l/demo/runs` folde
 ### Large images (SAHI)
 YOLOv11l SAHI supports TT input size selection via `--tt-input-size {640,1280}`. For larger scenes (for example `--pre-resize-to 1280 1280`), combine SAHI slicing with optional `--tt-slice-dp-batch` / `--tt-slice-parallel-devices`. Script: `models/demos/yolov11l/sahi_ultralytics_eval.py` (`--tt-model yolov11l`, Ultralytics default weights `yolo11l.pt`).
 
+### COCO subset eval (mAP-style metric, 1280×1280)
+Same harness as `yolov11n` in `models/demos/yolo_eval/evaluate.py`. Resolution and device buffers match 1280² e2e perf (`yolov11_l1_small_size_for_res` / `yolov11_trace_region_size_e2e_for_res`). Bracket order: `res`-`device_params`-`model_type`.
+
+```bash
+pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[1280-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[1280-device_params0-torch_model]
+```
+
 ## Details
 - The entry point to the `yolov11l` is located at : `models/demos/yolov11l/tt/ttnn_yolov11.py`
 - Batch Size : `1` per device (effective batch scales with mesh, e.g. `8` on 1x8).
