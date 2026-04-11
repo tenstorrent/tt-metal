@@ -27,6 +27,10 @@ on:
         description: "Max bug escapes before Phase 4 stops"
         type: string
         default: "999"
+      lookback-days:
+        description: "How many days back to scan for failures"
+        type: string
+        default: "14"
 
 permissions:
   contents: read
@@ -42,6 +46,7 @@ jobs:
       max-candidates: ${{ inputs.max-candidates }}
       max-log-bytes: ${{ inputs.max-log-bytes }}
       max-escapes: ${{ inputs.max-escapes }}
+      lookback-days: ${{ inputs.lookback-days }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
