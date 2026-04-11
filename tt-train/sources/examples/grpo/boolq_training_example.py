@@ -3,8 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from ttml.common.utils import get_tt_metal_runtime_root
 from utils.grpo_trainer import GrpoConfig, GrpoTrainer
 
 
@@ -73,6 +75,8 @@ if __name__ == "__main__":
         "kahan_summation": False,
     }
 
+    from datetime import datetime, timezone
+
     config = GrpoConfig(
         epsilon=0.2,
         batch_size=4,
@@ -80,7 +84,9 @@ if __name__ == "__main__":
         num_iterations=1,
         gradient_accumulation_steps=4,
         logging_steps=-1,  # FIXME: not used yet
-        output_dir="/localdev/ichovpan/grpo-run",
+        output_dir=get_tt_metal_runtime_root()
+        + "/generated/tt-train/grpo_run/"
+        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
         checkpointing=False,
         checkpoint_interval=50,
         prompts_to_train=1600,
