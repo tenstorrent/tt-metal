@@ -74,10 +74,10 @@ if __name__ == "__main__":
     }
 
     config = GrpoConfig(
-        clip_eps=0.2,
+        epsilon=0.2,
         batch_size=4,
         micro_batch_size=32,
-        num_mini_epochs=1,
+        num_iterations=1,
         gradient_accumulation_steps=4,
         logging_steps=-1,  # FIXME: not used yet
         output_dir="/localdev/ichovpan/grpo-run",
@@ -85,13 +85,13 @@ if __name__ == "__main__":
         checkpoint_interval=50,
         prompts_to_train=1600,
         temperature=1.5,
-        max_tokens_to_complete=256,
-        group_size=8,
+        max_completion_length=256,
+        num_generations=8,
         warmup_steps=0,
-        model_source=model_id,
     )
 
     grpo_trainer = GrpoTrainer(
+        model_source=model_id,
         dataset=dataset,
         config=config,
         reward_func=boolq_reward,
