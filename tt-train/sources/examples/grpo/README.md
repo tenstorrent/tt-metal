@@ -12,7 +12,7 @@ conventions where possible so that users familiar with TRL face minimal friction
 ```python
 from datasets import load_dataset
 from transformers import AutoTokenizer
-from utils.grpo_trainer import GrpoConfig, GrpoTrainer
+from utils.grpo_trainer import GrpoConfig, GrpoTrainer, TrainerCallback
 
 model_id = "meta-llama/Llama-3.2-1B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -35,7 +35,12 @@ def my_reward(completions, answer, **kwargs):
     return [2.0 if c.strip().lower().startswith(a) else -1.0
             for c, a in zip(completions, answer)]
 
-# 3. Train
+# 3. Define a callback for logging
+class LogCallback(TrainerCallback):
+    def on_step_end(self, trainer, step, metrics):
+        print(f"Step {step} | Reward: {metrics['reward_mean']:.4f} | Len: {metrics['mean_completion_len']:.2f}")
+
+# 4. Train
 trainer = GrpoTrainer(
     model_source=model_id,
     dataset=dataset,
@@ -44,12 +49,14 @@ trainer = GrpoTrainer(
         num_generations=8,
         max_completion_length=256,
         gradient_accumulation_steps=4,
+        logging_steps=1,
         prompts_to_train=1600,
     ),
     reward_func=my_reward,
     transformer_config={...},   # see Transformer Config below
     optimizer_config={"type": "MorehAdamW", "lr": 5e-6},
     device_config={"enable_ddp": True, "mesh_shape": [1, 2]},
+    callbacks=[LogCallback()],
 )
 trainer.train()
 ```
@@ -79,7 +86,7 @@ from utils.grpo_trainer import GrpoConfig
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
-| `logging_steps` | `int` | — | `logging_steps` | Log metrics every *N* steps. |
+| `logging_steps` | `int` | — | `logging_steps` | Fire `on_step_end` callbacks every *N* optimizer steps (0 or negative to disable). The trainer has no built-in logging; all output is callback-driven. |
 
 ---
 
@@ -100,6 +107,7 @@ GrpoTrainer(
     transformer_config,
     optimizer_config,
     device_config,
+    callbacks=None,
 )
 ```
 
@@ -112,6 +120,7 @@ GrpoTrainer(
 | `transformer_config` | `dict` | Model architecture config (see [Transformer Config](#transformer-config)). |
 | `optimizer_config` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](../../docs/TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `device_config` | `dict` | Device mesh configuration (see [Device Config](#device-config)). |
+| `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 
 ### Methods
 
@@ -162,6 +171,43 @@ only explicitly named parameters are passed.
 >     brev = [-0.1 * (len(c) / 20) ** 2 for c in completions]
 >     return [a + b for a, b in zip(acc, brev)]
 > ```
+
+---
+
+## Callbacks
+
+Subclass `TrainerCallback` and override any hooks you need:
+
+```python
+import csv
+import os
+from utils.grpo_trainer import TrainerCallback
+
+class GRPOMonitor(TrainerCallback):
+    def __init__(self, output_dir):
+        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
+        os.makedirs(output_dir, exist_ok=True)
+        with open(self.file_path, mode="w", newline="") as f:
+            csv.writer(f).writerow(["step", "reward", "avg_length"])
+
+    def on_step_end(self, trainer, step, metrics):
+        reward = metrics["reward_mean"]
+        length = metrics["mean_completion_len"]
+        print(f"Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
+        with open(self.file_path, mode="a", newline="") as f:
+            csv.writer(f).writerow([step, reward, length])
+
+trainer = GrpoTrainer(..., callbacks=[GRPOMonitor(output_dir)])
+```
+
+| Hook | Signature | When |
+|------|-----------|------|
+| `on_step_end` | `(trainer, step, metrics)` | Every `logging_steps` optimizer steps. `metrics` is a dict with `reward_mean`, `reward_std`, `mean_completion_len`, and `lr`. |
+| `on_train_end` | `(trainer)` | After the final batch. |
+
+The trainer has no built-in logging. All monitoring, CSV writing, and console
+output is handled through callbacks. The `trainer` argument gives callbacks
+access to `trainer.model` and `trainer.config`.
 
 ---
 
@@ -280,6 +326,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
 | **Device setup** | Handled by HF Accelerate | Handled by `device_config` dict |
 | **KL penalty** | `beta` parameter | Not implemented (equivalent to `beta=0.0`) |
+| **Callbacks** | HF `TrainerCallback` with `on_log(args, state, control, logs)` | `TrainerCallback` with `on_step_end(trainer, step, metrics)` |
 
 ---
 

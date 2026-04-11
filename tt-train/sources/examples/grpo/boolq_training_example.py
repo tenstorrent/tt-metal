@@ -3,11 +3,32 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import time
+import csv
+import os
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.grpo_trainer import GrpoConfig, GrpoTrainer
+from utils.grpo_trainer import GrpoConfig, GrpoTrainer, TrainerCallback
+
+
+class GRPOMonitor(TrainerCallback):
+    def __init__(self, output_dir):
+        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
+        os.makedirs(output_dir, exist_ok=True)
+        with open(self.file_path, mode="w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "reward", "avg_length"])
+
+    def on_step_end(self, trainer, step, metrics):
+        reward = metrics["reward_mean"]
+        length = metrics["mean_completion_len"]
+        print(f"Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
+        with open(self.file_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([step, reward, length])
+
+    def on_train_end(self, trainer):
+        print("Training complete.")
 
 
 def boolq_reward(completions, answer, **kwargs):
@@ -77,16 +98,20 @@ if __name__ == "__main__":
 
     from datetime import datetime, timezone
 
+    output_dir = (
+        get_tt_metal_runtime_root()
+        + "/generated/tt-train/grpo_run/"
+        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    )
+
     config = GrpoConfig(
         epsilon=0.2,
         batch_size=4,
         micro_batch_size=32,
         num_iterations=1,
         gradient_accumulation_steps=4,
-        logging_steps=-1,  # FIXME: not used yet
-        output_dir=get_tt_metal_runtime_root()
-        + "/generated/tt-train/grpo_run/"
-        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
+        logging_steps=1,
+        output_dir=output_dir,
         checkpointing=False,
         checkpoint_interval=50,
         prompts_to_train=1600,
@@ -104,5 +129,6 @@ if __name__ == "__main__":
         transformer_config=transformer_config,
         optimizer_config=optimizer_config,
         device_config=device_config,
+        callbacks=[GRPOMonitor(output_dir)],
     )
     grpo_trainer.train()
