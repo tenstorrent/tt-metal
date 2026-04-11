@@ -430,9 +430,11 @@ void DevicePrintImpl::print_buffer_data(
 
             // Find elf path from inspector using kernel id
             auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto risc_name = GetRiscName(cluster, hal, device_id, logical_core, header->risc_id);
-            std::transform(
-                risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
+            auto [processor_class, processor_type_idx] =
+                hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
+            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
+            const auto& risc_name = build_state.get_target_name();
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
             risc_data.kernel_elf_path = elf_path.string();
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
