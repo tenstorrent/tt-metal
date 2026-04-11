@@ -140,20 +140,6 @@ bool can_use_reshard(
     const MemoryConfig& output_mem_config,
     std::optional<DataType> output_dtype,
     const std::optional<Tensor>& output_tensor) {
-    const auto input_memory_config = ttnn::get_memory_config(input_tensor);
-    if (input_memory_config.value().shard_spec().has_value() && output_mem_config.shard_spec().has_value()) {
-        const auto input_shard_spec = input_memory_config.value().shard_spec().value();
-        const auto output_shard_spec = output_mem_config.shard_spec().value();
-        // Check if we can use ttnn::reshard directly
-        bool use_reshard_workaround =
-            (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
-            (input_memory_config.value().memory_layout() != output_mem_config.memory_layout() &&
-             input_tensor.layout() == Layout::ROW_MAJOR);
-        if (use_reshard_workaround) {
-            return false;
-        }
-    }
-
     if (output_dtype.has_value()) {
         return false;
     }
@@ -273,10 +259,59 @@ Tensor to_memory_config(
         // to_sharded path
         if (tensor.is_sharded()) {
             // reshard
-            if (can_use_reshard(tensor, memory_config, dtype, output_tensor)) {
-                return ttnn::reshard(tensor, memory_config, output_tensor);
+            const auto input_memory_config = ttnn::get_memory_config(tensor);
+            bool has_legacy_shard_specs =
+                input_memory_config.value().shard_spec().has_value() && memory_config.shard_spec().has_value();
+
+            bool use_reshard_workaround = false;
+            if (has_legacy_shard_specs) {
+                const auto input_shard_spec = input_memory_config.value().shard_spec().value();
+                const auto output_shard_spec = memory_config.shard_spec().value();
+                // For row-major tensors where shard widths differ across different memory layouts,
+                // the reshard op cannot handle the conversion directly.
+                // Check if we need to use the s2i->i2s workaround
+                use_reshard_workaround =
+                    (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
+                    (input_memory_config.value().memory_layout() != memory_config.memory_layout() &&
+                     tensor.layout() == Layout::ROW_MAJOR);
+            }
+            if (!use_reshard_workaround) {
+                if (dtype.has_value()) {
+                    return ttnn::prim::copy(
+                        tensor,
+                        memory_config,
+                        dtype.value_or(tensor.dtype()),
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
+                }
+                if (can_use_reshard(tensor, memory_config, dtype, output_tensor)) {
+                    return ttnn::reshard(tensor, memory_config, output_tensor);
+                }
+            }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
+
+            // Workaround: sharded_to_interleaved -> interleaved_to_sharded.
+            // Used when reshard cannot handle the conversion directly (e.g. row-major
+            // with differing shard widths across memory layouts), or when reshard
+            // validation fails.
+            if (can_use_sharded_to_interleaved(
+                    tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()), std::nullopt)) {
+                Tensor temp = ttnn::prim::sharded_to_interleaved(
+                    tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
+                if (can_use_interleaved_to_sharded(
+                        temp,
+                        memory_config,
+                        dtype.value_or(temp.dtype()),
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0))) {
+                    const bool keep_l1_aligned = false;
+                    return ttnn::interleaved_to_sharded(
+                        temp,
+                        memory_config,
+                        dtype.value_or(temp.dtype()),
+                        keep_l1_aligned,
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
+                }
             }
         }
+
         if (can_use_interleaved_to_sharded(
                 tensor,
                 memory_config,
