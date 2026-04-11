@@ -51,11 +51,8 @@ def run_adaptive_pool2d(
 
     if dtype == ttnn.bfloat8_b:
         ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        # Roundtrip through bfloat8_b so golden computes on the same quantized data as the device
-        torch_golden_input = ttnn.to_torch(ttnn.from_torch(torch_input, dtype, layout=ttnn.TILE_LAYOUT))
     else:
         ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        torch_golden_input = torch_input
 
     # Call the appropriate TTNN function
     if pool_type == "avg":
@@ -72,7 +69,7 @@ def run_adaptive_pool2d(
         )
 
         torch_output = golden_adaptive_avg_pool2d(
-            input_tensor=torch_golden_input,
+            input_tensor=torch_input,
             batch_size=in_n,
             input_h=in_h,
             input_w=in_w,
@@ -93,7 +90,7 @@ def run_adaptive_pool2d(
         )
 
         torch_output = golden_adaptive_max_pool2d(
-            input_tensor=torch_golden_input,
+            input_tensor=torch_input,
             batch_size=in_n,
             input_h=in_h,
             input_w=in_w,
@@ -115,14 +112,14 @@ def run_adaptive_pool2d(
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
 
-    allclose = torch.allclose(ttnn_output.float(), torch_output.float(), atol=atol, rtol=rtol)
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert (
         allclose
     ), f"Reference and output tensor are not close. Input: {input_shape}, Output: [{out_h}, {out_w}], Pool: {pool_type}"
 
     # Max pool has additional strict equality check for bfloat16
     if pool_type == "max" and dtype == ttnn.bfloat16:
-        isequal = torch.equal(ttnn_output.float(), torch_output.float())
+        isequal = torch.equal(ttnn_output, torch_output)
         assert (
             isequal
         ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output: [{out_h}, {out_w}]"
