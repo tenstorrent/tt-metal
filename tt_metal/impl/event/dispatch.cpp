@@ -68,11 +68,19 @@ void issue_record_event_commands(
     }
 
     // Calculate the actual command size
+    bool distributed_dispatcher =
+        MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     tt::tt_metal::DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
+        if (distributed_dispatcher) {
+            calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait (forwards worker count to DISPATCH_MASTER)
+        }
         calculator.add_dispatch_wait();
     }
     if (num_worker_counters > 0) {
+        if (distributed_dispatcher) {
+            calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait before the final prefetch-stall
+        }
         calculator.add_dispatch_wait_with_prefetch_stall();
     }
 
@@ -101,6 +109,21 @@ void issue_record_event_commands(
         const uint32_t wait_flags = CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM |
                                     (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                                     ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0);
+
+        if (distributed_dispatcher) {
+            // In distributed-dispatcher mode, DISPATCH_S (subordinate) owns the worker-done stream
+            // registers. DISPATCH_D (master) cannot see them directly. We must first send a wait to
+            // DISPATCH_S so it forwards the current worker count to DISPATCH_D, then send the wait to
+            // DISPATCH_D so it blocks until that count is reached. We use WAIT_STREAM only (no
+            // CLEAR_STREAM) so cumulative worker tracking on DISPATCH_S is preserved.
+            command_sequence.add_dispatch_wait(
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+                0,
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                expected_num_workers_completed[offset_index],
+                DispatcherSelect::DISPATCH_SUBORDINATE);
+        }
+
         if (i == num_worker_counters - 1) {
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,

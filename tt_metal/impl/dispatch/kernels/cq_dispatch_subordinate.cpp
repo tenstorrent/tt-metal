@@ -281,10 +281,13 @@ void process_go_signal_mcast_cmd() {
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    // Limited Usage of Wait CMD: dispatch_s should get a wait command only if it's not on the
-    // same core as dispatch_d and is used to clear the worker count
+    // dispatch_s should get a wait command only if it's not on the same core as dispatch_d.
+    // Supports WAIT_STREAM with or without CLEAR_STREAM:
+    //   - With CLEAR_STREAM: waits, forwards count to dispatch_d, then resets dispatch_s counter (original behavior).
+    //   - Without CLEAR_STREAM: waits, forwards count to dispatch_d, leaves dispatch_s counter intact
+    //     (used by event recording to snapshot the current worker count without disrupting cumulative tracking).
     ASSERT(
-        (cmd->wait.flags == (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM)) &&
+        (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM) &&
         distributed_dispatcher);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
@@ -294,13 +297,15 @@ void process_dispatch_s_wait_cmd() {
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
     }
-    // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
-    // counter. dispatch_d will clear it's own counter
+    // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before
+    // (optionally) clearing the counter. dispatch_d will clear its own counter.
     update_worker_completion_count_on_dispatch_d<true>();
-    // Reset SPACE_AVAILABLE to 0.
-    NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
-    worker_count_update_for_dispatch_d[index] =
-        0;  // Local worker count update for dispatch_d should reflect state of worker semaphore on dispatch_s
+    if (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+        // Reset SPACE_AVAILABLE to 0.
+        NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
+        worker_count_update_for_dispatch_d[index] =
+            0;  // Local worker count update for dispatch_d should reflect state of worker semaphore on dispatch_s
+    }
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
