@@ -64,7 +64,9 @@ def load_checkpoint(model, checkpoint_path, dp_mapper=None):
             print(f"  - {n}")
 
 
-def setup_inference(grpo_config, transformer_config, device_config, model_source: str) -> InferenceCtx:
+def setup_inference(
+    temperature, max_completion_length, num_generations, transformer_config, device_config, model_source: str
+) -> InferenceCtx:
     tokenizer = AutoTokenizer.from_pretrained(model_source)
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
@@ -132,10 +134,10 @@ def setup_inference(grpo_config, transformer_config, device_config, model_source
         tt_model=tt_model,
         tokenizer=tokenizer,
         pad_token=pad_token,
-        temperature=grpo_config.temperature,
-        max_tokens_to_complete=grpo_config.max_completion_length,
+        temperature=temperature,
+        max_tokens_to_complete=max_completion_length,
         transformer_config=transformer_config,
-        group_size=grpo_config.num_generations,
+        group_size=num_generations,
         tile_size=32,
         sample_seed=42,
         dp_mapper=dp_mapper,

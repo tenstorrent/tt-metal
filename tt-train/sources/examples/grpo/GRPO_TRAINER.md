@@ -330,11 +330,41 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ---
 
-## Complete Example
+## Examples
 
-See [`boolq_training_example.py`](boolq_training_example.py)
-for a full working example that trains Llama-3.2-1B-Instruct on BoolQ using
-`GrpoTrainer` with a custom reward function and DDP on 2 devices.
+### Training
+
+[`boolq_training_example.py`](boolq_training_example.py) — trains
+Llama-3.2-1B-Instruct on BoolQ using `GrpoTrainer` with a custom reward
+function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
+
+```bash
+python3 boolq_training_example.py
+```
+
+### Accuracy Evaluation
+
+[`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates a
+model on the BoolQ validation set with greedy decoding (`temperature=0`)
+and writes per-question results to a CSV. Runs on 2 devices (p150x2) with
+`PROMPTS_TO_VALIDATE=20` by default.
+
+```bash
+python3 boolq_accuracy_example.py
+```
+
+To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the directory
+containing `model.safetensors`.
+
+### Tests
+
+[`test_batched_vs_single_completion.py`](test_batched_vs_single_completion.py) —
+verifies that batched inference produces identical outputs to one-by-one
+inference under greedy decoding. Runs on a single device.
+
+```bash
+pytest test_batched_vs_single_completion.py
+```
 
 ---
 
