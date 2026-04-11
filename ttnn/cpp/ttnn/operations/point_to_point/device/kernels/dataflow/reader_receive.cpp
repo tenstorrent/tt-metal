@@ -56,7 +56,8 @@ void kernel_main() {
 
     fabric_connection.close();
 
-    const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr);
+    const decltype(TensorAccessor(packet_buffer_args, intermediate_base_addr)) packet_buffer(
+        packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
     cb_reserve_back(packet_cb_id, 1);
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
