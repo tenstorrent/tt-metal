@@ -23,7 +23,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(dst_args, input_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, input_addr);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;

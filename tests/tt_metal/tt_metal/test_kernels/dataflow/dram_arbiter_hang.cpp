@@ -12,7 +12,7 @@ void kernel_main() {
     uint32_t num_iterations = get_arg_val<uint32_t>(4);
 
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, bank_base_address, page_size);
+    const auto s = TensorAccessor(s_args, bank_base_address);
 
     for (uint32_t iter_idx = 0; iter_idx < num_iterations; iter_idx++) {
         for (uint32_t page_id = 0; page_id < num_pages_to_read; page_id++) {

@@ -14,7 +14,7 @@ void kernel_main() {
 
     // Address of the output buffer
     constexpr auto out0_args = TensorAccessorArgs<0>();
-    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
+    const auto out0 = TensorAccessor(out0_args, c_addr);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {

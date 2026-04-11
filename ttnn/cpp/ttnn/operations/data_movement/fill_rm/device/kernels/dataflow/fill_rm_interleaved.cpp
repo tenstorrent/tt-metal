@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t val_lo = get_arg_val<uint32_t>(7);
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
     // ENDL();

@@ -132,13 +132,12 @@ void kernel_main() {
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
-    const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
+    const auto in0_reader = TensorAccessor(in0_args, in0_addr);
 
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple =
-        make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start);
 
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
@@ -159,7 +158,7 @@ void kernel_main() {
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
@@ -186,7 +185,7 @@ void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
-    const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+    const auto in3_reader = TensorAccessor(in3_args, in3_addr);
 #endif
 
 #ifdef FUSE_TERNARY
@@ -209,8 +208,8 @@ void kernel_main() {
     constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
     constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
 
-    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
-    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =

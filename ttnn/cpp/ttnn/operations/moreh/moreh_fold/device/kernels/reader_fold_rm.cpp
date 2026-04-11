@@ -39,7 +39,7 @@ void kernel_main() {
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
-    const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
+    const auto s0 = TensorAccessor(input_args, input_addr);
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
         cb_reserve_back(output_cb_id, onetile);

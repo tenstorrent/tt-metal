@@ -17,7 +17,7 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
 
     constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s = TensorAccessor(input_args, input_addr);
 
     fill_cb_with_value(cb_id_decimal, decimal);
 

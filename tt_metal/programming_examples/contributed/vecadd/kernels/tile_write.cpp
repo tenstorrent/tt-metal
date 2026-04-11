@@ -14,7 +14,7 @@ void kernel_main() {
 
     // Address generator for the output buffer. This is faster than doing plain DRAM writes.
     constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, c_addr, tile_size_bytes);
+    const auto c = TensorAccessor(c_args, c_addr);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {

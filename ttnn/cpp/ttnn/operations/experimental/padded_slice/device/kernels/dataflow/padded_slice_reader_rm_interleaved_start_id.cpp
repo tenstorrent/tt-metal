@@ -39,7 +39,7 @@ void kernel_main() {
     if constexpr (is_non_aligned) {
         misalignment = (src_addr % src_buffer_alignment);
     }
-    const auto s0 = TensorAccessor(src_args, src_addr - misalignment, padded_stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr - misalignment);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size

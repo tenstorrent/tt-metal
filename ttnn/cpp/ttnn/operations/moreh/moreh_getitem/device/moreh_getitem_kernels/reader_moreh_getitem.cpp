@@ -67,13 +67,13 @@ void kernel_main() {
     constexpr auto index3_args = TensorAccessorArgs<index2_args.next_compile_time_args_offset()>();
     constexpr auto index4_args = TensorAccessorArgs<index3_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(in_args, src_addr, stick_size);
+    const auto s0 = TensorAccessor(in_args, src_addr);
 
-    const auto index0 = TensorAccessor(index0_args, index0_addr, index0_stick_size);
-    const auto index1 = TensorAccessor(index1_args, index1_addr, index1_stick_size);
-    const auto index2 = TensorAccessor(index2_args, index2_addr, index2_stick_size);
-    const auto index3 = TensorAccessor(index3_args, index3_addr, index3_stick_size);
-    const auto index4 = TensorAccessor(index4_args, index4_addr, index4_stick_size);
+    const auto index0 = TensorAccessor(index0_args, index0_addr);
+    const auto index1 = TensorAccessor(index1_args, index1_addr);
+    const auto index2 = TensorAccessor(index2_args, index2_addr);
+    const auto index3 = TensorAccessor(index3_args, index3_addr);
+    const auto index4 = TensorAccessor(index4_args, index4_addr);
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,

@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 
-    const auto s = TensorAccessor(output_args, output_addr, output_cb_page_size);
+    const auto s = TensorAccessor(output_args, output_addr);
 
     for (uint32_t i = start_id; i < start_id + num_units_per_core; i++) {
         cb_wait_front(output_cb_id, onetile);

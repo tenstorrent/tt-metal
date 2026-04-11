@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t src_in_tile_bytes = get_tile_size(cb_in);
 
     constexpr auto in_args = TensorAccessorArgs<0>();
-    const auto src_in = TensorAccessor(in_args, src_addr, src_in_tile_bytes);
+    const auto src_in = TensorAccessor(in_args, src_addr);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {

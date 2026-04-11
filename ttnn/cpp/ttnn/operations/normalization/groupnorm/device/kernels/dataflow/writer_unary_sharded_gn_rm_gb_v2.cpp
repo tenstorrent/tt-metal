@@ -69,7 +69,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
 
-    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t cb_input_negative_mask_id = tt::CBIndex::c_14;
@@ -78,8 +78,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_input_negative_mask(cb_input_negative_mask_id);
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
-    const auto negative_mask_tensor_accessor =
-        TensorAccessor(negative_mask_args, input_negative_mask_addr, input_negative_mask_single_tile_size_bytes);
+    const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
 
 #endif
 
@@ -141,7 +140,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
-                    const auto gamma = TensorAccessor(gamma_args, gamma_addr, size);
+                    const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = cb_gamma.get_write_ptr();
@@ -184,7 +183,7 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
-                    const auto beta = TensorAccessor(beta_args, beta_addr, size);
+                    const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);

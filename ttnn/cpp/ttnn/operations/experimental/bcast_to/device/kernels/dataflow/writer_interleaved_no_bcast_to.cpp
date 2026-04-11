@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_written = 0;

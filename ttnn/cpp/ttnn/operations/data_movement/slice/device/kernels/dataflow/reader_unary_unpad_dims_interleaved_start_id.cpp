@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
 
     // In and out are assumed to be same dataformat
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t src_tile_id = start_id;
 

@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t block_h_id = 0; block_h_id < out_num_blocks_h; block_h_id++) {
         uint32_t end_id = start_id + out_num_blocks_w_per_core;

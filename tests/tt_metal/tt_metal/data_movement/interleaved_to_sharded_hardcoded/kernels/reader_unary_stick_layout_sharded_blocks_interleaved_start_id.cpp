@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t test_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
     constexpr uint32_t num_trids = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes, stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, block_height);
     uint32_t dest_write_addr = get_write_ptr(cb_id_in0);

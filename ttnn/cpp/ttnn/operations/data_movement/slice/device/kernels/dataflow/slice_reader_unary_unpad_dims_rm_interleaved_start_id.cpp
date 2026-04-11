@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
 

@@ -20,8 +20,8 @@ void kernel_main() {
     const uint32_t start_height_tile = get_arg_val<uint32_t>(2);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
 
-    const auto scores_accessor = TensorAccessor(scores_args, scores_addr, scores_page_size);
-    const auto bias_accessor = TensorAccessor(bias_args, bias_addr, bias_page_size);
+    const auto scores_accessor = TensorAccessor(scores_args, scores_addr);
+    const auto bias_accessor = TensorAccessor(bias_args, bias_addr);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;

@@ -16,7 +16,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

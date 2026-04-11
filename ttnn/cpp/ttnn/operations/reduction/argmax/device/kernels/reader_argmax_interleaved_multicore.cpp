@@ -292,8 +292,8 @@ void kernel_main() {
     // Flag to identify if this core will collate intermediate outputs
     const bool is_reduce_core = (core_id == reduce_core_id);
 
-    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     // CB in L1 memory for storing input
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);

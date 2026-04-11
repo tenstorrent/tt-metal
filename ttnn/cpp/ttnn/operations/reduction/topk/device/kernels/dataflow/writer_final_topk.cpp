@@ -26,8 +26,8 @@ void kernel_main() {
     const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
 
     // Initialize DRAM tensor accessors for interleaved output format
-    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0, tile_bytes_values);
-    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1, tile_bytes_ind);
+    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);
+    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1);
 
     // Process each height row sequentially, writing Kt tiles of TopK results
     for (uint32_t j = 0; j < Ht; ++j) {

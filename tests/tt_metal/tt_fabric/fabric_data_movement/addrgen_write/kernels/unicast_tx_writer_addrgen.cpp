@@ -101,8 +101,8 @@ void kernel_main() {
 
     // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
     // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
-    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
+    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;

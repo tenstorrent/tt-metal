@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr auto input_grad_args = TensorAccessorArgs<0>();
 
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     constexpr uint32_t onetile = 1;
 

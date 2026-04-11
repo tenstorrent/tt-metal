@@ -126,7 +126,7 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, token_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {

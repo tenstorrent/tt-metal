@@ -60,15 +60,15 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(arg_idx++);
     generate_bcast_col_scalar(cb_eps, eps);
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_page_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_page_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 

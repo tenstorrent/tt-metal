@@ -41,7 +41,7 @@ void kernel_main() {
     // ENDL(); DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
+    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base);
 
     DPRINT << "HERE" << ENDL();
     DEVICE_PRINT("HERE\n");

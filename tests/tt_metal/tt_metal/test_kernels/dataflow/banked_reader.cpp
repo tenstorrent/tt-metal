@@ -21,7 +21,7 @@ void kernel_main() {
 
     const uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = cb.get_tile_size();
-    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, page_size);
+    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base);
 
     // read tiles from src to CB
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

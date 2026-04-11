@@ -393,29 +393,6 @@ private:
 #endif
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
-TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
-    -> TensorAccessor<tensor_accessor::DistributionSpec<
-        /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
-        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT,
-        /* TensorShapeWrapper */
-        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
-            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::tensor_shape_is_crta,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorShapeCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
-        /* ShardShapeWrapper */
-        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
-            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::shard_shape_is_crta,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::ShardShapeCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
-        /* BankCoordsWrapper */
-        typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
-            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::bank_coords_is_crta,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::BankCoordsCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
-        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
-
-template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
         /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
@@ -438,56 +415,19 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
 
-template <
-    uint32_t RankCT,
-    uint32_t NumBanksCT,
-    typename TensorShapeWrapper,
-    typename ShardShapeWrapper,
-    typename BankCoordsWrapper,
-    bool IsInterleaved,
-    bool IsDram>
-TensorAccessor(
-    tensor_accessor::DistributionSpec<
-        RankCT,
-        NumBanksCT,
-        TensorShapeWrapper,
-        ShardShapeWrapper,
-        BankCoordsWrapper,
-        IsInterleaved,
-        IsDram>,
-    size_t,
-    uint32_t)
-    -> TensorAccessor<tensor_accessor::DistributionSpec<
-        RankCT,
-        NumBanksCT,
-        TensorShapeWrapper,
-        ShardShapeWrapper,
-        BankCoordsWrapper,
-        IsInterleaved,
-        IsDram>>;
-
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args,
-    uint32_t address_rt_arg_index_start,
-    uint32_t page_size_ct_arg_index_start,
-    std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args),
-        get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes),
-        kernel_compile_time_args[page_size_ct_arg_index_start + Indexes])...);
+    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(
+        TensorAccessor(std::get<Indexes>(args), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes))...);
 }
 }  // namespace tensor_accessor::detail
 
 template <typename... Args>
-auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, uint32_t page_size_ct_arg_index_start) {
+auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start) {
     return tensor_accessor::detail::make_tensor_accessor_tuple(
-        args,
-        address_rt_arg_index_start,
-        page_size_ct_arg_index_start,
-        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+        args, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
 /**

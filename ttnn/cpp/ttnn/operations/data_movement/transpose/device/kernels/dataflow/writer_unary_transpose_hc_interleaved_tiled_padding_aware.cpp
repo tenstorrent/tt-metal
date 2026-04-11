@@ -43,7 +43,7 @@ void kernel_main() {
 
     // Initialize address generator
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;

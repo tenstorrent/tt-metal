@@ -50,7 +50,7 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    const auto s0 = TensorAccessor(src_args, src_addr, input_tensor_page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;

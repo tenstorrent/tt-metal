@@ -27,7 +27,7 @@ void kernel_main() {
     // Then, construct the address generator for the output buffer.
     // Observe that here we are just constructing the address generator object, but not using it yet.
     // It will be used in the loop below to determine the address to write the tiles to.
-    const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
+    const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr);
 
     // Loop over all the tiles and write them to the output buffer.
     for (uint32_t i = 0; i < n_tiles; i++) {

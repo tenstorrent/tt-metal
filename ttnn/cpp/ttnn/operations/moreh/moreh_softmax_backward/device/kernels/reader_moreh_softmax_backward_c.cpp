@@ -27,8 +27,8 @@ void kernel_main() {
 
     constexpr auto y_args = TensorAccessorArgs<0>();
     constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
-    const auto y_in = TensorAccessor(y_args, y_addr, y_tile_bytes);
-    const auto dy_in = TensorAccessor(dy_args, dy_addr, dy_tile_bytes);
+    const auto y_in = TensorAccessor(y_args, y_addr);
+    const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
