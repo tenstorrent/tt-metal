@@ -180,13 +180,6 @@ def run_conv2d_short_sweep(
     config_tensors_in_dram=False,
     output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
     compute_config=None,  # ttnn compute config object
-    conv_config=None,  # optional pre-built ttnn.Conv2dConfig
-    input_dtype=None,  # ttnn dtype for input tensor (e.g., ttnn.bfloat16)
-    weight_dtype=None,  # ttnn dtype for weight tensor (e.g., ttnn.bfloat8_b)
-    bias_dtype=None,  # ttnn dtype for bias tensor
-    slice_config=None,  # optional ttnn.Op2DSliceConfig
-    input_layout=None,  # optional ttnn layout for input tensor (e.g., ttnn.TILE_LAYOUT)
-    padding_override=None,  # optional 4-element tuple for asymmetric padding (top, bottom, left, right)
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -254,37 +247,18 @@ def run_conv2d_short_sweep(
             if has_bias
             else None
         )
-    if padding_override is not None and len(padding_override) == 4:
-        pt, pb, pl, pr = padding_override
-        golden_input = torch.nn.functional.pad(torch_input_tensor_nchw, (pl, pr, pt, pb))
-        golden_padding = (0, 0)
-    else:
-        golden_input = torch_input_tensor_nchw
-        golden_padding = (pad_h, pad_w)
     torch_out_golden_tensor = torch.nn.functional.conv2d(
-        golden_input,
+        torch_input_tensor_nchw,
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
-        padding=golden_padding,
+        padding=(pad_h, pad_w),
         dilation=(dilation_h, dilation_w),
         groups=groups,
     )
 
-    if conv_config is not None and conv_config.activation is not None:
-        act_str = str(conv_config.activation)
-        if "RELU" in act_str:
-            torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
-        elif "GELU" in act_str:
-            torch_out_golden_tensor = torch.nn.functional.gelu(torch_out_golden_tensor)
-        elif "SILU" in act_str:
-            torch_out_golden_tensor = torch.nn.functional.silu(torch_out_golden_tensor)
-        elif "SIGMOID" in act_str:
-            torch_out_golden_tensor = torch.sigmoid(torch_out_golden_tensor)
-
     tt_bias_tensor = None
-    if conv_config is None:
-        conv_config = ttnn.Conv2dConfig()
+    conv_config = ttnn.Conv2dConfig()
     # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
     if config_tensors_in_dram:
         conv_config.config_tensors_in_dram = True
@@ -310,28 +284,13 @@ def run_conv2d_short_sweep(
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
     else:
-        effective_weight_dtype = weight_dtype or ttnn.bfloat16
-        if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-            effective_weight_dtype = ttnn.float32
-        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, effective_weight_dtype)
+        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
         if has_bias:
-            effective_bias_dtype = bias_dtype or ttnn.bfloat16
-            if effective_bias_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-                effective_bias_dtype = ttnn.float32
-            tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, effective_bias_dtype)
+            tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
-        effective_input_dtype = input_dtype or ttnn.bfloat16
-        effective_input_layout = input_layout
-        if effective_input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-            effective_input_layout = ttnn.TILE_LAYOUT
-        tt_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            effective_input_dtype,
-            device=device,
-            layout=effective_input_layout if effective_input_layout is not None else ttnn.ROW_MAJOR_LAYOUT,
-        )
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
     start_time = start_measuring_time()
-    conv2d_kwargs = dict(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -340,7 +299,7 @@ def run_conv2d_short_sweep(
         bias_tensor=tt_bias_tensor,
         kernel_size=(kernel_height, kernel_width),
         stride=(stride_h, stride_w),
-        padding=padding_override if padding_override is not None else (pad_h, pad_w),
+        padding=(pad_h, pad_w),
         dilation=(dilation_h, dilation_w),
         batch_size=batch_size,
         input_height=input_height,
@@ -352,9 +311,6 @@ def run_conv2d_short_sweep(
         dtype=conv_output_dtype,
         compute_config=compute_config,
     )
-    if slice_config is not None:
-        conv2d_kwargs["slice_config"] = slice_config
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(**conv2d_kwargs)
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)

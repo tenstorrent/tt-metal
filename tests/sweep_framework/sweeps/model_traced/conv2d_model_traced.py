@@ -2,34 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.sweep_framework.sweep_utils.conv2d_common import (
-    run_conv2d_short_sweep,
-    run_conv1d_short_sweep,
-)
+import re
+import torch
 import ttnn
+
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    check_with_pcc_without_tensor_printout,
+    start_measuring_time,
+    stop_measuring_time,
+)
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
 )
-
-# Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
-# Override the default timeout in seconds for hang detection.
-# Conv2d operations can be slow, especially with large kernels/channels
 TIMEOUT = 300
 
-# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("conv2d")
 
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_specs": [
-            # Contains following params
-            # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-            # Use tuple so it serializes as a string for proper deserialization
             (1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False),
         ],
         "is_conv1d": [False],
@@ -37,25 +35,15 @@ parameters = {
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
     mesh_shape = get_mesh_shape()
-
     if mesh_shape:
         try:
-            device = ttnn.open_mesh_device(
-                mesh_shape=ttnn.MeshShape(*mesh_shape),
-                dispatch_core_config=ttnn.DispatchCoreConfig(),
-                l1_small_size=79104,
-            )
+            device = create_mesh_device(mesh_shape)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
@@ -73,313 +61,362 @@ def mesh_device_fixture():
         del device
 
 
+_DTYPE_MAP = {
+    "DataType.BFLOAT16": ttnn.bfloat16,
+    "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+    "DataType.BFLOAT4_B": ttnn.bfloat4_b,
+    "DataType.FLOAT32": ttnn.float32,
+    "DataType.UINT16": ttnn.uint16,
+    "DataType.UINT32": ttnn.uint32,
+    "DataType.INT32": ttnn.int32,
+}
+
+_LAYOUT_MAP = {
+    "Layout.ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+    "Layout.TILE": ttnn.TILE_LAYOUT,
+}
+
+_SHARD_LAYOUT_MAP = {
+    "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    "BLOCK_SHARDED": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    "WIDTH_SHARDED": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+}
+
+_WEIGHTS_DTYPE_MAP = {
+    "BFLOAT8_B": ttnn.bfloat8_b,
+    "BFLOAT16": ttnn.bfloat16,
+    "BFLOAT4_B": ttnn.bfloat4_b,
+    "FLOAT32": ttnn.float32,
+}
+
+_OUTPUT_LAYOUT_MAP = {
+    "TILE": ttnn.TILE_LAYOUT,
+    "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+}
+
+_ACTIVATION_MAP = {
+    "RELU": ttnn.UnaryOpType.RELU,
+    "GELU": ttnn.UnaryOpType.GELU,
+    "SILU": ttnn.UnaryOpType.SILU,
+    "SIGMOID": ttnn.UnaryOpType.SIGMOID,
+}
+
+
+def _parse_conv_config(traced_conv_config):
+    """Parse serialized Conv2dConfig dict into ttnn.Conv2dConfig."""
+    if not traced_conv_config or not isinstance(traced_conv_config, dict):
+        return None
+    if traced_conv_config.get("type") != "Conv2dConfig":
+        return None
+
+    value_str = traced_conv_config.get("value", "")
+    conv_config = ttnn.Conv2dConfig()
+
+    sl_m = re.search(r"shard_layout=TensorMemoryLayout::(\w+)", value_str)
+    if sl_m:
+        sl_val = _SHARD_LAYOUT_MAP.get(sl_m.group(1))
+        if sl_val:
+            conv_config.shard_layout = sl_val
+
+    wdt_m = re.search(r"weights_dtype=DataType::(\w+)", value_str)
+    if wdt_m:
+        wdt_val = _WEIGHTS_DTYPE_MAP.get(wdt_m.group(1))
+        if wdt_val:
+            conv_config.weights_dtype = wdt_val
+
+    ol_m = re.search(r"output_layout=Layout::(\w+)", value_str)
+    if ol_m:
+        ol_val = _OUTPUT_LAYOUT_MAP.get(ol_m.group(1))
+        if ol_val:
+            conv_config.output_layout = ol_val
+
+    act_m = re.search(r"activation=UnaryWithParam\(op_type=UnaryOpType::(\w+)", value_str)
+    if act_m:
+        act_op = _ACTIVATION_MAP.get(act_m.group(1))
+        if act_op:
+            conv_config.activation = ttnn.UnaryWithParam(act_op)
+
+    bool_attrs = {
+        "deallocate_activation",
+        "reallocate_halo_output",
+        "reshard_if_not_optimal",
+        "override_sharding_config",
+        "override_output_sharding_config",
+        "transpose_shards",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "enable_kernel_stride_folding",
+        "enable_activation_reuse",
+        "full_inner_dim",
+        "config_tensors_in_dram",
+    }
+    for attr in bool_attrs:
+        m = re.search(rf"{attr}=(\w+)", value_str)
+        if m:
+            setattr(conv_config, attr, m.group(1).lower() in ("true", "1"))
+
+    int_attrs = {"act_block_h_override", "act_block_w_div"}
+    for attr in int_attrs:
+        m = re.search(rf"{attr}=(\d+)", value_str)
+        if m:
+            setattr(conv_config, attr, int(m.group(1)))
+
+    return conv_config
+
+
+def _parse_compute_config(device, compute_config_dict):
+    """Parse compute_config dict into ttnn ComputeKernelConfig."""
+    if not compute_config_dict or not isinstance(compute_config_dict, dict):
+        return None
+
+    fidelity_map = {
+        "MathFidelity.LoFi": ttnn.MathFidelity.LoFi,
+        "MathFidelity.HiFi2": ttnn.MathFidelity.HiFi2,
+        "MathFidelity.HiFi3": ttnn.MathFidelity.HiFi3,
+        "MathFidelity.HiFi4": ttnn.MathFidelity.HiFi4,
+    }
+    fidelity_str = compute_config_dict.get("math_fidelity", "MathFidelity.HiFi4")
+    math_fidelity = fidelity_map.get(fidelity_str, ttnn.MathFidelity.HiFi4)
+
+    math_approx = str(compute_config_dict.get("math_approx_mode", "False")).lower() in ("true", "1")
+    fp32_acc = bool(compute_config_dict.get("fp32_dest_acc_en", False))
+    packer_l1 = bool(compute_config_dict.get("packer_l1_acc", False))
+
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=packer_l1,
+    )
+
+
+def _parse_list_param(val, default=(1, 1)):
+    """Parse kernel_size/stride/dilation from list/tuple/int."""
+    if isinstance(val, (list, tuple)) and len(val) >= 2:
+        return int(val[0]), int(val[1])
+    elif isinstance(val, int):
+        return val, val
+    elif isinstance(val, (list, tuple)) and len(val) == 1:
+        return int(val[0]), int(val[0])
+    return default
+
+
+def _parse_padding(val):
+    """Parse padding - could be 2-element (h,w) or 4-element (top,bottom,left,right)."""
+    if isinstance(val, (list, tuple)):
+        if len(val) == 4:
+            return (0, 0), tuple(int(x) for x in val)
+        elif len(val) >= 2:
+            return (int(val[0]), int(val[1])), None
+        elif len(val) == 1:
+            return (int(val[0]), int(val[0])), None
+    elif isinstance(val, int):
+        return (val, val), None
+    return (0, 0), None
+
+
+def _parse_memory_config(mem_config):
+    """Parse memory_config dict to ttnn.MemoryConfig."""
+    if mem_config is None or mem_config == "__ABSENT__":
+        return None
+    if isinstance(mem_config, dict):
+        data = mem_config.get("data", mem_config)
+        buf_type = data.get("buffer_type", "DRAM")
+        if "L1" in str(buf_type):
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.DRAM_MEMORY_CONFIG
+    return mem_config
+
+
 def run(
     input_specs=None,
     is_conv1d=False,
-    compute_config=None,
-    dtype=None,
-    config_tensors_in_dram=False,
     storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
-    # Build input_specs from flat kwargs when not provided directly
-    full_padding = None
-    if input_specs is None:
-        batch_size = kwargs.get("batch_size")
-        out_channels = kwargs.get("out_channels")
-        in_channels = kwargs.get("in_channels")
-        input_height = kwargs.get("input_height") or kwargs.get("input_h")
-        input_width = kwargs.get("input_width") or kwargs.get("input_w")
-        kernel_size = kwargs.get("kernel_size")
-        stride = kwargs.get("stride")
-        padding = kwargs.get("padding")
-        dilation = kwargs.get("dilation")
-        groups = kwargs.get("groups")
-        # Check if we have enough params to construct input_specs
-        if batch_size is not None and out_channels is not None and in_channels is not None:
-            if isinstance(kernel_size, (list, tuple)) and len(kernel_size) >= 2:
-                kh, kw = kernel_size[0], kernel_size[1]
-            elif isinstance(kernel_size, int):
-                kh = kw = kernel_size
-            else:
-                kh = kw = kernel_size[0] if kernel_size else 1
-            if isinstance(stride, (list, tuple)) and len(stride) >= 2:
-                sh, sw = stride[0], stride[1]
-            elif isinstance(stride, int):
-                sh = sw = stride
-            else:
-                sh = sw = stride[0] if stride else 1
-            full_padding = None
-            if isinstance(padding, (list, tuple)) and len(padding) == 4:
-                ph, pw = 0, 0
-                full_padding = tuple(padding)
-            elif isinstance(padding, (list, tuple)) and len(padding) >= 2:
-                ph, pw = padding[0], padding[1]
-            elif isinstance(padding, int):
-                ph = pw = padding
-            else:
-                ph = pw = padding[0] if padding else 0
-            if isinstance(dilation, (list, tuple)) and len(dilation) >= 2:
-                dh, dw = dilation[0], dilation[1]
-            elif isinstance(dilation, int):
-                dh = dw = dilation
-            else:
-                dh = dw = dilation[0] if dilation else 1
-            ih = input_height or 4
-            iw = input_width or 4
-            g = groups or 1
-            has_bias = bool(
-                kwargs.get("bias_tensor_shape") and kwargs.get("bias_tensor_shape") not in (None, "None", "")
-            )
-            input_specs = (
-                int(batch_size),
-                int(out_channels),
-                int(in_channels),
-                int(ih),
-                int(iw),
-                int(kh),
-                int(kw),
-                int(sh),
-                int(sw),
-                int(ph),
-                int(pw),
-                int(g),
-                int(dh),
-                int(dw),
-                has_bias,
-            )
-        else:
-            return [(False, "Cannot construct input_specs: missing batch_size/out_channels/in_channels"), 0.0]
+    torch.manual_seed(0)
 
-    # Parse compute_kernel_config from dict to ttnn object via build_op_kwargs or manually
-    parsed_compute_config = None
-    if compute_config and isinstance(compute_config, dict):
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # --- Legacy path for model_traced_sample suite ---
+    if input_specs is not None:
+        from tests.sweep_framework.sweep_utils.conv2d_common import run_conv2d_short_sweep, run_conv1d_short_sweep
 
-        parsed_compute_config = parse_dict_value("compute_config", compute_config)
-    elif compute_config is not None:
-        parsed_compute_config = compute_config
+        if is_conv1d:
+            return run_conv1d_short_sweep(input_specs, device)
+        result = run_conv2d_short_sweep(input_specs, device)
+        pcc_passed = bool(result[0])
+        pcc_value = float(result[1])
+        return [(pcc_passed, f"PCC: {pcc_value:.6f}"), result[2]]
 
-    # Parse output_dtype from string/dict to ttnn dtype
-    parsed_dtype = None
-    if dtype and isinstance(dtype, (str, dict)):
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # --- Model traced path: call ttnn.conv2d directly with traced args ---
 
-        if isinstance(dtype, dict):
-            parsed_dtype = parse_dict_value("dtype", dtype)
-        else:
-            dtype_map = {
-                "DataType.BFLOAT16": ttnn.bfloat16,
-                "DataType.BFLOAT8_B": ttnn.bfloat8_b,
-                "DataType.BFLOAT4_B": ttnn.bfloat4_b,
-                "DataType.FLOAT32": ttnn.float32,
-                "DataType.UINT16": ttnn.uint16,
-                "DataType.UINT32": ttnn.uint32,
-                "DataType.INT32": ttnn.int32,
-                "bfloat16": ttnn.bfloat16,
-                "bfloat8_b": ttnn.bfloat8_b,
-                "bfloat4_b": ttnn.bfloat4_b,
-                "float32": ttnn.float32,
-                "uint16": ttnn.uint16,
-                "uint32": ttnn.uint32,
-                "int32": ttnn.int32,
-            }
-            parsed_dtype = dtype_map.get(dtype, ttnn.bfloat16)
+    batch_size = int(kwargs.get("batch_size", 1))
+    out_channels = int(kwargs.get("out_channels", 1))
+    in_channels = int(kwargs.get("in_channels", 1))
+    input_height = int(kwargs.get("input_height") or kwargs.get("input_h") or 4)
+    input_width = int(kwargs.get("input_width") or kwargs.get("input_w") or 4)
+    groups = int(kwargs.get("groups") or 1)
 
-    # Build Conv2dConfig from traced kwargs.
-    # In V2 format, conv_config may be a serialized dict {"type": "Conv2dConfig", "value": "Conv2dConfig(...)"}
-    # or individual flat kwargs (shard_layout, act_block_h_override, etc.).
-    conv_config = None
-    traced_conv_config = kwargs.get("conv_config")
-    if traced_conv_config and isinstance(traced_conv_config, dict) and traced_conv_config.get("type") == "Conv2dConfig":
-        import re
+    kernel_h, kernel_w = _parse_list_param(kwargs.get("kernel_size"), (1, 1))
+    stride_h, stride_w = _parse_list_param(kwargs.get("stride"), (1, 1))
+    dilation_h, dilation_w = _parse_list_param(kwargs.get("dilation"), (1, 1))
+    (pad_h, pad_w), full_padding = _parse_padding(kwargs.get("padding"))
 
-        value_str = traced_conv_config.get("value", "")
+    has_bias = bool(kwargs.get("bias_tensor_shape") and kwargs.get("bias_tensor_shape") not in (None, "None", ""))
+
+    # Parse dtypes from traced args
+    input_dtype = _DTYPE_MAP.get(kwargs.get("input_tensor_dtype"), ttnn.bfloat16)
+    weight_dtype = _DTYPE_MAP.get(kwargs.get("weight_tensor_dtype"), ttnn.bfloat16)
+    bias_dtype = _DTYPE_MAP.get(kwargs.get("bias_tensor_dtype"), ttnn.bfloat16)
+    output_dtype = _DTYPE_MAP.get(kwargs.get("dtype"), ttnn.bfloat16)
+
+    # Parse layout
+    input_layout = _LAYOUT_MAP.get(kwargs.get("input_tensor_layout"), ttnn.ROW_MAJOR_LAYOUT)
+
+    # conv2d manages its own input sharding (via conv_config.shard_layout).
+    # The traced input_tensor_memory_config reflects model runtime state (e.g., L1
+    # from a previous op), but we create from scratch so always start in DRAM.
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Parse conv_config
+    conv_config = _parse_conv_config(kwargs.get("conv_config"))
+    if conv_config is None:
         conv_config = ttnn.Conv2dConfig()
-        bool_attrs = {
-            "deallocate_activation",
-            "reallocate_halo_output",
-            "reshard_if_not_optimal",
-            "override_sharding_config",
-            "override_output_sharding_config",
-            "transpose_shards",
-            "enable_act_double_buffer",
-            "enable_weights_double_buffer",
-            "enable_kernel_stride_folding",
-            "enable_activation_reuse",
-            "full_inner_dim",
-            "config_tensors_in_dram",
-        }
-        int_attrs = {"act_block_h_override", "act_block_w_div"}
 
-        # Extract shard_layout
-        sl_m = re.search(r"shard_layout=TensorMemoryLayout::(\w+)", value_str)
-        if sl_m:
-            sl_map = {
-                "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                "BLOCK_SHARDED": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                "WIDTH_SHARDED": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            }
-            sl_val = sl_map.get(sl_m.group(1))
-            if sl_val:
-                conv_config.shard_layout = sl_val
+    # Parse compute_config
+    compute_config = _parse_compute_config(device, kwargs.get("compute_config"))
 
-        # Extract weights_dtype
-        wdt_m = re.search(r"weights_dtype=DataType::(\w+)", value_str)
-        if wdt_m:
-            wdt_map = {
-                "BFLOAT8_B": ttnn.bfloat8_b,
-                "BFLOAT16": ttnn.bfloat16,
-                "BFLOAT4_B": ttnn.bfloat4_b,
-                "FLOAT32": ttnn.float32,
-            }
-            wdt_val = wdt_map.get(wdt_m.group(1))
-            if wdt_val:
-                conv_config.weights_dtype = wdt_val
+    # --- Create torch tensors ---
+    conv_input_shape = [batch_size, in_channels, input_height, input_width]
+    conv_weight_shape = [out_channels, in_channels // groups, kernel_h, kernel_w]
+    conv_bias_shape = [1, 1, 1, out_channels]
 
-        # Extract output_layout
-        ol_m = re.search(r"output_layout=Layout::(\w+)", value_str)
-        if ol_m:
-            ol_map = {
-                "TILE": ttnn.TILE_LAYOUT,
-                "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
-            }
-            ol_val = ol_map.get(ol_m.group(1))
-            if ol_val:
-                conv_config.output_layout = ol_val
+    torch_input_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1)
+    torch_weight = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
 
-        # Extract activation (e.g. UnaryWithParam(op_type=UnaryOpType::RELU))
-        act_m = re.search(r"activation=UnaryWithParam\(op_type=UnaryOpType::(\w+)", value_str)
-        if act_m:
-            act_map = {
-                "RELU": ttnn.UnaryOpType.RELU,
-                "GELU": ttnn.UnaryOpType.GELU,
-                "SILU": ttnn.UnaryOpType.SILU,
-                "SIGMOID": ttnn.UnaryOpType.SIGMOID,
-            }
-            act_op = act_map.get(act_m.group(1))
-            if act_op:
-                conv_config.activation = ttnn.UnaryWithParam(act_op)
-
-        for attr in bool_attrs:
-            m = re.search(rf"{attr}=(\w+)", value_str)
-            if m:
-                setattr(conv_config, attr, m.group(1).lower() in ("true", "1"))
-        for attr in int_attrs:
-            m = re.search(rf"{attr}=(\d+)", value_str)
-            if m:
-                setattr(conv_config, attr, int(m.group(1)))
+    # --- Golden reference ---
+    if full_padding is not None:
+        pt, pb, pl, pr = full_padding
+        golden_input = torch.nn.functional.pad(torch_input_nchw, (pl, pr, pt, pb))
+        golden_padding = (0, 0)
     else:
-        conv_config_attrs = {
-            "shard_layout": kwargs.get("shard_layout"),
-            "act_block_h_override": kwargs.get("act_block_h_override"),
-            "act_block_w_div": kwargs.get("act_block_w_div"),
-            "transpose_shards": kwargs.get("transpose_shards"),
-            "enable_act_double_buffer": kwargs.get("enable_act_double_buffer"),
-            "enable_weights_double_buffer": kwargs.get("enable_weights_double_buffer"),
-            "deallocate_activation": kwargs.get("deallocate_activation"),
-            "reshard_if_not_optimal": kwargs.get("reshard_if_not_optimal"),
-            "override_sharding_config": kwargs.get("override_sharding_config"),
-            "output_layout": kwargs.get("output_layout"),
-            "enable_kernel_stride_folding": kwargs.get("enable_kernel_stride_folding"),
-            "enable_activation_reuse": kwargs.get("enable_activation_reuse"),
-            "full_inner_dim": kwargs.get("full_inner_dim"),
-            "config_tensors_in_dram": kwargs.get("config_tensors_in_dram"),
-        }
-        conv_config_attrs = {k: v for k, v in conv_config_attrs.items() if v is not None and v != "__ABSENT__"}
+        golden_input = torch_input_nchw
+        golden_padding = (pad_h, pad_w)
 
-        if conv_config_attrs:
-            conv_config = ttnn.Conv2dConfig()
-            for attr, value in conv_config_attrs.items():
-                if attr in ("act_block_h_override", "act_block_w_div"):
-                    value = int(value)
-                setattr(conv_config, attr, value)
+    torch_golden = torch.nn.functional.conv2d(
+        golden_input,
+        torch_weight,
+        bias=torch_bias.reshape(-1) if has_bias else None,
+        stride=(stride_h, stride_w),
+        padding=golden_padding,
+        dilation=(dilation_h, dilation_w),
+        groups=groups,
+    )
 
-    # Parse slice_config from traced args.
-    # Only pass non-default DRAM slice configs. When slice_config is L1_FULL/0
-    # (the default), leave as None so conv2d can auto-determine DRAM slicing
-    # when the input tensor is in DRAM (sweep tests create inputs in DRAM,
-    # unlike models where inputs are already in L1 from previous ops).
-    parsed_slice_config = None
-    traced_slice_config = kwargs.get("slice_config")
-    if (
-        traced_slice_config
-        and isinstance(traced_slice_config, dict)
-        and traced_slice_config.get("type") == "Op2DSliceConfig"
-    ):
-        import re
+    if conv_config.activation is not None:
+        act_str = str(conv_config.activation)
+        if "RELU" in act_str:
+            torch_golden = torch.nn.functional.relu(torch_golden)
+        elif "GELU" in act_str:
+            torch_golden = torch.nn.functional.gelu(torch_golden)
+        elif "SILU" in act_str:
+            torch_golden = torch.nn.functional.silu(torch_golden)
+        elif "SIGMOID" in act_str:
+            torch_golden = torch.sigmoid(torch_golden)
 
-        sc_value_str = traced_slice_config.get("value", "")
-        slice_type_map = {
-            "L1_FULL": ttnn.Op2DSliceConfig.SliceTypeEnum.L1Full,
-            "DRAM_SLICE_HEIGHT": ttnn.Op2DSliceConfig.SliceTypeEnum.DRAMSliceHeight,
-            "DRAM_SLICE_WIDTH": ttnn.Op2DSliceConfig.SliceTypeEnum.DRAMSliceWidth,
-        }
-        st_m = re.search(r"slice_type=SliceType::(\w+)", sc_value_str)
-        ns_m = re.search(r"num_slices=(\d+)", sc_value_str)
-        if st_m:
-            st_val = slice_type_map.get(st_m.group(1))
-            if st_val is not None:
-                num_slices = int(ns_m.group(1)) if ns_m else 0
-                if st_val != ttnn.Op2DSliceConfig.SliceTypeEnum.L1Full or num_slices > 0:
-                    sc_kwargs = {"slice_type": st_val}
-                    if num_slices > 0:
-                        sc_kwargs["num_slices"] = num_slices
-                    parsed_slice_config = ttnn.Op2DSliceConfig(**sc_kwargs)
+    # --- Create ttnn tensors ---
+    is_mesh_device = hasattr(device, "get_num_devices")
+    input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", None)
 
-    # Parse tensor dtypes from traced args
-    dtype_str_map = {
-        "DataType.BFLOAT16": ttnn.bfloat16,
-        "DataType.BFLOAT8_B": ttnn.bfloat8_b,
-        "DataType.BFLOAT4_B": ttnn.bfloat4_b,
-        "DataType.FLOAT32": ttnn.float32,
-        "DataType.UINT16": ttnn.uint16,
-        "DataType.UINT32": ttnn.uint32,
-        "DataType.INT32": ttnn.int32,
-    }
-    parsed_input_dtype = dtype_str_map.get(kwargs.get("input_tensor_dtype"))
-    parsed_weight_dtype = dtype_str_map.get(kwargs.get("weight_tensor_dtype"))
-    parsed_bias_dtype = dtype_str_map.get(kwargs.get("bias_tensor_dtype"))
+    # BFLOAT8_B/BFLOAT4_B require TILE_LAYOUT for from_torch
+    effective_input_layout = input_layout
+    if input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        effective_input_layout = ttnn.TILE_LAYOUT
 
-    # Parse input_tensor_layout from traced args
-    layout_str_map = {
-        "Layout.ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
-        "Layout.TILE": ttnn.TILE_LAYOUT,
-    }
-    parsed_input_layout = layout_str_map.get(kwargs.get("input_tensor_layout"))
-
-    # Call the short sweep function with parsed ttnn objects
-    if is_conv1d:
-        result = run_conv1d_short_sweep(input_specs, device)
-    else:
-        result = run_conv2d_short_sweep(
-            input_specs,
+    if is_mesh_device and input_a_tensor_placement:
+        tt_input = create_tensor_on_mesh(
+            torch_input_nhwc,
             device,
-            config_tensors_in_dram=config_tensors_in_dram,
-            output_dtype=parsed_dtype,
-            compute_config=parsed_compute_config,
-            conv_config=conv_config,
-            input_dtype=parsed_input_dtype,
-            weight_dtype=parsed_weight_dtype,
-            bias_dtype=parsed_bias_dtype,
-            slice_config=parsed_slice_config,
-            input_layout=parsed_input_layout,
-            padding_override=full_padding,
+            input_dtype,
+            effective_input_layout,
+            input_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            input_a_tensor_placement,
+        )
+    else:
+        tt_input = ttnn.from_torch(
+            torch_input_nhwc,
+            dtype=input_dtype,
+            layout=effective_input_layout,
+            device=device,
+            memory_config=input_memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]
-    # to model_traced format [pcc_tuple, e2e_perf]
-    # result[0]: bool (PCC passed/failed)
-    # result[1]: float (actual PCC value)
-    # result[2]: int/float (e2e performance time)
+    # Weight/bias: BFLOAT8_B/BFLOAT4_B not supported as host dtypes, use float32
+    effective_weight_dtype = weight_dtype
+    if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        effective_weight_dtype = ttnn.float32
+    tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
 
-    pcc_passed = bool(result[0])
-    pcc_value = float(result[1])
-    e2e_perf = result[2]
+    tt_bias = None
+    if has_bias:
+        effective_bias_dtype = bias_dtype
+        if effective_bias_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            effective_bias_dtype = ttnn.float32
+        tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
 
-    # Format as (bool, message) tuple expected by sweep framework
-    pcc_result = (pcc_passed, f"PCC: {pcc_value:.6f}")
+    # --- Call ttnn.conv2d ---
+    start_time = start_measuring_time()
 
-    return [pcc_result, e2e_perf]
+    padding_arg = full_padding if full_padding is not None else (pad_h, pad_w)
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=(kernel_h, kernel_w),
+        stride=(stride_h, stride_w),
+        padding=padding_arg,
+        dilation=(dilation_h, dilation_w),
+        groups=groups,
+        bias_tensor=tt_bias,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        dtype=output_dtype,
+    )
+
+    e2e_perf = stop_measuring_time(start_time)
+
+    # --- Extract output ---
+    if is_mesh_device:
+        device_tensors = ttnn.get_device_tensors(tt_output)
+        torch_output = ttnn.to_torch(device_tensors[0])
+    else:
+        torch_output = ttnn.to_torch(tt_output)
+
+    # Reshape output to NHWC then compare
+    out_h = (input_height + 2 * pad_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
+    out_w = (input_width + 2 * pad_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
+    if full_padding is not None:
+        pt, pb, pl, pr = full_padding
+        padded_h = input_height + pt + pb
+        padded_w = input_width + pl + pr
+        out_h = (padded_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
+        out_w = (padded_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
+
+    torch_output = torch_output.reshape(batch_size, out_h, out_w, -1)
+    torch_output = torch_output[:, :, :, :out_channels]
+
+    torch_golden = torch_golden.permute(0, 2, 3, 1)
+
+    pcc_passed, pcc_value = check_with_pcc_without_tensor_printout(torch_output, torch_golden, pcc=0.985)
+
+    return [(bool(pcc_passed), f"PCC: {pcc_value:.6f}"), e2e_perf]
