@@ -227,6 +227,8 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
+    const bool core_grid_auto_selected = !core_grid.has_value();
+
     if (!core_grid.has_value()) {
         if (input_tensor.is_sharded()) {
             const auto& shard_spec_opt = input_tensor.shard_spec();
@@ -258,6 +260,13 @@ Tensor group_norm(
                 nhw);
             core_grid = dram_grid.value();
         }
+    }
+
+    if (core_grid_auto_selected && num_out_blocks.has_value()) {
+        TT_FATAL(
+            false,
+            "group_norm: num_out_blocks cannot be specified when core_grid is auto-selected. "
+            "Either provide an explicit core_grid or omit num_out_blocks.");
     }
 
     // For non-sharded DRAM tensors, validate that the requested core grid is not too
@@ -301,7 +310,7 @@ Tensor group_norm(
         .out_data_format = DataType::BFLOAT16,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
-        .num_out_blocks = num_out_blocks.value_or(1)};
+        .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
     return ttnn::prim::group_norm(
         input_tensor,
         epsilon,
