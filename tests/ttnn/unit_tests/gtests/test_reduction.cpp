@@ -25,13 +25,13 @@
 
 namespace ttnn::operations::binary::test {
 
-struct SumTensorParamaram {
+struct SumTensorParameter {
     int32_t h;
     int32_t w;
 };
 
 class SumTensorLastDimFixture : public TTNNFixtureWithSuiteDevice<SumTensorLastDimFixture>,
-                                public testing::WithParamInterface<SumTensorParamaram> {};
+                                public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorLastDimFixture, SumTensorCorrectly) {
     auto param = GetParam();
@@ -41,6 +41,9 @@ TEST_P(SumTensorLastDimFixture, SumTensorCorrectly) {
     std::array<uint32_t, 2> reduced_dimensions = {param.h, 1};
     ttnn::Shape reduced_shape(reduced_dimensions);
     int32_t dim = -1;
+    // Non-tile aligned shapes result in reduction calling fill_implicit_tile_padding
+    // which was not ported to Quasar at the time of creating these tests.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     const uint32_t TILE_SIDE = 32;
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR && (param.h % TILE_SIDE != 0 || param.w % TILE_SIDE != 0)) {
@@ -67,10 +70,10 @@ TEST_P(SumTensorLastDimFixture, SumTensorCorrectly) {
 INSTANTIATE_TEST_SUITE_P(
     SumTensorLastDimTests,
     SumTensorLastDimFixture,
-    ::testing::Values(SumTensorParamaram{3100, 63}, SumTensorParamaram{3200, 64}));
+    ::testing::Values(SumTensorParameter{3100, 63}, SumTensorParameter{3200, 64}));
 
 class SumTensorFirstDimFixture : public TTNNFixtureWithSuiteDevice<SumTensorFirstDimFixture>,
-                                 public testing::WithParamInterface<SumTensorParamaram> {};
+                                 public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorFirstDimFixture, SumTensorCorrectly) {
     auto param = GetParam();
@@ -80,6 +83,9 @@ TEST_P(SumTensorFirstDimFixture, SumTensorCorrectly) {
     std::array<uint32_t, 2> reduced_dimensions = {1, param.w};
     ttnn::Shape reduced_shape(reduced_dimensions);
     int32_t dim = -2;
+    // Non-tile aligned shapes result in reduction calling fill_implicit_tile_padding
+    // which was not ported to Quasar at the time of creating these tests.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     const uint32_t TILE_SIDE = 32;
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR && (param.h % TILE_SIDE != 0 || param.w % TILE_SIDE != 0)) {
@@ -106,10 +112,10 @@ TEST_P(SumTensorFirstDimFixture, SumTensorCorrectly) {
 INSTANTIATE_TEST_SUITE_P(
     SumTensorFirstDimTests,
     SumTensorFirstDimFixture,
-    ::testing::Values(SumTensorParamaram{63, 3100}, SumTensorParamaram{64, 3200}));
+    ::testing::Values(SumTensorParameter{63, 3100}, SumTensorParameter{64, 3200}));
 
 class SumTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<SumTensorBothDimsFixture>,
-                                 public testing::WithParamInterface<SumTensorParamaram> {};
+                                 public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
     auto param = GetParam();
@@ -117,6 +123,9 @@ TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
     ttnn::Shape shape(dimensions);
     SmallVector<int> dim = {0, 1};
+    // Non-tile aligned shapes result in reduction calling fill_implicit_tile_padding
+    // which was not ported to Quasar at the time of creating these tests.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     const uint32_t TILE_SIDE = 32;
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR && (param.h % TILE_SIDE != 0 || param.w % TILE_SIDE != 0)) {
@@ -138,16 +147,16 @@ TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
 INSTANTIATE_TEST_SUITE_P(
     SumTensorBothDimsTests,
     SumTensorBothDimsFixture,
-    ::testing::Values(SumTensorParamaram{30, 30}, SumTensorParamaram{64, 64}));
+    ::testing::Values(SumTensorParameter{30, 30}, SumTensorParameter{64, 64}));
 
-struct MinMaxTensorParamaram {
+struct MinMaxTensorParameter {
     int32_t h;
     int32_t w;
     int32_t offset;
 };
 
 class MinMaxTensorLastDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorLastDimFixture>,
-                                   public testing::WithParamInterface<MinMaxTensorParamaram> {};
+                                   public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
     auto param = GetParam();
@@ -155,6 +164,8 @@ TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
     std::array<uint32_t, 4> reduced_dimensions = {1, 1, param.h, 1};
     ttnn::Shape reduced_shape(reduced_dimensions);
     int32_t dim = -1;
+    // LLK used by min/max reduction has not been ported to Quasar when this test is created.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -205,13 +216,13 @@ INSTANTIATE_TEST_SUITE_P(
     MinMaxTensorLastDimTests,
     MinMaxTensorLastDimFixture,
     ::testing::Values(
-        MinMaxTensorParamaram{3100, 63, 4},
-        MinMaxTensorParamaram{3200, 64, 4},
-        MinMaxTensorParamaram{3100, 63, -128},
-        MinMaxTensorParamaram{3200, 64, -128}));
+        MinMaxTensorParameter{3100, 63, 4},
+        MinMaxTensorParameter{3200, 64, 4},
+        MinMaxTensorParameter{3100, 63, -128},
+        MinMaxTensorParameter{3200, 64, -128}));
 
 class MinMaxTensorFirstDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorFirstDimFixture>,
-                                    public testing::WithParamInterface<MinMaxTensorParamaram> {};
+                                    public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
     auto param = GetParam();
@@ -219,6 +230,8 @@ TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
     std::array<uint32_t, 4> reduced_dimensions = {1, 1, 1, param.w};
     ttnn::Shape reduced_shape(reduced_dimensions);
     int32_t dim = -2;
+    // LLK used by min/max reduction has not been ported to Quasar when this test is created.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -269,18 +282,20 @@ INSTANTIATE_TEST_SUITE_P(
     MinMaxTensorFirstDimTests,
     MinMaxTensorFirstDimFixture,
     ::testing::Values(
-        MinMaxTensorParamaram{63, 3100, 4},
-        MinMaxTensorParamaram{64, 3200, 4},
-        MinMaxTensorParamaram{63, 3100, -128},
-        MinMaxTensorParamaram{64, 3200, -128}));
+        MinMaxTensorParameter{63, 3100, 4},
+        MinMaxTensorParameter{64, 3200, 4},
+        MinMaxTensorParameter{63, 3100, -128},
+        MinMaxTensorParameter{64, 3200, -128}));
 
 class MinMaxTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorBothDimsFixture>,
-                                    public testing::WithParamInterface<MinMaxTensorParamaram> {};
+                                    public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
     auto param = GetParam();
     auto& device = *device_;
     SmallVector<int> dim = {-2, -1};
+    // LLK used by min/max reduction has not been ported to Quasar when this test is created.
+    // Once that is ported, this will be removed. Tracked by issue #41906
     arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     if (arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -326,6 +341,6 @@ TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
 INSTANTIATE_TEST_SUITE_P(
     MinMaxTensorBothDimsTests,
     MinMaxTensorBothDimsFixture,
-    ::testing::Values(MinMaxTensorParamaram{64, 64, 1}, MinMaxTensorParamaram{30, 30, -1004}));
+    ::testing::Values(MinMaxTensorParameter{64, 64, 1}, MinMaxTensorParameter{30, 30, -1004}));
 
 }  // namespace ttnn::operations::binary::test
