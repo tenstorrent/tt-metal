@@ -164,9 +164,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
-    TensorLayout intermediate_layout(
-        input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), final_output_spec.tensor_layout().get_memory_config());
-    TensorSpec intermediate_spec(intermediate_shape, intermediate_layout);
+    TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
 
     return {intermediate_spec, final_output_spec};
 }
