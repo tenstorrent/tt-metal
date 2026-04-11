@@ -91,10 +91,9 @@ void kernel_main() {
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
 #else
-    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
 #endif
 
@@ -137,6 +136,31 @@ void kernel_main() {
     }
 #endif
 
+    uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t mcast_start_x = get_arg_val<uint32_t>(rt_args++);
+    uint32_t mcast_start_y = get_arg_val<uint32_t>(rt_args++);
+    uint32_t mcast_end_x = get_arg_val<uint32_t>(rt_args++);
+    uint32_t mcast_end_y = get_arg_val<uint32_t>(rt_args++);
+    uint32_t idle_counter_l1_offset = get_write_ptr(cb_dispatched_metadata_id);
+    uint32_t counter_ready_sem_l1_offset = get_semaphore(counter_ready_semaphore_id);
+    uint64_t mcast_counter_noc_addr =
+        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, idle_counter_l1_offset);
+    uint64_t mcast_counter_sem_noc_addr =
+        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
+
+    uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    volatile tt_l1_ptr uint32_t* data_ready_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_ready_semaphore_id));
+
+    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t start_sem_l1_offset = get_semaphore(start_semaphore_id);
+    uint64_t idle_start_noc_addrs[num_idle_cores];
+    for (uint32_t c = 0; c < num_idle_cores; c++) {
+        uint32_t noc_x = get_arg_val<uint32_t>(rt_args++);
+        uint32_t noc_y = get_arg_val<uint32_t>(rt_args++);
+        idle_start_noc_addrs[c] = get_noc_addr(noc_x, noc_y, start_sem_l1_offset);
+    }
+
     // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
@@ -169,72 +193,80 @@ void kernel_main() {
     constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
     constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    // Multicast expert token counts + receive_buf_addr to all idle cores
+    {
+        constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
+
+        // Append receive_buf_addr so idle cores know where to NOC-write untilized data
+        volatile tt_l1_ptr uint32_t* receive_buf_slot =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr + counter_total_size);
+        receive_buf_slot[0] = get_write_ptr(cb_untilize_id);
+
+        constexpr uint32_t mcast_total_size = counter_total_size + l1_alignment;
+        uint32_t off = 0;
+        while (off < mcast_total_size) {
+            uint32_t chunk = ((mcast_total_size - off) > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE
+                                                                                       : (mcast_total_size - off);
+            noc_async_write_multicast(counter_base_addr + off, mcast_counter_noc_addr + off, chunk, num_idle_cores);
+            off += chunk;
+        }
+        noc_async_write_barrier();
+        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores);
+        noc_async_atomic_barrier();
+    }
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
     constexpr uint32_t read_batch_size = 32;
-    uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
 
-    const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
-    const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
+    const auto dispatched_metadata_addr_gen =
+        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
-    constexpr auto expert_stride_tile = (max_dispatched_tokens_per_expert / 32) * (hidden_size / 32);
 
     // Process each expert in assigned range
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
-        uint32_t tile_batch_counter = 0;
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         if (expert_tokens > max_dispatched_tokens_per_expert) {
             expert_tokens = max_dispatched_tokens_per_expert;
         }
         uint32_t end_page = start_page + expert_tokens;
-        uint32_t start_page_tiled = local_expert * expert_stride_tile;
+        uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
         DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
 
-        // Prefetch first batch
-        uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
-        uint32_t first_batch_count = first_batch_end - start_page;
-        if (first_batch_count > 0) {
-            for (uint32_t t = 0; t < first_batch_count; t++) {
+        for (uint32_t B = 0; B < num_batches; B++) {
+            uint32_t batch_start = start_page + B * read_batch_size;
+            uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
+            uint32_t batch_count = batch_end - batch_start;
+            uint32_t C = B % num_idle_cores;
+            bool batch_did_local_write = false;
+
+            // Signal idle core C to send its untilized batch
+            noc_semaphore_inc(idle_start_noc_addrs[C], 1);
+            noc_async_atomic_barrier();
+
+            // Speculatively read metadata for this batch (overlaps with idle core's NOC write)
+            for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(
-                    start_page + t,
+                    batch_start + t,
                     dispatched_metadata_addr_gen,
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
-            cb_reserve_back(cb_dispatched_buffer_id, hidden_size / 32);
-            for (uint32_t t = 0; t < hidden_size / 32; t++) {
-                noc_async_read_page(
-                    start_page_tiled + t,
-                    dispatched_buffer_addr_gen,
-                    buffer_base + t * aligned_dispatched_buffer_page_size);
-            }
 
+            // Wait for idle core to write untilized data to sender's cb_untilize_id
+            noc_semaphore_wait(data_ready_sem_ptr, 1);
+            noc_semaphore_set(data_ready_sem_ptr, 0);
+
+            // Ensure metadata is ready
             noc_async_read_barrier();
 
-            // Push tiles to c_0 so compute's cb_wait_front(cb_in_id) can proceed
-            cb_push_back(cb_dispatched_buffer_id, hidden_size / 32);
-
-            cb_reserve_back(cb_signal_id, 1);
-            volatile tt_l1_ptr uint32_t* signal_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-            signal_ptr[0] = 0x00000000;
-            cb_push_back(cb_signal_id, 1);
-            tile_batch_counter++;
-        }
-
-        for (uint32_t batch_start = start_page; batch_start < end_page; batch_start += read_batch_size) {
-            uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
-            uint32_t batch_count = batch_end - batch_start;
-            bool batch_did_local_write = false;
-
-            cb_wait_front(cb_untilize_id, read_batch_size);
+            // Route tokens
             for (uint32_t t = 0; t < batch_count; t++) {
                 uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
                 uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
@@ -275,52 +307,12 @@ void kernel_main() {
                     }
                 }
             }
-            cb_pop_front(cb_untilize_id, read_batch_size);
-
-            // Issue next batch reads BEFORE write barrier
-            uint32_t next_batch_start = batch_start + read_batch_size;
-            uint32_t next_batch_start_tiled = start_page_tiled + tile_batch_counter * hidden_size / 32;
-            bool has_next_batch = (next_batch_start < end_page);
-            if (has_next_batch) {
-                uint32_t next_batch_end =
-                    (next_batch_start + read_batch_size < end_page) ? next_batch_start + read_batch_size : end_page;
-                uint32_t next_batch_count = next_batch_end - next_batch_start;
-                for (uint32_t t = 0; t < next_batch_count; t++) {
-                    noc_async_read_page(
-                        next_batch_start + t,
-                        dispatched_metadata_addr_gen,
-                        metadata_base + t * aligned_dispatched_metadata_page_size);
-                }
-                // Reserve c_0 for next batch (compute popped previous tiles)
-                cb_reserve_back(cb_dispatched_buffer_id, hidden_size / 32);
-                for (uint32_t t = 0; t < hidden_size / 32; t++) {
-                    noc_async_read_page(
-                        next_batch_start_tiled + t,
-                        dispatched_buffer_addr_gen,
-                        buffer_base + t * aligned_dispatched_buffer_page_size);
-                }
-                tile_batch_counter++;
-            }
 
             if (batch_did_local_write) {
                 noc_async_write_barrier();
             }
-
-            if (has_next_batch) {
-                noc_async_read_barrier();
-                // Push tiles to c_0 so compute's cb_wait_front(cb_in_id) can proceed
-                cb_push_back(cb_dispatched_buffer_id, hidden_size / 32);
-                cb_reserve_back(cb_signal_id, 1);
-                cb_push_back(cb_signal_id, 1);
-            }
         }
     }
-
-    cb_reserve_back(cb_signal_id, 1);
-    volatile tt_l1_ptr uint32_t* signal_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-    signal_ptr[0] = ROUTE_INFO_SENTINEL;  // Signal writer that first batch is ready
-    cb_push_back(cb_signal_id, 1);
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);
