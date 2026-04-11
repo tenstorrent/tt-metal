@@ -145,7 +145,7 @@ ttnn::Tensor upsample(
         return output_tensor;
     }
 
-    // For nearest mode, pass to unified prim (device op handles factory selection)
+    // For nearest and bicubic modes, pass to unified prim (device op handles factory selection)
     return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
 }
 }  // namespace ttnn::operations::upsample

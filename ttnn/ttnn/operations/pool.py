@@ -266,9 +266,11 @@ def golden_upsample(
     if isinstance(scale_factor, (int, float)):
         scale_factor = (scale_factor, scale_factor)
 
-    input_nchw = input_tensor.permute(0, 3, 1, 2)
-    output_nchw = torch.nn.functional.interpolate(input_nchw, scale_factor=scale_factor, mode=mode)
-    return output_nchw.permute(0, 2, 3, 1)
+    input_nchw = input_tensor.permute(0, 3, 1, 2).float()
+    output_nchw = torch.nn.functional.interpolate(
+        input_nchw, scale_factor=scale_factor, mode=mode, align_corners=False if mode == "bicubic" else None
+    )
+    return output_nchw.to(input_tensor.dtype).permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
