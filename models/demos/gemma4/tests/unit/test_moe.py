@@ -1,26 +1,38 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for Gemma4 MoE block — fully on device."""
+"""Unit tests for Gemma4 MoE block — fully on device.
+
+    pytest -k "1x1"   # single card
+    pytest -k "1x8"   # T3K with TP-sharded experts + CCL
+"""
 
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.moe import MoEBlock
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_not_moe
+from ...tests.test_factory import (
+    TestFactory,
+    compare_tensors,
+    parametrize_batch_seq,
+    parametrize_mesh_with_fabric,
+    skip_if_not_moe,
+)
 
 
 @skip_if_not_moe
+@parametrize_mesh_with_fabric()
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_moe(batch_size, seq_len, device):
-    """
-    Test MoE end-to-end on device.
+def test_moe(batch_size, seq_len, mesh_device):
+    """Test MoE end-to-end on device against HF reference.
 
     Uses HF routing for the reference, TT router+experts for the test.
-    Since router may select different experts due to bf16 precision,
-    we use a relaxed PCC threshold.
+    Relaxed PCC: router may select different experts due to bf16 precision.
     """
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
     num_experts = 8
     top_k = 4
     hf_text_config = TestFactory.create_hf_text_config(num_experts=num_experts, top_k=top_k)
@@ -40,29 +52,42 @@ def test_moe(batch_size, seq_len, device):
     hf_config.num_experts = num_experts
     hf_config.top_k_experts = top_k
 
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+
     moe = MoEBlock(
-        mesh_device=device,
+        mesh_device=mesh_device,
         hf_config=hf_config,
         state_dict=state_dict,
-        ccl_manager=None,
-        mesh_config=TestFactory.create_mesh_config((1, 1)),
+        ccl_manager=ccl_manager,
+        mesh_config=mesh_config,
         dtype=ttnn.bfloat16,
     )
 
     x_torch = torch.randn(1, 1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
-    # HF reference: router → experts
+    # HF reference
     x_flat = x_torch.reshape(-1, hf_config.hidden_size).float()
     with torch.no_grad():
         _, ref_weights, ref_indices = hf_router(x_flat)
         ref_output = hf_experts(x_flat, ref_indices, ref_weights)
 
-    # TT forward: fully on device
-    x_tt = ttnn.from_torch(x_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    # Router input = same as expert input for this test
+    # TT forward
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    x_tt = ttnn.from_torch(
+        x_torch,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
     tt_output = moe(x_tt, x_tt)
-    tt_output_torch = ttnn.to_torch(tt_output).reshape(-1, hf_config.hidden_size).float()[:seq_len]
+    tt_output_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output))
+        .reshape(-1, hf_config.hidden_size)
+        .float()[:seq_len]
+    )
 
-    # Relaxed threshold: router may pick different experts due to bf16
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.80)
-    assert passing, f"MoE PCC too low: {pcc_msg}"
+    assert passing, f"MoE (tp={tp}) PCC too low: {pcc_msg}"
