@@ -1,6 +1,6 @@
 # Pruned to single test for bug escape verification
 - name: BH Galaxy CCL tests
-  cmd: pytest "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly/test_new_all_broadcast.py::test_all_broadcast[num_devices=4-num_links=1-output_shape=_1__1__1__32__1024_-layout=Layout.TILE-input_dtype=DataType.BFLOAT16-cluster_axis=1]"
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly/test_new_all_broadcast.py::test_all_broadcast
   skus:
     bh_galaxy:
       timeout: 40
