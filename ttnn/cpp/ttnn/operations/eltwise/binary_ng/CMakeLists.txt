@@ -29,7 +29,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/binary_ng_device_operation.cpp
-        device/binary_ng_program_factory.cpp
+        device/programs/binary_ng_program_factory.cpp
         device/binary_ng_utils.cpp
 )
 

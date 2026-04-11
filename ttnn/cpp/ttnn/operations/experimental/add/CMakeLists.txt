@@ -27,7 +27,6 @@ target_sources(
     PRIVATE
         device/add_device_operation.cpp
         device/dram_optimized/dram_optimized_program.cpp
-        device/ndsharded/elt_nd_sharded_add_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_add PRIVATE ${FixmeOpIncDirs})

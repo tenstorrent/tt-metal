@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_ng_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_program_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -77,34 +78,6 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
     }
 
     return TensorMemoryLayout::INTERLEAVED;
-}
-
-std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
-    bool a_sharded = a.memory_config().is_sharded();
-    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
-    bool c_sharded = c.memory_config().is_sharded();
-
-    if ((!a_sharded && !b_sharded) && !c_sharded) {
-        return std::nullopt;
-    }
-
-    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
-    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
-    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
-        // treat as interleaved
-        return std::nullopt;
-    }
-
-    const auto& a_shape = a.padded_shape();
-    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
-    const auto& c_shape = c.padded_shape();
-
-    TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
-    return AllShardSpecs{
-        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
-        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
-        *get_shard_spec(c)};
 }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
@@ -494,34 +467,15 @@ bool is_llk_bcast(
 
     return false;
 }
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace ttnn::operations::binary_ng {
-
-std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
-
-    if (not shard_specs.has_value()) {
-        return std::nullopt;
-    }
-
-    const auto a_sharded = a.memory_config().is_sharded();
-    const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
-    const auto c_sharded = c.memory_config().is_sharded();
-    const auto tile_hw = c.tile().get_tile_hw();
-
-    return AllShardVolumes{
-        .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
-        .b_shard_volume = b_sharded ? shard_specs->b_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
-        .c_shard_volume = c_sharded ? shard_specs->c_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
-    };
-}
+namespace ttnn::operations::binary_ng::program {
 
 // Implements c = a op b
-BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
+BinaryNgProgramFactory::cached_program_t BinaryNgProgramFactory::create(
+    const BinaryNgParams& operation_attributes, const BinaryNgInputs& tensor_args, Tensor& c) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -829,11 +783,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         {reader_kernel_id, writer_kernel_id, compute_kernel_id, a_cb_handle, b_cb_handle, c_cb_handle}};
 }
 
-void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
+void BinaryNgProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& c) {
+    const BinaryNgParams& operation_attributes,
+    const BinaryNgInputs& tensor_args,
+    Tensor& c) {
     auto& program = cached_program.program;
     auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -869,4 +823,4 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         update_args);
 }
 
-}  // namespace ttnn::operations::binary_ng
+}  // namespace ttnn::operations::binary_ng::program

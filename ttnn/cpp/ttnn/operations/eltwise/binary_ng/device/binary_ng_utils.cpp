@@ -741,4 +741,53 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
         input_tensor_a.memory_config().buffer_type(),
         adjusted_shard_spec);
 }
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const auto shard_specs = get_shard_specs(a, b, c);
+
+    if (not shard_specs.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto a_sharded = a.memory_config().is_sharded();
+    const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
+    const auto c_sharded = c.memory_config().is_sharded();
+    const auto tile_hw = c.tile().get_tile_hw();
+
+    return AllShardVolumes{
+        .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .b_shard_volume = b_sharded ? shard_specs->b_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .c_shard_volume = c_sharded ? shard_specs->c_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+    };
+}
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    bool a_sharded = a.memory_config().is_sharded();
+    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    bool c_sharded = c.memory_config().is_sharded();
+
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
+        // treat as interleaved
+        return std::nullopt;
+    }
+
+    const auto& a_shape = a.padded_shape();
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
+    const auto& c_shape = c.padded_shape();
+
+    TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
+    return AllShardSpecs{
+        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
+        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
+        *get_shard_spec(c)};
+}
+
 }  // namespace ttnn::operations::binary_ng
