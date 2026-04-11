@@ -651,6 +651,123 @@ def test_bruteforce_sweep_h4w8_720p_t16(
 
 
 # ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 720p, cached t_chunk_size=1 (first/anchor frame)
+# All stages see T = t_chunk + 2 = 3. T_out=1 for (3,3,3) kernels so only
+# T_block=1 is valid — very fast sweep with few combos.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_720P_T1 = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Ordered most-to-least compute. All T=3.
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 186, 162, 4, 8),
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 186, 162, 4, 8),
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 3, 186, 162, 4, 8),
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 94, 82, 4, 8),
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 3, 94, 82, 4, 8),
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 48, 42, 4, 8),
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 48, 42, 4, 8),
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 46, 40, 4, 8),
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 3, 48, 42, 4, 8),
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 25, 22, 4, 8),
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 25, 22, 4, 8),
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 23, 20, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_t1_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_720P_T1,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_720P_T1],
+)
+def test_bruteforce_sweep_h4w8_720p_t1(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_720p_t1/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        hw_product=32,
+        # T_out=1 for (3,3,3) kernels → only T_block=1; no hang risk.
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 720p, cached t_chunk_size=15 (last partial chunk)
+# Stage 0: T_res=17. Stage 1: T_res=32, T_sp_in=30. Stage 2/3: T_res=62.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_720P_T15 = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Ordered most-to-least compute.
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 62, 186, 162, 4, 8),
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 62, 186, 162, 4, 8),
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 60, 186, 162, 4, 8),
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 62, 94, 82, 4, 8),
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 60, 94, 82, 4, 8),
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 32, 48, 42, 4, 8),
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 32, 48, 42, 4, 8),
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 30, 48, 42, 4, 8),
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 32, 46, 40, 4, 8),
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 17, 25, 22, 4, 8),
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 17, 25, 22, 4, 8),
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 17, 23, 20, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_t15_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_720P_T15,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_720P_T15],
+)
+def test_bruteforce_sweep_h4w8_720p_t15(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_720p_t15/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BH Galaxy 4x8, 480p, full-T (81 frames, latent T=21)
 # ---------------------------------------------------------------------------
 # Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded):
@@ -718,4 +835,74 @@ def test_bruteforce_sweep_h4w8_480p_full_t(
         max_combos=500,
         max_t_block=8,
         hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 6U 4x32, 480p, full-T (81 frames, latent T=21)
+# ---------------------------------------------------------------------------
+# Mesh: h_factor=4, w_factor=32.  Per-device spatial (unpadded):
+#   lat(15,3)  mid(30,6)  hi(60,12)  full(120,24)
+#
+# Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   lat(17,5)  mid(32,8)  hi(62,14)  full(122,26)
+# (3,1,1) kernels use no spatial padding: lat(15,3) mid(30,6)
+#
+# Same temporal dims as all 81-frame configs (T_res=23, T_tconv=22, etc.).
+# Very narrow W per device (W=3-26). Layers ordered most-to-least compute.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W32_480P_FULL_T = [
+    # (name,           C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
+    # --- stage 3 / 2 (largest spatial) ---
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 122, 26, 4, 32),
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 122, 26, 4, 32),
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 122, 26, 4, 32),
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 62, 14, 4, 32),
+    # --- stage 1 ---
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 62, 14, 4, 32),
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 32, 8, 4, 32),
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 32, 8, 4, 32),
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 41, 32, 8, 4, 32),
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 42, 30, 6, 4, 32),
+    # --- stage 0 (small spatial) ---
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 17, 5, 4, 32),
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 17, 5, 4, 32),
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 22, 15, 3, 4, 32),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x32_480p_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W32_480P_FULL_T,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W32_480P_FULL_T],
+)
+def test_bruteforce_sweep_h4w32_480p_full_t(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w32_480p_full_t/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        # No hw_product: 4x32 480p W=3-26 is too narrow for h*w=32.
+        hw_product=None,
     )
