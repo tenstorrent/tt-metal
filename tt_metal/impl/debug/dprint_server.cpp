@@ -435,7 +435,7 @@ void DevicePrintImpl::print_buffer_data(
                 hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
             const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
                 device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
-            auto risc_name = build_state.get_target_name();
+            const auto& risc_name = build_state.get_target_name();
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
             risc_data.kernel_elf_path = elf_path.string();
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
