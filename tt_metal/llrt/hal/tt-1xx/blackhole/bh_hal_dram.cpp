@@ -96,7 +96,7 @@ HalCoreInfoType create_dram_mem_map() {
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
         // DM
         {
-            {"DR0", "DRISC0"},
+            {"DR", "DRISC"},
         },
     };
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};

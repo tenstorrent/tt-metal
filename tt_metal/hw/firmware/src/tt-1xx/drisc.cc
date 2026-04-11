@@ -11,6 +11,8 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 uint8_t noc_index;
 
@@ -60,6 +62,8 @@ int main() {
         noc_local_state_init(n);
     }
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
+
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;
 
@@ -82,6 +86,7 @@ int main() {
         WAYPOINT("R");
         reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
