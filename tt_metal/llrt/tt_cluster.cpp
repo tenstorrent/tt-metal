@@ -330,7 +330,7 @@ void Cluster::initialize_device_drivers() {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
             ChipId mmio_id = *mmio_ids.begin();
-            auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+            auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
                 this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
@@ -361,9 +361,18 @@ void Cluster::assign_mem_channels_to_devices(
 }
 
 void Cluster::get_metal_desc_from_tt_desc() {
+    std::string silicon_dram_metadata_yaml;
+    if (this->target_type_ == TargetDevice::Silicon) {
+        // UMD uses arch-default soc descriptors without sdesc_path; device_descriptor_file_path is empty until we set
+        // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
+        silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+    }
     for (const auto& id : this->driver_->get_target_device_ids()) {
-        this->sdesc_per_chip_.emplace(
-            id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->cluster_desc_->get_board_type(id)));
+        tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
+        if (this->target_type_ == TargetDevice::Silicon) {
+            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        }
+        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -373,22 +382,24 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
-    std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
-        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        auto grouped_chips = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
+        auto discovered_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        auto grouped_chips = discovered_cluster_desc->get_chips_grouped_by_closest_mmio();
         uint32_t max_chips_per_mmio = 0;
         for (const auto& [mmio_device_id, chips] : grouped_chips) {
             max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
         }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
-            .sdesc_path = sdesc_path,
+            .sdesc_path = {},
+            .target_devices = discovered_cluster_desc->get_all_chips(),
+            .cluster_descriptor = discovered_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
         std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
         if (rtoptions_.get_mock_enabled()) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
@@ -406,6 +417,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
         auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
