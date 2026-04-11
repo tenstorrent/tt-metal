@@ -228,7 +228,7 @@
   skus:
     wh_llmbox:
       timeout: 15
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gemma4-a4b
 
@@ -237,6 +237,6 @@
   skus:
     wh_llmbox:
       timeout: 15
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gemma4-31b

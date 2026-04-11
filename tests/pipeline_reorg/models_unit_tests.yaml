@@ -435,7 +435,7 @@
     wh_n150:
       timeout: 15
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma4 A4B unit tests (T3K)
@@ -447,7 +447,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma4 31B unit tests (T3K)
@@ -459,5 +459,5 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
