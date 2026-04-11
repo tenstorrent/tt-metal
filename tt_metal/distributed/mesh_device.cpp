@@ -1320,12 +1320,8 @@ bool MeshDeviceImpl::initialize_impl(
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto& env_impl = MetalEnvAccessor(MetalContext::instance(context_id_).get_env()).impl();
-    // Exclude the last row (y = compute_grid_size.y - 1) which contains dispatch infrastructure
-    // cores (fabric MUX, PREFETCH_D, DISPATCH_D). These cores run infinite-loop kernels and never
-    // call notify_dispatch_core_done(), so including them in the worker count causes
-    // dispatch_wait_with_prefetch_stall(K) to hang when K > 0.
     auto sub_devices = {SubDevice(SubDeviceImpl(
-        &env_impl, std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 2}))}))};
+        &env_impl, std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();
