@@ -11,6 +11,6 @@ operations:
       - type: "Fpu"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
     packer: "Packer"
-    math_fidelity: "HiFi2"
     block_size: [64, 128]

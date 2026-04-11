@@ -250,7 +250,7 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
  *                            of TF32 (SrcA/SrcB) and FP32 (Dst) register formats.
  * \return true if the conversion is supported given the FP32 accumulation setting.
  */
-__attribute__((noinline)) bool is_unpacker_format_conversion_supported_fp32_acc(
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_conversion_supported_fp32_acc(
     const DataFormat unpack_src_format, const DataFormat unpack_dst_format, const bool is_fp32_dest_acc_en)
 {
     switch (unpack_src_format)
@@ -486,7 +486,7 @@ __attribute__((noinline)) bool is_unpacker_format_conversion_supported_fp32_acc(
  *                          targeting SrcA/SrcB registers (Tf32/16b/8b path).
  * \return true if the conversion is supported given the register destination.
  */
-__attribute__((noinline)) bool is_unpacker_format_conversion_supported_dest(
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_conversion_supported_dest(
     const DataFormat unpack_src_format, const DataFormat unpack_dst_format, const bool unpack_to_dest)
 {
     switch (unpack_src_format)

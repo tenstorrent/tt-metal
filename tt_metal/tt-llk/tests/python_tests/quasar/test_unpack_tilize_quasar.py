@@ -13,6 +13,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
@@ -52,12 +53,11 @@ def generate_unpack_tilize_combinations(
     Returns: List of (format, dest_acc, unpacker_sel, input_dimensions) tuples
     """
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     combinations = []
@@ -82,9 +82,12 @@ def generate_unpack_tilize_combinations(
         )
 
         for dest_acc in dest_acc_modes:
-            for unpacker_sel in unpacker_engines:
-                for dimensions in dimensions_cache[dest_acc]:
-                    combinations.append((fmt, dest_acc, unpacker_sel, dimensions))
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for unpacker_sel in unpacker_engines:
+                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        combinations.append(
+                            (fmt, dest_acc, dest_sync, unpacker_sel, dimensions)
+                        )
 
     return combinations
 
@@ -105,16 +108,14 @@ ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
+    formats_dest_acc_sync_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
+    formats_dest_acc_sync_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
 ):
-    formats_dest_acc_unpack_sel_dimensions = formats_dest_acc_unpack_sel_dimensions[0]
-    formats = formats_dest_acc_unpack_sel_dimensions[0]
-    dest_acc = formats_dest_acc_unpack_sel_dimensions[1]
-    unpacker_sel = formats_dest_acc_unpack_sel_dimensions[2]
-    input_dimensions = formats_dest_acc_unpack_sel_dimensions[3]
+    (formats, dest_acc, dest_sync_mode, unpacker_sel, input_dimensions) = (
+        formats_dest_acc_sync_unpack_sel_dimensions[0]
+    )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -141,7 +142,7 @@ def test_unpack_tilize_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),

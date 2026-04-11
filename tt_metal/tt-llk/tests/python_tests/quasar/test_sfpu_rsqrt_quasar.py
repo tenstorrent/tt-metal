@@ -10,6 +10,7 @@ from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -76,10 +77,11 @@ def generate_sfpu_rsqrt_combinations(
 
     Args: Input-output format pairs
 
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
+    Returns: List of (format, dest_acc, dest_sync, implied_math_format, input_dimensions) tuples
     """
     combinations = []
 
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
@@ -93,11 +95,21 @@ def generate_sfpu_rsqrt_combinations(
             if _is_invalid_quasar_combination(fmt, dest_acc):
                 continue
 
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                for input_dimensions in [[32, 32], [64, 64]]:
-                    combinations.append(
-                        (fmt, dest_acc, implied_math_format, input_dimensions)
-                    )
+            for dest_sync in dest_sync_modes:
+                for implied_math_format in [
+                    ImpliedMathFormat.No,
+                    ImpliedMathFormat.Yes,
+                ]:
+                    for input_dimensions in [[32, 32], [64, 64]]:
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                implied_math_format,
+                                input_dimensions,
+                            )
+                        )
 
     return combinations
 
@@ -113,19 +125,19 @@ SFPU_RSQRT_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_rsqrt_combinations(
+    formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_rsqrt_combinations(
         SFPU_RSQRT_FORMATS
     ),
 )
-def test_sfpu_rsqrt_quasar(formats_dest_acc_implied_math_input_dims):
+def test_sfpu_rsqrt_quasar(formats_dest_acc_sync_implied_math_input_dims):
     """
     Test reciprocal square root (rsqrt) operation on Quasar architecture.
 
     Uses PyTorch's rsqrt as the golden reference and generates input stimuli
     covering the full representable range
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
+    (formats, dest_acc, dest_sync, implied_math_format, input_dimensions) = (
+        formats_dest_acc_sync_implied_math_input_dims[0]
     )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -169,7 +181,7 @@ def test_sfpu_rsqrt_quasar(formats_dest_acc_implied_math_input_dims):
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

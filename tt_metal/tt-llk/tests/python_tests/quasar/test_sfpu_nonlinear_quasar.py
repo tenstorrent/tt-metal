@@ -10,6 +10,7 @@ from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -76,10 +77,11 @@ def generate_sfpu_nonlinear_combinations(
 
     Args: Input-output format pairs
 
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions, mathop) tuples
+    Returns: List of (format, dest_acc, dest_sync, implied_math_format, input_dimensions, mathop) tuples
     """
     combinations = []
 
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
@@ -93,27 +95,32 @@ def generate_sfpu_nonlinear_combinations(
             if _is_invalid_quasar_combination(fmt, dest_acc):
                 continue
 
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                for input_dimensions in [[32, 32], [64, 64]]:
-                    for mathop in [
-                        MathOperation.Exp,
-                        MathOperation.Gelu,
-                        MathOperation.Relu,
-                        MathOperation.Reciprocal,
-                        MathOperation.Sqrt,
-                        MathOperation.Tanh,
-                        MathOperation.Sigmoid,
-                        MathOperation.Silu,
-                    ]:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                implied_math_format,
-                                input_dimensions,
-                                mathop,
+            for dest_sync in dest_sync_modes:
+                for implied_math_format in [
+                    ImpliedMathFormat.No,
+                    ImpliedMathFormat.Yes,
+                ]:
+                    for input_dimensions in [[32, 32], [64, 64]]:
+                        for mathop in [
+                            MathOperation.Exp,
+                            MathOperation.Gelu,
+                            MathOperation.Relu,
+                            MathOperation.Reciprocal,
+                            MathOperation.Sqrt,
+                            MathOperation.Tanh,
+                            MathOperation.Sigmoid,
+                            MathOperation.Silu,
+                        ]:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    implied_math_format,
+                                    input_dimensions,
+                                    mathop,
+                                )
                             )
-                        )
 
     return combinations
 
@@ -299,18 +306,18 @@ SFPU_NONLINEAR_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims_mathop=generate_sfpu_nonlinear_combinations(
+    formats_dest_acc_sync_implied_math_input_dims_mathop=generate_sfpu_nonlinear_combinations(
         SFPU_NONLINEAR_FORMATS
     ),
 )
-def test_sfpu_nonlinear_quasar(formats_dest_acc_implied_math_input_dims_mathop):
+def test_sfpu_nonlinear_quasar(formats_dest_acc_sync_implied_math_input_dims_mathop):
     """
     Test nonlinear SFPU operations (exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu) on Quasar architecture.
 
     This test parameterizes over multiple operations to avoid code duplication.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions, mathop) = (
-        formats_dest_acc_implied_math_input_dims_mathop[0]
+    (formats, dest_acc, dest_sync, implied_math_format, input_dimensions, mathop) = (
+        formats_dest_acc_sync_implied_math_input_dims_mathop[0]
     )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -351,7 +358,7 @@ def test_sfpu_nonlinear_quasar(formats_dest_acc_implied_math_input_dims_mathop):
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
