@@ -197,6 +197,13 @@ def test_single_layer_model(mesh_device, num_layers):
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
 
+    # 6-layer test includes global attention — skip on single device if head_dim=512 overflows L1
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    if num_layers >= 6 and tp == 1:
+        hf_config_check = TestFactory.create_hf_config()
+        if hf_config_check.hidden_size > 4096:
+            pytest.skip("Global attention head_dim=512 overflows L1 on single device for large models")
+
     base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     is_moe = getattr(base_config, "enable_moe_block", False)
     if is_moe:
