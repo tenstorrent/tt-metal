@@ -680,7 +680,8 @@ static void sdpa_inner_loop_step(
     const bool reduce_trigger = false,
     const uint32_t actual_sbw = qkt_subblock_w,
     const uint32_t save_out_cb = INVALID_CB,
-    const uint32_t save_max_cb = INVALID_CB) {
+    const uint32_t save_max_cb = INVALID_CB,
+    const int32_t ring_iter = -1) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     // TODO: pick up the size of dest from dest_helper once it is merged to main.
@@ -719,7 +720,12 @@ static void sdpa_inner_loop_step(
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
 #endif
-    cb_wait_front(cb_kt_in, DHt * KT_stride);
+    if (ring_iter == 3) {
+        DeviceZoneScopedN("WAIT-K");
+        cb_wait_front(cb_kt_in, DHt * KT_stride);
+    } else {
+        cb_wait_front(cb_kt_in, DHt * KT_stride);
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
@@ -1553,7 +1559,8 @@ void sdpa_ring_v2(
                 can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
                 chunk_sbw,
                 step_save_out_cb,
-                step_save_max_cb);
+                step_save_max_cb,
+                (int32_t)ring_iter);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.

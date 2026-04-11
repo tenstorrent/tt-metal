@@ -96,139 +96,139 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
-            q_chunk_sizes=[224, 256, 288],
-            k_chunk_sizes=[128, 256, 512],
-            seq_len=9472 if mesh_config.is_galaxy else 8544,  # Tuned for each platform to match per-core work
-        )
-    )
-
-    # WAN 2.2 — 4×Galaxy deployment (128 chips, 720p split across 4 Galaxies)
-    configs.append(
-        ModelConfig(
-            name="wan2_2_4xGLX",
-            nhq=10,
-            nhk=10,
-            nhv=10,
-            d_q=128,
-            d_k=128,
-            d_v=128,
-            is_causal=False,
-            is_balanced=False,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat16,
-            q_chunk_sizes=[224, 256, 288],
-            k_chunk_sizes=[128, 256, 512],
-            seq_len=2368 if mesh_config.is_galaxy else 2240,  # Tuned for each platform to match per-core work
-        )
-    )
-
-    # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
-    # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
-    # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
-    configs.append(
-        ModelConfig(
-            name="videogen_model1_720p",
-            nhq=10,
-            nhk=10,
-            nhv=10,
-            d_q=128,
-            d_k=128,
-            d_v=128,
-            is_causal=False,
-            is_balanced=False,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat16,
-            q_chunk_sizes=[224],
-            k_chunk_sizes=[512],
-            seq_len=14400 if mesh_config.is_galaxy else 13440,  # Tuned for each platform to match per-core work
-        )
-    )
-
-    # VideogenModel1 480p — 1×Galaxy deployment (49,920 total tokens)
-    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
-    # Galaxy: 6240/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
-    configs.append(
-        ModelConfig(
-            name="videogen_model1_480p",
-            nhq=10,
-            nhk=10,
-            nhv=10,
-            d_q=128,
-            d_k=128,
-            d_v=128,
-            is_causal=False,
-            is_balanced=False,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[288],
             k_chunk_sizes=[512],
-            seq_len=6240 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+            seq_len=9472,
         )
     )
 
-    # VideogenModel1 768×512 — 1×Galaxy deployment (49,152 total tokens)
-    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
-    # Zero K pad waste (6144 = 12×512 exactly).
-    # Galaxy: 6144/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
-    configs.append(
-        ModelConfig(
-            name="videogen_model1_768x512",
-            nhq=10,
-            nhk=10,
-            nhv=10,
-            d_q=128,
-            d_k=128,
-            d_v=128,
-            is_causal=False,
-            is_balanced=False,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat16,
-            q_chunk_sizes=[288],
-            k_chunk_sizes=[512],
-            seq_len=6144 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
-        )
-    )
+    # # WAN 2.2 — 4×Galaxy deployment (128 chips, 720p split across 4 Galaxies)
+    # configs.append(
+    #     ModelConfig(
+    #         name="wan2_2_4xGLX",
+    #         nhq=10,
+    #         nhk=10,
+    #         nhv=10,
+    #         d_q=128,
+    #         d_k=128,
+    #         d_v=128,
+    #         is_causal=False,
+    #         is_balanced=False,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat16,
+    #         q_chunk_sizes=[224, 256, 288],
+    #         k_chunk_sizes=[128, 256, 512],
+    #         seq_len=2368 if mesh_config.is_galaxy else 2240,  # Tuned for each platform to match per-core work
+    #     )
+    # )
 
-    # DeepSeek MLA configuration
-    mla_nhq = 32 if mesh_config.is_galaxy else 29  # Tuned for each platform to match per-core work
+    # # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
+    # # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
+    # # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
+    # configs.append(
+    #     ModelConfig(
+    #         name="videogen_model1_720p",
+    #         nhq=10,
+    #         nhk=10,
+    #         nhv=10,
+    #         d_q=128,
+    #         d_k=128,
+    #         d_v=128,
+    #         is_causal=False,
+    #         is_balanced=False,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat16,
+    #         q_chunk_sizes=[224],
+    #         k_chunk_sizes=[512],
+    #         seq_len=14400 if mesh_config.is_galaxy else 13440,  # Tuned for each platform to match per-core work
+    #     )
+    # )
 
-    configs.append(
-        ModelConfig(
-            name="mla_100k",
-            nhq=mla_nhq,
-            nhk=1,
-            nhv=mla_nhq,
-            d_q=576,
-            d_k=576,
-            d_v=128,
-            is_causal=True,
-            is_balanced=True,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[160],  # Tuned for each sequence length
-            k_chunk_sizes=[160],
-            seq_len=3200,
-        )
-    )
+    # # VideogenModel1 480p — 1×Galaxy deployment (49,920 total tokens)
+    # # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # # Galaxy: 6240/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    # configs.append(
+    #     ModelConfig(
+    #         name="videogen_model1_480p",
+    #         nhq=10,
+    #         nhk=10,
+    #         nhv=10,
+    #         d_q=128,
+    #         d_k=128,
+    #         d_v=128,
+    #         is_causal=False,
+    #         is_balanced=False,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat16,
+    #         q_chunk_sizes=[288],
+    #         k_chunk_sizes=[512],
+    #         seq_len=6240 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+    #     )
+    # )
 
-    configs.append(
-        ModelConfig(
-            name="mla_128k",
-            nhq=mla_nhq,
-            nhk=1,
-            nhv=mla_nhq,
-            d_q=576,
-            d_k=576,
-            d_v=128,
-            is_causal=True,
-            is_balanced=True,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[128],
-            k_chunk_sizes=[128],
-            seq_len=4096,
-        )
-    )
+    # # VideogenModel1 768×512 — 1×Galaxy deployment (49,152 total tokens)
+    # # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # # Zero K pad waste (6144 = 12×512 exactly).
+    # # Galaxy: 6144/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    # configs.append(
+    #     ModelConfig(
+    #         name="videogen_model1_768x512",
+    #         nhq=10,
+    #         nhk=10,
+    #         nhv=10,
+    #         d_q=128,
+    #         d_k=128,
+    #         d_v=128,
+    #         is_causal=False,
+    #         is_balanced=False,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat16,
+    #         q_chunk_sizes=[288],
+    #         k_chunk_sizes=[512],
+    #         seq_len=6144 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+    #     )
+    # )
+
+    # # DeepSeek MLA configuration
+    # mla_nhq = 32 if mesh_config.is_galaxy else 29  # Tuned for each platform to match per-core work
+
+    # configs.append(
+    #     ModelConfig(
+    #         name="mla_100k",
+    #         nhq=mla_nhq,
+    #         nhk=1,
+    #         nhv=mla_nhq,
+    #         d_q=576,
+    #         d_k=576,
+    #         d_v=128,
+    #         is_causal=True,
+    #         is_balanced=True,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat8_b,
+    #         q_chunk_sizes=[160],  # Tuned for each sequence length
+    #         k_chunk_sizes=[160],
+    #         seq_len=3200,
+    #     )
+    # )
+
+    # configs.append(
+    #     ModelConfig(
+    #         name="mla_128k",
+    #         nhq=mla_nhq,
+    #         nhk=1,
+    #         nhv=mla_nhq,
+    #         d_q=576,
+    #         d_k=576,
+    #         d_v=128,
+    #         is_causal=True,
+    #         is_balanced=True,
+    #         q_dtype=ttnn.bfloat16,
+    #         kv_dtype=ttnn.bfloat8_b,
+    #         q_chunk_sizes=[128],
+    #         k_chunk_sizes=[128],
+    #         seq_len=4096,
+    #     )
+    # )
 
     return {config.name: config for config in configs}
 

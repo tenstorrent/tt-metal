@@ -65,7 +65,7 @@ class MeshConfig:
     GALAXY_SP_SIZE: ClassVar[int] = 8
 
     # Non-Galaxy hardware constants
-    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
+    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows)
 
     # Instance fields (set by detect())
     is_galaxy: bool
