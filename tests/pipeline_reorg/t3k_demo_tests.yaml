@@ -215,3 +215,21 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss
+
+- name: t3k_gemma4_a4b_demo
+  cmd: run_t3000_gemma4_a4b_demo
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gemma4-a4b
+
+- name: t3k_gemma4_31b_demo
+  cmd: run_t3000_gemma4_31b_demo
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gemma4-31b

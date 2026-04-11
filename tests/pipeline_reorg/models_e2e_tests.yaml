@@ -361,3 +361,27 @@
 #       tier: 3
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
+
+- name: Gemma4 A4B e2e demo (T3K)
+  cmd: |
+    export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it
+    pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
+  model: gemma4-a4b-t3k
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma4 31B e2e demo (T3K)
+  cmd: |
+    export HF_MODEL=/proj_sw/user_dev/gemma4/gemma-4-31B-it
+    pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
+  model: gemma4-31b-t3k
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
