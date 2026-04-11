@@ -20,9 +20,7 @@ constexpr uint32_t stack_usage_pattern = 0xBABABABA;
 static inline uint32_t* get_stack_base() {
 #if defined(ARCH_QUASAR)
     extern thread_local uint32_t __stack_base_lwm[];
-    extern char __stack_base_offset;
-    uint32_t* __stack_base = &__stack_base_lwm[uintptr_t(&__stack_base_offset)];
-    return __stack_base;
+    return __stack_base_lwm;
 #else
     extern uint32_t __stack_base[];
     return __stack_base;

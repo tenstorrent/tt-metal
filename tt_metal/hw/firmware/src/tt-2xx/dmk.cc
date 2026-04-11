@@ -32,8 +32,8 @@ extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
-    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    mark_stack_usage();
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
@@ -83,11 +83,15 @@ uint32_t _start() {
     wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
-        EARLY_RETURN_FOR_DEBUG
 
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
+        // Paint stack after all thread_local writes and CRT init are done.
+        mark_stack_usage();
+
+        EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");
         kernel_main();
