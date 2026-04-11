@@ -188,26 +188,26 @@ def parametrize_batch_seq(configs=None, ids=None):
 def parametrize_mesh_with_fabric(mesh_shapes=None):
     """Universal mesh parametrization with FABRIC_1D.
 
-    Generates mesh_device + device_params parametrization for multi-device tests.
+    Generates mesh_device + device_params parametrization for tests at any TP factor.
     Only includes mesh shapes that fit on the current system.
 
-    Usage:
-        @parametrize_mesh_with_fabric()           # default: (1,2) and (1,8)
-        @parametrize_mesh_with_fabric([(1,2)])     # explicit shapes
+    Default shapes: (1,1) single card, (1,2) N300, (1,8) T3K.
 
-        pytest -k "1x2"   # run only N300 configs
-        pytest -k "1x8"   # run only T3K configs
+    Usage:
+        @parametrize_mesh_with_fabric()           # default: all shapes that fit
+        @parametrize_mesh_with_fabric([(1,8)])     # explicit shapes
+
+        pytest -k "1x1"   # single card (TP=1)
+        pytest -k "1x2"   # N300 (TP=2)
+        pytest -k "1x8"   # T3K (TP=8)
     """
     num_devices = ttnn.get_num_devices()
 
     if mesh_shapes is None:
-        # Default: offer every standard config that fits the current system
-        # all_shapes = [(1, 2), (1, 8)]
-        all_shapes = [(1, 8)]
+        all_shapes = [(1, 1), (1, 2), (1, 8)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
 
     if not mesh_shapes:
-        # No multi-device configs fit — skip
         mesh_shapes = [pytest.param((1, 1), marks=pytest.mark.skip(reason="Not enough devices"))]
 
     mesh_params = [pytest.param(s, id=f"{s[0]}x{s[1]}") for s in mesh_shapes]
