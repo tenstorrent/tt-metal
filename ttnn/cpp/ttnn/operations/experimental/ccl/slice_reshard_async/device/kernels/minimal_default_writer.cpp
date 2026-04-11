@@ -55,7 +55,13 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<4>();
     uint32_t read_size = stick_size;
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
+    const decltype(TensorAccessor(
+        dst_args,
+        output_tensor_address)) dst_accessor(  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
+                                               // since it is coming from runtime arguments, which may be overwritten.
+        dst_args,
+        output_tensor_address,
+        stick_size);
 
     // pre-populate packet headers
     auto pkt_hdr = PacketHeaderPool::allocate_header();

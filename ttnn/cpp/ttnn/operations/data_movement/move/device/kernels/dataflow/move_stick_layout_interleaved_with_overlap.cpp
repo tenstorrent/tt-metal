@@ -38,8 +38,12 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    const auto src_addrgen = TensorAccessor(src_args, src_addr);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
+    const decltype(TensorAccessor(src_args, src_addr)) src_addrgen(
+        src_args, src_addr, page_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                         // it is coming from runtime arguments, which may be overwritten.
+    const decltype(TensorAccessor(dst_args, dst_addr)) dst_addrgen(
+        dst_args, dst_addr, page_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                         // it is coming from runtime arguments, which may be overwritten.
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees

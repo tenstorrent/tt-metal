@@ -25,7 +25,13 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src0_args, input_addr_a);
     const auto s1 = TensorAccessor(src1_args, input_addr_b);
 
-    const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr);
+    const decltype(TensorAccessor(
+        batch_ids_args,
+        batch_ids_addr)) batchAddr(  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since it is
+                                     // coming from runtime arguments, which may be overwritten.
+        batch_ids_args,
+        batch_ids_addr,
+        batch_id_size << 2);
 
     bool replace_batch = false;
     uint32_t batch_to_replace_id = 0;

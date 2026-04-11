@@ -56,7 +56,9 @@ void kernel_main() {
     const uint32_t outND = cND;
 
     const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
-    const decltype(TensorAccessor(src_args, src_addr)) src(src_args, src_addr, page_size_a);
+    const decltype(TensorAccessor(src_args, src_addr)) src(
+        src_args, src_addr, page_size_a);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                           // it is coming from runtime arguments, which may be overwritten.
 
     cb_src_b.reserve_back(1);
 #ifdef FILL_WITH_VALUE_FLOAT_B
