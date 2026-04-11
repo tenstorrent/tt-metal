@@ -90,8 +90,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Step 2: Install SFPI
       - name: Install SFPI
