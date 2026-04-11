@@ -10,8 +10,9 @@ operations:
     output_format: "Float16_b"
     math:
       - type: "Fpu"
-        operation: "ReduceColumn"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_COL"
         reduce_pool: "MAX"
         unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
     packer: "Packer"
-    math_fidelity: "HiFi2"

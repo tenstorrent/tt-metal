@@ -15,6 +15,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
+    DestSync,
     ImpliedMathFormat,
     MathOperation,
     format_dict,
@@ -64,7 +65,10 @@ from helpers.utils import passed_test
         ImpliedMathFormat.No,
         ImpliedMathFormat.Yes,
     ],
-    input_dimensions=lambda dest_acc: generate_unary_input_dimensions(dest_acc),
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
+    input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+        dest_acc, dest_sync_mode
+    ),
 )
 def test_eltwise_binary_broadcast_quasar(
     formats,
@@ -73,6 +77,7 @@ def test_eltwise_binary_broadcast_quasar(
     broadcast_type,
     math_fidelity,
     implied_math_format,
+    dest_sync_mode,
     input_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
@@ -111,7 +116,7 @@ def test_eltwise_binary_broadcast_quasar(
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
