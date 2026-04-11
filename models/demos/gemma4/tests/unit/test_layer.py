@@ -258,14 +258,33 @@ def test_layer_forward_decode(layer_idx, mesh_device):
     kv_cache = init_kv_cache(
         mesh_device, attn_cfg, max_batch_size=1, max_seq_len=cache_len + 32, cache_dtype=ttnn.bfloat16
     )
-    k_fill = ttnn.from_torch(
-        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
-    v_fill = ttnn.from_torch(
-        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
-    ttnn.fill_cache(kv_cache[0], k_fill, batch_idx=0)
-    ttnn.fill_cache(kv_cache[1], v_fill, batch_idx=0)
+    # Fill cache — on multi-device, each device gets its local KV heads
+    if tp > 1:
+        local_kv = attn_cfg.num_key_value_heads // tp
+        for dev_idx in range(tp):
+            k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+            v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+            dev_k = ttnn.get_device_tensors(kv_cache[0])[dev_idx]
+            dev_v = ttnn.get_device_tensors(kv_cache[1])[dev_idx]
+            ttnn.fill_cache(
+                dev_k,
+                ttnn.from_torch(k_local, device=dev_k.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+                batch_idx=0,
+            )
+            ttnn.fill_cache(
+                dev_v,
+                ttnn.from_torch(v_local, device=dev_v.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+                batch_idx=0,
+            )
+    else:
+        k_fill = ttnn.from_torch(
+            k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        v_fill = ttnn.from_torch(
+            v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        ttnn.fill_cache(kv_cache[0], k_fill, batch_idx=0)
+        ttnn.fill_cache(kv_cache[1], v_fill, batch_idx=0)
     tt_layer.self_attn.kv_cache = kv_cache
 
     # Set HF KV cache

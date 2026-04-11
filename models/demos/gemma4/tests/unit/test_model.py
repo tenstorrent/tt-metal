@@ -205,6 +205,7 @@ def test_single_layer_model(mesh_device, num_layers):
     hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
+    model_args._hf_text_config = hf_text_config  # Enables internal per-layer RoPE
     tt_state = _hf_model_state_to_tt_state(hf_model)
 
     seq_len = 32
@@ -246,10 +247,8 @@ def test_single_layer_model(mesh_device, num_layers):
     tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx=0)
-    tt_logits = tt_model(
-        tt_embeds, rope_mats=(cos_tt, sin_tt), position_idx=None, page_table=None, kv_caches=None, is_decode=False
-    )
+    # Don't pass rope_mats — let model use internal per-layer-type RoPE caches
+    tt_logits = tt_model(tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False)
     tt_logits_torch = (
         (ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]) if is_mesh else ttnn.to_torch(tt_logits))
         .squeeze(0)
