@@ -55,6 +55,48 @@ SUBBLOCK_HW_CHOICES = [
     (1, 1),  # subblock_hw = 1
 ]
 
+# ── Production helpers (ported from models/tt_transformers/tt/model_config.py) ──
+
+
+def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:
+    """Find the largest divisor of n that is <= max_divisor.
+
+    Mirrors ``ModelArgs.find_largest_divisor`` used by every production
+    model (Llama, Falcon, Stable Diffusion, etc.) to select ``in0_block_w``.
+    """
+    for i in range(max_divisor, 0, -1):
+        if n % i == 0:
+            return i
+    return 1
+
+
+def _find_grid(total_tiles: int, max_rows: int = 8, max_cols: int = 8) -> tuple:
+    """Find an (rows, cols) grid such that total_tiles divides evenly.
+
+    Mirrors ``ModelArgs.find_grid`` — targets ~32 cores for best
+    utilisation on Wormhole (8×8 grid).
+    """
+    max_cores = max_rows * max_cols
+    target = 32
+    possible = [k for k in range(1, max_cores + 1) if total_tiles % k == 0]
+    possible.sort(key=lambda x: abs(x - target))
+    for cores in possible:
+        for rows in range(1, max_rows + 1):
+            if cores % rows == 0:
+                cols = cores // rows
+                if cols <= max_cols:
+                    return rows, cols
+    return 1, 1  # Fallback
+
+
+def _get_out_subblock_w(per_core_N: int, out_subblock_h: int = 1, max_hw: int = 8) -> int:
+    """Find the largest out_subblock_w that divides per_core_N and satisfies
+    out_subblock_h * out_subblock_w <= max_hw."""
+    for w in range(min(max_hw // max(out_subblock_h, 1), per_core_N), 0, -1):
+        if per_core_N % w == 0 and out_subblock_h * w <= max_hw:
+            return w
+    return 1
+
 
 def _get_subblock_sizes(m_tiles_per_core: int, n_tiles_per_core: int, fp32_dest_acc_en: bool = False) -> tuple:
     """Find the best (out_subblock_h, out_subblock_w) for given per_core dimensions."""
@@ -414,6 +456,250 @@ def _generate_minimal_matmul_candidates(
     return candidates[:MAX_CANDIDATES_PER_FAMILY]
 
 
+# ── Production-derived candidate generators ──
+# These replicate the EXACT algorithms used by every production Tenstorrent
+# model (Llama, Falcon, Stable Diffusion, DeepSeek, etc.) and are inserted
+# at the TOP of the candidate list so the heuristic scorer sees them first.
+
+
+def _generate_production_1d_candidate(
+    features: Dict[str, Any],
+) -> List[ConfigCandidate]:
+    """Generate a production-quality 1D MultiCast config.
+
+    Replicates ``ModelArgs.matmul_1d_config()`` from model_config.py (line 3309).
+    This is the config used by decode/attention paths in Llama, Falcon, etc.
+    """
+    candidates = []
+    M = features["M"]
+    K = features["K"]
+    N = features["N"]
+    batch_size = features["batch_size_a"]
+    grid_x = features["grid_x"]
+    grid_y = features["grid_y"]
+    num_cores = grid_x * grid_y
+
+    if num_cores <= 0:
+        return candidates
+
+    m = batch_size * M  # fuse_batch=True
+    per_core_m = m // TILE_SIZE
+    if per_core_m <= 0:
+        return candidates
+
+    n_tiles = N // TILE_SIZE
+    k_tiles = K // TILE_SIZE
+    if n_tiles <= 0 or k_tiles <= 0:
+        return candidates
+
+    # Adjust grid if N is too small for all cores
+    effective_grid_x = grid_x
+    effective_grid_y = grid_y
+    effective_num_cores = num_cores
+    if n_tiles < num_cores:
+        # Use fewer cores — match production logic
+        effective_grid_y = max(1, n_tiles // effective_grid_x)
+        effective_num_cores = effective_grid_x * effective_grid_y
+
+    if effective_num_cores <= 0 or k_tiles % effective_num_cores != 0:
+        # Cannot evenly divide K across cores — try with fewer cores
+        for nc in range(effective_num_cores, 0, -1):
+            if k_tiles % nc == 0:
+                effective_num_cores = nc
+                effective_grid_y = max(1, nc // effective_grid_x)
+                effective_grid_x = min(effective_grid_x, nc)
+                break
+
+    if effective_num_cores <= 0:
+        return candidates
+
+    per_core_k = _find_largest_divisor(k_tiles // effective_num_cores) if k_tiles >= effective_num_cores else 1
+    per_core_n = _div_up(n_tiles, effective_num_cores)
+    if per_core_n <= 0:
+        return candidates
+
+    # Subblock calculation — matches production exactly
+    is_fp32 = features.get("is_fp32_accumulate", False)
+    max_sub = 4 if is_fp32 else 8
+
+    out_subblock_w = max([i for i in range(1, max_sub + 1) if per_core_n % i == 0], default=1)
+    out_subblock_h = max(
+        [i for i in range(1, max_sub + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_sub],
+        default=1,
+    )
+
+    try:
+        config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(effective_grid_x, effective_grid_y),
+            in0_block_w=per_core_k,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_m,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            mcast_in0=True,
+        )
+        candidates.append(
+            ConfigCandidate(
+                config=config,
+                config_family="MultiCast1D",
+                backend="matmul",
+                params={
+                    "mcast_in0": True,
+                    "in0_block_w": per_core_k,
+                    "per_core_M": per_core_m,
+                    "per_core_N": per_core_n,
+                    "out_subblock_h": out_subblock_h,
+                    "out_subblock_w": out_subblock_w,
+                    "production_derived": True,
+                },
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Production 1D config failed: {e}")
+
+    return candidates
+
+
+def _generate_production_2d_candidate(
+    features: Dict[str, Any],
+) -> List[ConfigCandidate]:
+    """Generate a production-quality 2D MultiCast config.
+
+    Replicates ``ModelArgs.matmul_config()`` from model_config.py (line 3076).
+    This is the config used by prefill/large-matrix paths.
+    """
+    candidates = []
+    M = features["M"]
+    K = features["K"]
+    N = features["N"]
+    batch_size = features["batch_size_a"]
+    grid_x = features["grid_x"]
+    grid_y = features["grid_y"]
+
+    m = batch_size * M
+    m_tiles = m // TILE_SIZE
+    k_tiles = K // TILE_SIZE
+    n_tiles = N // TILE_SIZE
+
+    if m_tiles <= 0 or k_tiles <= 0 or n_tiles <= 0:
+        return candidates
+
+    per_core_M = _div_up(m_tiles, grid_y)
+    per_core_N = _div_up(n_tiles, grid_x)
+
+    if per_core_M <= 0 or per_core_N <= 0:
+        return candidates
+
+    # in0_block_w — production formula
+    k_per_grid = k_tiles // grid_y if k_tiles % grid_y == 0 else k_tiles
+    in0_block_w = _find_largest_divisor(k_per_grid) if k_per_grid > 0 else 1
+
+    out_subblock_h = 1
+    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+
+    try:
+        config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fuse_batch=True,
+        )
+        candidates.append(
+            ConfigCandidate(
+                config=config,
+                config_family="MultiCast2D",
+                backend="matmul",
+                params={
+                    "transpose_mcast": False,
+                    "in0_block_w": in0_block_w,
+                    "per_core_M": per_core_M,
+                    "per_core_N": per_core_N,
+                    "out_subblock_h": out_subblock_h,
+                    "out_subblock_w": out_subblock_w,
+                    "production_derived": True,
+                },
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Production 2D config failed: {e}")
+
+    return candidates
+
+
+def _generate_production_dram_candidate(
+    features: Dict[str, Any],
+) -> List[ConfigCandidate]:
+    """Generate a production-quality DRAM-sharded config.
+
+    Replicates ``ModelArgs.dram_matmul_config()`` from model_config.py (line 3230).
+    Uses ``find_grid`` to determine optimal core count.
+    """
+    candidates = []
+
+    # DRAM-sharded only valid for non-sharded, DRAM-interleaved inputs
+    if features["is_a_sharded"] or "DRAM" not in features["buffer_type_a"]:
+        return candidates
+
+    M = features["M"]
+    K = features["K"]
+    N = features["N"]
+    batch_size = features["batch_size_a"]
+
+    m_tiles = (batch_size * M) // TILE_SIZE
+    k_tiles = K // TILE_SIZE
+    n_tiles = N // TILE_SIZE
+
+    if m_tiles <= 0 or k_tiles <= 0 or n_tiles <= 0:
+        return candidates
+
+    # Use find_grid to get optimal core count — mirrors production
+    try:
+        rows, cols = _find_grid(k_tiles)
+        num_cores = rows * cols
+    except Exception:
+        num_cores = 1
+
+    if num_cores <= 0 or k_tiles % num_cores != 0:
+        return candidates
+
+    in0_block_w = _find_largest_divisor(k_tiles // num_cores)
+    per_core_M = m_tiles
+    per_core_N = _div_up(n_tiles, num_cores)
+
+    try:
+        config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+        candidates.append(
+            ConfigCandidate(
+                config=config,
+                config_family="DRAMSharded",
+                backend="matmul",
+                params={
+                    "in0_block_w": in0_block_w,
+                    "per_core_M": per_core_M,
+                    "per_core_N": per_core_N,
+                    "production_derived": True,
+                },
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Production DRAM config failed: {e}")
+
+    return candidates
+
+
 def generate_matmul_candidates(features: Dict[str, Any]) -> List[ConfigCandidate]:
     """
     Generate all valid matmul config candidates for the given features.
@@ -421,6 +707,9 @@ def generate_matmul_candidates(features: Dict[str, Any]) -> List[ConfigCandidate
     This exhaustively explores the decision tree from matmul_program_config.cpp,
     producing multiple alternatives instead of a single choice. Each family
     is capped at MAX_CANDIDATES_PER_FAMILY to prevent combinatorial explosion.
+
+    Production-derived candidates (from model_config.py) are inserted FIRST,
+    giving them priority during scoring and selection.
 
     Math fidelity is iterated as a first-class dimension: each program config
     candidate is duplicated across all valid fidelities for the input dtype pair.
@@ -430,9 +719,17 @@ def generate_matmul_candidates(features: Dict[str, Any]) -> List[ConfigCandidate
     """
     base_candidates = []
 
+    # ── Production-derived candidates (highest priority) ──
+    # These replicate the exact algorithms used by Llama, Falcon, etc.
+    base_candidates.extend(_generate_production_1d_candidate(features))
+    base_candidates.extend(_generate_production_2d_candidate(features))
+    base_candidates.extend(_generate_production_dram_candidate(features))
+    logger.debug(f"Production candidates: {len(base_candidates)}")
+
+    # ── Swept candidates (additional exploration) ──
     # Path 1: MultiCast 1D (tall and wide variants)
     base_candidates.extend(_generate_multicast_1d_candidates(features))
-    logger.debug(f"MultiCast1D: {len(base_candidates)} candidates so far")
+    logger.debug(f"After MultiCast1D: {len(base_candidates)} candidates")
 
     # Path 2: MultiCast 2D
     base_candidates.extend(_generate_multicast_2d_candidates(features))

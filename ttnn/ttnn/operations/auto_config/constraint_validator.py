@@ -162,7 +162,16 @@ def validate_batching_constraints(config_family: str, features: Dict[str, Any]) 
 
 
 def validate_l1_budget(config: Any, config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
-    """Check that the config's L1 memory requirement doesn't exceed device limits."""
+    """Check that the config's L1 memory requirement doesn't exceed device limits.
+
+    Uses an accurate circular buffer (CB) size estimation that accounts for:
+    - Double-buffered input tiles (in0, in1)
+    - Single-buffered output tiles
+    - FP32 accumulator tiles when fp32_dest_acc_en is True
+    - Kernel binary overhead (~100KB reserved)
+
+    The formula mirrors the actual CB allocation in the matmul kernel factories.
+    """
     # Only applies to configs where we explicitly set per block/core sizes
     if config_family in ("DRAMSharded", "BatchedDRAMSharded", "MultiCore", "Reuse"):
         return True, "ok"
@@ -174,25 +183,36 @@ def validate_l1_budget(config: Any, config_family: str, features: Dict[str, Any]
     if per_core_M is None or per_core_N is None or in0_block_w is None:
         return True, "ok"
 
-    # Estimate CB sizes. TILE_SIZE=32x32=1024 elements.
-    # bfloat16 = 2 bytes per element -> 2048 bytes per tile
-    # bfloat8_b = 1088 bytes per tile (including header)
-    tile_bytes = 2048 if features.get("dtype_a") == "DataType.BFLOAT16" else 1088
+    # Tile byte sizes
+    # bfloat16: 32x32 × 2 bytes = 2048 bytes per tile
+    # bfloat8_b: 32x32 × 1 byte + 64 header = 1088 bytes per tile
+    dtype_a = features.get("dtype_a", "DataType.BFLOAT16")
+    tile_bytes = 2048 if dtype_a == "DataType.BFLOAT16" else 1088
 
-    # Rough CB memory estimate:
-    # input0: per_core_M * in0_block_w
-    # input1: in0_block_w * per_core_N
-    # output: per_core_M * per_core_N
-    # Multiply by 2 for double buffering.
-    cb_tiles = (per_core_M * in0_block_w) + (in0_block_w * per_core_N) + (per_core_M * per_core_N)
-    estimated_l1_usage = cb_tiles * tile_bytes * 2
+    # CB size estimation (mirrors matmul kernel factory allocation):
+    # CB_in0: in0_block_w × per_core_M tiles × 2 (double buffer)
+    # CB_in1: in0_block_w × per_core_N tiles × 2 (double buffer)
+    # CB_out: per_core_M × per_core_N tiles × 1 (single buffer output)
+    cb_in0_tiles = in0_block_w * per_core_M * 2
+    cb_in1_tiles = in0_block_w * per_core_N * 2
+    cb_out_tiles = per_core_M * per_core_N
 
-    # L1 compute usable size is ~1.0 MB
-    MAX_L1_BUDGET = 1048576
-    if estimated_l1_usage > MAX_L1_BUDGET:
+    # FP32 accumulator: subblock_h × subblock_w × 4 bytes/element
+    out_subblock_h = getattr(config, "out_subblock_h", 1)
+    out_subblock_w = getattr(config, "out_subblock_w", 1)
+    fp32_accum_bytes = out_subblock_h * out_subblock_w * 32 * 32 * 4  # fp32 tiles
+
+    total_cb_bytes = (cb_in0_tiles + cb_in1_tiles + cb_out_tiles) * tile_bytes + fp32_accum_bytes
+
+    # Wormhole L1: 1.5 MB (1,572,864 bytes) total per core
+    # Reserve ~300KB for kernel binaries, runtime, and CB metadata
+    # Usable: ~1.2 MB = 1,258,291 bytes
+    MAX_L1_USABLE = 1_258_291
+    if total_cb_bytes > MAX_L1_USABLE:
         return False, (
-            f"Estimated L1 usage {estimated_l1_usage} exceeds budget {MAX_L1_BUDGET} "
-            f"(per_core_M={per_core_M}, per_core_N={per_core_N}, in0_block_w={in0_block_w})"
+            f"Estimated L1 CB usage {total_cb_bytes:,} bytes exceeds budget {MAX_L1_USABLE:,} "
+            f"(in0={cb_in0_tiles}×{tile_bytes}, in1={cb_in1_tiles}×{tile_bytes}, "
+            f"out={cb_out_tiles}×{tile_bytes}, accum={fp32_accum_bytes})"
         )
 
     return True, "ok"
