@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-
 """Validate #include directives in C++ source files."""
-
-from __future__ import annotations
 
 import re
 import sys
