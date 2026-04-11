@@ -28,8 +28,9 @@ void bind_upsample(nb::module_& mod) {
         - Integer scales: Optimized path with reader/writer replication (fastest)
         - Float scales: General path with coordinate mapping (supports fractional scales)
 
-        The algorithms available for upsampling are 'nearest' and 'bilinear'.
+        The algorithms available for upsampling are 'nearest', 'bilinear', and 'bicubic'.
         Note: 'bilinear' mode requires integer scale factors.
+        Note: 'bicubic' mode requires ROW_MAJOR layout and DRAM INTERLEAVED memory.
 
 
         Args:
@@ -42,7 +43,7 @@ void bind_upsample(nb::module_& mod) {
 
 
         Keyword args:
-            mode (str, optional): upsampling mode - 'nearest' or 'bilinear'. Defaults to 'nearest'.
+            mode (str, optional): upsampling mode - 'nearest', 'bilinear', or 'bicubic'. Defaults to 'nearest'.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
 
@@ -62,6 +63,9 @@ void bind_upsample(nb::module_& mod) {
 
             >>> # Bilinear mode (integer scales only)
             >>> output = ttnn.upsample(input, 2, mode="bilinear")
+
+            >>> # Bicubic mode (float scales, DRAM interleaved)
+            >>> output = ttnn.upsample(input, 1.25, mode="bicubic")
 
         )doc";
 
