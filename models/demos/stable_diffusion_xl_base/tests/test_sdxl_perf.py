@@ -141,11 +141,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "clip_encoder_1": {
         "wormhole": 40_570_000,
-        "blackhole": 7_089_747,
+        "blackhole": 19_377_824,
     },
     "clip_encoder_2": {
         "wormhole": 125_300_000,
-        "blackhole": 29_182_499,
+        "blackhole": 60_903_932,
     },
 }
 
