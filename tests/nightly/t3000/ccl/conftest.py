@@ -247,15 +247,18 @@ def _reset_mesh_device_state(request, _mesh_device_manager):
         try:
             md.clear_loaded_sub_device_manager()
         except Exception:
-            pass
+            # Best-effort cleanup: log but do not fail the test if sub-device manager clearing fails.
+            logger.exception("Failed to clear loaded sub-device manager during mesh reset")
         try:
             md.reset_sub_device_stall_group()
         except Exception:
-            pass
+            # Best-effort cleanup: log but do not fail the test if stall group reset fails.
+            logger.exception("Failed to reset sub-device stall group during mesh reset")
         try:
             md.cache_entries_counter.reset()
         except Exception:
-            pass
+            # Best-effort cleanup: log but do not fail the test if cache_entries_counter reset fails.
+            logger.exception("Failed to reset cache_entries_counter during mesh reset")
         # Re-enable program cache in case a test called
         # disable_and_clear_program_cache().  This is safe — it does
         # NOT clear existing entries, it just ensures the cache is
@@ -263,4 +266,5 @@ def _reset_mesh_device_state(request, _mesh_device_manager):
         try:
             md.enable_program_cache()
         except Exception:
-            pass
+            # Best-effort cleanup: log but do not fail the test if enabling program cache fails.
+            logger.exception("Failed to re-enable program cache during mesh reset")
