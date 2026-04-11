@@ -334,7 +334,9 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
     bool row_wise = (memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
     CoreRangeSet grid_set = num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
-    ShardOrientation orientation = row_wise ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
+    // Use ROW_MAJOR orientation consistently, matching the convention in unary_ng_utils
+    // and the default expectation of sharded program factories.
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     ShardSpec shard_spec(grid_set, shard_shape, orientation);
     return output_memory_config.with_shard_spec(shard_spec);
 }
