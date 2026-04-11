@@ -426,6 +426,42 @@
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
 
+- name: Gemma4 E2B unit tests (N150)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E2B-it
+    pytest models/demos/gemma4/tests/unit -k "1x1" --timeout 300
+  model: gemma4-e2b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma4 E4B unit tests (N150)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    pytest models/demos/gemma4/tests/unit -k "1x1" --timeout 300
+  model: gemma4-e4b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma4 E4B unit tests (N300)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    pytest models/demos/gemma4/tests/unit -k "1x2" --timeout 300
+  model: gemma4-e4b-n300
+  skus:
+    wh_n300:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 - name: Gemma4 A4B unit tests (single card)
   cmd: |
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
