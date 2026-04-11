@@ -55,8 +55,6 @@ void kernel_main() {
     const uint32_t current_block_start = get_arg_val<uint32_t>(index++);
     const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
     const uint32_t row_width_elements = get_arg_val<uint32_t>(index++);
-    const uint32_t page_size_a_arg = get_arg_val<uint32_t>(index++);
-    const uint32_t page_size_b_arg = get_arg_val<uint32_t>(index++);
     const uint32_t alignment_a = get_arg_val<uint32_t>(index++);
     const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
@@ -83,14 +81,6 @@ void kernel_main() {
     const uint32_t outN = (aN > bN) ? aN : bN;
     const uint32_t outD = (aD > bD) ? aD : bD;
     const uint32_t outND = cND;
-
-#if SRC_BCAST
-    const uint32_t page_size_a = element_size_aligned_a;
-    const uint32_t page_size_b = align(page_size_b_arg, alignment_b);
-#else
-    const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
-    const uint32_t page_size_b = element_size_aligned_b;
-#endif
 
     const auto src = TensorAccessor(src_args, src_addr);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b);
