@@ -135,7 +135,14 @@ class GrpoTrainer:
             self.device_config.mesh_shape, self.device_config.device_ids
         )
 
-        inference_ctx = setup_inference(self.config, self.transformer_config, self.device_config, self.model_source)
+        inference_ctx = setup_inference(
+            grpo_cfg.temperature,
+            grpo_cfg.max_completion_length,
+            grpo_cfg.num_generations,
+            self.transformer_config,
+            self.device_config,
+            self.model_source,
+        )
         self.model = inference_ctx.tt_model
 
         optimizer = create_optimizer(inference_ctx.tt_model, self.optimizer_config_dict)
