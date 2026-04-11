@@ -170,10 +170,7 @@ class AutoConfigSelector(ABC):
         if not valid_candidates:
             # Return with selected_config=None to signal fallback to caller.
             # matmul_auto.py handles this by falling back to default ttnn.matmul.
-            logger.warning(
-                "No valid candidates found. "
-                f"All {len(candidates)} candidates were invalid."
-            )
+            logger.warning("No valid candidates found. " f"All {len(candidates)} candidates were invalid.")
             elapsed = (time.perf_counter() - start) * 1000
             return SelectionResult(
                 selected_config=None,
@@ -210,8 +207,6 @@ class AutoConfigSelector(ABC):
             selection_time_ms=elapsed,
         )
 
-    def _generate_suggestions(
-        self, features: Dict[str, Any], candidates: List[ConfigCandidate]
-    ) -> List[str]:
+    def _generate_suggestions(self, features: Dict[str, Any], candidates: List[ConfigCandidate]) -> List[str]:
         """Generate user-facing suggestions for better performance. Override as needed."""
         return []

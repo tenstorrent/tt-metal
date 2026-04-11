@@ -21,11 +21,7 @@ from ttnn.operations.auto_config.base import ConfigCandidate
 
 logger = logging.getLogger(__name__)
 
-from ttnn.operations.auto_config.math_fidelity import (
-    CYCLES_PER_TILE,
-    MAX_CYCLES_PER_TILE,
-    MathFidelity,
-)
+from ttnn.operations.auto_config.math_fidelity import CYCLES_PER_TILE, MAX_CYCLES_PER_TILE, MathFidelity
 
 TILE_SIZE = 32
 
@@ -165,9 +161,7 @@ class HeuristicScorer:
 
         return 0.5
 
-    def _score_subblock_efficiency(
-        self, candidate: ConfigCandidate, features: Dict[str, Any]
-    ) -> float:
+    def _score_subblock_efficiency(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
         """Score based on subblock sizes — larger subblocks use registers better."""
         out_subblock_h = candidate.params.get("out_subblock_h", 1)
         out_subblock_w = candidate.params.get("out_subblock_w", 1)
@@ -176,9 +170,7 @@ class HeuristicScorer:
         # Max useful subblock product is 8 (DST register limit)
         return min(1.0, subblock_product / 8.0)
 
-    def _score_backend_preference(
-        self, candidate: ConfigCandidate, features: Dict[str, Any]
-    ) -> float:
+    def _score_backend_preference(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
         """Score based on backend preference."""
         if candidate.backend == "matmul":
             return 0.8  # Standard backend, well-tested
@@ -186,9 +178,7 @@ class HeuristicScorer:
             return 0.6  # Experimental, may have better throughput for specific shapes
         return 0.5
 
-    def _score_fidelity_cost(
-        self, candidate: ConfigCandidate, features: Dict[str, Any]
-    ) -> float:
+    def _score_fidelity_cost(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
         """Score based on math fidelity efficiency.
 
         Lower fidelity = fewer cycles per tile = higher score.

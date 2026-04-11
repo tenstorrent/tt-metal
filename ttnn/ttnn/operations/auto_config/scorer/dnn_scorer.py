@@ -30,17 +30,27 @@ logger = logging.getLogger(__name__)
 
 # Feature keys used for DNN input (order matters!)
 DNN_FEATURE_KEYS = [
-    "M", "K", "N",
-    "batch_size_a", "batch_size_b",
-    "M_tiles", "K_tiles", "N_tiles",
-    "grid_x", "grid_y", "num_cores",
+    "M",
+    "K",
+    "N",
+    "batch_size_a",
+    "batch_size_b",
+    "M_tiles",
+    "K_tiles",
+    "N_tiles",
+    "grid_x",
+    "grid_y",
+    "num_cores",
     "num_devices",
 ]
 
 # Config param keys
 DNN_CONFIG_KEYS = [
-    "in0_block_w", "per_core_M", "per_core_N",
-    "out_subblock_h", "out_subblock_w",
+    "in0_block_w",
+    "per_core_M",
+    "per_core_N",
+    "out_subblock_h",
+    "out_subblock_w",
 ]
 
 
@@ -50,6 +60,7 @@ def _features_to_vector(features: Dict[str, Any], config_params: Dict[str, Any])
 
     # Features: log-normalize large values
     import math
+
     for key in DNN_FEATURE_KEYS:
         val = features.get(key, 0)
         if isinstance(val, bool):
@@ -69,8 +80,15 @@ def _features_to_vector(features: Dict[str, Any], config_params: Dict[str, Any])
             vec.append(0.0)
 
     # Config family one-hot encoding
-    families = ["MultiCast1D", "MultiCast2D", "Reuse", "DRAMSharded",
-                "BatchedDRAMSharded", "MinimalMatmul", "MultiCore"]
+    families = [
+        "MultiCast1D",
+        "MultiCast2D",
+        "Reuse",
+        "DRAMSharded",
+        "BatchedDRAMSharded",
+        "MinimalMatmul",
+        "MultiCore",
+    ]
     family = config_params.get("_family", "")
     for f in families:
         vec.append(1.0 if f == family else 0.0)
@@ -99,9 +117,7 @@ class DNNScorer:
 
     @staticmethod
     def _default_model_path() -> str:
-        return os.path.join(
-            os.path.expanduser("~"), ".ttnn", "auto_config_cache", "dnn_scorer_weights.json"
-        )
+        return os.path.join(os.path.expanduser("~"), ".ttnn", "auto_config_cache", "dnn_scorer_weights.json")
 
     def _load_model(self) -> None:
         """Load model weights from disk."""
@@ -122,6 +138,7 @@ class DNNScorer:
     def _init_random_weights(self) -> None:
         """Initialize with small random weights (untrained model)."""
         import random
+
         random.seed(42)
 
         input_dim = len(DNN_FEATURE_KEYS) + len(DNN_CONFIG_KEYS) + 7  # +7 for family one-hot
@@ -142,6 +159,7 @@ class DNNScorer:
 
     def _sigmoid(self, x: float) -> float:
         import math
+
         return 1.0 / (1.0 + math.exp(-max(-10.0, min(10.0, x))))
 
     def _matmul_vec(self, weights: List[List[float]], vec: List[float], bias: List[float]) -> List[float]:
@@ -215,9 +233,7 @@ class DNNScorer:
         for data in training_data:
             data["target_score"] = 1.0 - (data["latency_us"] - min_lat) / lat_range
 
-        logger.info(
-            f"Training DNN scorer on {len(training_data)} samples for {epochs} epochs"
-        )
+        logger.info(f"Training DNN scorer on {len(training_data)} samples for {epochs} epochs")
 
         try:
             import torch
@@ -238,7 +254,7 @@ class DNNScorer:
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(),
             nn.Linear(h2_dim, 1),
-            nn.Sigmoid()
+            nn.Sigmoid(),
         )
 
         with torch.no_grad():

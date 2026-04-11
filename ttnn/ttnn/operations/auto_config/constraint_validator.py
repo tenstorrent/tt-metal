@@ -19,10 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Tuple
 
-from ttnn.operations.auto_config.math_fidelity import (
-    MathFidelity,
-    valid_fidelities,
-)
+from ttnn.operations.auto_config.math_fidelity import MathFidelity
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +40,7 @@ def validate_tile_alignment(features: Dict[str, Any]) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def validate_grid_feasibility(
-    config: Any, config_family: str, features: Dict[str, Any]
-) -> Tuple[bool, str]:
+def validate_grid_feasibility(config: Any, config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
     """Check that the config's grid size doesn't exceed available cores."""
     grid_x = features["grid_x"]
     grid_y = features["grid_y"]
@@ -92,8 +87,7 @@ def validate_subblock_params(config: Any, config_family: str) -> Tuple[bool, str
             return False, f"subblock dims must be > 0: h={out_subblock_h}, w={out_subblock_w}"
         if out_subblock_h * out_subblock_w > MAX_SUBBLOCK_HW:
             return False, (
-                f"subblock_h*subblock_w={out_subblock_h * out_subblock_w} "
-                f"> MAX_SUBBLOCK_HW={MAX_SUBBLOCK_HW}"
+                f"subblock_h*subblock_w={out_subblock_h * out_subblock_w} " f"> MAX_SUBBLOCK_HW={MAX_SUBBLOCK_HW}"
             )
         if per_core_M % out_subblock_h != 0:
             return False, f"per_core_M={per_core_M} not divisible by out_subblock_h={out_subblock_h}"
@@ -121,9 +115,7 @@ def validate_minimal_matmul_constraints(
     return True, "ok"
 
 
-def validate_memory_config_compatibility(
-    config_family: str, features: Dict[str, Any]
-) -> Tuple[bool, str]:
+def validate_memory_config_compatibility(config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
     """Check that the config family is compatible with the input memory configuration."""
     is_a_sharded = features["is_a_sharded"]
     mem_layout_a = features["mem_layout_a"]
@@ -154,9 +146,7 @@ def validate_memory_config_compatibility(
     return True, "ok"
 
 
-def validate_batching_constraints(
-    config_family: str, features: Dict[str, Any]
-) -> Tuple[bool, str]:
+def validate_batching_constraints(config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
     """Check batch-related constraints."""
     is_batched_b = features["is_batched_b"]
 
@@ -171,9 +161,7 @@ def validate_batching_constraints(
     return True, "ok"
 
 
-def validate_l1_budget(
-    config: Any, config_family: str, features: Dict[str, Any]
-) -> Tuple[bool, str]:
+def validate_l1_budget(config: Any, config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
     """Check that the config's L1 memory requirement doesn't exceed device limits."""
     # Only applies to configs where we explicitly set per block/core sizes
     if config_family in ("DRAMSharded", "BatchedDRAMSharded", "MultiCore", "Reuse"):
@@ -200,7 +188,7 @@ def validate_l1_budget(
     estimated_l1_usage = cb_tiles * tile_bytes * 2
 
     # L1 compute usable size is ~1.0 MB
-    MAX_L1_BUDGET = 1048576 
+    MAX_L1_BUDGET = 1048576
     if estimated_l1_usage > MAX_L1_BUDGET:
         return False, (
             f"Estimated L1 usage {estimated_l1_usage} exceeds budget {MAX_L1_BUDGET} "

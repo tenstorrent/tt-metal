@@ -5,18 +5,16 @@
 """Unit tests for math fidelity module (CPU-only, no hardware required)."""
 
 import pytest
-
-
 from ttnn.operations.auto_config.math_fidelity import (
-    MathFidelity,
     CYCLES_PER_TILE,
-    MAX_CYCLES_PER_TILE,
     DTYPE_FIDELITY_CONSTRAINTS,
-    valid_fidelities,
+    GPT_ATTENTION_SHAPES,
+    MAX_CYCLES_PER_TILE,
+    MathFidelity,
     default_fidelity,
     fidelity_cycle_cost,
     fidelity_to_ttnn_string,
-    GPT_ATTENTION_SHAPES,
+    valid_fidelities,
 )
 
 
@@ -110,7 +108,7 @@ class TestValidFidelities:
 
     def test_hifi4_always_valid(self):
         """HiFi4 should always be valid — it's the most accurate."""
-        for (a, b) in DTYPE_FIDELITY_CONSTRAINTS:
+        for a, b in DTYPE_FIDELITY_CONSTRAINTS:
             valid = valid_fidelities(a, b)
             assert MathFidelity.HiFi4 in valid, f"HiFi4 not valid for {a}×{b}"
 
@@ -133,12 +131,15 @@ class TestDefaultFidelity:
 class TestFidelityCycleCost:
     """Tests for the cycle cost lookup."""
 
-    @pytest.mark.parametrize("fid,expected", [
-        (MathFidelity.LoFi, 16),
-        (MathFidelity.HiFi2, 32),
-        (MathFidelity.HiFi3, 48),
-        (MathFidelity.HiFi4, 64),
-    ])
+    @pytest.mark.parametrize(
+        "fid,expected",
+        [
+            (MathFidelity.LoFi, 16),
+            (MathFidelity.HiFi2, 32),
+            (MathFidelity.HiFi3, 48),
+            (MathFidelity.HiFi4, 64),
+        ],
+    )
     def test_parametrized(self, fid, expected):
         assert fidelity_cycle_cost(fid) == expected
 

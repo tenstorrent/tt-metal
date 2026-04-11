@@ -15,14 +15,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-import ttnn
+from ttnn.operations.auto_config.math_fidelity import default_fidelity, fidelity_cycle_cost, valid_fidelities
 
-from ttnn.operations.auto_config.math_fidelity import (
-    MathFidelity,
-    default_fidelity,
-    fidelity_cycle_cost,
-    valid_fidelities,
-)
+import ttnn
 
 logger = logging.getLogger(__name__)
 
@@ -180,9 +175,7 @@ def extract_matmul_features(
         # Math fidelity — first-class dimension for compute config selection
         "math_fidelity_default": default_fidelity(str(dtype_a), str(dtype_b)),
         "math_fidelity_valid": valid_fidelities(str(dtype_a), str(dtype_b)),
-        "math_fidelity_cycle_cost": fidelity_cycle_cost(
-            default_fidelity(str(dtype_a), str(dtype_b))
-        ),
+        "math_fidelity_cycle_cost": fidelity_cycle_cost(default_fidelity(str(dtype_a), str(dtype_b))),
     }
 
     return features

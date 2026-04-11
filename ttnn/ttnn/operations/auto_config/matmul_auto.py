@@ -31,21 +31,14 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import ttnn
-
-from ttnn.operations.auto_config.base import (
-    AutoConfigSelector,
-    ConfigCandidate,
-    SelectionResult,
-)
+from ttnn.operations.auto_config.base import AutoConfigSelector, ConfigCandidate, SelectionResult
 from ttnn.operations.auto_config.candidate_generator import generate_matmul_candidates
 from ttnn.operations.auto_config.config_cache import ConfigCache
 from ttnn.operations.auto_config.constraint_validator import validate_candidate
-from ttnn.operations.auto_config.feature_extraction import (
-    extract_matmul_features,
-    get_cache_key_from_features,
-)
+from ttnn.operations.auto_config.feature_extraction import extract_matmul_features, get_cache_key_from_features
 from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
+
+import ttnn
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +57,7 @@ def _get_global_cache() -> ConfigCache:
 # Config capture for mutation testing
 _last_selected_config = None
 _last_selected_api = None
+
 
 def get_last_selected_config():
     return _last_selected_config, _last_selected_api
@@ -135,9 +129,7 @@ class MatmulAutoConfig(AutoConfigSelector):
         """Score a matmul config candidate."""
         return self._scorer.score(candidate, features)
 
-    def _generate_suggestions(
-        self, features: Dict[str, Any], candidates: List[ConfigCandidate]
-    ) -> List[str]:
+    def _generate_suggestions(self, features: Dict[str, Any], candidates: List[ConfigCandidate]) -> List[str]:
         """
         Generate user-facing suggestions for better performance.
 
@@ -181,8 +173,7 @@ class MatmulAutoConfig(AutoConfigSelector):
         valid_dtypes = {"DataType.BFLOAT16", "DataType.BFLOAT8_B"}
         if features["dtype_a"] in valid_dtypes and features["layout_a"] == "Layout.TILE":
             has_minimal_winner = any(
-                c.backend == "minimal_matmul" and c.score > selected_score * 1.2
-                for c in candidates
+                c.backend == "minimal_matmul" and c.score > selected_score * 1.2 for c in candidates
             )
             if has_minimal_winner:
                 suggestions.append(
@@ -257,6 +248,7 @@ def _execute_with_config(
         )
     else:
         import ttnn.operations.auto_config.matmul_auto as _selfmod
+
         _selfmod._last_selected_config = program_config
         _selfmod._last_selected_api = "matmul"
         output = ttnn.matmul(
@@ -354,7 +346,7 @@ def _execute_multi_device(
             all_gather_out, mm_out = ttnn.experimental.strided_all_gather_minimal_matmul_async(
                 input_tensor_a,
                 input_tensor_b,
-                dim=0, # Default to dim 0 for AG
+                dim=0,  # Default to dim 0 for AG
                 memory_config=memory_config,
             )
             return mm_out
@@ -659,9 +651,6 @@ def _benchmark_all_candidates(
             median_time = sorted(times)[len(times) // 2]
             candidate.measured_latency_us = median_time
 
-
-
-
             if median_time < best_time:
                 best_time = median_time
                 best_output = output
@@ -671,9 +660,7 @@ def _benchmark_all_candidates(
 
         except Exception as e:
             candidate.measured_latency_us = None
-            logger.info(
-                f"{candidate.config_family:<45} | {'FAILED':>12} | {candidate.score:>5.2f} | {str(e)[:30]}"
-            )
+            logger.info(f"{candidate.config_family:<45} | {'FAILED':>12} | {candidate.score:>5.2f} | {str(e)[:30]}")
 
     # Print sorted table
     if measured:
@@ -687,10 +674,7 @@ def _benchmark_all_candidates(
 
     if best_candidate:
         logger.info("")
-        logger.info(
-            f"[matmul_auto] Benchmark winner: {best_candidate.config_family} "
-            f"({best_time:.0f} us)"
-        )
+        logger.info(f"[matmul_auto] Benchmark winner: {best_candidate.config_family} " f"({best_time:.0f} us)")
         # Update cache with the benchmark winner
         selector = MatmulAutoConfig()
         features = selector.extract_features(input_tensor_a, input_tensor_b, **kwargs)
@@ -702,5 +686,3 @@ def _benchmark_all_candidates(
 
 # Convenience: make matmul_auto available at module level
 __all__ = ["matmul_auto", "MatmulAutoConfig"]
-
-

@@ -26,20 +26,21 @@ Dtype-to-fidelity mapping (from tech report + PR #39628):
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 
 class MathFidelity(IntEnum):
     """Math fidelity levels for Tenstorrent matrix engines."""
-    LoFi  = 0   # 16 cycles/tile — SrcA MSBs × SrcB MSBs
-    HiFi2 = 1   # 32 cycles/tile — + SrcA LSBs × SrcB MSBs
-    HiFi3 = 2   # 48 cycles/tile — + SrcA MSBs × SrcB LSBs
-    HiFi4 = 3   # 64 cycles/tile — + SrcA LSBs × SrcB LSBs
+
+    LoFi = 0  # 16 cycles/tile — SrcA MSBs × SrcB MSBs
+    HiFi2 = 1  # 32 cycles/tile — + SrcA LSBs × SrcB MSBs
+    HiFi3 = 2  # 48 cycles/tile — + SrcA MSBs × SrcB LSBs
+    HiFi4 = 3  # 64 cycles/tile — + SrcA LSBs × SrcB LSBs
 
 
 # Cycle cost per tile for each fidelity level
 CYCLES_PER_TILE: Dict[MathFidelity, int] = {
-    MathFidelity.LoFi:  16,
+    MathFidelity.LoFi: 16,
     MathFidelity.HiFi2: 32,
     MathFidelity.HiFi3: 48,
     MathFidelity.HiFi4: 64,
@@ -62,36 +63,28 @@ MAX_CYCLES_PER_TILE = 64
 
 DTYPE_FIDELITY_CONSTRAINTS: Dict[Tuple[str, str], List[MathFidelity]] = {
     # Bfp8 × Bfp8: LoFi + HiFi2 consumes all mantissa bits
-    ("BFLOAT8_B", "BFLOAT8_B"):   [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT8_B", "BFLOAT8_B"): [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bfp8 × Bfp4: HiFi2 sufficient for bfp8 precision
-    ("BFLOAT8_B", "BFLOAT4_B"):   [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT8_B", "BFLOAT4_B"): [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bf16 × Bf16: needs all 4 phases for full precision
-    ("BFLOAT16", "BFLOAT16"):     [MathFidelity.HiFi4],
-
+    ("BFLOAT16", "BFLOAT16"): [MathFidelity.HiFi4],
     # Bf16 × Bfp8: HiFi2 catches the important SrcA LSBs × SrcB MSBs
-    ("BFLOAT16", "BFLOAT8_B"):    [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT16", "BFLOAT8_B"): [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bf16 × Bfp4 — KEY CASE from PR #39628:
     #   Bfp4 SrcB has ~3 mantissa bits, all in MSBs.
     #   LoFi:  SrcA_MSB × SrcB_MSB ← useful
     #   HiFi2: SrcA_LSB × SrcB_MSB ← marginal (SrcB MSBs already consumed)
     #   HiFi3: SrcA_MSB × SrcB_LSB ← useful (new SrcB bits)
     #   Therefore, prefer HiFi3 over HiFi2 for bf16 × bfp4.
-    ("BFLOAT16", "BFLOAT4_B"):    [MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT16", "BFLOAT4_B"): [MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bfp4 × Bfp4: LoFi is sufficient
-    ("BFLOAT4_B", "BFLOAT4_B"):   [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT4_B", "BFLOAT4_B"): [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bfp4 × Bfp8: LoFi + HiFi2 covers it
-    ("BFLOAT4_B", "BFLOAT8_B"):   [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT4_B", "BFLOAT8_B"): [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bfp4 × Bf16: mirror of the above
-    ("BFLOAT4_B", "BFLOAT16"):    [MathFidelity.HiFi3, MathFidelity.HiFi4],
-
+    ("BFLOAT4_B", "BFLOAT16"): [MathFidelity.HiFi3, MathFidelity.HiFi4],
     # Bfp8 × Bf16: mirror
-    ("BFLOAT8_B", "BFLOAT16"):    [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
+    ("BFLOAT8_B", "BFLOAT16"): [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
 }
 
 # Default fidelity ordering when dtype pair is unknown
@@ -144,7 +137,7 @@ def fidelity_to_ttnn_string(fidelity: MathFidelity) -> str:
     This is used when constructing compute_config for ttnn.matmul.
     """
     return {
-        MathFidelity.LoFi:  "MathFidelity.LoFi",
+        MathFidelity.LoFi: "MathFidelity.LoFi",
         MathFidelity.HiFi2: "MathFidelity.HiFi2",
         MathFidelity.HiFi3: "MathFidelity.HiFi3",
         MathFidelity.HiFi4: "MathFidelity.HiFi4",
@@ -159,27 +152,27 @@ GPT_ATTENTION_SHAPES = [
     # (M, K, N, description)
     # QK^T: [seq, heads*head_dim] × [heads*head_dim, seq]
     (2048, 4096, 2048, "GPT-2 large QK^T, seq=2048"),
-    (128,  4096, 128,  "GPT decode QK^T, short seq"),
-    (1,    4096, 2048, "Single-token decode QK^T"),
+    (128, 4096, 128, "GPT decode QK^T, short seq"),
+    (1, 4096, 2048, "Single-token decode QK^T"),
     # V projection: [seq, seq] × [seq, head_dim]
-    (2048, 2048, 128,  "GPT V projection"),
+    (2048, 2048, 128, "GPT V projection"),
     # MLP: [seq, hidden] × [hidden, 4*hidden]
     (2048, 4096, 16384, "GPT MLP up-proj, seq=2048"),
-    (128,  4096, 16384, "GPT MLP up-proj, seq=128"),
+    (128, 4096, 16384, "GPT MLP up-proj, seq=128"),
     # Multi-head with >32 heads (PR #39196 pattern)
-    (2048, 8192, 2048,  "64 heads × 128 dim attention"),
+    (2048, 8192, 2048, "64 heads × 128 dim attention"),
     # Small batch decode (PR #39120 tile-rounding)
-    (1,    4096, 4096,  "Decode 1-token 4K hidden"),
-    (8,    4096, 4096,  "Decode 8-token 4K hidden"),
-    (16,   4096, 11008, "LLaMA MLP decode"),
+    (1, 4096, 4096, "Decode 1-token 4K hidden"),
+    (8, 4096, 4096, "Decode 8-token 4K hidden"),
+    (16, 4096, 11008, "LLaMA MLP decode"),
     # Non-tile-aligned vocabulary (PR #39296 padded vocab)
-    (32,   4096, 32000, "LLaMA vocab head batch=32"),
-    (32,   4096, 128256, "Large vocab head batch=32"),
+    (32, 4096, 32000, "LLaMA vocab head batch=32"),
+    (32, 4096, 128256, "Large vocab head batch=32"),
     # Additional GPT-OSS pipeline parallelism shapes (sankarmanoj-tt)
-    (256,  4096, 4096,  "Pipeline parallel mid-seq"),
-    (512,  4096, 4096,  "Pipeline parallel mid-seq 512"),
-    (1024, 4096, 4096,  "Pipeline parallel mid-seq 1024"),
+    (256, 4096, 4096, "Pipeline parallel mid-seq"),
+    (512, 4096, 4096, "Pipeline parallel mid-seq 512"),
+    (1024, 4096, 4096, "Pipeline parallel mid-seq 1024"),
     # DeepSeek V3 patterns (yieldthought)
-    (2048, 7168, 2048,  "DeepSeek V3 attention"),
+    (2048, 7168, 2048, "DeepSeek V3 attention"),
     (2048, 7168, 18432, "DeepSeek V3 MLP"),
 ]

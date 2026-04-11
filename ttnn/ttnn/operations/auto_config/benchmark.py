@@ -45,7 +45,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 1024, "K": 1024, "N": 1024},
     {"M": 2048, "K": 2048, "N": 2048},
     {"M": 4096, "K": 4096, "N": 4096},
-
     # ── M large, K & N small ────────────────────────────────────────
     {"M": 2048, "K": 128, "N": 128},
     {"M": 2048, "K": 256, "N": 64},
@@ -57,7 +56,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 4096, "K": 32, "N": 128},
     {"M": 1024, "K": 128, "N": 64},
     {"M": 1024, "K": 64, "N": 32},
-
     # ── K large, M & N small ────────────────────────────────────────
     {"M": 32, "K": 4096, "N": 32},
     {"M": 64, "K": 8192, "N": 64},
@@ -69,7 +67,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 32, "K": 1024, "N": 128},
     {"M": 128, "K": 2048, "N": 64},
     {"M": 64, "K": 1024, "N": 64},
-
     # ── N large, M & K small ────────────────────────────────────────
     {"M": 32, "K": 128, "N": 4096},
     {"M": 64, "K": 64, "N": 8192},
@@ -79,7 +76,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 128, "K": 64, "N": 8192},
     {"M": 32, "K": 256, "N": 2048},
     {"M": 64, "K": 32, "N": 4096},
-
     # ── M & N large, K small ───────────────────────────────────────
     {"M": 2048, "K": 128, "N": 2048},
     {"M": 4096, "K": 64, "N": 4096},
@@ -87,7 +83,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 4096, "K": 128, "N": 2048},
     {"M": 1024, "K": 128, "N": 2048},
     {"M": 2048, "K": 256, "N": 1024},
-
     # ── M & K large, N small ───────────────────────────────────────
     {"M": 2048, "K": 4096, "N": 32},
     {"M": 4096, "K": 2048, "N": 64},
@@ -95,7 +90,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 4096, "K": 4096, "N": 32},
     {"M": 1024, "K": 4096, "N": 64},
     {"M": 2048, "K": 1024, "N": 32},
-
     # ── K & N large, M small ───────────────────────────────────────
     {"M": 32, "K": 4096, "N": 4096},
     {"M": 64, "K": 8192, "N": 2048},
@@ -103,17 +97,15 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 128, "K": 4096, "N": 2048},
     {"M": 64, "K": 4096, "N": 4096},
     {"M": 32, "K": 8192, "N": 2048},
-
     # ── LLM decode (M=1, tile-padded to 32) ────────────────────────
-    {"M": 32, "K": 4096, "N": 4096},      # LLaMA/GPT-J decode
-    {"M": 32, "K": 4096, "N": 11008},     # LLaMA MLP up
-    {"M": 32, "K": 11008, "N": 4096},     # LLaMA MLP down
-    {"M": 32, "K": 4544, "N": 4672},      # Falcon-7B QKV
-    {"M": 32, "K": 4544, "N": 18176},     # Falcon-7B MLP up
-    {"M": 32, "K": 18176, "N": 4544},     # Falcon-7B MLP down
-    {"M": 32, "K": 8192, "N": 8192},      # LLaMA-70B decode
-    {"M": 32, "K": 8192, "N": 28672},     # LLaMA-70B MLP
-
+    {"M": 32, "K": 4096, "N": 4096},  # LLaMA/GPT-J decode
+    {"M": 32, "K": 4096, "N": 11008},  # LLaMA MLP up
+    {"M": 32, "K": 11008, "N": 4096},  # LLaMA MLP down
+    {"M": 32, "K": 4544, "N": 4672},  # Falcon-7B QKV
+    {"M": 32, "K": 4544, "N": 18176},  # Falcon-7B MLP up
+    {"M": 32, "K": 18176, "N": 4544},  # Falcon-7B MLP down
+    {"M": 32, "K": 8192, "N": 8192},  # LLaMA-70B decode
+    {"M": 32, "K": 8192, "N": 28672},  # LLaMA-70B MLP
     # ── LLM prefill ────────────────────────────────────────────────
     {"M": 128, "K": 4096, "N": 4096},
     {"M": 512, "K": 4096, "N": 11008},
@@ -125,17 +117,15 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 2048, "K": 4096, "N": 11008},
     {"M": 512, "K": 8192, "N": 8192},
     {"M": 2048, "K": 8192, "N": 8192},
-
     # ── Attention shapes (seq²) ────────────────────────────────────
-    {"M": 2048, "K": 128, "N": 2048},     # QK^T
-    {"M": 128, "K": 2048, "N": 128},      # V projection
-    {"M": 4096, "K": 128, "N": 4096},     # Long-ctx QK^T
-    {"M": 512, "K": 64, "N": 512},        # Small head attn
-    {"M": 1024, "K": 128, "N": 1024},     # Mid-size attn
-    {"M": 2048, "K": 64, "N": 2048},      # 64-head attn
-    {"M": 256, "K": 128, "N": 256},       # Short-ctx attn
-    {"M": 4096, "K": 64, "N": 4096},      # Long-ctx 64-head
-
+    {"M": 2048, "K": 128, "N": 2048},  # QK^T
+    {"M": 128, "K": 2048, "N": 128},  # V projection
+    {"M": 4096, "K": 128, "N": 4096},  # Long-ctx QK^T
+    {"M": 512, "K": 64, "N": 512},  # Small head attn
+    {"M": 1024, "K": 128, "N": 1024},  # Mid-size attn
+    {"M": 2048, "K": 64, "N": 2048},  # 64-head attn
+    {"M": 256, "K": 128, "N": 256},  # Short-ctx attn
+    {"M": 4096, "K": 64, "N": 4096},  # Long-ctx 64-head
     # ── Non-power-of-2 ─────────────────────────────────────────────
     {"M": 384, "K": 1024, "N": 768},
     {"M": 768, "K": 3072, "N": 768},
@@ -145,19 +135,16 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 384, "K": 384, "N": 1536},
     {"M": 768, "K": 768, "N": 3072},
     {"M": 1024, "K": 768, "N": 3072},
-
     # ── Tall shapes (M >> N) ───────────────────────────────────────
     {"M": 2048, "K": 1024, "N": 32},
     {"M": 4096, "K": 512, "N": 64},
     {"M": 8192, "K": 256, "N": 128},
     {"M": 4096, "K": 1024, "N": 128},
-
     # ── Wide shapes (N >> M) ───────────────────────────────────────
     {"M": 32, "K": 1024, "N": 2048},
     {"M": 64, "K": 512, "N": 4096},
     {"M": 128, "K": 256, "N": 8192},
     {"M": 64, "K": 1024, "N": 4096},
-
     # ── Batch/extra shapes ─────────────────────────────────────────
     {"M": 256, "K": 2048, "N": 256},
     {"M": 512, "K": 1024, "N": 512},
@@ -170,13 +157,13 @@ DEFAULT_SWEEP_SHAPES = [
 # Import GPT/LLM attention training shapes for expanded coverage
 try:
     from ttnn.operations.auto_config.math_fidelity import GPT_ATTENTION_SHAPES
+
     for m, k, n, _desc in GPT_ATTENTION_SHAPES:
         shape = {"M": ((m + 31) // 32) * 32, "K": ((k + 31) // 32) * 32, "N": ((n + 31) // 32) * 32}
         if shape not in DEFAULT_SWEEP_SHAPES:
             DEFAULT_SWEEP_SHAPES.append(shape)
 except ImportError:
     pass  # math_fidelity module not available
-
 
 
 def run_benchmark(
@@ -202,8 +189,9 @@ def run_benchmark(
         List of benchmark result dicts.
     """
     import torch
-    import ttnn
     from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+
+    import ttnn
 
     results = []
 
@@ -216,6 +204,7 @@ def run_benchmark(
         # Build compute_kernel_config with appropriate math fidelity
         try:
             from ttnn.operations.auto_config.math_fidelity import default_fidelity, fidelity_to_ttnn_string
+
             fidelity_str = fidelity_to_ttnn_string(default_fidelity(str(dt), str(dt)))
             math_fidelity = getattr(ttnn.MathFidelity, fidelity_str.split(".")[-1], ttnn.MathFidelity.HiFi4)
         except (ImportError, AttributeError):
@@ -259,7 +248,8 @@ def run_benchmark(
                     for _ in range(num_warmup):
                         if candidate.backend == "matmul" and candidate.config is not None:
                             out = ttnn.matmul(
-                                input_a, input_b,
+                                input_a,
+                                input_b,
                                 program_config=candidate.config,
                                 compute_kernel_config=compute_kernel_config,
                             )
@@ -274,7 +264,8 @@ def run_benchmark(
 
                         if candidate.backend == "matmul" and candidate.config is not None:
                             out = ttnn.matmul(
-                                input_a, input_b,
+                                input_a,
+                                input_b,
                                 program_config=candidate.config,
                                 compute_kernel_config=compute_kernel_config,
                             )
@@ -301,14 +292,12 @@ def run_benchmark(
                     results.append(result_entry)
 
                     logger.info(
-                        f"  [{cand_idx+1}/{len(valid_candidates)}] "
-                        f"{candidate.config_family}: {median_time:.0f} us"
+                        f"  [{cand_idx+1}/{len(valid_candidates)}] " f"{candidate.config_family}: {median_time:.0f} us"
                     )
 
                 except Exception as e:
                     logger.warning(
-                        f"  [{cand_idx+1}/{len(valid_candidates)}] "
-                        f"{candidate.config_family} FAILED: {e}"
+                        f"  [{cand_idx+1}/{len(valid_candidates)}] " f"{candidate.config_family} FAILED: {e}"
                     )
 
             # Cleanup
@@ -336,25 +325,27 @@ def train_dnn_scorer(benchmark_results: List[Dict[str, Any]], model_path: Option
     training_data = []
     for entry in benchmark_results:
         if entry.get("latency_us") is not None:
-            training_data.append({
-                "features": {
-                    "M": entry["shape"]["M"],
-                    "K": entry["shape"]["K"],
-                    "N": entry["shape"]["N"],
-                    "batch_size_a": 1,
-                    "batch_size_b": 1,
-                    "M_tiles": entry["shape"]["M"] // 32,
-                    "K_tiles": entry["shape"]["K"] // 32,
-                    "N_tiles": entry["shape"]["N"] // 32,
-                    "grid_x": 8,
-                    "grid_y": 8,
-                    "num_cores": 64,
-                    "num_devices": 1,
-                },
-                "config_params": entry["params"],
-                "config_family": entry["config_family"],
-                "latency_us": entry["latency_us"],
-            })
+            training_data.append(
+                {
+                    "features": {
+                        "M": entry["shape"]["M"],
+                        "K": entry["shape"]["K"],
+                        "N": entry["shape"]["N"],
+                        "batch_size_a": 1,
+                        "batch_size_b": 1,
+                        "M_tiles": entry["shape"]["M"] // 32,
+                        "K_tiles": entry["shape"]["K"] // 32,
+                        "N_tiles": entry["shape"]["N"] // 32,
+                        "grid_x": 8,
+                        "grid_y": 8,
+                        "num_cores": 64,
+                        "num_devices": 1,
+                    },
+                    "config_params": entry["params"],
+                    "config_family": entry["config_family"],
+                    "latency_us": entry["latency_us"],
+                }
+            )
 
     if not training_data:
         logger.warning("No valid training data from benchmark results")
@@ -367,39 +358,16 @@ def train_dnn_scorer(benchmark_results: List[Dict[str, Any]], model_path: Option
 
 def main():
     """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="Benchmark harness for matmul auto-config selection"
-    )
-    parser.add_argument(
-        "--op", default="matmul", help="Operation to benchmark (currently only 'matmul')"
-    )
-    parser.add_argument(
-        "--shapes", type=str, default=None, help="Path to shapes JSON file"
-    )
-    parser.add_argument(
-        "--sweep", action="store_true", help="Run default sweep shapes"
-    )
-    parser.add_argument(
-        "--dtype", default="bfloat16", choices=["bfloat16", "bfloat8_b"],
-        help="Data type"
-    )
-    parser.add_argument(
-        "--warmup", type=int, default=2, help="Number of warmup runs"
-    )
-    parser.add_argument(
-        "--runs", type=int, default=5, help="Number of timed runs (takes median)"
-    )
-    parser.add_argument(
-        "--output", type=str, default="benchmark_results.json",
-        help="Output file for results"
-    )
-    parser.add_argument(
-        "--train-dnn", action="store_true",
-        help="Train DNN scorer on benchmark results"
-    )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Verbose logging"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark harness for matmul auto-config selection")
+    parser.add_argument("--op", default="matmul", help="Operation to benchmark (currently only 'matmul')")
+    parser.add_argument("--shapes", type=str, default=None, help="Path to shapes JSON file")
+    parser.add_argument("--sweep", action="store_true", help="Run default sweep shapes")
+    parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "bfloat8_b"], help="Data type")
+    parser.add_argument("--warmup", type=int, default=2, help="Number of warmup runs")
+    parser.add_argument("--runs", type=int, default=5, help="Number of timed runs (takes median)")
+    parser.add_argument("--output", type=str, default="benchmark_results.json", help="Output file for results")
+    parser.add_argument("--train-dnn", action="store_true", help="Train DNN scorer on benchmark results")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
 

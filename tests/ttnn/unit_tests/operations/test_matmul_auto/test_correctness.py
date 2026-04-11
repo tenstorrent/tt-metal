@@ -17,9 +17,7 @@ import pytest
 import torch
 
 import ttnn
-
 from tests.ttnn.utils_for_testing import check_with_pcc
-
 
 # ─────────────────────────────────────────────
 # Test shapes: 50+ representative configurations
@@ -202,8 +200,13 @@ class TestMatmulAutoCorrectness:
         assert result.selected_config is not None
         assert result.selected_config.is_valid
         assert result.selected_config.config_family in (
-            "MultiCast1D", "MultiCast2D", "Reuse",
-            "DRAMSharded", "BatchedDRAMSharded", "MinimalMatmul", "MultiCore"
+            "MultiCast1D",
+            "MultiCast2D",
+            "Reuse",
+            "DRAMSharded",
+            "BatchedDRAMSharded",
+            "MinimalMatmul",
+            "MultiCore",
         )
         assert result.selected_config.score > 0
         assert len(result.all_candidates) > 0
@@ -215,8 +218,8 @@ class TestMatmulAutoCache:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:3])
     def test_cache_hit_on_repeat(self, device, batch, m, k, n):
         """Test that repeated calls with same signature hit the cache."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
         from ttnn.operations.auto_config.config_cache import ConfigCache
+        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -255,14 +258,30 @@ class TestMatmulAutoFeatureExtraction:
         features = extract_matmul_features(input_a, input_b)
 
         required_keys = [
-            "M", "K", "N", "batch_size_a", "batch_size_b",
-            "M_tiles", "K_tiles", "N_tiles",
-            "dtype_a", "dtype_b", "layout_a", "layout_b",
-            "is_a_sharded", "is_b_sharded",
-            "arch", "grid_x", "grid_y", "num_cores",
-            "is_multi_device", "num_devices",
-            "transpose_a", "transpose_b",
-            "has_bias", "has_activation",
+            "M",
+            "K",
+            "N",
+            "batch_size_a",
+            "batch_size_b",
+            "M_tiles",
+            "K_tiles",
+            "N_tiles",
+            "dtype_a",
+            "dtype_b",
+            "layout_a",
+            "layout_b",
+            "is_a_sharded",
+            "is_b_sharded",
+            "arch",
+            "grid_x",
+            "grid_y",
+            "num_cores",
+            "is_multi_device",
+            "num_devices",
+            "transpose_a",
+            "transpose_b",
+            "has_bias",
+            "has_activation",
         ]
         for key in required_keys:
             assert key in features, f"Missing feature key: {key}"
@@ -310,8 +329,8 @@ class TestHeuristicScorer:
 
     def test_scorer_returns_valid_score(self):
         """Test that scorer returns a score in [0, 1]."""
-        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
         from ttnn.operations.auto_config.base import ConfigCandidate
+        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
 
         scorer = HeuristicScorer()
         candidate = ConfigCandidate(
@@ -328,13 +347,22 @@ class TestHeuristicScorer:
             },
         )
         features = {
-            "M": 128, "K": 256, "N": 512,
-            "M_tiles": 4, "K_tiles": 8, "N_tiles": 16,
-            "batch_size_a": 1, "batch_size_b": 1,
+            "M": 128,
+            "K": 256,
+            "N": 512,
+            "M_tiles": 4,
+            "K_tiles": 8,
+            "N_tiles": 16,
+            "batch_size_a": 1,
+            "batch_size_b": 1,
             "num_cores": 64,
-            "is_tall": False, "is_wide": True, "is_square": False,
-            "is_a_sharded": False, "is_batched_b": False,
-            "grid_x": 8, "grid_y": 8,
+            "is_tall": False,
+            "is_wide": True,
+            "is_square": False,
+            "is_a_sharded": False,
+            "is_batched_b": False,
+            "grid_x": 8,
+            "grid_y": 8,
         }
 
         score = scorer.score(candidate, features)
@@ -342,36 +370,61 @@ class TestHeuristicScorer:
 
     def test_tall_shape_prefers_mcast_in1(self):
         """Test that tall shapes score higher with mcast_in0=False."""
-        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
         from ttnn.operations.auto_config.base import ConfigCandidate
+        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
 
         scorer = HeuristicScorer()
         features = {
-            "M": 2048, "K": 1024, "N": 32,
-            "M_tiles": 64, "K_tiles": 32, "N_tiles": 1,
-            "batch_size_a": 1, "batch_size_b": 1,
+            "M": 2048,
+            "K": 1024,
+            "N": 32,
+            "M_tiles": 64,
+            "K_tiles": 32,
+            "N_tiles": 1,
+            "batch_size_a": 1,
+            "batch_size_b": 1,
             "num_cores": 64,
-            "is_tall": True, "is_wide": False, "is_square": False,
-            "is_a_sharded": False, "is_batched_b": False,
-            "grid_x": 8, "grid_y": 8,
+            "is_tall": True,
+            "is_wide": False,
+            "is_square": False,
+            "is_a_sharded": False,
+            "is_batched_b": False,
+            "grid_x": 8,
+            "grid_y": 8,
         }
 
         # Tall config (mcast_in0=False)
         tall_candidate = ConfigCandidate(
-            config=None, config_family="MultiCast1D", backend="matmul",
-            params={"mcast_in0": False, "in0_block_w": 2, "per_core_M": 1, "per_core_N": 1,
-                    "out_subblock_h": 1, "out_subblock_w": 1},
+            config=None,
+            config_family="MultiCast1D",
+            backend="matmul",
+            params={
+                "mcast_in0": False,
+                "in0_block_w": 2,
+                "per_core_M": 1,
+                "per_core_N": 1,
+                "out_subblock_h": 1,
+                "out_subblock_w": 1,
+            },
         )
         # Wide config (mcast_in0=True) — wrong for tall shape
         wide_candidate = ConfigCandidate(
-            config=None, config_family="MultiCast1D", backend="matmul",
-            params={"mcast_in0": True, "in0_block_w": 2, "per_core_M": 1, "per_core_N": 1,
-                    "out_subblock_h": 1, "out_subblock_w": 1},
+            config=None,
+            config_family="MultiCast1D",
+            backend="matmul",
+            params={
+                "mcast_in0": True,
+                "in0_block_w": 2,
+                "per_core_M": 1,
+                "per_core_N": 1,
+                "out_subblock_h": 1,
+                "out_subblock_w": 1,
+            },
         )
 
         tall_score = scorer.score(tall_candidate, features)
         wide_score = scorer.score(wide_candidate, features)
 
-        assert tall_score > wide_score, (
-            f"Tall shape should prefer mcast_in0=False: tall={tall_score:.3f} vs wide={wide_score:.3f}"
-        )
+        assert (
+            tall_score > wide_score
+        ), f"Tall shape should prefer mcast_in0=False: tall={tall_score:.3f} vs wide={wide_score:.3f}"

@@ -59,9 +59,7 @@ def test_auto_beats_default(device, name, M, K, N):
     t_default = _bench(lambda: ttnn.matmul(ta, tb), device)
 
     # Allow 5% tolerance — auto should not be significantly slower
-    assert t_auto <= t_default * 1.05, (
-        f"{name}: auto ({t_auto:.2f}ms) slower than default ({t_default:.2f}ms)"
-    )
+    assert t_auto <= t_default * 1.05, f"{name}: auto ({t_auto:.2f}ms) slower than default ({t_default:.2f}ms)"
 
 
 @pytest.mark.parametrize("name,M,K,N", TEST_SHAPES)
@@ -110,6 +108,6 @@ def test_auto_beats_degraded_neighbors(device, name, M, K, N):
             configs_auto_wins += 1  # crashed = auto wins by default
 
     assert configs_tested > 0, f"{name}: no degraded configs could be tested"
-    assert configs_auto_wins >= configs_tested * 0.5, (
-        f"{name}: auto won {configs_auto_wins}/{configs_tested} — expected >= 50%"
-    )
+    assert (
+        configs_auto_wins >= configs_tested * 0.5
+    ), f"{name}: auto won {configs_auto_wins}/{configs_tested} — expected >= 50%"

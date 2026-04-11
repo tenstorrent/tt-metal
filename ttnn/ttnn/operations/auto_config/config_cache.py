@@ -57,9 +57,7 @@ class ConfigCache:
           (useful for CI environments that need a temp directory)
     """
 
-    def __init__(
-        self, cache_dir: Optional[str] = None, max_entries: int = 10000
-    ):
+    def __init__(self, cache_dir: Optional[str] = None, max_entries: int = 10000):
         self._lock = threading.Lock()
         self._memory_cache: Dict[str, Dict[str, Any]] = {}
         self._max_entries = max_entries
@@ -84,9 +82,7 @@ class ConfigCache:
             for key, entry in data.items():
                 if entry.get("version") == SELECTOR_VERSION:
                     self._memory_cache[key] = entry
-            logger.debug(
-                f"Loaded {len(self._memory_cache)} cache entries from {self._cache_file}"
-            )
+            logger.debug(f"Loaded {len(self._memory_cache)} cache entries from {self._cache_file}")
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to load config cache (auto-deleting corrupt cache): {e}")
             # Auto-delete corrupt cache file

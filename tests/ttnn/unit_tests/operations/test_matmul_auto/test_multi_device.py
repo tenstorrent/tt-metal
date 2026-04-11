@@ -17,6 +17,7 @@ import os
 
 import pytest
 import torch
+
 import ttnn
 
 pytestmark = pytest.mark.requires_wormhole_b0
@@ -67,12 +68,18 @@ class TestMatmulAutoMultiDevice:
         torch_b = torch.randn(k, n, dtype=torch.float32)
 
         input_a = ttnn.from_torch(
-            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         input_b = ttnn.from_torch(
-            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            torch_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         features = extract_matmul_features(input_a, input_b)
@@ -90,12 +97,18 @@ class TestMatmulAutoMultiDevice:
         torch_output = torch.matmul(torch_a, torch_b)
 
         input_a = ttnn.from_torch(
-            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         input_b = ttnn.from_torch(
-            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            torch_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         tt_output = matmul_auto(input_a, input_b)
@@ -105,6 +118,7 @@ class TestMatmulAutoMultiDevice:
         first_device_output = ttnn.to_torch(device_tensors[0])
 
         from tests.ttnn.utils_for_testing import check_with_pcc
+
         passed, msg = check_with_pcc(torch_output, first_device_output, pcc=0.99)
         assert passed, f"Multi-device PCC check failed: {msg}"
 
@@ -120,12 +134,8 @@ class TestMatmulAutoSingleDeviceFallback:
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
 
-        input_a = ttnn.from_torch(
-            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=single_device
-        )
-        input_b = ttnn.from_torch(
-            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=single_device
-        )
+        input_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=single_device)
+        input_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=single_device)
 
         features = extract_matmul_features(input_a, input_b)
         assert features["is_multi_device"] is False

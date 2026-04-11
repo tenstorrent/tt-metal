@@ -20,6 +20,7 @@ import time
 
 import pytest
 import torch
+
 import ttnn
 
 pytestmark = pytest.mark.requires_wormhole_b0
@@ -32,14 +33,12 @@ PERF_SHAPES = [
     (1, 1024, 1024, 1024),
     (1, 2048, 2048, 2048),
     (1, 128, 4096, 4096),
-    (1, 2048, 1024, 32),   # Tall
-    (1, 32, 1024, 2048),   # Wide
+    (1, 2048, 1024, 32),  # Tall
+    (1, 32, 1024, 2048),  # Wide
 ]
 
 
-def measure_latency(
-    device, input_a, input_b, config=None, num_warmup=3, num_runs=5
-):
+def measure_latency(device, input_a, input_b, config=None, num_warmup=3, num_runs=5):
     """Measure matmul latency in microseconds."""
     for _ in range(num_warmup):
         if config is not None:
@@ -152,10 +151,10 @@ class TestMatmulAutoPerformance:
 
         # Measure 5 random valid alternatives
         import random
+
         random.seed(42)
         alternatives = random.sample(
-            [c for c in valid_candidates if c is not selected],
-            min(5, len(valid_candidates) - 1)
+            [c for c in valid_candidates if c is not selected], min(5, len(valid_candidates) - 1)
         )
 
         wins = 0
@@ -173,8 +172,7 @@ class TestMatmulAutoPerformance:
         if alternatives:
             win_rate = wins / len(alternatives)
             assert win_rate >= 0.6, (
-                f"Selected config should beat most alternatives: "
-                f"wins={wins}/{len(alternatives)} ({win_rate:.0%})"
+                f"Selected config should beat most alternatives: " f"wins={wins}/{len(alternatives)} ({win_rate:.0%})"
             )
 
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:2])
@@ -199,8 +197,8 @@ class TestMatmulAutoSelectionConsistency:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:3])
     def test_deterministic_selection(self, device, batch, m, k, n):
         """Test that same inputs always produce the same config selection."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
         from ttnn.operations.auto_config.config_cache import ConfigCache
+        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -262,11 +260,9 @@ class TestSelectedIsLocalOptimum:
 
         # Get all valid alternatives with different params
         alternatives = [
-            c for c in result.all_candidates
-            if c.is_valid
-            and c.config is not None
-            and c.backend == "matmul"
-            and c.params != selected.params
+            c
+            for c in result.all_candidates
+            if c.is_valid and c.config is not None and c.backend == "matmul" and c.params != selected.params
         ]
 
         if not alternatives:
@@ -274,6 +270,7 @@ class TestSelectedIsLocalOptimum:
 
         # Test a subset of alternatives (up to 5)
         import random
+
         random.seed(42)
         test_alts = random.sample(alternatives, min(5, len(alternatives)))
 
@@ -303,4 +300,3 @@ class TestSelectedIsLocalOptimum:
                 f"Selected config is not locally optimal: "
                 f"beat {worse_or_equal}/{total_tested} alternatives ({optimality_rate:.0%})"
             )
-
