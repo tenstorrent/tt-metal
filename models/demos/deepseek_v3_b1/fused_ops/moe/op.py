@@ -2035,12 +2035,19 @@ class MoeSharedExpertOp:
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
+        # When BLAZE_SPOOF_WEIGHTS is set, shared expert weights live in DRAM
+        # to free L1 for the kernel config buffer.  Use a safe L1 address (0)
+        # so the kernel compiles/runs — output will be garbage.
+        if weights_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM:
+            weights_cb_addr = 0
+        else:
+            weights_cb_addr = weights_tensor.buffer_address()
         return {
             "k_per_core": k_per_core,
             "act_total_tiles": act_total_tiles,
             "weights_num_pages": weights_num_pages,
             "cb_weights_descriptor": None,
-            "weights_cb_addr": weights_tensor.buffer_address(),
+            "weights_cb_addr": weights_cb_addr,
             "cb_out_descriptor": None,
         }
 
@@ -3045,6 +3052,7 @@ class MoeOp:
             )
             if weights_core_ranges_override is not None:
                 weights_cb_descriptor.core_ranges = weights_core_ranges_override
+            is_dram = weights_overlapped.fused_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
         else:
             weights_device0 = ttnn.get_device_tensors(weights_overlapped)[0]
             tile = weights_device0.get_tile()
@@ -3054,10 +3062,13 @@ class MoeOp:
             weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_device0)
             if weights_core_ranges_override is not None:
                 weights_cb_descriptor.core_ranges = weights_core_ranges_override
+            is_dram = weights_overlapped.memory_config().buffer_type == ttnn.BufferType.DRAM
         output_cb_descriptor = None
         if output_tensor is not None:
             output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
 
+        # When BLAZE_SPOOF_WEIGHTS is set, weights live in DRAM to free L1.
+        # Use address 0 so the kernel compiles/runs — output will be garbage.
         return {
             "in0_cb": in0_cb,
             "in1_cb": in1_cb,
@@ -3069,7 +3080,7 @@ class MoeOp:
             "core_grid": core_grid,
             "num_cores": core_grid.num_cores(),
             "weights_cb_descriptor": weights_cb_descriptor,
-            "weights_cb_addr": ttnn.get_cb_address(weights_cb_descriptor),
+            "weights_cb_addr": 0 if is_dram else ttnn.get_cb_address(weights_cb_descriptor),
             "output_cb_descriptor": output_cb_descriptor,
         }
 

@@ -892,6 +892,7 @@ def create_decoder_block_tensors(
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -900,7 +901,7 @@ def create_decoder_block_tensors(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1431568,
+            "worker_l1_size": 1406224,  # reduced by ~25KB vs 1431568 to fit kernel config buffer; set BLAZE_SPOOF_WEIGHTS=1 to move shared expert weights to DRAM
         }
     ],
     indirect=True,

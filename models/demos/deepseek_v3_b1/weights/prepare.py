@@ -16,6 +16,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -383,7 +384,8 @@ def _shared_down_tensor_target(device) -> TensorTarget:
     N_per_core = 64
     matmul_core_grid = dp_spec.build_matmul_core_grid()
     dp_shard_spec = ttnn.ShardSpec(matmul_core_grid, (K_down_per_device, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
-    dp_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dp_shard_spec)
+    _buf_type = ttnn.BufferType.DRAM if os.environ.get("BLAZE_SPOOF_WEIGHTS") else ttnn.BufferType.L1
+    dp_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _buf_type, dp_shard_spec)
     _, moe_tp = _tp_factors(device)
     if moe_tp == 1:
         mmc = ReplicateMeshMapper()

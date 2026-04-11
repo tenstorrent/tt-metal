@@ -4,6 +4,7 @@
 
 """Overlap packing — fuse multiple tensors into a single L1 buffer with per-core shards."""
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -163,9 +164,10 @@ def overlap_tensors(
         (1, uint32_per_shard),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+    _buf_type = ttnn.BufferType.DRAM if os.environ.get("BLAZE_SPOOF_WEIGHTS") else ttnn.BufferType.L1
     mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
+        _buf_type,
         shard_spec,
     )
 
