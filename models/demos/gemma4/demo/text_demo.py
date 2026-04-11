@@ -537,12 +537,16 @@ def test_demo(mesh_device, model_path):
         pytest -k "1x8"   # T3K  / TP=8
     """
     prompts = ["Explain quantum computing in simple terms"]
+    # Decode trace requires all ops to be trace-compatible; disable for 1x1 mesh
+    # where CPU sampling (to_torch + argmax) is used.
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     results = run_generation(
         mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=64,
         max_seq_len=512,
+        enable_decode_trace=(tp > 1),
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")
