@@ -175,7 +175,7 @@ jobs:
           # MIGRATION: Uses migrated script in parent repo (.github/scripts/llk-get-docker-tag.sh)
           # instead of the submodule's script, so changes to build scripts trigger rebuilds
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
