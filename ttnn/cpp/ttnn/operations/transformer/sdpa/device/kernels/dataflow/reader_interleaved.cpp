@@ -475,7 +475,9 @@ void kernel_main() {
                                     true /* linked: semaphore mcast follows */);
                                 noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                                 noc_async_writes_flushed();
-                                cb_push_back(cb_k_in, k_chunk_tiles);
+                                if (!should_receive) {
+                                    cb_push_back(cb_k_in, k_chunk_tiles);
+                                }
                             } else {
                                 uint64_t k_unicast_data_addr =
                                     get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
@@ -527,7 +529,9 @@ void kernel_main() {
                         if (should_forward) {
                             if constexpr (!mcast_enabled) {
                                 noc_async_writes_flushed();
-                                cb_push_back(cb_k_in, k_chunk_tiles);
+                                if (!should_receive) {
+                                    cb_push_back(cb_k_in, k_chunk_tiles);
+                                }
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
                         }
@@ -639,7 +643,9 @@ void kernel_main() {
                             if constexpr (!mcast_enabled) {
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
-                            cb_push_back(cb_v_in, v_chunk_tiles);
+                            if (!should_receive) {
+                                cb_push_back(cb_v_in, v_chunk_tiles);
+                            }
                         }
                     }
                 }
