@@ -77,6 +77,12 @@ public:
 
     void finish() { finish_impl(); }
 
+#ifndef COMPILE_FOR_TRISC
+    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transation ids are not tracked.
+    // Instead, use noc.async_write_barrier<TxnIdMode::ENABLED>(trid)
+    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+#endif
+
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
 
@@ -93,11 +99,24 @@ private:
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+#ifndef COMPILE_FOR_TRISC
+    void write_barrier_impl(const Noc &noc) const;
+#endif
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
     void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
-#endif
+
+#ifndef COMPILE_FOR_TRISC
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+
+    uint32_t prepare_implicit_read();
+    void commit_implicit_read();
+
+    uint32_t prepare_implicit_write();
+    void commit_implicit_write();
+#endif // !COMPILE_FOR_TRISC
+#endif // ARCH_QUASAR
 
     void release_scoped_lock() {
         // TODO: Unregister with the debugger
@@ -122,12 +141,12 @@ private:
 
 template <>
 struct noc_traits_t<DataflowBuffer> {
-    struct src_args_type {
-        uint32_t offset_bytes{};
-    };
-    struct dst_args_type {
-        uint32_t offset_bytes{};
-    };
+
+    // Alias the struct defined in noc.h so that noc_traits_t<DataflowBuffer>::src/dst_args_type
+    // stays consistent with the DFB-specific Noc overload signatures.
+    using src_args_type = DataflowBufferArgs;
+    using dst_args_type = DataflowBufferArgs;
+
     struct dst_args_mcast_type {
         uint32_t noc_x_start{};
         uint32_t noc_y_start{};
