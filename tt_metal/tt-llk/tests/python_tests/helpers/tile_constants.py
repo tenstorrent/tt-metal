@@ -63,6 +63,23 @@ MAX_FACE_ELEMENTS = MAX_FACE_R_DIM * FACE_C_DIM
 MAX_TILE_ELEMENTS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 # =============================================================================
+# SrcS / UNP_S TDMA slice
+# =============================================================================
+# Hardware delivers SrcS in 8×16 regions of 16-bit datums (e.g. UNP_S x_dim=16,
+# y_dim=8)
+
+SRCS_SLICE_DATUM_BITS = 16
+SRCS_SLICE_COL_DIM = FACE_C_DIM  # 16 columns of 16-bit datums
+SRCS_SLICE_ROW_DIM = 8
+SRCS_SLICE_ELEMENT_COUNT = (
+    SRCS_SLICE_ROW_DIM * SRCS_SLICE_COL_DIM
+)  # 128 elements per slice
+
+# 32-bit SrcS mode (dest_acc=Yes): register file holds 32-bit datums, halving rows
+SRCS_SLICE_32B_ROW_DIM = 4
+SRCS_SLICE_32B_ELEMENT_COUNT = SRCS_SLICE_32B_ROW_DIM * SRCS_SLICE_COL_DIM  # 64
+
+# =============================================================================
 # Supported Tile Sizes
 # =============================================================================
 
@@ -138,7 +155,13 @@ def get_tile_params(tile_dimensions):
     return face_r_dim, num_faces_r_dim, num_faces_c_dim
 
 
-def calculate_tile_size_bytes(data_format, tile_dimensions, format_tile_sizes):
+def calculate_tile_size_bytes(
+    data_format,
+    tile_dimensions,
+    format_tile_sizes,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
     """
     Calculate the actual tile size in bytes based on tile dimensions and data format.
 
@@ -152,14 +175,34 @@ def calculate_tile_size_bytes(data_format, tile_dimensions, format_tile_sizes):
         data_format: DataFormat enum value
         tile_dimensions: List or tuple of [rows, cols]
         format_tile_sizes: Dict mapping DataFormat to full tile size in bytes
+        use_srcs: If True and MX format, compute size using per-slice 16B-aligned
+            layout (SrcS blocks) instead of flat [scales][elements].
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+            (4×16 = 64 elements/slice) instead of 16-bit (8×16 = 128).
 
     Returns:
         int: Tile size in bytes
     """
-    from .format_config import DataFormat
+    from .format_config import (
+        MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
+        MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+        DataFormat,
+    )
 
     tile_rows, tile_cols = tile_dimensions
     tile_elements = tile_rows * tile_cols
+
+    if use_srcs and data_format.is_mx_format():
+        slice_elem_count = (
+            SRCS_SLICE_32B_ELEMENT_COUNT if dest_acc else SRCS_SLICE_ELEMENT_COUNT
+        )
+        slice_byte_len = (
+            MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+            if dest_acc
+            else MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+        )
+        num_slices = (tile_elements + slice_elem_count - 1) // slice_elem_count
+        return num_slices * slice_byte_len
 
     # For standard 32x32 tiles, use the predefined sizes (includes format overhead)
     if tile_elements == MAX_TILE_ELEMENTS:

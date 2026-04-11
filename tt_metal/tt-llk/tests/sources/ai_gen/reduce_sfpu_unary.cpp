@@ -46,7 +46,7 @@ constexpr bool row_pool                             = (REDUCE_DIM == ckernel::Re
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure hardware for AB unpack (single tile per input)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -76,7 +76,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     //------------------------------------------------------------------
     // Synchronisation & HW configuration
@@ -123,7 +123,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     _llk_pack_init_<false, false>(formats.pack_dst);
 

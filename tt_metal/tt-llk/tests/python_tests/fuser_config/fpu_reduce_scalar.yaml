@@ -10,9 +10,10 @@ operations:
     output_format: "Float16_b"
     math:
       - type: "Fpu"
-        operation: "ReduceScalar"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
     packer: "Packer"
-    math_fidelity: "HiFi2"
     block_size: [64, 128]

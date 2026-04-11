@@ -170,9 +170,13 @@ REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 
 
 class ReduceDimension(Enum):
-    Column = auto()
-    Row = auto()
-    Scalar = auto()
+    Column = "REDUCE_COL"
+    Row = "REDUCE_ROW"
+    Scalar = "REDUCE_SCALAR"
+
+    @property
+    def cpp_enum_value(self):
+        return f"ReduceDim::{self.value}"
 
 
 class ReducePool(Enum):
@@ -350,6 +354,8 @@ class Mailboxes(Enum):
     BriscCommand0 = Unpacker + 12
     BriscCommand1 = Unpacker + 16
     BriscCounter = Unpacker + 20
+    BriscBread0 = Unpacker + 24
+    BriscBread1 = Unpacker + 28
 
 
 class MailboxesCoverage(Enum):
@@ -359,6 +365,8 @@ class MailboxesCoverage(Enum):
     BriscCommand0 = Unpacker + 12
     BriscCommand1 = Unpacker + 16
     BriscCounter = Unpacker + 20
+    BriscBread0 = Unpacker + 24
+    BriscBread1 = Unpacker + 28
 
 
 class MailboxesQuasar(Enum):

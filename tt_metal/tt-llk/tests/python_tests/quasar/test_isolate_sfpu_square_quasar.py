@@ -12,7 +12,12 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import (
+    MXFP8_E4M3_MAX_NORMAL,
+    MXFP8_E5M2_MAX_NORMAL,
+    DataFormat,
+    FormatConfig,
+)
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
@@ -62,20 +67,32 @@ def prepare_square_inputs(
     input_finfo = torch.finfo(input_torch_format)
     output_finfo = torch.finfo(output_torch_format)
 
-    # For squaring, x² must fit in the OUTPUT format
-    max_safe_value = math.sqrt(output_finfo.max) * 0.9
+    def mx_elem_max(df: DataFormat) -> float:
+        if df == DataFormat.MxFp8R:
+            return MXFP8_E5M2_MAX_NORMAL
+        if df == DataFormat.MxFp8P:
+            return MXFP8_E4M3_MAX_NORMAL
+        raise ValueError(f"mx_elem_max: not an MX format: {df}")
 
-    # Special handling for bfloat16: it has wide range but limited precision
-    # Extreme values lose precision, so limit to reasonable bounds
-    if input_torch_format == torch.bfloat16:
-        # Limit to range where squaring maintains reasonable precision
-        max_safe_value = min(max_safe_value, 1e4)  # 10000² = 1e8 fits comfortably
+    # For squaring, x² must fit in the OUTPUT format; |x| must fit the INPUT format.
+    if output_format.is_mx_format():
+        cap_from_output = math.sqrt(mx_elem_max(output_format)) * 0.9
     else:
-        # For Float16, ensure input itself fits in input format
-        # Float16 max is ~65504, so sqrt(65504) ≈ 256 is the safe limit
-        max_safe_value = min(max_safe_value, math.sqrt(input_finfo.max) * 0.9)
+        cap_from_output = math.sqrt(output_finfo.max) * 0.9
 
-    min_magnitude = max(1e-6, input_finfo.tiny * 100)  # Avoid denormals
+    if input_format.is_mx_format():
+        cap_from_input = mx_elem_max(input_format) * 0.9
+    else:
+        cap_from_input = math.sqrt(input_finfo.max) * 0.9
+
+    max_safe_value = min(cap_from_output, cap_from_input)
+
+    # bfloat16 (non-MX): limit |x| so squaring keeps reasonable precision.
+    if input_torch_format == torch.bfloat16 and not input_format.is_mx_format():
+        max_safe_value = min(max_safe_value, 1e4)  # 10000² = 1e8 fits comfortably
+
+    # MX uses torch.bfloat16 as the logical dtype; same denormal floor as other formats.
+    min_magnitude = max(1e-6, input_finfo.tiny * 100)
 
     # Ensure src_A and src_B don't contain inf/nan before normalization
     src_A_float = src_A.to(torch.float32)
@@ -163,11 +180,13 @@ def generate_sfpu_square_combinations(
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
+        if in_fmt.is_32_bit():
+            dest_acc_modes = (DestAccumulation.Yes,)
+        elif in_fmt.is_mx_format():
+            dest_acc_modes = (DestAccumulation.No,)
+        else:
+            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+
         for dest_acc in dest_acc_modes:
             # Skip invalid format combinations for Quasar
             if _is_invalid_quasar_combination(fmt, dest_acc):
@@ -184,9 +203,11 @@ def generate_sfpu_square_combinations(
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
-        DataFormat.Float16_b,
     ]
 )
 
@@ -257,6 +278,8 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
+        # Input MX formats require disable_format_inference
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
