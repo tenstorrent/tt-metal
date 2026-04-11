@@ -35,6 +35,9 @@ class MeshWorkloadImpl {
     //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
     // Support for configurable runtime arguments will be added in future versions.
+public:
+    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
+
 private:
     uint64_t id;
 
@@ -47,7 +50,6 @@ private:
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
     std::vector<uint32_t> get_program_config_sizes();
-    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool kernel_binary_always_stored_in_ringbuffer();
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };

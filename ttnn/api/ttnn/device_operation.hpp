@@ -254,7 +254,13 @@ void enqueue_mesh_workload(
     // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
     // occur during capture.
     if (!mesh_cq.trace_id().has_value()) {
-        auto completion_event = mesh_cq.enqueue_record_event_to_host();
+        // Restrict the event to only the sub-devices used by this workload.  Including unrelated
+        // sub-devices (e.g. fabric MUX cores on a different sub-device) in the wait count causes
+        // DISPATCH_D to spin on a done-signal count that those cores never contribute to.
+        auto workload_sub_device_ids = workload.determine_sub_device_ids(mesh_device);
+        std::vector<tt::tt_metal::SubDeviceId> sub_device_id_vec(
+            workload_sub_device_ids.begin(), workload_sub_device_ids.end());
+        auto completion_event = mesh_cq.enqueue_record_event_to_host(sub_device_id_vec);
         detail::track_completion_event_on_tensors(tensor_args, completion_event);
         detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
     }
