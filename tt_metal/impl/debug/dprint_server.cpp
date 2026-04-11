@@ -50,7 +50,6 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -594,7 +593,7 @@ bool DevicePrintImpl::poll_one_core(
     uint32_t risc_state_bytes = ((num_processors + 3) / 4) * 4;  // Round up to nearest word
     auto from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
-    uint32_t print_buffer_address =
+    uint64_t print_buffer_address =
         buffer_address + eightbytes + risc_state_bytes + sizeof(uint32_t);  // Skip wpos, rpos, risc state, and lock
     uint32_t print_buffer_size = buffer_size - eightbytes - risc_state_bytes - sizeof(uint32_t);
 
@@ -806,7 +805,12 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
-    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+    const auto& hal = env_.get_hal();
+    std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        core_types_to_check.push_back(CoreType::DRAM);
+    }
+    for (CoreType core_type : core_types_to_check) {
         if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
@@ -1034,7 +1038,7 @@ bool DPrintImpl::peek_one_risc_non_blocking(
     }
 
     // compute the buffer address for the requested risc
-    uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
+    uint64_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
     ChipId chip_id = device_id;
     RiscKey risc_key{chip_id, logical_core, risc_id};
 
