@@ -166,7 +166,7 @@ inline void packer_addr_counter_init()
  *
  * Ref: Wormhole Packers/FormatConversion.md, late table "From FP32".
  */
-__attribute__((noinline)) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
 {
     switch (out_l1)
     {
@@ -205,7 +205,7 @@ __attribute__((noinline)) bool is_packer_combined_late_column_output(const DataF
  *
  * Ref: Wormhole Packers/FormatConversion.md, "Early format conversion".
  */
-__attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
@@ -253,7 +253,7 @@ __attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const 
  *
  * Ref: Wormhole Packers/FormatConversion.md, "Late format conversion".
  */
-__attribute__((noinline)) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
