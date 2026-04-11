@@ -39,9 +39,7 @@ void kernel_main() {
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
-
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src0_addr, tile_bytes);
+    const auto s0 = TensorAccessor(src_args, src0_addr);
 
     uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;

@@ -32,15 +32,13 @@ void kernel_main() {
     constexpr uint32_t C_padded = get_compile_time_arg_val(6);
     constexpr uint32_t stick_size_padded = get_compile_time_arg_val(7);
     constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(8);
-    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(9);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
-    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(18);
+    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(9);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(16);
 
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(12) == 1;
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t front_padding = get_compile_time_arg_val(8);
-    constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
-    constexpr auto src_args = TensorAccessorArgs<20>();
+    constexpr bool unaligned = get_compile_time_arg_val(17) == 1;
+    constexpr auto src_args = TensorAccessorArgs<18>();
 
     uint32_t packed_pad_value = 0;
     uint32_t row_major_min_bytes = 0;
@@ -59,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
-    const auto s = TensorAccessor(src_args, src_addr, stick_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Prepare pad pattern
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);

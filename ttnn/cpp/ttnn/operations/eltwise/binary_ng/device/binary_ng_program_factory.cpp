@@ -488,7 +488,6 @@ void set_or_update_runtime_arguments(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -541,7 +540,6 @@ void set_or_update_runtime_arguments(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -569,8 +567,6 @@ void set_or_update_runtime_arguments(
 
         if (row_major_inputs) {
             const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
-            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                       : static_cast<uint32_t>(a.buffer()->aligned_page_size());
             const uint32_t bD_arg = b.has_value() ? bD : 1u;
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
@@ -595,8 +591,6 @@ void set_or_update_runtime_arguments(
                 current_block,
                 num_rows_per_tile,
                 common_row_width_elements,
-                static_cast<uint32_t>(a.buffer()->aligned_page_size()),
-                b_page_size,
                 a_alignment,
                 b_alignment,
                 tiles_per_row_width,

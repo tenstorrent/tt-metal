@@ -101,7 +101,7 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     };
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};

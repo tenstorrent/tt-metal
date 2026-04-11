@@ -170,12 +170,10 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
     reader_compile_time_args.push_back(H);
     reader_compile_time_args.push_back(C);
     reader_compile_time_args.push_back(stick_size);
-    reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     writer_compile_time_args.push_back(stick_size);
-    writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle reader_kernel_id = CreateKernel(

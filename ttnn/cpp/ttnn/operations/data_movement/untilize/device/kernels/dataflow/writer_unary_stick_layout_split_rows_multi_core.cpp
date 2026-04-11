@@ -17,16 +17,15 @@ void kernel_main() {
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
-    constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
-    constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
+    constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(2);
+    constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(3);
+    constexpr uint32_t output_element_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(5);
+    constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(6);
 
-    constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    constexpr auto dst_args = TensorAccessorArgs<7>();
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);

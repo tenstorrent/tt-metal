@@ -56,7 +56,7 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
-    std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
+    std::vector<uint32_t> reader_ct_args = {padded_row_size_nbytes};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);

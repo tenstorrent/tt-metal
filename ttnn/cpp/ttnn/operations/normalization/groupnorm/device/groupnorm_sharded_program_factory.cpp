@@ -544,8 +544,6 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)beta.has_value(),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_N,
-        (std::uint32_t)per_core_N * datum_size_bytes,
-        (std::uint32_t)per_core_Nt * tile_width * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)block_wt};

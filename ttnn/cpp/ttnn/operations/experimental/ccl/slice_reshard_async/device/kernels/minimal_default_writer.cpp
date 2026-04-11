@@ -55,7 +55,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<4>();
     uint32_t read_size = stick_size;
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     // pre-populate packet headers
     auto pkt_hdr = PacketHeaderPool::allocate_header();

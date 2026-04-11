@@ -205,15 +205,12 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
-    // Calculate aligned page sizes for source (DRAM) and destination (DRAM or L1)
+    // Calculate aligned page size for source (DRAM)
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);  // Source is always DRAM
-    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
-                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     // Round up to alignment boundary
     uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
-    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
     for (size_t i = 0; i < dst_coords.size(); ++i) {
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
@@ -276,7 +273,6 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
     writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
     writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
-    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
     auto writer_k = tt::tt_metal::CreateKernel(

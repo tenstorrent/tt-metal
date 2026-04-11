@@ -47,7 +47,6 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(tensor_args.index_tensor.dtype());
     uint32_t index_single_page_size =
         INPUT_SIZE * index_element_size_bytes;  // Only need 32 at most at a time, which is less than full page size
-    uint32_t index_page_size = index_tensor.padded_shape()[-1] * index_element_size_bytes;
 
     tt::DataFormat mask_cb_data_format = tt::DataFormat::UInt8;
     uint32_t mask_single_page_size = INPUT_SIZE * 1;  // UInt8 is 1 byte per element
@@ -108,7 +107,6 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
         (uint32_t)batch_size,
         (uint32_t)seq_len_tiles,
         (uint32_t)num_embeddings_tiles,
-        (uint32_t)index_page_size,
         (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
         (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
     TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);

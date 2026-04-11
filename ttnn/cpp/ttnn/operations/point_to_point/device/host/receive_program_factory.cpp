@@ -132,7 +132,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::SetRuntimeArgs(program, receive_unary_reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(), increment, page_idx_start, output_page_size_bytes};
+            output_tensor.buffer()->address(), increment, page_idx_start};
 
         tt::tt_metal::SetRuntimeArgs(program, receive_unary_writer_kernel_id, c, writer_runtime_args);
 

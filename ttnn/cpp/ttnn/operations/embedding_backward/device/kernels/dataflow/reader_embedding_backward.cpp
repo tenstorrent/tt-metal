@@ -7,7 +7,7 @@
 constexpr uint32_t INPUT_SIZE = 32;
 
 FORCE_INLINE uint32_t get_index(uint32_t input_l1_addr, uint32_t idx) {
-    constexpr bool is_index_bfloat16 = get_compile_time_arg_val(5) == 1;
+    constexpr bool is_index_bfloat16 = get_compile_time_arg_val(4) == 1;
     if constexpr (is_index_bfloat16) {
         auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
         union {
@@ -68,7 +68,7 @@ FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint3
 }
 
 FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
-    constexpr bool is_output_bfloat16 = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_output_bfloat16 = get_compile_time_arg_val(5) == 1;
     auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 
     if constexpr (is_output_bfloat16) {
@@ -96,7 +96,6 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(1);
     constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_embeddings = get_compile_time_arg_val(3);
-    constexpr uint32_t index_page_size = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_grad = tt::CBIndex::c_0;
     constexpr uint32_t cb_index = tt::CBIndex::c_1;
@@ -108,13 +107,13 @@ void kernel_main() {
     constexpr uint32_t grad_page_size = get_tile_size(cb_grad);
     constexpr uint32_t out_page_size = get_tile_size(cb_id_out0);
 
-    constexpr auto grad_args = TensorAccessorArgs<7>();
+    constexpr auto grad_args = TensorAccessorArgs<6>();
     constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
-    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr, grad_page_size);
-    const auto index_s = TensorAccessor(index_args, index_tensor_addr, index_page_size);
-    const auto out_s = TensorAccessor(out_args, output_tensor_addr, out_page_size);
+    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr);
+    const auto index_s = TensorAccessor(index_args, index_tensor_addr);
+    const auto out_s = TensorAccessor(out_args, output_tensor_addr);
 
     uint32_t index_block_size = get_tile_size(cb_index) >> 5;  // we only need 32 elements
     uint32_t index_l1_addr = get_write_ptr(cb_index);          // static

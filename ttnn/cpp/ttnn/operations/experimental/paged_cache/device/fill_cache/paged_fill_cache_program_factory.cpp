@@ -54,7 +54,6 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     TT_FATAL(
         page_table_stick_size_B % 32 == 0,
         "page table page size in bytes must be a multiple of 32 due to address alignment");
-    uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
 
     // batch_idx_tensor specific parameters
@@ -112,7 +111,6 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         num_blocks_of_work_per_head,
         block_size_t,
         Wt,
-        log2_page_table_stick_size_B,
         page_table_stick_size_B,
         // New compile-time args for batch_idx_tensor
         (uint32_t)use_batch_idx_tensor,

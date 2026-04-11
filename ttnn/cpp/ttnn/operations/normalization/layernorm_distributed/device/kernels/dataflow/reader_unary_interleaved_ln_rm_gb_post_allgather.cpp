@@ -35,31 +35,28 @@ void kernel_main() {
     constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
     const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
-    constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
-    constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_length = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(2);
+    constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_length = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt = get_compile_time_arg_val(5);  // Width in tiles
+    constexpr auto src_args = TensorAccessorArgs<6>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 

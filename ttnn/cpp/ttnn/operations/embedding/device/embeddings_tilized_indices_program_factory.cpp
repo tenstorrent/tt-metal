@@ -37,7 +37,6 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     uint32_t output_element_size_bytes = output.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.logical_shape()[-1] * input_element_size_bytes;
     uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
     uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
 
@@ -109,10 +108,9 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
-        (std::uint32_t)FACE_HEIGHT};
+    };
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 

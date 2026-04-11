@@ -8,24 +8,23 @@
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
-    const uint32_t num_dims = get_arg_val<uint32_t>(4);
-    const uint32_t misalignment = get_arg_val<uint32_t>(5);
-    const uint32_t start_id = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(7);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(8);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(9);
+    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(1);
+    const uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
+    const uint32_t num_dims = get_arg_val<uint32_t>(3);
+    const uint32_t misalignment = get_arg_val<uint32_t>(4);
+    const uint32_t start_id = get_arg_val<uint32_t>(5);
+    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
+    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
+    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
+    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
 

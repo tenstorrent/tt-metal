@@ -429,13 +429,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
                             ? fused_op_signaler->ag_input.value().buffer()->address()
                             : 0;
-    auto in3_data_format =
-        (fuse_op && fused_op_signaler->read_local_slice_from_input)
-            ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
-            : in1_data_format;
-
-    auto in3_tile_size = tt::tile_size(in3_data_format);
-
     /**
      * Create kernels
      */
@@ -465,7 +458,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         true,               // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
-        in3_tile_size,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -507,7 +499,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         false,              // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
-        in3_tile_size,
     };
     append_accessors(
         in0_receiver_compile_time_args,

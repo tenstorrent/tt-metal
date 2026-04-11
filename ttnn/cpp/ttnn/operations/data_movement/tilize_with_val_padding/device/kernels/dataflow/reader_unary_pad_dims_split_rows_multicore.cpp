@@ -64,9 +64,8 @@ void kernel_main() {
     constexpr uint32_t elem_size = get_compile_time_arg_val(2);
     constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(3);
     constexpr uint32_t page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
@@ -77,7 +76,7 @@ void kernel_main() {
     const uint32_t num_tiles_per_row =
         padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {

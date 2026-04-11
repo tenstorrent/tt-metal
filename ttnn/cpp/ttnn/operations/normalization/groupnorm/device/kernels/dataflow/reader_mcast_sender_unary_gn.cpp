@@ -275,7 +275,7 @@ void kernel_main() {
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                         const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
-                        const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+                        const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
                         l1_write_addr = cb_in0.get_write_ptr();
                         cb_in0.reserve_back(out_block_hw_normal);
@@ -365,7 +365,7 @@ void kernel_main() {
                                 }
                             }
                         } else if (cur_read_iteration == 2) {
-                            const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
+                            const auto dst_a = TensorAccessor(out_args, out_addr);
 
                             // add or copy with previous output results
                             uint32_t block_w_curr =

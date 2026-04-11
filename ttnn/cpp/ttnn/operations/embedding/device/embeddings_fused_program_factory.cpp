@@ -175,7 +175,6 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_block_size,
         (std::uint32_t)tiles_per_chunk,
         (std::uint32_t)input_block_size_bytes,

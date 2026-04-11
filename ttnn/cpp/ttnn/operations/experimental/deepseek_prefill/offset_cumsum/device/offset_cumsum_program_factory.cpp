@@ -63,7 +63,6 @@ CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor
         (uint32_t)src_is_dram,
         (uint32_t)dst_offsets_is_dram,
         (uint32_t)dst_totals_is_dram,
-        input_page_size,
         offsets_page_size,
         totals_page_size,
         W,

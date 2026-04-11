@@ -25,7 +25,6 @@ void kernel_main() {
     // etc
     uint32_t start_id = get_arg_val<uint32_t>(i++);
     uint32_t num_sticks = get_arg_val<uint32_t>(i++);
-    uint32_t stick_size = get_arg_val<uint32_t>(i++);
     uint32_t element_size = get_arg_val<uint32_t>(i++);
     uint32_t num_elements_per_alignment = get_arg_val<uint32_t>(i++);
     uint32_t num_alignment_width = get_arg_val<uint32_t>(i++);
@@ -34,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
 #define NOC_MINIMUM_READ_SIZE 32
 

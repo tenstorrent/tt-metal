@@ -34,7 +34,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -73,7 +72,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
-        padded_row_size_bytes,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
@@ -124,7 +122,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
         uint32_t addr_offset =
-            6;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims, misalignment
+            5;  // input buffer addr, unpadded_row_size_bytes, unpadded_row_size_bytes_offset, num_dims, misalignment
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core_read;

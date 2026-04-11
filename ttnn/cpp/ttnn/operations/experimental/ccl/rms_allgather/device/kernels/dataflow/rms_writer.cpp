@@ -39,16 +39,15 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(16);
 
     // Data type CTs
-    constexpr uint32_t stick_size = get_compile_time_arg_val(17);
-    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(18) == 1;
+    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(17) == 1;
 
     // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(20);
-    constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(21);
-    constexpr uint32_t signaling_cb = get_compile_time_arg_val(22);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(23);
-    constexpr auto gamma_args = TensorAccessorArgs<24>();
+    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(18);
+    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(19);
+    constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(20);
+    constexpr uint32_t signaling_cb = get_compile_time_arg_val(21);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(22);
+    constexpr auto gamma_args = TensorAccessorArgs<23>();
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
@@ -189,7 +188,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;

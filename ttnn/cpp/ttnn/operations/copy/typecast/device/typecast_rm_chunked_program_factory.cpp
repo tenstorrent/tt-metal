@@ -122,7 +122,6 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
         full_chunks_per_row,             // full_chunks_per_row
         input_partial_chunk_size_bytes,  // partial_chunk_size_bytes
         partial_chunks_per_row,          // partial_chunks_per_row (0 or 1)
-        src_buffer->page_size()          // row_page_size_bytes
     };
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
@@ -132,7 +131,6 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
         full_chunks_per_row,              // full_chunks_per_row
         output_partial_chunk_size_bytes,  // partial_chunk_size_bytes
         partial_chunks_per_row,           // partial_chunks_per_row (0 or 1)
-        dst_buffer->page_size()           // row_page_size_bytes
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 

@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
-    const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;
