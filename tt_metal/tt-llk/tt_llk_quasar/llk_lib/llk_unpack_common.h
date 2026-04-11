@@ -63,9 +63,15 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
     _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
 }
 
-// template <bool IS_FP32_MATH_DEST_EN>
+template <DstSync DST>
 inline void _llk_unpack_dest_dvalid_section_done_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::UNPACK0);
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, 0);
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
+        // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
+        TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, p_cleardvalid::UNPACK_TO_DEST, 0);
+    }
 }

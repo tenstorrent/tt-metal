@@ -89,7 +89,13 @@ int main(void)
 
     {
         ZONE_SCOPED("KERNEL")
+
+        asm volatile("" ::: "memory");
+
         run_kernel(temp_args);
+
+        asm volatile("" ::: "memory");
+
         ckernel::tensix_sync();
     }
 

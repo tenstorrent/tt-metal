@@ -74,13 +74,27 @@ def generate_random_face(
                     torch.ones(size, dtype=format_dict[stimuli_format]) * const_value
                 )
             else:
-                max_value = 127 if stimuli_format == DataFormat.Int8 else 255
-                min_value = -(max_value + 1) if negative_values else 0
+                dtype = format_dict[stimuli_format]
+                # Determine representable range for this integer format.
+                # Signed formats use sign+magnitude in hardware, so INT_MIN is not
+                # representable (sign+magnitude -0 is reserved). Exclude it by
+                # clamping the lower bound to iinfo.min + 1.
+                # UInt32 is stored as torch.int64; use the actual uint32 range.
+                if stimuli_format == DataFormat.UInt32:
+                    type_min, type_max = 0, 2**32 - 1
+                else:
+                    iinfo = torch.iinfo(dtype)
+                    is_signed = iinfo.min < 0
+                    # Use half the representable range so that binary operations
+                    # (e.g. addition) on two values cannot overflow.
+                    type_max = iinfo.max // 2
+                    type_min = (-type_max) if is_signed else 0
+                min_value = type_min if negative_values else 0
                 srcA_face = torch.randint(
                     low=min_value,
-                    high=max_value,
+                    high=type_max,
                     size=(size,),
-                    dtype=format_dict[stimuli_format],
+                    dtype=dtype,
                 )
         else:
             if const_face:

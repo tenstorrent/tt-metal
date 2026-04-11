@@ -11,6 +11,6 @@ operations:
       - type: "Fpu"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
     packer: "Packer"
-    math_fidelity: "LoFi"
     block_size: [64, 128]

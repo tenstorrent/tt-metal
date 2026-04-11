@@ -12,6 +12,6 @@ operations:
       - type: "Fpu"
         operation: "ReduceBlockMax"
         unpacker: "ReduceBlockMaxUnpacker"
+        math_fidelity: "HiFi2"
     packer: "Packer"
-    math_fidelity: "HiFi2"
     block_size: [64, 128]

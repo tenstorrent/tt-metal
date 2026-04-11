@@ -15,6 +15,7 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         broadcast_type: "SCALAR"
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Fill"
         approximation_mode: false
@@ -25,7 +26,6 @@ operations:
         operation: "Elwadd"
         unpacker: "UnpackerAB"
     packer: "Packer"
-    math_fidelity: "LoFi"
     block_size: [64, 64]
 
   - src_a: "datacopy_output"
@@ -40,6 +40,7 @@ operations:
       - type: "Fpu"
         operation: "Datacopy"
         unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: false
@@ -56,7 +57,6 @@ operations:
         src2_dest_tile_index: 1
         dst_dest_tile_index: 1
     packer: "Packer"
-    math_fidelity: "LoFi"
     block_size: [64, 64]
 
   - src_a: "tilized_output"
@@ -73,12 +73,12 @@ operations:
         unpacker: "UnpackerAB"
         unpack_transpose_within_face: true
         unpack_transpose_faces: true
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Neg"
         approximation_mode: false
         iterations: 32
     packer: "Packer"
-    math_fidelity: "LoFi"
     dest_sync: "SyncFull"
 
   - src_a: "elwadd1"
@@ -93,6 +93,7 @@ operations:
       - type: "Fpu"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
       - type: "UnarySfpu"
         operation: "Abs"
         approximation_mode: false
@@ -102,7 +103,6 @@ operations:
         approximation_mode: false
         iterations: 32
     packer: "Packer"
-    math_fidelity: "HiFi2"
 
   - src_a: "matmul_result"
     src_b: "input_D"
@@ -116,6 +116,7 @@ operations:
       - type: "Fpu"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Sqrt"
         approximation_mode: false
@@ -128,4 +129,3 @@ operations:
         src2_dest_tile_index: 0
         dst_dest_tile_index: 0
     packer: "Packer"
-    math_fidelity: "LoFi"
