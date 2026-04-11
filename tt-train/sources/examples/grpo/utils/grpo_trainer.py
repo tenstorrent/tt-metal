@@ -1,17 +1,25 @@
 from dataclasses import dataclass
 import inspect
-from typing import List, Callable, Sequence, Iterator
+from typing import List, Callable, Sequence
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from utils.inference import InferenceCtx, setup_inference
 from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
 from utils.loss import compute_nlog_probs, compute_grpo_loss
-import time
+import os
 import numpy as np
 import ttml
 import ttnn
-from utils.bookkeeping import RunContext, TrainingMetricsTracker, setup_training_run
+from safetensors.torch import save_file
 from ttml.common.utils import create_optimizer, no_grad
+
+
+class TrainerCallback:
+    def on_step_end(self, trainer, step, metrics):
+        pass
+
+    def on_train_end(self, trainer):
+        pass
 
 
 @dataclass
@@ -57,7 +65,6 @@ def compute_advantages(rewards_np, group_size):
 
 def iter_batched_completions(
     ctx: InferenceCtx,
-    run: RunContext,
     prompts: Sequence[List[int]],
     batch_columns: dict,
     batch_size: int = 32,
@@ -67,9 +74,7 @@ def iter_batched_completions(
         end = min(start + batch_size, n)
         prompt_batch = list(prompts[start:end])
 
-        start_time = time.perf_counter()
         completions_batch = completion_batched_multiple_prompts(ctx, prompt_batch)
-        run.logger.info(f"batch of completions done! took {time.perf_counter() - start_time} s")
 
         prompt_batch_expanded = [item for item in prompt_batch for _ in range(ctx.group_size)]
         columns_expanded = {
@@ -87,16 +92,24 @@ def iter_micro_batch(prompts, completions, micro_batch_size=16):
         yield prompts[start:end], completions[start:end]
 
 
+def save_checkpoint(model, step, output_dir, dp_composer=None):
+    ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    tensors = {name: param.to_numpy(ttnn.DataType.FLOAT32, dp_composer) for name, param in model.parameters().items()}
+    save_file(tensors, os.path.join(ckpt_dir, f"model.safetensors"))
+
+
 class GrpoTrainer:
     def __init__(
         self,
-        model_source: str,  # hugging face model id or a directory path. The directory must have model.safetensors and config.json inside
-        dataset,  # from datasets library
+        model_source: str,
+        dataset,
         config: GrpoConfig,
         reward_func: Callable,
         transformer_config: dict,
         optimizer_config: dict,
         device_config: dict,
+        callbacks: list = None,
     ):
         self.model_source = model_source
         self.dataset = dataset
@@ -105,14 +118,15 @@ class GrpoTrainer:
         self.transformer_config = TransformerConfig({"transformer_config": transformer_config})
         self.device_config = DeviceConfig({"device_config": device_config})
         self.optimizer_config_dict = optimizer_config
+        self.callbacks = callbacks or []
+        self.model = None
+
+    def _notify(self, method, *args, **kwargs):
+        for cb in self.callbacks:
+            getattr(cb, method)(self, *args, **kwargs)
 
     def train(self):
         grpo_cfg = self.config
-
-        # FIXME
-        run = setup_training_run(output_dir=grpo_cfg.output_dir)
-
-        metrics = TrainingMetricsTracker(self.config.output_dir)
 
         if self.device_config.total_devices() > 1:
             ttml.core.distributed.enable_fabric(self.device_config.total_devices())
@@ -122,6 +136,7 @@ class GrpoTrainer:
         )
 
         inference_ctx = setup_inference(self.config, self.transformer_config, self.device_config, self.model_source)
+        self.model = inference_ctx.tt_model
 
         optimizer = create_optimizer(inference_ctx.tt_model, self.optimizer_config_dict)
         base_lr = optimizer.get_lr()
@@ -137,15 +152,11 @@ class GrpoTrainer:
         accum_rewards = []
         accum_completion_lens = []
 
-        expected_steps = len(prompts) // grpo_cfg.batch_size * grpo_cfg.num_iterations // grad_accum
-        run.logger.info(f"optimizer.step() will be called {expected_steps} times during training")
-
         optimizer.zero_grad()
 
         for prompts_batch, completions_batch, dataset_columns_dict in iter_batched_completions(
-            inference_ctx, run, prompts, extra_columns, grpo_cfg.batch_size
+            inference_ctx, prompts, extra_columns, grpo_cfg.batch_size
         ):
-            batch_time_start = time.perf_counter()
             num_batches += 1
 
             completions_strs = [inference_ctx.tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
@@ -202,8 +213,6 @@ class GrpoTrainer:
 
                     deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
-                    run.logger.debug("microbatch done")
-
                 accum_count += 1
 
                 if accum_count == grad_accum:
@@ -212,10 +221,8 @@ class GrpoTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    run.logger.info("synchronizing gradients")
                     if inference_ctx.dp_mapper is not None:
                         ttml.core.distributed.synchronize_gradients(inference_ctx.tt_model.parameters())
-                    run.logger.info("gradients synchronized")
 
                     optimizer.step()
                     optimizer.zero_grad()
@@ -225,36 +232,25 @@ class GrpoTrainer:
                     all_rewards = np.concatenate(accum_rewards)
                     mean_reward = float(all_rewards.mean())
                     mean_completion_len = sum(accum_completion_lens) / max(len(accum_completion_lens), 1)
-                    run.logger.info(
-                        f"Step {num_steps} | Reward: {mean_reward:.4f} | Len: {mean_completion_len:.2f} tokens"
-                    )
 
-                    metrics.log_step(
-                        step=num_steps,
-                        batch=num_batches,
-                        mini_epoch=mini_epoch,
-                        reward_mean=mean_reward,
-                        reward_std=float(all_rewards.std()),
-                        mean_completion_len=mean_completion_len,
-                        batch_elapsed_s=time.perf_counter() - batch_time_start,
-                        lr=base_lr * warmup_factor,
-                    )
+                    if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
+                        step_metrics = {
+                            "reward_mean": mean_reward,
+                            "reward_std": float(all_rewards.std()),
+                            "mean_completion_len": mean_completion_len,
+                            "lr": base_lr * warmup_factor,
+                        }
+                        self._notify("on_step_end", num_steps, step_metrics)
+
                     accum_rewards.clear()
                     accum_completion_lens.clear()
 
-                    if grpo_cfg.checkpointing == True and num_steps % grpo_cfg.checkpoint_interval == 1:
-                        run.save_checkpoint(
-                            inference_ctx.tt_model, step=num_steps, dp_composer=inference_ctx.dp_composer
+                    if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
+                        save_checkpoint(
+                            inference_ctx.tt_model, num_steps, grpo_cfg.output_dir, inference_ctx.dp_composer
                         )
 
-                run.logger.info(f"{mini_epoch=} done!")
-
-            # Deallocate cached old log probs after all mini epochs are done
             for nlog_old, mask_old, _ in probs_old_list:
                 deallocate_tensors([nlog_old, mask_old])
 
-            run.logger.info(f"reward_mean={rewards_np.mean():.4f}, reward_std={rewards_np.std():.4f}")
-            run.logger.info(f"batch={num_batches} done!")
-
-        run.logger.info("training process done!")
-        run.save_checkpoint(inference_ctx.tt_model, step=num_steps, dp_composer=inference_ctx.dp_composer)
+        self._notify("on_train_end")
