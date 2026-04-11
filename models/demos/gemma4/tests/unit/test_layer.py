@@ -15,13 +15,7 @@ import ttnn
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import (
-    TestFactory,
-    compare_tensors,
-    parametrize_batch_seq,
-    parametrize_mesh_with_fabric,
-    skip_if_needs_multi_device,
-)
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 # ── Config / Structure Tests ───────────────────────────────────────────────
 
@@ -126,10 +120,10 @@ def _create_gemma4_model_args(hf_text_config):
 # ── Full Layer PCC Test ───────────────────────────────────────────────────
 
 
-@skip_if_needs_multi_device
+@parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_layer_forward(batch_size, seq_len, layer_idx, device):
+def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
     """
     Full decoder layer PCC test: compares TT layer against HF reference.
 
@@ -151,14 +145,19 @@ def test_layer_forward(batch_size, seq_len, layer_idx, device):
 
     attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
 
-    # Create TT layer
-    mesh_config = TestFactory.create_mesh_config((1, 1))
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+
     tt_layer = Gemma4DecoderLayer(
-        mesh_device=device,
+        mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=tt_state,
         layer_idx=layer_idx,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
@@ -178,13 +177,15 @@ def test_layer_forward(batch_size, seq_len, layer_idx, device):
     logger.info(f"HF output shape: {hf_output.shape}, range: [{hf_output.min():.4f}, {hf_output.max():.4f}]")
 
     # TT forward
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     x_tt = ttnn.from_torch(
         x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, max(seq_len, 128), layer_idx)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
     tt_output = tt_layer(
         x_tt,
         rope_mats=(cos_tt, sin_tt),
@@ -193,21 +194,22 @@ def test_layer_forward(batch_size, seq_len, layer_idx, device):
         kv_cache=None,
         is_decode=False,
     )
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()  # [1, S, H]
+    tt_output_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output))
+        .squeeze(0)
+        .float()
+    )
 
-    # Compare
-    # PCC threshold: lower than attention-only (0.95) due to accumulated error
-    # from attention + MLP + MoE + 7 norms + residuals + bf16 quantization
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
-    assert passing, f"Full layer (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+    assert passing, f"Full layer (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
 
 
 # ── Decode Layer Test (fully on device) ───────────────────────────────────
 
 
-@skip_if_needs_multi_device
+@parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, device):
+def test_layer_forward_decode(layer_idx, mesh_device):
     """
     Full decoder layer decode test (seq_len=1, fully on device).
 
@@ -226,15 +228,20 @@ def test_layer_forward_decode(layer_idx, device):
     model_args = _create_gemma4_model_args(hf_text_config)
     attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
 
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
     cache_len = 32
-    mesh_config = TestFactory.create_mesh_config((1, 1))
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_layer = Gemma4DecoderLayer(
-        mesh_device=device,
+        mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=tt_state,
         layer_idx=layer_idx,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
@@ -246,12 +253,17 @@ def test_layer_forward_decode(layer_idx, device):
     k_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
     v_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
 
-    # Set TT KV cache
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
-    kv_cache = init_kv_cache(device, attn_cfg, max_batch_size=1, max_seq_len=cache_len + 32, cache_dtype=ttnn.bfloat16)
-    k_fill = ttnn.from_torch(k_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    v_fill = ttnn.from_torch(v_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    kv_cache = init_kv_cache(
+        mesh_device, attn_cfg, max_batch_size=1, max_seq_len=cache_len + 32, cache_dtype=ttnn.bfloat16
+    )
+    k_fill = ttnn.from_torch(
+        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    v_fill = ttnn.from_torch(
+        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
     ttnn.fill_cache(kv_cache[0], k_fill, batch_idx=0)
     ttnn.fill_cache(kv_cache[1], v_fill, batch_idx=0)
     tt_layer.self_attn.kv_cache = kv_cache
@@ -278,19 +290,22 @@ def test_layer_forward_decode(layer_idx, device):
             attention_mask=mask,
         )
 
-    # TT forward (decode, fully on device)
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, cache_len + 32, layer_idx)
+    # TT forward (decode)
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, cache_len + 32, layer_idx)
     x_tt = ttnn.from_torch(
         x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_layer(
         x_tt,
@@ -301,82 +316,11 @@ def test_layer_forward_decode(layer_idx, device):
         is_decode=True,
         token_index=cache_len,
     )
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
+    tt_output_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output))
+        .squeeze(0)
+        .float()
+    )
 
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
-    assert passing, f"Full layer decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
-
-
-# ── TP Layer Test ─────────────────────────────────────────────────────────
-
-
-@parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_layer_forward_tp(batch_size, seq_len, layer_idx, mesh_device):
-    """
-    Full decoder layer with TP attention, compared against HF reference.
-
-    Filter: pytest -k "1x8" or pytest -k "1x2"
-    """
-    from models.demos.gemma4.config import MeshConfig, ModeConfig
-    from models.demos.gemma4.tt.ccl import CCLManager
-
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
-    hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
-
-    hf_state = hf_layer.state_dict()
-    tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
-    model_args = _create_gemma4_model_args(hf_text_config)
-
-    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
-
-    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
-
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
-    ccl_manager = CCLManager(mesh_device, num_links=1)
-
-    tt_layer = Gemma4DecoderLayer(
-        mesh_device=mesh_device,
-        hf_config=model_args,
-        state_dict=tt_state,
-        layer_idx=layer_idx,
-        ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
-        tensor_cache_path=None,
-        mesh_config=mesh_config,
-        max_seq_len=seq_len,
-        max_local_batch_size=batch_size,
-    )
-
-    x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
-
-    # HF reference
-    hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
-    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
-    with torch.no_grad():
-        pli = _make_per_layer_input(hf_text_config, seq_len)
-        hf_output = hf_layer(x_torch, per_layer_input=pli, position_embeddings=hf_rope, attention_mask=causal_mask)
-
-    # TT forward (input replicated to both devices)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
-    tt_output = tt_layer(
-        x_tt,
-        rope_mats=(cos_tt, sin_tt),
-        position_idx=None,
-        page_table=None,
-        kv_cache=None,
-        is_decode=False,
-    )
-    # After allreduce, all devices have the same result
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).squeeze(0).float()
-
-    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
-    assert passing, f"Full layer TP (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+    assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
