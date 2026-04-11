@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,7 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -68,7 +69,7 @@ static void RunTest(
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
+    KernelHandle assert_kernel = 0;
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -134,6 +135,17 @@ static void RunTest(
             risc = is_active ? "erisc" : "ierisc";
             break;
         }
+        case HalProgrammableCoreType::DRAM: {
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+                log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            logical_core = {0, 0};
+            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            assert_kernel = CreateKernel(program_, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
+            risc = "drisc";
+            break;
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
@@ -176,6 +188,7 @@ static void RunTest(
     switch (processor.core_type) {
         case HalProgrammableCoreType::ACTIVE_ETH: core_str = "acteth"; break;
         case HalProgrammableCoreType::IDLE_ETH: core_str = "idleth"; break;
+        case HalProgrammableCoreType::DRAM: core_str = "dram"; break;
         default: core_str = "worker";
     }
 
@@ -191,7 +204,6 @@ static void RunTest(
         case 7: hw_fault_info = 0xffffffffff000000; break;
         default: hw_fault_info = 0; break;
     }
-    log_critical(LogTest, "hw_fault_info: 0x{:x}, hw_assert_cause: 0x{:x}", hw_fault_info, hw_assert_cause);
     const std::string msg = get_debug_assert_message(
         assert_type,
         0,
@@ -222,13 +234,13 @@ static void RunTest(
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {
-        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x\d+
+        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
         std::string pattern = regex_escape(expected);
         const std::string pc_placeholder = "PC 0x0";
         size_t pos = pattern.find(pc_placeholder);
         ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << pc_placeholder << "' not found in exception: " << pattern;
-        pattern.replace(pos, pc_placeholder.length(), "PC 0x\\d+");
+            << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
@@ -255,6 +267,9 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
 
     // Skip if processor type is not available on this architecture
     const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(params.processor.core_type)) {
+        GTEST_SKIP() << "Test " << params.test_name << " skipped: core type not available on this architecture";
+    }
     uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
     uint32_t available_processors =
         hal.get_processor_types_count(core_type_index, static_cast<uint32_t>(params.processor.processor_class));
@@ -264,18 +279,20 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     }
 
     // Dispatch mode validation:
-    // - IDLE_ETH cores only support SD (FD not yet implemented)
+    // - IDLE_ETH and DRAM cores only support SD (FD not yet implemented)
     // - TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
     bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
     bool using_slow_dispatch = this->IsSlowDispatch();
 
-    if (is_idle_eth && !using_slow_dispatch) {
-        log_info(tt::LogTest, "IDLE_ETH requires Slow Dispatch (Fast Dispatch not yet supported).");
+    if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
+        log_info(
+            tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).", is_dram ? "DRAM" : "IDLE_ETH");
         GTEST_SKIP();
     }
-    if (using_slow_dispatch && !is_quasar && !is_idle_eth) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, or DRAM cores";
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -307,7 +324,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}},
         WatcherTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 INSTANTIATE_TEST_SUITE_P(
@@ -339,7 +357,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{
             "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 }  // namespace

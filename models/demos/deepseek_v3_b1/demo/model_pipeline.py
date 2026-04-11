@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@ class ModelPipeline:
         lm_head_persistent_mode: bool = True,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
+        io_socket_descriptor_prefix: str | None = None,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -56,7 +57,9 @@ class ModelPipeline:
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path)
+            if model_path is None:
+                raise ValueError("weights_mode='real' requires model_path")
+            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
@@ -92,6 +95,10 @@ class ModelPipeline:
                 batch_size=1,
                 pipeline_depth=config.num_stages,
             )
+
+            if io_socket_descriptor_prefix is not None:
+                self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
+
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
     def prefill_forward(self, tokens: list[int]) -> int:

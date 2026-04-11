@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,11 +58,8 @@ TensorReturnValue filter_tensor_shards(
                 }
             }
 
-            // Create new storage with filtered coords, sharing the mesh_buffer
-            tt::tt_metal::DeviceStorage new_storage(old_storage, std::move(filtered_coords));
-
-            // Return new tensor with new storage
-            return Tensor(std::move(new_storage), tensor.tensor_spec(), tensor.tensor_topology());
+            // Create new storage with filtered coords, sharing the device memory
+            return Tensor(tt::tt_metal::DeviceStorage(old_storage, std::move(filtered_coords)));
         },
         tensor_return_value);
 }

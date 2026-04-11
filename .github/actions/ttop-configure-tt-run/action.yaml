@@ -39,6 +39,14 @@ runs:
       shell: bash
       run: |
         echo "Creating OpenMPI hostfile from ranks mapping..."
+        echo "ranksData input: '${{ inputs.ranksData }}'"
+
+        # Check if ranksData is null or empty
+        if [ -z "${{ inputs.ranksData }}" ] || [ "${{ inputs.ranksData }}" == "null" ]; then
+          echo "ERROR: ranksData is null or empty!"
+          echo "This means the allocation has no nodes or get-allocation-data failed."
+          exit 1
+        fi
 
         # Parse the JSON and create ordered hostfile
         echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee ${{ inputs.directory }}/hostfile

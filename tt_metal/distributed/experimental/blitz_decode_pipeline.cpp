@@ -1,23 +1,21 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
+#include <set>
 #include <vector>
 
-#include <tt-metalium/base_types.hpp>
+#include <fmt/format.h>
+
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt_stl/span.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/physical_system_discovery.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::experimental::blitz {
 
@@ -25,615 +23,230 @@ using ::tt::tt_metal::distributed::MeshCoordinate;
 
 namespace {
 
-struct PhysicalPipelineStageConfig {
-    uint32_t entry_node_tray_id;
-    uint32_t exit_node_tray_id;
-    uint32_t entry_node_asic_location;
-    uint32_t exit_node_asic_location;
-};
-
-std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
-    const distributed::MeshDevice& mesh_device) {
+std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    const auto num_meshes = mesh_ids.size();
 
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
-        tt_fabric::FabricNodeId fabric_node_id = mesh_device.get_fabric_node_id(coord);
-        tt_metal::AsicID asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-        asic_id_to_mesh_coord_map.emplace(asic_id, coord);
+    auto fn_to_coord = [&](const tt::tt_fabric::FabricNodeId& fn) {
+        return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id);
+    };
+
+    // Track which FabricNodeIds have been claimed as entry or exit nodes.
+    // Each hop claims its exit (on mesh_i) and peer (on mesh_{i+1}).
+    // When selecting a pair for each hop, skip any pair that would reuse an already-claimed node.
+    std::set<tt::tt_fabric::FabricNodeId> used_nodes;
+
+    // Select one inter-mesh pair per hop, avoiding collisions.
+    // hop[i] connects mesh_ids[i] → mesh_ids[(i+1) % N].
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
+    hops.reserve(num_meshes);
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
+        TT_FATAL(
+            !pairs.empty(),
+            "No inter-mesh connection from mesh {} to mesh {}",
+            *mesh_ids[i],
+            *mesh_ids[(i + 1) % num_meshes]);
+
+        bool found = false;
+        for (const auto& pair : pairs) {
+            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+                continue;
+            }
+            hops.push_back(pair);
+            used_nodes.insert(pair.first);
+            used_nodes.insert(pair.second);
+            found = true;
+            break;
+        }
+        TT_FATAL(
+            found,
+            "No non-colliding inter-mesh pair from mesh {} to mesh {} "
+            "(all {} candidate pairs overlap with already-claimed nodes)",
+            *mesh_ids[i],
+            *mesh_ids[(i + 1) % num_meshes],
+            pairs.size());
     }
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    for (auto rank = 0; rank < *(distributed_context->size()); rank++) {
-        if (rank == *(distributed_context->rank())) {
-            std::size_t num_entries = asic_id_to_mesh_coord_map.size();
-            distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
-                distributed::multihost::Rank{rank});
-            for (auto& [asic_id, mesh_coord] : asic_id_to_mesh_coord_map) {
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(
-                        reinterpret_cast<std::byte*>(const_cast<tt_metal::AsicID*>(&asic_id)), sizeof(asic_id)),
-                    distributed::multihost::Rank{rank});
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
-                    distributed::multihost::Rank{rank});
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
-                    distributed::multihost::Rank{rank});
-            }
-        } else {
-            std::size_t num_entries = 0;
-            distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
-                distributed::multihost::Rank{rank});
-            for (std::size_t i = 0; i < num_entries; i++) {
-                tt_metal::AsicID asic_id;
-                distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
-                    distributed::multihost::Rank{rank});
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
-                    distributed::multihost::Rank{rank});
-                distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
-                    distributed::multihost::Rank{rank});
-                asic_id_to_mesh_coord_map.emplace(asic_id, mesh_coord);
+    // Pipeline data flow:
+    //   stage 0 → stage 1 → ... → stage N-1 → loopback(stage N) [→ stage 0 intra-mesh]
+    //
+    // Inter-mesh hops:
+    //   hop[0]:   mesh_0   → mesh_1     (stage 0 exit   → stage 1 entry)
+    //   hop[1]:   mesh_1   → mesh_2     (stage 1 exit   → stage 2 entry)
+    //   ...
+    //   hop[N-2]: mesh_{N-2} → mesh_{N-1} (stage N-2 exit → stage N-1 entry)
+    //   hop[N-1]: mesh_{N-1} → mesh_0     (stage N-1 exit → loopback entry)
+    //
+    // Stage 0 entry and loopback exit are intra-mesh on mesh_0 (not from inter-mesh cables).
+    // Find two unclaimed nodes on mesh_0 for these.
+    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
+    std::vector<tt::tt_fabric::FabricNodeId> unclaimed_mesh_0_nodes;
+    for (const auto& coord : mesh_0_coord_range) {
+        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
+        tt::tt_fabric::FabricNodeId fn(mesh_ids[0], chip_id);
+        if (!used_nodes.contains(fn)) {
+            unclaimed_mesh_0_nodes.push_back(fn);
+            if (unclaimed_mesh_0_nodes.size() >= 2) {
+                break;
             }
         }
     }
+    TT_FATAL(
+        unclaimed_mesh_0_nodes.size() >= 2,
+        "Need 2 unclaimed nodes on mesh {} for stage 0 entry and loopback exit, found {}",
+        *mesh_ids[0],
+        unclaimed_mesh_0_nodes.size());
 
-    return asic_id_to_mesh_coord_map;
-}
+    auto stage_0_entry_fn = unclaimed_mesh_0_nodes[0];
+    auto loopback_exit_fn = unclaimed_mesh_0_nodes[1];
 
-PhysicalSystemDescriptor create_physical_system_descriptor() {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    std::vector<BlitzDecodePipelineStage> stages;
+    stages.reserve(num_meshes + 1);
 
-    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
-}
+    // Stage 0: entry is intra-mesh (from loopback), exit goes to mesh_1 via hop[0]
+    stages.emplace_back(BlitzDecodePipelineStage{
+        .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
+        .entry_node_coord = fn_to_coord(stage_0_entry_fn),
+        .exit_node_coord = fn_to_coord(hops[0].first)});
 
-std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
-    auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
-    switch (num_procs) {
-        case 4:
-            return {
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3}};
-        case 16:
-            return {
-                // First Tray
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Second Tray
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Third Tray
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Fourth Tray
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                // Wrap-around
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-            };
-
-        case 32:
-            return {
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                // jump to pod 3
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 4}};
-        case 64:
-            return {
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                // jump to pod 4
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                // jump to pod 3
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 4},
-                // jump to pod 2
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 5},
-                // wrap-around
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5}};
-        default: TT_THROW("Unsupported number of processes for creating Multi-Host Pipeline: {}", num_procs);
-    }
-}
-
-std::vector<BlitzDecodePipelineStage> build_pipeline(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
-    std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = generate_physical_pipeline_config();
-
-    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
-    std::vector<BlitzDecodePipelineStage> logical_pipeline_stage_configs;
-    logical_pipeline_stage_configs.reserve(physical_pipeline_stage_configs.size());
-
-    for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
-        const auto& stage_config = physical_pipeline_stage_configs[stage_index];
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
-        auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
-            stage_hostname,
-            tt::tt_metal::TrayID(stage_config.entry_node_tray_id),
-            tt::tt_metal::ASICLocation(stage_config.entry_node_asic_location));
-        auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
-            stage_hostname,
-            tt::tt_metal::TrayID(stage_config.exit_node_tray_id),
-            tt::tt_metal::ASICLocation(stage_config.exit_node_asic_location));
-        logical_pipeline_stage_configs.emplace_back(BlitzDecodePipelineStage{
-            .stage_index = stage_index,
-            .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
-            .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
+    // Stages 1..N-1: entry from previous hop's peer, exit from current hop
+    for (std::size_t i = 1; i < num_meshes; i++) {
+        stages.emplace_back(BlitzDecodePipelineStage{
+            .stage_index = static_cast<std::size_t>(*mesh_ids[i]),
+            .entry_node_coord = fn_to_coord(hops[i - 1].second),
+            .exit_node_coord = fn_to_coord(hops[i].first)});
     }
 
-    return logical_pipeline_stage_configs;
+    // Loopback stage (on mesh_0): entry from hop[N-1] (connected to stage N-1 exit),
+    // exit is intra-mesh (feeds back into stage 0)
+    stages.emplace_back(BlitzDecodePipelineStage{
+        .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
+        .entry_node_coord = fn_to_coord(hops[num_meshes - 1].second),
+        .exit_node_coord = fn_to_coord(loopback_exit_fn)});
+
+    return stages;
+}
+
+void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    const auto num_meshes = mesh_ids.size();
+
+    auto coord_str = [](const MeshCoordinate& c) { return fmt::format("({}, {})", c[0], c[1]); };
+
+    TT_FATAL(
+        stages.size() == num_meshes + 1,
+        "Expected {} stages (num_meshes={} + 1 loopback), got {}",
+        num_meshes + 1,
+        num_meshes,
+        stages.size());
+
+    // 1. No stage has identical entry and exit coords
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        TT_FATAL(
+            s.entry_node_coord != s.exit_node_coord,
+            "Stage [{}] (stage_index={}) has identical entry and exit coords {}",
+            i,
+            s.stage_index,
+            coord_str(s.entry_node_coord));
+    }
+
+    // 2. No coord is reused across stages (no overlapping nodes)
+    std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        auto entry_key = std::make_pair(s.stage_index, std::make_pair(s.entry_node_coord[0], s.entry_node_coord[1]));
+        auto exit_key = std::make_pair(s.stage_index, std::make_pair(s.exit_node_coord[0], s.exit_node_coord[1]));
+        TT_FATAL(
+            used_coords.insert(entry_key).second,
+            "Stage [{}] entry coord {} (stage_index={}) overlaps with a previous stage",
+            i,
+            coord_str(s.entry_node_coord),
+            s.stage_index);
+        TT_FATAL(
+            used_coords.insert(exit_key).second,
+            "Stage [{}] exit coord {} (stage_index={}) overlaps with a previous stage",
+            i,
+            coord_str(s.exit_node_coord),
+            s.stage_index);
+    }
+
+    // 3. Consecutive stages are physically connected via inter-mesh links:
+    //    stage[i].exit on mesh_i must be an exit node to the mesh of stage[i+1],
+    //    and stage[i+1].entry must be the peer on the other side of that cable.
+    for (std::size_t i = 0; i < stages.size() - 1; i++) {
+        const auto& curr = stages[i];
+        const auto& next = stages[i + 1];
+
+        auto curr_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(curr.stage_index)};
+        auto next_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(next.stage_index)};
+
+        if (curr_mesh_id == next_mesh_id) {
+            continue;
+        }
+
+        auto exit_chip_id = mesh_graph.coordinate_to_chip(curr_mesh_id, curr.exit_node_coord);
+        auto entry_chip_id = mesh_graph.coordinate_to_chip(next_mesh_id, next.entry_node_coord);
+        tt::tt_fabric::FabricNodeId exit_fn(curr_mesh_id, exit_chip_id);
+        tt::tt_fabric::FabricNodeId entry_fn(next_mesh_id, entry_chip_id);
+
+        auto pairs =
+            control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
+
+        bool found = false;
+        for (const auto& [exit_node, peer_node] : pairs) {
+            if (exit_node == exit_fn && peer_node == entry_fn) {
+                found = true;
+                break;
+            }
+        }
+        TT_FATAL(
+            found,
+            "Stages [{}]->[{}]: exit (M{}D{}) coord {} is not physically connected to entry (M{}D{}) coord {}",
+            i,
+            i + 1,
+            *curr_mesh_id,
+            exit_chip_id,
+            coord_str(curr.exit_node_coord),
+            *next_mesh_id,
+            entry_chip_id,
+            coord_str(next.entry_node_coord));
+    }
+
+    // 4. Loopback stage (last) must have different entry/exit than stage 0
+    const auto& stage_0 = stages[0];
+    const auto& loopback = stages.back();
+    TT_FATAL(
+        loopback.entry_node_coord != stage_0.entry_node_coord || loopback.exit_node_coord != stage_0.exit_node_coord,
+        "Loopback stage has identical entry/exit as stage 0: entry={}, exit={}",
+        coord_str(loopback.entry_node_coord),
+        coord_str(loopback.exit_node_coord));
 }
 
 }  // namespace
 
-std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(const distributed::MeshDevice& mesh_device) {
-    auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
-    return build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline() {
+    auto stages = build_pipeline_from_topology();
+    validate_pipeline(stages);
+
+    // Synchronize all ranks before returning so that downstream socket creation
+    // (which cascades sequentially through stages) starts from a common point.
+    // The old implementation had implicit synchronization via MPI broadcasts in
+    // get_asic_id_to_mesh_coord_map / create_physical_system_descriptor; without
+    // this barrier the initialization-time variance across ranks can push the
+    // sequential handshake cascade past the 10-second MeshSocket timeout.
+    const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    ctx->barrier();
+
+    return stages;
 }
 
 }  // namespace tt::tt_metal::experimental::blitz

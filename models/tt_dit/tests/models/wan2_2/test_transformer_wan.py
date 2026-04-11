@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
 # ---------------------------------------------------------------------------
@@ -277,6 +277,7 @@ def test_wan_transformer_model(
     prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     tt_model = _make_wan_transformer(
         mesh_device=mesh_device,
@@ -298,7 +299,7 @@ def test_wan_transformer_model(
     tt_spatial_out = tt_model(
         spatial=spatial_input,
         prompt=tt_prompt,
-        timestep=timestep_input,
+        timestep=tt_timestep,
     )
     del tt_model
 

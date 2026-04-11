@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,6 +82,17 @@ Tensor view(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
+
+/**
+ * Reinterpret the underlying memory of input_tensor with target_layout without moving or converting data.
+ *
+ * The result and input_tensor will point to the same memory (whether on host or device),
+ * this is a pure metadata change.
+ *
+ * This function is error prone, and the caller is responsible for ensuring that the reinterpretation is semantically
+ * valid.
+ */
+Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout);
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
 

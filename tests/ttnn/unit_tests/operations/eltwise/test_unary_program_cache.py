@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,6 @@ work distribution, so different shapes with same volume correctly share a
 cache entry.
 """
 
-import os
 import pytest
 import torch
 
@@ -39,11 +38,6 @@ import ttnn
 # which requires a fresh device (clear_program_cache() is unsafe).
 pytestmark = pytest.mark.requires_fresh_device
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") != None
 
 
 def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -69,7 +63,6 @@ def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_same_config(device):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     device.cache_entries_counter.reset()
@@ -87,7 +80,6 @@ def test_unary_cache_reuse_same_config(device):
     assert not torch.equal(tt_out1, tt_out2)
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_same_volume_different_shapes(device):
     """TILE layout: same volume, different shapes -> 1 cache entry.
     unary_ng doesn't hash volume or shape; tile counts are runtime args,
@@ -103,7 +95,6 @@ def test_unary_cache_reuse_same_volume_different_shapes(device):
     assert device.cache_entries_counter.total == 1
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_different_volumes(device):
     """TILE layout: different volumes -> still 1 cache entry.
     unary_ng uses runtime tile counts (not compile-time), so different volumes
@@ -125,7 +116,6 @@ def test_unary_cache_reuse_different_volumes(device):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_op_types(device):
     """Different unary op types -> different cache entries."""
     device.cache_entries_counter.reset()
@@ -140,7 +130,6 @@ def test_unary_cache_miss_different_op_types(device):
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_input_dtypes(device):
     """Different input dtypes -> different cache entries."""
     device.cache_entries_counter.reset()
@@ -155,7 +144,6 @@ def test_unary_cache_miss_different_input_dtypes(device):
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_memory_configs(device):
     """Different memory configs -> different cache entries."""
     device.cache_entries_counter.reset()
@@ -174,7 +162,6 @@ def test_unary_cache_miss_different_memory_configs(device):
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_sub_core_grids(device):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is part of UnaryParams (hashed via args) and also hashed explicitly.
@@ -201,7 +188,6 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_factories(device):
     """Interleaved vs sub_core_grids factory -> different cache entries.
     factory_index is included in the hash.
@@ -230,7 +216,6 @@ def test_unary_cache_miss_different_factories(device):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_correctness_repeated_runs(device):
     """Run same op 5 times with different data -> all results correct."""
     device.cache_entries_counter.reset()
@@ -242,7 +227,6 @@ def test_unary_cache_correctness_repeated_runs(device):
     assert device.cache_entries_counter.total == 1
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_correctness_same_volume_different_shapes(device):
     """Same volume, different shapes all produce correct results via cache reuse."""
     device.cache_entries_counter.reset()
@@ -258,7 +242,6 @@ def test_unary_cache_correctness_same_volume_different_shapes(device):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_rm_different_widths_need_separate_entries(device):
     """ROW_MAJOR interleaved tensors with different widths have different page sizes,
     so compute_program_hash must produce distinct keys for each shape."""
@@ -285,7 +268,6 @@ def test_unary_cache_rm_different_widths_need_separate_entries(device):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_sharded_cache_correctness_different_grids(device):
     """Sharded ttnn.abs with different grid configs must produce correct results.
     Reproduces GitHub issue #33910: ttnn.abs ProgramCache data corruption.

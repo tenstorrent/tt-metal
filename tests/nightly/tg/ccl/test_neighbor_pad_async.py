@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -120,8 +120,8 @@ def test_neighbor_pad_async_1d(
         [(4, 8), 2],
     ],
     ids=[
-        "1link",
         "wh_4x8_4link",
+        "general_4x8_1link",
         "bh_4x8_2link",
     ],
     indirect=["mesh_device"],
