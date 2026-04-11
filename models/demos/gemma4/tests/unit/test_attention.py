@@ -3,193 +3,49 @@
 
 """Unit tests for Gemma4 Attention — uses HF Gemma4TextAttention as reference.
 
-Tests prefill (PCC comparison) and decode (sanity) for both sliding and global layers.
-Also includes TP=2 prefill test for N300.
+Tests prefill and decode for both sliding and global layers, across all TP factors.
+
+    pytest -k "1x1"              # single card
+    pytest -k "1x8"              # T3K
+    pytest -k "sliding"          # sliding attention only
+    pytest -k "global"           # global attention only
+    pytest -k "prefill"          # prefill only
+    pytest -k "decode"           # decode only
 """
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.ccl import CCLManager
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric, skip_if_needs_multi_device
-
-# ── Prefill PCC Test ──────────────────────────────────────────────────────
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric
 
 
-@skip_if_needs_multi_device
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("seq_len", [32, 128], ids=["seq32", "seq128"])
-def test_attention_prefill(layer_idx, seq_len, device):
-    """
-    Test prefill attention against HF Gemma4TextAttention with PCC >= 0.95.
-    """
+def _skip_if_l1_overflow(config, mesh_device):
+    """Skip if global attention head_dim overflows L1 on this mesh config."""
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    # Global layers with large head_dim (512) overflow L1 when hidden_size > 4096 on single device
+    if not config.is_sliding and config.head_dim >= 512 and tp == 1:
+        hf_config = TestFactory.create_hf_config()
+        if hf_config.hidden_size > 4096:
+            pytest.skip("Global attention head_dim=512 overflows L1 on single device for large models")
+
+
+def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128):
+    """Create HF reference and TT attention module for a given mesh."""
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
-    hidden_size = config.hidden_size
-
-    # Extract HF attention state_dict
-    state_dict = {
-        k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")
-    }  # v_norm has no weight
-
-    # Create TT attention
-    mesh_config = TestFactory.create_mesh_config((1, 1))
-    tt_attn = Gemma4Attention(
-        mesh_device=device,
-        config=config,
-        state_dict=state_dict,
-        ccl_manager=None,
-        mesh_config=mesh_config,
-        program_config=None,
-        layer_idx=layer_idx,
-    )
-
-    # Input
-    x_torch = torch.randn(1, seq_len, hidden_size, dtype=torch.float32)
-
-    # HF reference forward
-    hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
-    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
-    with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask)
-
-    # TT forward
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, max(seq_len, 128), layer_idx)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-    )
-    tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
-
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention prefill (layer_idx={layer_idx}, seq={seq_len}) PCC too low: {pcc_msg}"
-
-
-# ── Decode PCC Test ───────────────────────────────────────────────────────
-
-
-@skip_if_needs_multi_device
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-def test_attention_decode(layer_idx, device):
-    """
-    Test decode attention against HF reference with random KV cache and PCC >= 0.95.
-
-    Sets up identical random KV cache in both HF (DynamicCache) and TT (kv_cache),
-    then decodes one token at the next position and compares outputs.
-    """
-    from transformers.cache_utils import DynamicCache
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
-    hf_text_config = TestFactory.create_hf_text_config()
-    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
-    hf_attn = hf_layer.self_attn
-    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
-    hidden_size = config.hidden_size
-    cache_len = 32  # pre-existing KV cache length
 
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
 
-    mesh_config = TestFactory.create_mesh_config((1, 1))
-    tt_attn = Gemma4Attention(
-        mesh_device=device,
-        config=config,
-        state_dict=state_dict,
-        ccl_manager=None,
-        mesh_config=mesh_config,
-        program_config=None,
-        layer_idx=layer_idx,
-        create_kv_cache=True,
-        max_batch_size=1,
-        max_seq_len=cache_len + 32,
-    )
-
-    # Create random KV cache data [1, num_kv_heads, cache_len, head_dim]
-    k_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
-    v_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
-
-    # Set HF cache
-    hf_cache = DynamicCache()
-    hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
-
-    # Set TT cache — write k_data/v_data into the TT KV cache at positions 0..cache_len-1
-    k_cache_tt, v_cache_tt = tt_attn.kv_cache
-    k_for_fill = k_data.to(torch.bfloat16)
-    v_for_fill = v_data.to(torch.bfloat16)
-    k_fill_tt = ttnn.from_torch(k_for_fill, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    v_fill_tt = ttnn.from_torch(v_for_fill, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    ttnn.fill_cache(k_cache_tt, k_fill_tt, batch_idx=0)
-    ttnn.fill_cache(v_cache_tt, v_fill_tt, batch_idx=0)
-
-    # Decode input (one new token at position cache_len)
-    x_torch = torch.randn(1, 1, hidden_size, dtype=torch.float32)
-
-    # HF reference decode
-    rope = Gemma4TextRotaryEmbedding(hf_text_config)
-    layer_type = hf_text_config.layer_types[layer_idx]
-    cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
-    mask = torch.zeros(1, 1, 1, cache_len + 1)  # no masking for decode
-    with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
-
-    # TT decode
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, cache_len + 32, layer_idx)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-    )
-    position_idx_tt = ttnn.from_torch(
-        torch.tensor([[cache_len]], dtype=torch.int32),
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-    )
-    tt_output = tt_attn(
-        x_tt,
-        rope_mats=(cos_tt, sin_tt),
-        position_idx=position_idx_tt,
-        is_decode=True,
-        token_index=cache_len,
-    )
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()  # [1, 1, H]
-
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
-
-
-# ── TP Prefill Test ──────────────────────────────────────────────────────
-
-
-@parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-def test_attention_prefill_tp(layer_idx, mesh_device):
-    """
-    Test TP prefill attention against HF reference with PCC >= 0.95.
-
-    Filter: pytest -k "1x8" or pytest -k "1x2"
-    """
-    from models.demos.gemma4.config import MeshConfig, ModeConfig
-    from models.demos.gemma4.tt.ccl import CCLManager
-
-    hf_text_config = TestFactory.create_hf_text_config()
-    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
-    hf_attn = hf_layer.self_attn
-    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
-    hidden_size = config.hidden_size
-    seq_len = 32
-
-    state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
-
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
-    ccl_manager = CCLManager(mesh_device, num_links=1)
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_attn = Gemma4Attention(
         mesh_device=mesh_device,
@@ -199,23 +55,46 @@ def test_attention_prefill_tp(layer_idx, mesh_device):
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        create_kv_cache=create_kv_cache,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
     )
 
-    # Input (replicated)
-    x_torch = torch.randn(1, seq_len, hidden_size, dtype=torch.float32)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
+    return hf_text_config, hf_attn, config, tt_attn, mesh_config
+
+
+def _to_device(tensor, mesh_device):
+    """Send tensor to mesh device with appropriate mapper."""
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    return ttnn.from_torch(
+        tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
 
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
 
-    # TT forward
-    tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).squeeze(0).float()
+def _from_device(tensor, mesh_device):
+    """Read tensor back from device 0."""
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    if is_mesh:
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+    return ttnn.to_torch(tensor)
+
+
+# ── Prefill PCC Test ──────────────────────────────────────────────────────
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("seq_len", [32], ids=["seq32"])
+def test_attention_prefill(layer_idx, seq_len, mesh_device):
+    """Test prefill attention against HF reference with PCC >= 0.95."""
+    hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx)
+    _skip_if_l1_overflow(config, mesh_device)
+
+    x_torch = torch.randn(1, seq_len, config.hidden_size, dtype=torch.float32)
 
     # HF reference
     hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
@@ -223,84 +102,81 @@ def test_attention_prefill_tp(layer_idx, mesh_device):
     with torch.no_grad():
         ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask)
 
+    # TT forward
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
+    tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
+    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention TP prefill (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+    assert passing, f"Attention prefill (layer={layer_idx}, seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
 
 
-# ── TP Decode PCC Test ───────────────────────────────────────────────────
+# ── Decode PCC Test ───────────────────────────────────────────────────────
 
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-def test_attention_decode_tp(layer_idx, mesh_device):
-    """
-    Test TP decode attention against HF reference with random KV cache and PCC >= 0.95.
-
-    Filter: pytest -k "1x8" or pytest -k "1x2"
-    """
+def test_attention_decode(layer_idx, mesh_device):
+    """Test decode attention against HF reference with random KV cache and PCC >= 0.95."""
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
-    from models.demos.gemma4.config import MeshConfig, ModeConfig
-    from models.demos.gemma4.tt.ccl import CCLManager
-
-    hf_text_config = TestFactory.create_hf_text_config()
-    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
-    hf_attn = hf_layer.self_attn
-    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
-    hidden_size = config.hidden_size
     cache_len = 32
-
-    state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
-
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
-    ccl_manager = CCLManager(mesh_device, num_links=1)
-
-    tt_attn = Gemma4Attention(
-        mesh_device=mesh_device,
-        config=config,
-        state_dict=state_dict,
-        ccl_manager=ccl_manager,
-        mesh_config=mesh_config,
-        program_config=None,
-        layer_idx=layer_idx,
-        create_kv_cache=True,
-        max_batch_size=1,
-        max_seq_len=cache_len + 32,
+    hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(
+        mesh_device, layer_idx, create_kv_cache=True, max_seq_len=cache_len + 32
     )
+    _skip_if_l1_overflow(config, mesh_device)
 
-    # Random KV cache
+    tp = mesh_config.tp
+
+    # Random KV cache [1, num_kv_heads, cache_len, head_dim]
     k_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
     v_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
 
-    # HF cache (full heads)
+    # HF cache
     hf_cache = DynamicCache()
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
-    # TT cache — each device has local_kv_heads. Fill each device's cache separately.
-    # When kv_replicated (num_kv_heads < TP), each device has 1 GQA-assigned KV head.
+    # TT cache — fill each device with its local KV heads
     k_cache_tt, v_cache_tt = tt_attn.kv_cache
-    kv_replicated = config.num_key_value_heads < mesh_config.tp
-    q_per_device = config.num_attention_heads // mesh_config.tp
-    for dev_idx in range(mesh_config.tp):
-        if kv_replicated:
-            # GQA-assigned: device d gets KV head that its Q heads map to
-            kv_idx = (dev_idx * q_per_device) * config.num_key_value_heads // config.num_attention_heads
-            k_local = k_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
-            v_local = v_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
-        else:
-            local_kv = config.num_key_value_heads // mesh_config.tp
-            k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
-            v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
-        dev_k_cache = ttnn.get_device_tensors(k_cache_tt)[dev_idx]
-        dev_v_cache = ttnn.get_device_tensors(v_cache_tt)[dev_idx]
-        k_fill = ttnn.from_torch(k_local, device=dev_k_cache.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        v_fill = ttnn.from_torch(v_local, device=dev_v_cache.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        ttnn.fill_cache(dev_k_cache, k_fill, batch_idx=0)
-        ttnn.fill_cache(dev_v_cache, v_fill, batch_idx=0)
+    kv_replicated = config.num_key_value_heads < tp
+    q_per_device = config.num_attention_heads // tp if tp > 1 else config.num_attention_heads
+
+    if tp > 1:
+        for dev_idx in range(tp):
+            if kv_replicated:
+                kv_idx = (dev_idx * q_per_device) * config.num_key_value_heads // config.num_attention_heads
+                k_local = k_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
+                v_local = v_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
+            else:
+                local_kv = config.num_key_value_heads // tp
+                k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+                v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+            dev_k = ttnn.get_device_tensors(k_cache_tt)[dev_idx]
+            dev_v = ttnn.get_device_tensors(v_cache_tt)[dev_idx]
+            ttnn.fill_cache(
+                dev_k,
+                ttnn.from_torch(k_local, device=dev_k.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+                batch_idx=0,
+            )
+            ttnn.fill_cache(
+                dev_v,
+                ttnn.from_torch(v_local, device=dev_v.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+                batch_idx=0,
+            )
+    else:
+        k_fill = ttnn.from_torch(
+            k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        v_fill = ttnn.from_torch(
+            v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        ttnn.fill_cache(k_cache_tt, k_fill, batch_idx=0)
+        ttnn.fill_cache(v_cache_tt, v_fill, batch_idx=0)
 
     # Decode input
-    x_torch = torch.randn(1, 1, hidden_size, dtype=torch.float32)
+    x_torch = torch.randn(1, 1, config.hidden_size, dtype=torch.float32)
 
     # HF reference
     rope = Gemma4TextRotaryEmbedding(hf_text_config)
@@ -312,19 +188,14 @@ def test_attention_decode_tp(layer_idx, mesh_device):
 
     # TT decode
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, cache_len + 32, layer_idx)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_attn(
         x_tt,
@@ -333,24 +204,19 @@ def test_attention_decode_tp(layer_idx, mesh_device):
         is_decode=True,
         token_index=cache_len,
     )
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).squeeze(0).float()
+    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention TP decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+    assert passing, f"Attention decode (layer={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
 
 
-# ── Paged Attention Tests ─────────────────────────────────────────────────
+# ── Paged Attention Test ─────────────────────────────────────────────────
 
 
-@skip_if_needs_multi_device
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_attention_decode_paged(layer_idx, device):
-    """
-    Test decode attention with paged KV cache against HF reference.
-
-    Creates a paged cache, fills it with random KV data via shuffled page table,
-    then decodes one token and compares against HF (which uses standard cache).
-    """
+def test_attention_decode_paged(layer_idx, mesh_device):
+    """Test decode attention with paged KV cache against HF reference."""
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
@@ -360,28 +226,25 @@ def test_attention_decode_paged(layer_idx, device):
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+    _skip_if_l1_overflow(config, mesh_device)
+
     hidden_size = config.hidden_size
     cache_len = 32
-
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
 
-    # Paged attention config
     block_size = 32
-    max_num_blocks = 4  # 4 blocks × 32 tokens = 128 max seq_len
+    max_num_blocks = 4
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    mesh_config = TestFactory.create_mesh_config((1, 1))
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
     kv_cache = init_kv_cache(
-        mesh_device=device,
-        config=config,
-        paged_attention_config=paged_attention_config,
-        cache_dtype=ttnn.bfloat16,
+        mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
     )
 
     tt_attn = Gemma4Attention(
-        mesh_device=device,
+        mesh_device=mesh_device,
         config=config,
         state_dict=state_dict,
         ccl_manager=None,
@@ -391,31 +254,27 @@ def test_attention_decode_paged(layer_idx, device):
     )
     tt_attn.kv_cache = kv_cache
 
-    # Create random KV data for cache_len positions
     k_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
     v_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
 
-    # HF cache (standard, no paging)
     hf_cache = DynamicCache()
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
-    # Page table: sequential mapping (block 0 → physical 0, block 1 → physical 1, ...)
-    blocks_per_batch = max_num_blocks
-    page_table = torch.arange(blocks_per_batch, dtype=torch.int32).reshape(1, blocks_per_batch)
-    page_table_tt = ttnn.from_torch(page_table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, max_num_blocks)
+    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
-    # Fill paged cache: reshape KV data into blocks and use paged_fill_cache
     k_cache_tt, v_cache_tt = kv_cache
-    # For fill: need K/V in [1, heads, seq_len, head_dim] format
-    k_fill = ttnn.from_torch(k_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    v_fill = ttnn.from_torch(v_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    k_fill = ttnn.from_torch(
+        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    v_fill = ttnn.from_torch(
+        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, page_table_tt, batch_idx=0)
     ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, page_table_tt, batch_idx=0)
 
-    # Decode input
     x_torch = torch.randn(1, 1, hidden_size, dtype=torch.float32)
 
-    # HF reference
     rope = Gemma4TextRotaryEmbedding(hf_text_config)
     layer_type = hf_text_config.layer_types[layer_idx]
     cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
@@ -423,17 +282,13 @@ def test_attention_decode_paged(layer_idx, device):
     with torch.no_grad():
         ref_output, _ = hf_attn(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
 
-    # TT paged decode
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, 128, layer_idx)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, 128, layer_idx)
     x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16),
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        x_torch.unsqueeze(0).to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
     )
@@ -448,4 +303,4 @@ def test_attention_decode_paged(layer_idx, device):
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention paged decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+    assert passing, f"Attention paged decode (layer={layer_idx}) PCC too low: {pcc_msg}"

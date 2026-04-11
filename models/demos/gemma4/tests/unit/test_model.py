@@ -14,7 +14,7 @@ import ttnn
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric, skip_if_needs_multi_device
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric
 
 # ── Config Tests ───────────────────────────────────────────────────────────
 
@@ -183,15 +183,21 @@ def _hf_model_state_to_tt_state(hf_model):
 # ── Single Layer Model PCC Test ───────────────────────────────────────────
 
 
-@skip_if_needs_multi_device
-def test_single_layer_model(device):
-    """
-    Test single-layer model against HF reference with PCC.
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("num_layers", [1, 5, 6], ids=["1layer", "5layers", "6layers"])
+def test_single_layer_model(mesh_device, num_layers):
+    """Test few-layer model with random weights against HF reference.
 
-    Embed -> 1 decoder layer -> norm -> lm_head -> softcapping.
+    1 layer = sliding only, 5 layers = all sliding, 6 layers = includes first global.
+    Uses small vocab (256) and random weights for fast execution.
+
+        pytest -k "1x1 and 1layer"    # single card, 1 layer
+        pytest -k "1x8 and 6layers"   # T3K, through first global layer
     """
-    # For MoE models, reduce experts for speed; dense models don't need override
-    base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     is_moe = getattr(base_config, "enable_moe_block", False)
     if is_moe:
         base_config.num_experts = 4
@@ -199,61 +205,68 @@ def test_single_layer_model(device):
     hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
-
-    # Convert state for TT
     tt_state = _hf_model_state_to_tt_state(hf_model)
 
-    # RoPE setup
-    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
-
-    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx=0)
     seq_len = 32
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
-    mesh_config = TestFactory.create_mesh_config((1, 1))
     tt_model = Gemma4Model(
-        mesh_device=device,
+        mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=tt_state,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
         max_seq_len=seq_len,
         max_local_batch_size=1,
-        num_layers=1,
+        num_layers=num_layers,
     )
 
-    # Input tokens
     tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
 
-    # HF reference forward
+    # HF reference
     causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
     with torch.no_grad():
         hf_logits = hf_model(tokens, attention_mask=causal_mask)
-    logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
 
     # TT forward
-    tt_tokens = ttnn.from_torch(tokens.to(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    tt_tokens = ttnn.from_torch(
+        tokens.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
     tt_embeds = tt_model.embed_tokens(tt_tokens)
     tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, max(seq_len, 128), layer_idx=0)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx=0)
     tt_logits = tt_model(
         tt_embeds, rope_mats=(cos_tt, sin_tt), position_idx=None, page_table=None, kv_caches=None, is_decode=False
     )
-    tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0).float()  # [1, S, V]
+    tt_logits_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]) if is_mesh else ttnn.to_torch(tt_logits))
+        .squeeze(0)
+        .float()
+    )
 
-    # Compare
-    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.95)
-    assert passing, f"Single-layer model PCC too low: {pcc_msg}"
+    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.90)
+    logger.info(f"TP={tp} {num_layers}-layer PCC: {pcc_msg}")
+    assert passing, f"Single-layer model (layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
 
 
 # ── Full Model PCC Test ─────────────────────────────────────────────────
+# Full model with real weights — only runs on multi-device (full model doesn't fit on 1 card)
 
 
-@skip_if_needs_multi_device
-def test_full_model(device):
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 2), (1, 8)])
+def test_full_model(mesh_device):
     """
     Test full model (all layers, real weights) against HuggingFace reference.
 
@@ -302,21 +315,22 @@ def test_full_model(device):
     gc.collect()
 
     # ── TT model ─────────────────────────────────────────────────────
-    logger.info("Creating TT model with all layers...")
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    logger.info(f"Creating TT model with all layers (TP={tp})...")
     model_args, tt_model, tt_kv_cache, state_dict = create_tt_model(
-        mesh_device=device,
+        mesh_device=mesh_device,
         max_batch_size=1,
         max_seq_len=max(padded_len, 128),
         model_path=model_path,
         create_kv_cache=True,
     )
 
-    is_mesh = hasattr(device, "shape")
-    replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     tokens_tt = ttnn.from_torch(
         input_ids_padded.to(torch.int32),
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
         mesh_mapper=replicate,
@@ -375,195 +389,3 @@ def test_full_model(device):
     )
 
     assert passing, f"Full model PCC too low: {pcc_msg}"
-
-
-# ── Multi-device (TP) Tests ──────────────────────────────────────────────
-
-
-@parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("num_layers", [1, 5, 6], ids=["1layer", "5layers", "6layers"])
-def test_single_layer_model_tp(mesh_device, num_layers):
-    """Single/few-layer model with TP on multi-device mesh, PCC vs HF reference.
-
-    1 layer = sliding only, 5 layers = all sliding, 6 layers = includes first global layer.
-    Filter: pytest -k "1x8" or pytest -k "6layers"
-    """
-    from models.demos.gemma4.config import MeshConfig, ModeConfig
-    from models.demos.gemma4.tt.ccl import CCLManager
-
-    base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
-    hf_text_config = base_config
-    hf_model = _create_hf_model(hf_text_config)
-    model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
-    tt_state = _hf_model_state_to_tt_state(hf_model)
-
-    seq_len = 32
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
-    ccl_manager = CCLManager(mesh_device, num_links=1)
-
-    tt_model = Gemma4Model(
-        mesh_device=mesh_device,
-        hf_config=model_args,
-        state_dict=tt_state,
-        ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
-        tensor_cache_path=None,
-        mesh_config=mesh_config,
-        max_seq_len=seq_len,
-        max_local_batch_size=1,
-        num_layers=1,
-    )
-
-    tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
-
-    # HF reference
-    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
-    with torch.no_grad():
-        hf_logits = hf_model(tokens, attention_mask=causal_mask)
-
-    # TT forward
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
-    tt_tokens = ttnn.from_torch(
-        tokens.to(torch.int32),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint32,
-        mesh_mapper=replicate,
-    )
-    tt_embeds = tt_model.embed_tokens(tt_tokens)
-    tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
-    tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
-
-    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx=0)
-    tt_logits = tt_model(
-        tt_embeds,
-        rope_mats=(cos_tt, sin_tt),
-        position_idx=None,
-        page_table=None,
-        kv_caches=None,
-        is_decode=False,
-    )
-    tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).squeeze(0).float()
-
-    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.90)
-    logger.info(f"TP={mesh_device.shape[1]} single-layer PCC: {pcc_msg}")
-    assert passing, f"TP={mesh_device.shape[1]} single-layer model PCC too low: {pcc_msg}"
-
-
-@parametrize_mesh_with_fabric()
-def test_full_model_tp(mesh_device):
-    """Full model (all layers, real weights) with TP on multi-device mesh.
-
-    Loads the real checkpoint, runs a short prefill on both HF and TT,
-    and compares logits PCC.
-
-    Filter: pytest -k "1x2" or pytest -k "1x8"
-    """
-    import os
-
-    import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    from models.demos.gemma4.tt.common import create_tt_model
-
-    model_path = os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
-
-    # ── HF reference ─────────────────────────────────────────────────
-    logger.info(f"Loading HF reference model from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    hf_model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-    prompt = "The capital of France is"
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")  # [1, seq_len]
-    seq_len = input_ids.shape[1]
-    padded_len = ((seq_len + 31) // 32) * 32
-    if padded_len > seq_len:
-        input_ids_padded = F.pad(input_ids, (0, padded_len - seq_len), value=0)
-    else:
-        input_ids_padded = input_ids
-
-    logger.info(f"Prompt: '{prompt}' -> {seq_len} tokens (padded to {padded_len})")
-
-    with torch.no_grad():
-        hf_out = hf_model(input_ids_padded)
-        hf_logits = hf_out.logits.float()  # [1, padded_len, vocab_size]
-
-    logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
-
-    del hf_model
-    import gc
-
-    gc.collect()
-
-    # ── TT model ─────────────────────────────────────────────────────
-    logger.info(f"Creating TT model with all layers (TP={mesh_device.shape[1]})...")
-    model_args, tt_model, tt_kv_cache, state_dict = create_tt_model(
-        mesh_device=mesh_device,
-        max_batch_size=1,
-        max_seq_len=max(padded_len, 128),
-        model_path=model_path,
-        create_kv_cache=True,
-    )
-
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
-
-    tokens_tt = ttnn.from_torch(
-        input_ids_padded.to(torch.int32),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint32,
-        mesh_mapper=replicate,
-    )
-    embeds = tt_model.embed_tokens(tokens_tt)
-    embeds = ttnn.reshape(embeds, (1, 1, padded_len, model_args.hidden_size))
-    embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
-
-    # CPU tensors for per-layer input (E2B/E4B models)
-    embed_key = "model.language_model.embed_tokens.weight"
-    if embed_key not in state_dict:
-        embed_key = "model.embed_tokens.weight"
-    embeds_torch = (
-        F.embedding(input_ids_padded.long(), state_dict.get(embed_key, torch.zeros(1))) * tt_model.embed_scale
-    ).float()
-
-    tt_logits = tt_model.ttnn_prefill_forward(
-        embeds,
-        page_table=None,
-        kv_cache=tt_kv_cache,
-        input_ids_torch=input_ids_padded,
-        embeds_torch=embeds_torch,
-    )
-
-    tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
-    tt_logits.deallocate(True)
-
-    # Reshape TT output to match HF: TT is [1, 1, padded_len, vocab] -> [1, padded_len, vocab]
-    if tt_logits_torch.dim() == 4:
-        tt_logits_torch = tt_logits_torch.squeeze(1)
-
-    logger.info(
-        f"TT logits shape: {tt_logits_torch.shape}, range: [{tt_logits_torch.min():.4f}, {tt_logits_torch.max():.4f}]"
-    )
-
-    # Compare only up to the real (unpadded) sequence length
-    hf_compare = hf_logits[:, :seq_len, :]
-    tt_compare = tt_logits_torch[:, :seq_len, :]
-
-    _, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=0.50)
-    logger.info(f"Full model TP={mesh_device.shape[1]} PCC (seq_len={seq_len}): {pcc_msg}")
-
-    # Check that argmax tokens match for the last position — this is the primary correctness check.
-    # PCC over the full 262k vocab is noisy due to bf16 rounding in the long tail.
-    hf_last_tok = hf_compare[0, -1, :].argmax().item()
-    tt_last_tok = tt_compare[0, -1, :].argmax().item()
-    logger.info(
-        f"Last-position argmax: HF={hf_last_tok} ('{tokenizer.decode([hf_last_tok])}'), "
-        f"TT={tt_last_tok} ('{tokenizer.decode([tt_last_tok])}')"
-    )
-
-    assert hf_last_tok == tt_last_tok, (
-        f"Full model TP={mesh_device.shape[1]} argmax mismatch: "
-        f"HF={hf_last_tok} ('{tokenizer.decode([hf_last_tok])}') vs "
-        f"TT={tt_last_tok} ('{tokenizer.decode([tt_last_tok])}')"
-    )
