@@ -72,17 +72,17 @@ while IFS= read -r FILE; do
         # TODO(llk-in-tree): Once LLK is fully in-tree (no longer a submodule), these direct
         # path patterns will be the primary detection path and the submodule inspection block
         # below can be removed entirely.
-        tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/**|tt_metal/third_party/tt_llk/tt_llk_blackhole/**|tt_metal/third_party/tt_llk/common/**)
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/tt-llk/common/**)
             LLK_ENGINE_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tt_llk_quasar/**)
+        tt_metal/tt-llk/tt_llk_quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tests/**/perf/**|tt_metal/third_party/tt_llk/tests/**/*perf*)
+        tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tests/**)
+        tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
         .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh)
@@ -142,7 +142,7 @@ done <<< "$CHANGED_FILES"
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
-    if [[ "$submodule_path" == "tt_metal/third_party/tt_llk" ]]; then
+    if [[ "$submodule_path" == "tt_metal/tt-llk" ]]; then
         # LLK submodule is handled with fine-grained detection below; skip the generic blast.
         # TODO(llk-in-tree): Remove this block once LLK is fully in-tree.
         if echo "$CHANGED_FILES" | grep -q "^${submodule_path}$"; then

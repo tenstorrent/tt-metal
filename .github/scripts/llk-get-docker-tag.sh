@@ -13,7 +13,7 @@ set -euo pipefail
 # Calculate hash from the following files. This hash is used to tag the docker images.
 # Any change in these files will result in a new docker image build.
 
-LLK_PATH="${LLK_PATH:-tt_metal/third_party/tt_llk}"
+LLK_PATH="${LLK_PATH:-tt_metal/tt-llk}"
 
 # Files within the tt_llk submodule
 DOCKERFILE_HASH_FILES=(

@@ -12,7 +12,7 @@ permissions:
   packages: write
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   build-images:

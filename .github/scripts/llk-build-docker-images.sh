@@ -16,7 +16,7 @@ set -euo pipefail
 LLK_UBUNTU_BASE_IMAGE="${LLK_UBUNTU_BASE_IMAGE:-ubuntu:22.04}"
 
 # LLK Docker images are built from the submodule content
-LLK_PATH="tt_metal/third_party/tt_llk"
+LLK_PATH="tt_metal/tt-llk"
 if [[ ! -d "$LLK_PATH" || ! -f "$LLK_PATH/.github/Dockerfile.base" ]]; then
   echo "::error::tt_llk submodule is missing or not checked out (expected $LLK_PATH with .github/Dockerfile.base)." >&2
   exit 1

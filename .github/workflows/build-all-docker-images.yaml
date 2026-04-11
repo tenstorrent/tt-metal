@@ -171,7 +171,7 @@ jobs:
         id: llk-check
         run: |
           set -euo pipefail
-          LLK="tt_metal/third_party/tt_llk"
+          LLK="tt_metal/tt-llk"
           # MIGRATION: Uses migrated script in parent repo (.github/scripts/llk-get-docker-tag.sh)
           # instead of the submodule's script, so changes to build scripts trigger rebuilds
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
