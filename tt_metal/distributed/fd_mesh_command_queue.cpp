@@ -25,10 +25,7 @@
 #include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include "llrt/core_descriptor.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
@@ -295,27 +292,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     if (mcast_go_signals) {
         num_workers += mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-        // When dispatch infrastructure kernels run on Tensix cores (WORKER dispatch core type),
-        // those cores receive the go-signal multicast but never call notify_dispatch_core_done.
-        // Subtract them so expected_num_workers_completed matches the actual completion signal count.
-        // With ETH dispatch, infra runs on ethernet cores outside the Tensix compute grid, so no
-        // adjustment is needed.
-        if (dispatch_core_type == CoreType::WORKER) {
-            const auto context_id = mesh_device_->impl().get_context_id();
-            auto& ctx = MetalContext::instance(context_id);
-            auto& env_impl = MetalEnvAccessor(ctx.get_env()).impl();
-            const uint8_t num_hw_cqs = ctx.get_dispatch_core_manager().get_num_hw_cqs();
-            const ChipId device_id = mesh_device_->get_devices().front()->id();
-            const uint32_t num_dispatch_infra_cores =
-                tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config).size() +
-                tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config).size();
-            TT_FATAL(
-                num_workers >= num_dispatch_infra_cores,
-                "num_workers ({}) < num_dispatch_infra_cores ({}): sub_device does not cover the full compute grid",
-                num_workers,
-                num_dispatch_infra_cores);
-            num_workers -= num_dispatch_infra_cores;
-        }
     }
     if (unicast_go_signals) {
         // Issue #19729: Running MeshWorkloads on Active Eth cores is supported through multiple workarounds
