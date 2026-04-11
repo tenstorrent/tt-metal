@@ -50,7 +50,7 @@ UpsampleBicubicProgramFactory::cached_program_t UpsampleBicubicProgramFactory::c
     // Compute kernel config
     const auto compute_config_tuple =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-    const tt::tt_metal::MathFidelity math_fidelity = std::get<0>(compute_config_tuple);
+    const MathFidelity math_fidelity = std::get<0>(compute_config_tuple);
     const bool math_approx_mode = std::get<1>(compute_config_tuple);
     const bool fp32_dest_acc_en = std::get<2>(compute_config_tuple);
 

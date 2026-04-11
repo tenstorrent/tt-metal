@@ -178,7 +178,6 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         self,
         abs_pos: ttnn.Tensor,
         tgt_size: int,
-        device: ttnn.Device,
     ) -> ttnn.Tensor:
         """
         Get absolute positional embeddings, interpolating if needed.
@@ -191,47 +190,33 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         Returns:
             TTNN tensor of shape (1, tgt_size + 1, C) with interpolated positional embeddings
         """
-        # Convert to torch for interpolation (TTNN doesn't have bicubic interpolation)
-        abs_pos_torch = ttnn.to_torch(abs_pos)
-
-        # Extract CLS token and position embeddings
-        cls_token = abs_pos_torch[:, :1, :]  # (1, 1, C)
-        old_pos_embed = abs_pos_torch[:, 1:, :]  # (1, L-1, C)
-
-        src_size = int(math.sqrt(old_pos_embed.shape[1]))
+        # All operations in TTNN — no torch roundtrip
+        L = abs_pos.shape[1]
+        C = abs_pos.shape[2]
+        src_size = int(math.sqrt(L - 1))
         tgt_size_sqrt = int(math.sqrt(tgt_size))
 
         if src_size != tgt_size_sqrt:
-            # Reshape for interpolation: (1, L-1, C) -> (1, C, src_size, src_size)
-            old_pos_embed_2d = old_pos_embed.view(1, src_size, src_size, -1).permute(0, 3, 1, 2).contiguous()
-            old_pos_embed_2d = old_pos_embed_2d.to(torch.float32)
+            # Split CLS token and position embeddings
+            cls_token = abs_pos[:, :1, :]
+            old_pos_embed = abs_pos[:, 1:, :]
 
-            # Interpolate using PyTorch
-            new_pos_embed_2d = torch.nn.functional.interpolate(
-                old_pos_embed_2d,
-                size=(tgt_size_sqrt, tgt_size_sqrt),
-                mode="bicubic",
-                antialias=True,
-                align_corners=False,
-            ).to(old_pos_embed.dtype)
+            # Reshape to NHWC for bicubic upsample (needs ROW_MAJOR, already DRAM interleaved)
+            old_pos_nhwc = ttnn.reshape(old_pos_embed, (1, src_size, src_size, C))
+            old_pos_nhwc = ttnn.to_layout(old_pos_nhwc, ttnn.ROW_MAJOR_LAYOUT)
 
-            # Reshape back: (1, C, tgt_size, tgt_size) -> (1, tgt_size, C)
-            new_pos_embed = new_pos_embed_2d.permute(0, 2, 3, 1).contiguous()
-            new_pos_embed = new_pos_embed.view(1, tgt_size, -1)
+            # Native TTNN bicubic interpolation
+            scale = tgt_size_sqrt / src_size
+            new_pos = ttnn.upsample(old_pos_nhwc, scale_factor=scale, mode="bicubic")
 
-            # Concatenate CLS token
-            vision_pos_embed = torch.cat([cls_token, new_pos_embed], dim=1)  # (1, tgt_size + 1, C)
+            # Reshape back to (1, tgt_size, C) and convert to TILE for downstream ops
+            new_pos = ttnn.reshape(new_pos, (1, tgt_size, C))
+            new_pos = ttnn.to_layout(new_pos, ttnn.TILE_LAYOUT)
+
+            # Concat CLS token + interpolated positions
+            return ttnn.concat([cls_token, new_pos], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            vision_pos_embed = abs_pos_torch
-
-        # Convert back to TTNN
-        return ttnn.from_torch(
-            vision_pos_embed,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            return abs_pos
 
     def forward(self, pixel_values: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """
@@ -290,7 +275,6 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         pos_embeds = self.get_abs_pos_ttnn(
             self.position_embedding,
             num_patches_actual,
-            self.device,
         )
 
         # Add position embeddings
