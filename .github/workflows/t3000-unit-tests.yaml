@@ -26,6 +26,8 @@ on:
           - qwen25_vl
           - qwen3_vl
           - gemma3-small
+          - gemma4-a4b
+          - gemma4-31b
           - dits
           - deepseek
           - gpt-oss
