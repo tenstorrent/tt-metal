@@ -496,7 +496,7 @@ def run_generation(
             run_type="demo",
             ml_model_name=model_name,
             ml_model_type="llm",
-            num_layers=num_layers or model_args.n_layers,
+            num_layers=num_layers or model_args.num_hidden_layers,
             batch_size=batch_size,
             config_params={},
             input_sequence_length=prompt_len,
