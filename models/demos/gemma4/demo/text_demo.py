@@ -208,101 +208,103 @@ def run_generation(
         trace_output = None
         trace_device_inputs = None
 
-        def _make_host_tensors(tok, pos):
-            """Create host-side tensors for decode: token and position only.
+        # ── Decode helpers ─────────────────────────────────────────────────
+        # Embedding + PLI computed on host (fast for single-token decode),
+        # transferred as ROW_MAJOR to device.  Trace captures decoder layers onward.
+        # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
+        on_device_sampling = model.sampling is not None
 
-            RoPE and PLI are both computed on-device (fully trace-compatible).
-            """
-            token_h = ttnn.from_torch(
-                torch.tensor([[tok]], dtype=torch.int32),
+        def _make_decode_inputs(tok, pos):
+            """Create host tensors for one decode iteration."""
+            embeds_torch, pli_torch = model.compute_host_embeddings(tok)
+            # ROW_MAJOR on host — TILE conversion happens on device inside the trace.
+            embeds_h = ttnn.from_torch(
+                embeds_torch,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
+                dtype=ttnn.bfloat16,
                 mesh_mapper=replicate,
             )
-            # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
             pos_padded = torch.nn.functional.pad(
                 torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
             )
-            position_h = ttnn.from_torch(
-                pos_padded,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                mesh_mapper=replicate,
-            )
-            # int32 [1] position for KV cache update + SDPA
-            position_int32_h = ttnn.from_torch(
-                torch.tensor([pos], dtype=torch.int32),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
-                mesh_mapper=replicate,
-            )
-            return token_h, position_h, position_int32_h
+            inputs = {
+                "embeds": embeds_h,
+                "position": ttnn.from_torch(
+                    pos_padded,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint32,
+                    mesh_mapper=replicate,
+                ),
+                "position_int32": ttnn.from_torch(
+                    torch.tensor([pos], dtype=torch.int32),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.int32,
+                    mesh_mapper=replicate,
+                ),
+            }
+            if pli_torch is not None:
+                inputs["pli"] = ttnn.from_torch(
+                    pli_torch,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=replicate,
+                )
+            return inputs
 
-        def _copy_to_trace_buffers(token_h, position_h, position_int32_h):
-            """Copy host tensors into the persistent trace device buffers."""
-            ttnn.copy_host_to_device_tensor(token_h, trace_device_inputs["token"])
-            ttnn.copy_host_to_device_tensor(position_h, trace_device_inputs["position"])
-            ttnn.copy_host_to_device_tensor(position_int32_h, trace_device_inputs["position_int32"])
+        def _fwd(device_inputs):
+            return model.ttnn_decode_forward(
+                precomputed_embeds=device_inputs["embeds"],
+                current_pos=device_inputs["position"],
+                kv_cache=tt_kv_cache,
+                page_table=page_table_tt,
+                position_idx_cache=device_inputs["position_int32"],
+                precomputed_pli=device_inputs.get("pli"),
+            )
 
-        # On-device sampling: model returns token IDs (uint32) instead of logits
-        on_device_sampling = model.sampling is not None
+        def _inputs_to_device(inputs):
+            return {k: ttnn.to_device(v, device=mesh_device) for k, v in inputs.items() if v is not None}
+
+        def _copy_inputs_to_trace(host_inputs):
+            for k, v in host_inputs.items():
+                if v is not None and k in trace_device_inputs:
+                    ttnn.copy_host_to_device_tensor(v, trace_device_inputs[k])
 
         def _extract_token(decode_output):
-            """Extract next token from model output (sampled tokens or logits)."""
+            """Extract next token from model output (token IDs or logits)."""
+            output_cpu = (
+                ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0]) if is_mesh else ttnn.to_torch(decode_output)
+            )
             if on_device_sampling:
-                # decode_output is sampled token IDs [1, 1, batch, 1] on device
-                tok_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
-                    if is_mesh
-                    else ttnn.to_torch(decode_output)
-                )
-                return tok_cpu.reshape(-1)[0].item()
+                return output_cpu.reshape(-1)[0].item()
             else:
-                logits_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
-                    if is_mesh
-                    else ttnn.to_torch(decode_output)
-                )
-                return logits_cpu.squeeze().argmax().item()
+                return output_cpu.squeeze().argmax().item()
 
+        sample_mode = "device" if on_device_sampling else "host"
         logger.info(
-            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, sampling={'device' if on_device_sampling else 'CPU'})..."
+            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, " f"embedding=host, sampling={sample_mode})..."
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
+        # ── Main decode loop (mode-agnostic) ──────────────────────────────
         for step in range(max_new_tokens - 1):
             if iteration == 0:
                 profiler.start(f"compile_decode", iteration=prompt_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
 
-            token_h, position_h, position_int32_h = _make_host_tensors(next_token, current_pos)
-
-            def _fwd(tok_dev, pos_dev, pos_cache_dev):
-                """Run ttnn_decode_forward with the given device tensors.
-                RoPE and PLI are computed on-device inside the model.
-                """
-                return model.ttnn_decode_forward(
-                    tok_dev,
-                    current_pos=pos_dev,
-                    kv_cache=tt_kv_cache,
-                    page_table=page_table_tt,
-                    position_idx_cache=pos_cache_dev,
-                )
+            inputs_h = _make_decode_inputs(next_token, current_pos)
 
             if enable_decode_trace and trace_id is not None:
                 # ── Traced execution: copy inputs and replay ──
-                _copy_to_trace_buffers(token_h, position_h, position_int32_h)
+                _copy_inputs_to_trace(inputs_h)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 decode_logits = trace_output
 
             elif enable_decode_trace and iteration == 0:
                 # ── Iteration 0: compile run + trace capture ──
                 # 1. Compile run (un-traced)
-                tok_d = ttnn.to_device(token_h, device=mesh_device)
-                pos_d = ttnn.to_device(position_h, device=mesh_device)
-                pos_cache_d = ttnn.to_device(position_int32_h, device=mesh_device)
-                decode_logits, _ = _fwd(tok_d, pos_d, pos_cache_d)
+                inputs_d = _inputs_to_device(inputs_h)
+                decode_logits, _ = _fwd(inputs_d)
                 next_token = _extract_token(decode_logits)
                 generated_tokens.append(next_token)
                 current_pos += 1
@@ -316,34 +318,24 @@ def run_generation(
 
                 # 2. Capture trace with fresh device buffers
                 logger.info("Capturing decode trace...")
-                token_h2, position_h2, position_int32_h2 = _make_host_tensors(next_token, current_pos)
-                trace_device_inputs = {
-                    "token": ttnn.to_device(token_h2, device=mesh_device),
-                    "position": ttnn.to_device(position_h2, device=mesh_device),
-                    "position_int32": ttnn.to_device(position_int32_h2, device=mesh_device),
-                }
+                inputs_h2 = _make_decode_inputs(next_token, current_pos)
+                trace_device_inputs = _inputs_to_device(inputs_h2)
 
                 trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                trace_output, _ = _fwd(
-                    trace_device_inputs["token"],
-                    trace_device_inputs["position"],
-                    trace_device_inputs["position_int32"],
-                )
+                trace_output, _ = _fwd(trace_device_inputs)
                 ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                 logger.info("Decode trace captured")
 
                 # 3. Execute trace for current iteration
                 profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
-                _copy_to_trace_buffers(token_h2, position_h2, position_int32_h2)
+                _copy_inputs_to_trace(inputs_h2)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 decode_logits = trace_output
 
             else:
                 # ── No tracing: straightforward forward ──
-                tok_d = ttnn.to_device(token_h, device=mesh_device)
-                pos_d = ttnn.to_device(position_h, device=mesh_device)
-                pos_cache_d = ttnn.to_device(position_int32_h, device=mesh_device)
-                decode_logits, _ = _fwd(tok_d, pos_d, pos_cache_d)
+                inputs_d = _inputs_to_device(inputs_h)
+                decode_logits, _ = _fwd(inputs_d)
 
             next_token = _extract_token(decode_logits)
             generated_tokens.append(next_token)
@@ -539,16 +531,13 @@ def test_demo(mesh_device, model_path):
         pytest -k "1x8"   # T3K  / TP=8
     """
     prompts = ["Explain quantum computing in simple terms"]
-    # Decode trace requires all ops to be trace-compatible; disable for 1x1 mesh
-    # where CPU sampling (to_torch + argmax) is used.
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     results = run_generation(
         mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=64,
         max_seq_len=512,
-        enable_decode_trace=(tp > 1),
+        enable_decode_trace=True,
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")
