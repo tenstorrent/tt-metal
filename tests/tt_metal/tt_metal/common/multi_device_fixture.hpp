@@ -256,6 +256,11 @@ protected:
 // Fixtures that specify the mesh device type explicitly.
 // The associated test will be run if the cluster topology matches
 // what is specified.
+class MeshDevice2x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 2}}) {}
+};
+
 class MeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}}) {}
