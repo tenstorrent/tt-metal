@@ -1866,12 +1866,12 @@ uint32_t create_fabric_mux_worker_semaphore(
     ProgramOrDescriptor& program_or_descriptor, const CoreCoord& worker_logical_core) {
     if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
         auto semaphore_id_opt =
-            program_or_descriptor.find_available_semaphore_id(worker_logical_core, CoreType::WORKER);
+            program_or_descriptor.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
         TT_FATAL(semaphore_id_opt.has_value(), "No available semaphore ID for fabric MUX worker semaphore");
         const uint32_t semaphore_id = semaphore_id_opt.value();
         program_or_descriptor.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = semaphore_id,
-            .core_type = CoreType::WORKER,
+            .core_type = tt::CoreType::WORKER,
             .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
             .initial_value = 0});
         return semaphore_id;
