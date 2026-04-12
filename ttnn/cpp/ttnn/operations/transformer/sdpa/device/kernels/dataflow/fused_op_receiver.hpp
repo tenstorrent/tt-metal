@@ -39,10 +39,9 @@ struct RingSDPAOpReceiver {
     uint32_t get_next_ring_id_and_sync() {
         ASSERT(initialized);
         return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
-            // DISABLED for spike investigation: skip AllGather sync
-            // if (this->wait_for_op_signal) {
-            //     noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[dir], val);
-            // }
+            if (this->wait_for_op_signal) {
+                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[dir], val);
+            }
         });
     }
 };

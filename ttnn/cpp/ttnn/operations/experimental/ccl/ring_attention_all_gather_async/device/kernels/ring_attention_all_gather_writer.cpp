@@ -35,8 +35,6 @@ constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
 
 void kernel_main() {
-    // DISABLED for spike investigation: empty AllGather writer
-    return;
     constexpr uint32_t page_size_base_idx = 14;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
 
