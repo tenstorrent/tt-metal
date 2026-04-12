@@ -1058,15 +1058,6 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
-      - name: Derive MESH_DEVICE_SHAPE from runner label
-        run: |
-          RUNNER_LABEL="${{ needs.resolve-inputs.outputs.runner-label }}"
-          case "$RUNNER_LABEL" in
-            N300|n300*) echo "MESH_DEVICE_SHAPE=1x2" >> "$GITHUB_ENV" ;;
-            topology-6u) echo "MESH_DEVICE_SHAPE=4x8" >> "$GITHUB_ENV" ;;
-            *)          ;; # N150, P150b: single device — leave unset
-          esac
-          echo "Runner label: $RUNNER_LABEL → MESH_DEVICE_SHAPE=${MESH_DEVICE_SHAPE:-<unset>}"
       - name: Run ttnn sweeps (single sweep) ${{ needs.resolve-inputs.outputs.runner-label }} ${{ needs.resolve-inputs.outputs.sweep-name }} ${{ needs.resolve-inputs.outputs.suite-name }}
         run: |
           SUITE_NAME="${{ needs.resolve-inputs.outputs.suite-name }}"

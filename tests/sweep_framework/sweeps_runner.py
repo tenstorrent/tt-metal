@@ -27,7 +27,6 @@ except ImportError:
 
 # tt
 from framework.device_fixtures import default_device
-from framework.constants import parse_mesh_suffix
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
 from framework.statuses import TestStatus, VectorValidity
@@ -833,27 +832,9 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-
-                # Set MESH_DEVICE_SHAPE env var from the module name's mesh
-                # suffix (e.g., "model_traced.add.mesh_2x4" → "2x4") so the
-                # test module's mesh_device_fixture() creates the correct mesh
-                # device.  Child processes inherit env vars at fork time.
-                mesh_shape = parse_mesh_suffix(module_name)
-                _prev_mesh_env = os.environ.get("MESH_DEVICE_SHAPE")
-                if mesh_shape:
-                    mesh_str = f"{mesh_shape[0]}x{mesh_shape[1]}"
-                    os.environ["MESH_DEVICE_SHAPE"] = mesh_str
-                    logger.info(f"Set MESH_DEVICE_SHAPE={mesh_str} for module {module_name}")
-
                 results, invalid_vectors_count = execute_suite(
                     test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
-
-                # Restore previous MESH_DEVICE_SHAPE value
-                if _prev_mesh_env is not None:
-                    os.environ["MESH_DEVICE_SHAPE"] = _prev_mesh_env
-                elif "MESH_DEVICE_SHAPE" in os.environ and mesh_shape:
-                    del os.environ["MESH_DEVICE_SHAPE"]
                 total_invalid_vectors += invalid_vectors_count
 
                 suite_end_time = dt.datetime.now(dt.timezone.utc)
