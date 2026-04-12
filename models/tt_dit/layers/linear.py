@@ -7,6 +7,7 @@ import math
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
@@ -225,7 +226,7 @@ class ColParallelLinear(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
             )
 

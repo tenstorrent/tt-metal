@@ -40,14 +40,6 @@ repos:
   hooks:
   - id: yamllint
     exclude: ^(?!\.github/).* # Only include files in .github/
-- repo: local
-  hooks:
-    - id: validate-copyright-headers
-      name: validate copyright headers
-      entry: python3 infra/validate_copyright.py
-      language: system
-      args: ["--quiet", "--fix"]
-      files: \.(cpp|cc|h|hpp|py|ld)$
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v5.0.0
   hooks:

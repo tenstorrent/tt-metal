@@ -169,7 +169,7 @@ ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_retur
         memory_config.value_or(input.memory_config()),
         mean_memory_config.value_or(input.memory_config()),
         rstd_memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

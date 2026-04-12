@@ -1008,6 +1008,14 @@ void add_rank_binding_constraints(
                 }
             }
             std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
+            // One physical UNSET PSD host (e.g. mock discovery with a single MPI rank) but the MGD has multiple
+            // mesh_host_ranks: we still need one "global partition" slot per same-rank target group for
+            // set_same_rank_groups_constraint (injective matching requires nt <= ng). Duplicate the sole
+            // partition; the solver assigns disjoint ASICs from that pool across groups.
+            if (global_groups.size() == 1 && target_groups.size() > global_groups.size()) {
+                const std::set<tt::tt_metal::AsicID> sole_partition = global_groups.front();
+                global_groups.assign(target_groups.size(), sole_partition);
+            }
             if (!intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
                 TT_THROW(
                     "Failed to set same-rank groups constraint for mesh {} (rank/host partition matching "

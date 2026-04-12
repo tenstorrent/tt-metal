@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
+import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any
 
@@ -13,7 +16,6 @@ import ttnn
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
 
 _OMITTED = object()
 """Sentinel for omitted positional args — distinct from ``None``, which is a valid scalar input."""
@@ -36,21 +38,33 @@ class Tracer:
        overwrites previous results in place.
     """
 
+    _traces_live: int = 0
+
     def __init__(
         self,
         function: Callable[..., Any],
         /,
         *,
         device: ttnn.MeshDevice,
+        prep_run: bool = True,
+        clone_prep_inputs: bool = True,
     ) -> None:
         """Initialize the tracer.
+
+        If the function modifies its input tensors in place, set ``clone_prep_inputs`` to ``True``
+        so that preparation runs operate on cloned inputs, leaving the originals intact for trace
+        capture.
 
         Args:
             function: Function to be traced.
             device: Device on which to capture and execute the trace.
+            prep_run: Whether to run the function once before capturing the trace.
+            clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
         self._function = function
         self._device = device
+        self._prep_run = prep_run
+        self._clone_prep_inputs = clone_prep_inputs
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
@@ -61,21 +75,24 @@ class Tracer:
         *args: Any,
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
+        tracer_execute_on_capture: bool = True,
         **kwargs: Any,
     ) -> Any:
         """Capture or execute trace.
 
-        On the first call, runs the wrapped function twice to compile and capture the trace, then
-        executes the trace to compute outputs. On subsequent calls, executes the captured trace.
-        On the first call, inputs initialize the trace inputs. On subsequent calls, they update the
-        trace inputs. Only ``ttnn.Tensor`` inputs can be changed. Trailing positional args can be
-        omitted to reuse their previous values (works for any type). For keyword arguments, a value
-        of ``None`` can be passed to reuse the previous value for tensor inputs. Host tensor inputs
-        will automatically be moved to the tracer device.
+        On the first call, runs the wrapped function to capture the trace. On subsequent calls,
+        executes the captured trace. On the first call, inputs initialize the trace inputs. On
+        subsequent calls, they update the trace inputs. Only ``ttnn.Tensor`` inputs can be changed.
+        Aside from omitting positional inputs to reuse previous values, a value of ``None`` can be
+        passed to reuse the previous value for tensor inputs as well. Host tensor inputs will
+        automatically be moved to the tracer device.
 
         Args:
             tracer_cq_id: Command queue id.
             tracer_blocking_execution: Whether ``ttnn.execute_trace`` should block.
+            tracer_execute_on_capture: Whether to execute the trace immediately after capturing it
+                on the first call. If ``False``, only the trace is captured and outputs are not
+                computed.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
 
@@ -88,7 +105,7 @@ class Tracer:
         """
         if self._trace_id is None:
             if self._function is None:
-                msg = "tracer cannot be reused after release_trace() has been called"
+                msg = "tracer cannot be reused after the trace was released"
                 raise RuntimeError(msg)
 
             args = _tree_map(_verify_value, args, path_label="args")
@@ -96,8 +113,16 @@ class Tracer:
             self._args = _tree_map(self._tensor_to_device, args, path_label="args")
             self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
-            # compile
-            self._function(*self._args, **self._kwargs)
+            if self._prep_run:
+                if self._clone_prep_inputs:
+                    prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+                    prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+                else:
+                    prep_args = self._args
+                    prep_kwargs = self._kwargs
+
+                self._function(*prep_args, **prep_kwargs)
+                del prep_args, prep_kwargs
 
             # capture trace
             logger.debug("capturing trace...")
@@ -113,14 +138,16 @@ class Tracer:
                 ttnn.release_trace(self._device, trace_id)
                 raise
 
-            # Trace capture records commands but does not execute them. Execute the trace to
-            # actually compute outputs.
-            ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            if tracer_execute_on_capture:
+                # Trace capture records commands but does not execute them. Execute the trace to
+                # actually compute outputs.
+                ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
             # Allow resources referenced by the function to be freed, which might be used to offload
             # weights.
             self._function = None
 
+            Tracer._traces_live += 1
             self._trace_id = trace_id
             self._outputs = outputs
         else:
@@ -128,8 +155,8 @@ class Tracer:
                 msg = f"expected at most {len(self._args)} positional args, got {len(args)}"
                 raise TypeError(msg)
 
-            # Pad with _OMITTED to allow omitting trailing positional args.
-            args = args + (_OMITTED,) * (len(self._args) - len(args))
+            # Pad with None to allow omitting trailing positional args.
+            args = args + (None,) * (len(self._args) - len(args))
             _tree_map(self._update_input, self._args, args, path_label="args")
 
             # kwargs can be omitted entirely to reuse all previous values, but individual
@@ -162,7 +189,16 @@ class Tracer:
             self._args = ()
             self._kwargs = {}
             self._outputs = None
+            Tracer._traces_live -= 1
             ttnn.release_trace(self._device, trace_id)
+
+    @staticmethod
+    def warn_if_live() -> None:
+        """Log a warning if there are any live traces that have not been released."""
+        if Tracer._traces_live > 0:
+            frame = inspect.stack()[1]
+            location = f"{frame.filename}:{frame.lineno} in {frame.function}"
+            logger.warning(f"{Tracer._traces_live} live trace(s) at: {location}")
 
     def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):
@@ -177,11 +213,6 @@ class Tracer:
         raise ValueError(msg)
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
-        # _OMITTED means the caller omitted this positional arg — reuse previous value.
-        if new is _OMITTED:
-            return
-
-        # None means reuse the previous tensor value (explicit opt-in via kwargs).
         if new is None and isinstance(prev, ttnn.Tensor):
             return
 
@@ -209,12 +240,20 @@ class Tracer:
             raise ValueError(msg)
 
 
+_TRACER_VALID_INPUT_TYPES = (ttnn.Tensor, int, float, str, bool, NoneType)
+
+
 def _verify_value(value: Any, *, path_label: str) -> Any:
-    if not isinstance(value, (ttnn.Tensor, int, float, str, bool, NoneType)):
+    if not isinstance(value, _TRACER_VALID_INPUT_TYPES):
         msg = f"value '{path_label}' has unsupported type {type(value)}"
         raise TypeError(msg)
 
     return value
+
+
+def _clone_tensor(value: Any, *, path_label: str) -> Any:  # noqa: ARG001
+    """Clone a tensor, passing through non-tensor values unchanged."""
+    return ttnn.clone(value) if isinstance(value, ttnn.Tensor) else value
 
 
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
@@ -272,3 +311,125 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
         return {key: _tree_map(f, *(d[key] for d in (x, *xs)), path_label=f'{path_label}["{key}"]') for key in x}
 
     raise AssertionError  # unreachable
+
+
+_TRACER_CALL_KWARGS = frozenset(
+    name
+    for name, param in inspect.signature(Tracer.__call__).parameters.items()
+    if param.kind == inspect.Parameter.KEYWORD_ONLY
+)
+
+
+def traced_function(
+    _fn: Callable[..., Any] | None = None,
+    *,
+    device: ttnn.MeshDevice | Callable[..., ttnn.MeshDevice] | None = None,
+    prep_run: bool = True,
+    clone_prep_inputs: bool = True,
+) -> Any:
+    """Decorator that adds optional tracing to any function or method via the ``Tracer`` class.
+
+    Can be applied with or without arguments::
+
+        # Standalone function — device provided directly at decoration time:
+        @traced_function(device=mesh_device, clone_prep_inputs=False)
+        def my_function(x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
+
+        # Method — device resolved lazily via lambda from the bound context (self):
+        @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
+        def my_method(self, x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
+
+        # Call without tracing (original function, no overhead):
+        result = my_function(x, scale=1.0)
+        result = model.my_method(x, scale=1.0)
+
+        # Call with tracing (captures on first call, replays on subsequent calls):
+        result = my_function(x, scale=1.0, traced=True)
+        result = model.my_method(x, scale=1.0, traced=True)
+
+        # With optional Tracer call-time kwargs:
+        result = my_function(x, scale=1.0, traced=True, tracer_cq_id=1, tracer_blocking_execution=False)
+
+    The decorated callable gains a ``traced`` keyword argument at call time. When
+    ``traced=False`` (the default) the original function is called directly. When
+    ``traced=True`` a ``Tracer`` is lazily created on the first call and subsequent
+    calls execute the captured trace.
+
+    If the first positional argument is not a valid ``Tracer`` input type
+    (i.e. not a ``ttnn.Tensor``, scalar, or ``None``) it is treated as a
+    bindable context (e.g. ``self``) and bound away before the ``Tracer`` sees
+    any inputs.     When ``device`` is a callable it is called with that context to
+    resolve the device. One ``Tracer`` per unique first argument is maintained in a
+    ``WeakKeyDictionary``, giving per-instance tracing for methods. For plain
+    functions whose first argument is a valid tracer type, a single shared
+    ``Tracer`` is used instead.
+
+    Tracer call-time kwargs (``tracer_cq_id``, ``tracer_blocking_execution``,
+    ``tracer_execute_on_capture``) are forwarded to the ``Tracer`` when tracing
+    and stripped before calling the original function in the untraced path.
+
+    Args:
+        _fn: The function to wrap when used without parentheses (``@traced_function``).
+        device: Device for tracing. Pass a ``ttnn.MeshDevice`` directly for plain
+            functions, or a callable (e.g. ``lambda self: self.mesh_device``) for
+            methods so it can be resolved lazily from the bound context.
+        prep_run: Forwarded to ``Tracer.__init__``.
+        clone_prep_inputs: Forwarded to ``Tracer.__init__``.
+    """
+
+    def _resolve_device(context: Any) -> ttnn.MeshDevice:
+        if device is None:
+            msg = (
+                "device= must be provided to @traced_function. "
+                "Pass a ttnn.MeshDevice directly, or a callable that accepts the bound context "
+                "and returns one (e.g. device=lambda self: self.mesh_device)."
+            )
+            raise ValueError(msg)
+        return device(context) if callable(device) else device
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        _tracers: weakref.WeakKeyDictionary[Any, Tracer] = weakref.WeakKeyDictionary()
+        _tracer_shared: Tracer | None = None
+
+        def _needs_new_tracer(tracer: Tracer | None) -> bool:
+            return tracer is None or (not tracer.trace_captured and tracer._function is None)
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, traced: bool = False, **kwargs: Any) -> Any:
+            nonlocal _tracer_shared
+
+            if not traced:
+                for k in _TRACER_CALL_KWARGS:
+                    kwargs.pop(k, None)
+                return fn(*args, **kwargs)
+
+            # If the first argument is not a valid Tracer input type, treat it as a
+            # bindable context (e.g. self) — bind it away and track a Tracer per instance.
+            if args and not isinstance(args[0], _TRACER_VALID_INPUT_TYPES):
+                context, rest = args[0], args[1:]
+                if _needs_new_tracer(_tracers.get(context)):
+                    _tracers[context] = Tracer(
+                        functools.partial(fn, context),
+                        device=_resolve_device(context),
+                        prep_run=prep_run,
+                        clone_prep_inputs=clone_prep_inputs,
+                    )
+                return _tracers[context](*rest, **kwargs)
+
+            # Plain function — single shared Tracer.
+            if _needs_new_tracer(_tracer_shared):
+                _tracer_shared = Tracer(
+                    fn,
+                    device=_resolve_device(None),
+                    prep_run=prep_run,
+                    clone_prep_inputs=clone_prep_inputs,
+                )
+            return _tracer_shared(*args, **kwargs)
+
+        wrapper._tracers = _tracers  # type: ignore[attr-defined]
+        return wrapper
+
+    if _fn is not None:
+        return decorator(_fn)
+
+    return decorator
