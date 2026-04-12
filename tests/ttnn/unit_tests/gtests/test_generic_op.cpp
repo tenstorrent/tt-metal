@@ -1213,8 +1213,9 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), worker_cores, 0),
     };
     auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), worker_cores, 0);
+    auto sync_sub_device_ids = std::array{mesh_device_->get_sub_device_ids().at(0)};
     tt::tt_metal::distributed::Synchronize(
-        mesh_device_.get(), std::nullopt, {mesh_device_->get_sub_device_ids().at(0)});
+        mesh_device_.get(), std::nullopt, sync_sub_device_ids);
 
     const auto mux_fwd_virtual =
         mux_fwd_core.has_value() ? mesh_device_->worker_core_from_logical_core(*mux_fwd_core) : CoreCoord{0, 0};
