@@ -785,5 +785,44 @@ TEST_F(MeshTensorDataMovementTest, NonUniformToDevice_SingleShard_Roundtrip) {
     expect_host_tensors_eq(expected, result);
 }
 
+// ---------------------------------------------------------------------------
+//  Non-uniform D2H sheds extra shards from the host tensor
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, NonUniformToHost_ShedsExtraShards) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {10, 20, 30, 40};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = tensor_impl::to_device(cq, host_tensor, *mesh_device_);
+
+    std::vector<distributed::MeshCoordinate> subset = {{0, 1}, {1, 0}};
+    HostTensor result = tensor_impl::non_uniform_data_movement::to_host(cq, device_tensor, subset);
+
+    ASSERT_EQ(result.buffer().shard_coords().size(), subset.size());
+    auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {20, 30});
+    expect_host_tensors_eq(expected, result);
+}
+
+TEST_F(MeshTensorDataMovementTest, NonUniformCopyToHost_ShedsExtraShards) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {5, 15, 25, 35};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = tensor_impl::to_device(cq, host_tensor, *mesh_device_);
+
+    // Pass a full-coverage host tensor as the destination, but only read back a subset of coords.
+    std::vector<distributed::MeshCoordinate> subset = {{1, 1}};
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dest = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
+    tensor_impl::non_uniform_data_movement::copy_to_host(cq, device_tensor, dest, subset);
+
+    ASSERT_EQ(dest.buffer().shard_coords().size(), subset.size());
+    auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {35});
+    expect_host_tensors_eq(expected, dest);
+}
+
 }  // namespace
 }  // namespace ttnn::distributed::test
