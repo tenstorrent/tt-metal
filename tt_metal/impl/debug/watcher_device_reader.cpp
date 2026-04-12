@@ -418,7 +418,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
                 Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
                     .Dump();
             }
@@ -522,13 +522,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     const auto& rtoptions = reader.env.get_rtoptions();
     const auto& hal = reader.env.get_hal();
     CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
-    CoreCoord virtual_coord;
-    if (programmable_core_type == HalProgrammableCoreType::DRAM) {
-        virtual_coord = logical_coord;
-    } else {
-        virtual_coord = reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            reader.device_id, logical_coord, core_type);
-    }
+    CoreCoord virtual_coord = reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
     string core_type_str;
