@@ -5,6 +5,16 @@
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
+try:
+    import sys as _sys, os as _os
+    _ccl_gen_path = _os.environ.get("CCL_GEN_PATH", "/localdev/nkapre/tt-ccl-codegen")
+    if _ccl_gen_path not in _sys.path:
+        _sys.path.insert(0, _ccl_gen_path)
+    from ccl_gen.api import reduce_scatter_minimal_async as _ccl_gen_rs
+    _USE_CCL_GEN = True
+except ImportError:
+    _USE_CCL_GEN = False
+
 
 def get_num_links(mesh_device, cluster_axis=None):
     """
@@ -170,21 +180,38 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
-            input_tensor,
-            persistent_output_buffers=None,
-            dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=num_reduce_scatter_links,
-            memory_config=memory_config,
-            intermediate_memory_config=rs_memory_config,
-            topology=topology,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=2,
-            subdevice_id=subdevice_id,
-        )
+        if _USE_CCL_GEN:
+            reduced = _ccl_gen_rs(
+                input_tensor,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                num_links=num_reduce_scatter_links,
+                memory_config=memory_config,
+                intermediate_memory_config=rs_memory_config,
+                topology=topology,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=2,
+                subdevice_id=subdevice_id,
+            )
+        else:
+            reduced = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                num_links=num_reduce_scatter_links,
+                memory_config=memory_config,
+                intermediate_memory_config=rs_memory_config,
+                topology=topology,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=2,
+                subdevice_id=subdevice_id,
+            )
         input_tensor.deallocate(True)
         return reduced
 
@@ -231,22 +258,40 @@ def tt_all_reduce(
     else:
         input_mem_cfg = input_tensor.memory_config()
 
-        reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-            input_tensor,
-            persistent_output_buffers=None,
-            dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            num_links=num_reduce_scatter_links,
-            cluster_axis=cluster_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-            subdevice_id=subdevice_id,
-        )
+        if _USE_CCL_GEN:
+            reduced_tensor = _ccl_gen_rs(
+                input_tensor,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=num_reduce_scatter_links,
+                cluster_axis=cluster_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=topology,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+                subdevice_id=subdevice_id,
+            )
+        else:
+            reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=num_reduce_scatter_links,
+                cluster_axis=cluster_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=topology,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+                subdevice_id=subdevice_id,
+            )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
             reduced_tensor,
