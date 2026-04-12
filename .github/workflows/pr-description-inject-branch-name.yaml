@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   update-description:
+    # Skip for PRs from forks — the GITHUB_TOKEN lacks write access to the
+    # base repo's pull requests in that context, causing a 403 on pulls.update.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Update PR Description
