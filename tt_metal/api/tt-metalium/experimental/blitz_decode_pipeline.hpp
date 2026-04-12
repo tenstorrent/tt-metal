@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal::experimental::blitz {
 
@@ -17,6 +18,7 @@ struct BlitzDecodePipelineStage {
     ::tt::tt_metal::distributed::MeshCoordinate exit_node_coord;
 };
 
-std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline();
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(
+    const ::tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 }  // namespace tt::tt_metal::experimental::blitz

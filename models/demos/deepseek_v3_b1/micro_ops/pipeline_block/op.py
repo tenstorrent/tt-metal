@@ -70,7 +70,7 @@ class PipelineBlock:
         self.num_procs = int(ttnn.distributed_context_get_size())
         self.initialize_loopback = initialize_loopback
 
-        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         if initialize_loopback:
             assert len(pipeline_config) == self.num_procs + 1
 
