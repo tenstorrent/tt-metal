@@ -111,11 +111,7 @@ set_directory_properties(
 # /opt/tenstorrent/sfpi/.
 
 set(KCT_SFPI_ROOT "")
-foreach(
-    _sfpi_candidate
-    "${CMAKE_SOURCE_DIR}/runtime/sfpi"
-    "/opt/tenstorrent/sfpi"
-)
+foreach(_sfpi_candidate "${CMAKE_SOURCE_DIR}/runtime/sfpi" "/opt/tenstorrent/sfpi")
     if(EXISTS "${_sfpi_candidate}/compiler/bin/riscv-tt-elf-g++")
         set(KCT_SFPI_ROOT "${_sfpi_candidate}")
         break()
@@ -176,6 +172,7 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${KCT_ARCH_PREFIX}"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${KCT_ARCH_PREFIX}/${KCT_ARCH_ALIAS}_defines"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${KCT_ARCH_PREFIX}/noc"
+        "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${KCT_ARCH_ALIAS}/common/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${KCT_ARCH_ALIAS}/llk_lib"
         # -- Compute kernel includes (LLK API + SFPU) --
@@ -240,9 +237,15 @@ target_compile_definitions(
         LOCAL_MEM_EN=0
         KERNEL_BUILD
         # -- Processor identification --
-        # We do NOT define COMPILE_FOR_TRISC so that firmware_common.h includes
-        # the real dataflow_api.h.  Compute kernel stubs are provided by the
-        # prelude and jit_stubs/.
+        # COMPILE_FOR_TRISC is required to match the real TRISC kernel build:
+        #   • risc_common.h gates its global reg_read() under !COMPILE_FOR_TRISC;
+        #     omitting it causes an ambiguity with ckernel::reg_read.
+        #   • experimental/circular_buffer.h takes the LLK code path (no NOC
+        #     includes) when COMPILE_FOR_TRISC is set, avoiding dataflow_api.h
+        #     conflicts with api/compute/common.h.
+        #   • firmware_common.h skips api/dataflow/dataflow_api.h (the
+        #     jit_stubs/internal/firmware_common.h wrapper handles both cases).
+        COMPILE_FOR_TRISC
         UCK_CHLKC_MATH
         NAMESPACE=chlkc_math
         PROCESSOR_INDEX=1
@@ -262,7 +265,7 @@ target_compile_definitions(
         # -- Dispatch constants (normally set by JIT) --
         DISPATCH_MESSAGE_ADDR=0
         # -- Data format stub --
-        DATA_FORMATS_DEFINED=1
+        DATA_FORMATS_DEFINED
         # -- Architecture --
         ${KCT_ARCH_DEFINE}
         # -- Compile-time arguments (dummy values so kernels parse) --

@@ -52,7 +52,10 @@ constexpr bool DST_ACCUM_MODE = false;
 constexpr bool APPROX = true;
 
 // -- chlkc_math_fidelity.h (JIT-generated) --
-constexpr std::int32_t MATH_FIDELITY = 255;
+// MATH_FIDELITY is defined in the chlkc_descriptors.h stub (after llk_defs.h
+// pulls in ckernel::MathFidelity).  Do NOT define it here as int32_t — the
+// real generated file uses `constexpr ckernel::MathFidelity` and the LLK
+// templates reject an integer literal as the template argument.
 
 // -- chlkc_pack_data_format.h (JIT-generated) --
 constexpr unsigned char pack_src_format[32] = {
@@ -119,9 +122,52 @@ constexpr uint16_t unpack_tile_size[32] = {
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
 };
+constexpr uint8_t unpack_num_faces_r_dim[32] = {
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+};
+constexpr uint8_t unpack_num_faces_c_dim[32] = {
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+};
+
+// -- chlkc_pack_tile_dims.h additions --
+constexpr uint8_t pack_num_faces_r_dim[32] = {
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+};
+constexpr uint8_t pack_num_faces_c_dim[32] = {
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+};
+
+// -- PROCESSOR_INDEX (set by compiler flags per processor type) --
+// BRISC=0, NCRISC=1, TRISC0/1/2=2/3/4 on tt-1xx.  Compute kernels supply
+// this via -DPROCESSOR_INDEX=<n>; provide 0 as a safe default for others
+// (e.g. BRISC dataflow kernels).
+#ifndef PROCESSOR_INDEX
+#define PROCESSOR_INDEX 0
+#endif
 
 // ===========================================================================
-// 1b) Named compile-time argument support
+// 1b) Kernel-specific JIT macro fallbacks
+// ===========================================================================
+// Some kernels (e.g. eltwise_binary.cpp) use macros that are normally set by
+// the JIT layer as kernel-specific compile-time arguments.  Provide sensible
+// defaults here so clang-tidy can parse the translation unit.
+//
+// ELTWISE_OP_TYPE — template argument of type EltwiseBinaryType (unscoped enum
+//   from llk_defs.h).  ELWMUL (= 0) is a safe default; the identifier will be
+//   in scope when the kernel headers are included later.
+#ifndef ELTWISE_OP_TYPE
+#define ELTWISE_OP_TYPE ELWMUL
+#endif
+//
+// ELTWISE_OP — function-like macro called as ELTWISE_OP(icb0,icb1,itile0,itile1,idst).
+//   mul_tiles() is declared in tt_metal/hw/inc/api/compute/eltwise_binary.h
+//   which is already included by the time ELTWISE_OP is called.
+#ifndef ELTWISE_OP
+#define ELTWISE_OP(icb0, icb1, itile0, itile1, idst) mul_tiles(icb0, icb1, itile0, itile1, idst)
+#endif
+
+// ===========================================================================
+// 1d) Named compile-time argument support
 // ===========================================================================
 // In real JIT builds each kernel gets its own KERNEL_COMPILE_TIME_ARG_MAP
 // define that maps string names → indices into the compile-time args array.
