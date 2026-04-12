@@ -37,6 +37,4 @@ jobs:
       consecutive-runs: ${{ inputs.consecutive-runs }}
       lookback-days: ${{ inputs.lookback-days }}
       max-candidates: ${{ inputs.max-candidates }}
-    secrets:
-      GITHUB_READ_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
-      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+    secrets: inherit
