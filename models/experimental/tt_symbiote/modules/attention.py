@@ -19,6 +19,7 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.run_config import trace_disabled
 
 
 def _unwrap_ttnn(x):
@@ -361,6 +362,15 @@ class TTNNPagedAttentionKVCache(Cache):
 
     def get_max_cache_shape(self) -> Optional[int]:
         return self.config.max_seq_length
+
+    def get_max_length(self) -> Optional[int]:
+        """HF ``generate`` / cache utilities may call ``get_max_length``."""
+        return self.config.max_seq_length
+
+    @property
+    def seen_tokens(self) -> int:
+        """Align with ``DynamicCache.seen_tokens`` for HuggingFace generation."""
+        return self._seen_tokens
 
     def reset(self) -> None:
         """Reset KV cache tracking for a new generation turn.
@@ -988,6 +998,7 @@ class LlamaAttention(TTNNModule):
         self.rope = TTNNRotaryPositionEmbedding()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
         self.qkv_same_shape = True
+        self._pos_typecast_pad_buf = None
 
     def move_weights_to_device_impl(self):
         """Initialize SDPA config when device is available."""
@@ -999,6 +1010,12 @@ class LlamaAttention(TTNNModule):
                 k_chunk_size=256,
                 exp_approx_mode=False,
             )
+            self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=0,
+                k_chunk_size=0,
+                exp_approx_mode=False,
+            )
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1006,6 +1023,188 @@ class LlamaAttention(TTNNModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+
+    def _llama_paged_to_replicated(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Replicated mesh topology for paged decode kernels (same idea as TTNNBailingMoEAttention)."""
+        dev = self.device
+        if not hasattr(dev, "get_num_devices") or dev.get_num_devices() <= 1:
+            return tensor
+        orig_shape = list(tensor.shape)
+        mesh_composer = ttnn.ConcatMeshToTensor(dev, dim=0)
+        t_torch = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+        t_torch = t_torch[: orig_shape[0]]
+        return ttnn.from_torch(
+            t_torch,
+            device=dev,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            dtype=tensor.dtype,
+            layout=tensor.layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _llama_get_cur_pos_device_tensor(self, cache_position, past_key_values, layer_idx, batch_size):
+        """Trace-safe ``cur_pos`` tensor for paged KV update/decode (see TTNNBailingMoEAttention)."""
+        cp = cache_position
+        if isinstance(cp, TorchTTNNTensor) and cp.ttnn_tensor is not None:
+            cp = cp.ttnn_tensor
+
+        if isinstance(cp, ttnn.Tensor) and hasattr(cp, "storage_type") and cp.storage_type() != ttnn.StorageType.HOST:
+            if len(cp.shape) > 1:
+                total_elems = 1
+                for d in cp.shape:
+                    total_elems *= d
+                cp = ttnn.reshape(cp, (total_elems,))
+            if cp.shape[0] > batch_size:
+                cp = ttnn.slice(cp, [0], [batch_size])
+            if cp.dtype != ttnn.int32:
+                orig_size = cp.shape[0]
+                if orig_size % 32 != 0:
+                    pad_amount = 32 - (orig_size % 32)
+                    if self._pos_typecast_pad_buf is None:
+                        pad_torch = torch.zeros(pad_amount, dtype=torch.int64)
+                        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+                        self._pos_typecast_pad_buf = ttnn.from_torch(
+                            pad_torch,
+                            device=self.device,
+                            dtype=cp.dtype,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=mesh_mapper,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    cp = ttnn.concat([cp, self._pos_typecast_pad_buf], dim=-1)
+                cp = ttnn.typecast(cp, ttnn.int32)
+                if orig_size % 32 != 0:
+                    cp = ttnn.slice(cp, [0], [orig_size])
+            return cp
+
+        if cache_position is None:
+            cur_pos = past_key_values.get_seq_length(layer_idx)
+            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+        else:
+            if isinstance(cp, TorchTTNNTensor):
+                cp = cp.to_torch
+            if isinstance(cp, ttnn.Tensor):
+                mesh_composer = None
+                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
+                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
+            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        return ttnn.from_torch(
+            cache_position_tensor,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_llama_paged_decode(
+        self,
+        query_states: ttnn.Tensor,
+        key_states: ttnn.Tensor,
+        value_states: ttnn.Tensor,
+        past_key_values: "TTNNPagedAttentionKVCache",
+        cache_position,
+        attn_scale: float,
+    ) -> ttnn.Tensor:
+        """Single-token decode using on-device paged KV (layout aligned with TTNNBailingMoEAttention)."""
+        batch_size = query_states.shape[0]
+        seq_length = query_states.shape[2]
+        layer_idx = self.torch_layer.layer_idx
+        head_dim = query_states.shape[3]
+
+        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
+        key_states = ttnn.permute(key_states, (2, 0, 1, 3))
+        value_states = ttnn.permute(value_states, (2, 0, 1, 3))
+
+        if query_states.dtype != ttnn.bfloat16:
+            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
+        if key_states.dtype != ttnn.bfloat16:
+            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
+        if value_states.dtype != ttnn.bfloat16:
+            value_states = ttnn.typecast(value_states, ttnn.bfloat16)
+
+        if hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1:
+            query_states = self._llama_paged_to_replicated(query_states)
+            key_states = self._llama_paged_to_replicated(key_states)
+            value_states = self._llama_paged_to_replicated(value_states)
+
+        cur_pos_tt = self._llama_get_cur_pos_device_tensor(cache_position, past_key_values, layer_idx, batch_size)
+
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
+        q_shard_mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        query_states = ttnn.to_memory_config(query_states, q_shard_mem)
+
+        num_cores = batch_size
+        compute_grid = self.device.compute_with_storage_grid_size()
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+        kv_vol = key_states.volume() // key_states.padded_shape[-1] // num_cores
+        kv_shard = ttnn.ShardSpec(
+            shard_grid,
+            [kv_vol, key_states.padded_shape[-1]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        kv_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_shard,
+        )
+        key_states = ttnn.to_memory_config(key_states, kv_mem)
+        value_states = ttnn.to_memory_config(value_states, kv_mem)
+
+        past_key_values.paged_update_on_device(
+            key_states,
+            value_states,
+            layer_idx=layer_idx,
+            current_pos=cur_pos_tt,
+        )
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        decode_pc = self.sdpa.decode_program_config
+        if decode_pc is None:
+            decode_pc = self.sdpa.program_config
+
+        attn_output = past_key_values.paged_sdpa_decode(
+            query_states,
+            layer_idx,
+            current_pos=cur_pos_tt,
+            scale=attn_scale,
+            program_config=decode_pc,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+        )
+
+        sdpa_output_memcfg = ttnn.create_sharded_memory_config(
+            shape=(32, head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, sdpa_output_memcfg)
+
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
+            attn_output,
+            num_heads=self.num_attention_heads,
+        )
+        # Call ``forward`` directly so TracedRun does not wrap ``o_proj`` during capture.
+        # Paged decode uses sharded/L1 intermediates; ``TTNNLinear`` may run ``to_layout``
+        # which performs device writes that are illegal inside ``begin_trace_capture``.
+        attn_output = self.o_proj.forward(attn_output)
+
+        if batch_size < 32:
+            attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, attn_output.shape[-1]])
+
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, -1))
+        return attn_output
 
     def init_fused_parameters(self, num_attention_heads, hidden_size: int):
         self.qkv_proj = TTNNFusedQKVSelfAttention.from_torch(
@@ -1029,7 +1228,15 @@ class LlamaAttention(TTNNModule):
     def from_torch(cls, llama_attn: "LlamaAttention"):
         new_attn = cls()
         new_attn._fallback_torch_layer = llama_attn
-        new_attn.num_key_value_groups = getattr(llama_attn, "num_key_value_groups", 1)
+        cfg = llama_attn.config
+        new_attn.num_attention_heads = cfg.num_attention_heads
+        new_attn.num_key_value_heads = getattr(cfg, "num_key_value_heads", cfg.num_attention_heads)
+        new_attn.head_dim = getattr(llama_attn, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
+        new_attn.num_key_value_groups = getattr(
+            llama_attn,
+            "num_key_value_groups",
+            new_attn.num_attention_heads // new_attn.num_key_value_heads if new_attn.num_key_value_heads else 1,
+        )
         # Fuse Q/K/V for self-attention (zero-pad K bias)
         new_attn.qkv_same_shape = (
             llama_attn.q_proj.weight.shape == llama_attn.k_proj.weight.shape
@@ -1097,28 +1304,54 @@ class LlamaAttention(TTNNModule):
 
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
-        if past_key_values is not None:
-            sin_torch = ttnn.to_torch(sin) if isinstance(sin, ttnn.Tensor) else sin
-            cos_torch = ttnn.to_torch(cos) if isinstance(cos, ttnn.Tensor) else cos
-            cache_kwargs = {"sin": sin_torch, "cos": cos_torch, "cache_position": cache_position}
+        seq_len_q = query_states.shape[2]
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
 
-            k_torch = (
-                ttnn.to_torch(_unwrap_ttnn(key_states))
-                if isinstance(_unwrap_ttnn(key_states), ttnn.Tensor)
-                else _unwrap_ttnn(key_states)
+        attn_scale = getattr(self.torch_layer, "scaling", None)
+        if attn_scale is None:
+            attn_scale = self.torch_layer.head_dim**-0.5
+
+        if use_paged and seq_len_q == 1:
+            attn_out = self._forward_llama_paged_decode(
+                query_states,
+                key_states,
+                value_states,
+                past_key_values,
+                cache_position,
+                attn_scale,
             )
-            v_torch = (
-                ttnn.to_torch(_unwrap_ttnn(value_states))
-                if isinstance(_unwrap_ttnn(value_states), ttnn.Tensor)
-                else _unwrap_ttnn(value_states)
-            )
-            k_torch, v_torch = past_key_values.update(k_torch, v_torch, self.torch_layer.layer_idx, cache_kwargs)
-            key_states = ttnn.from_torch(
-                k_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-            )
-            value_states = ttnn.from_torch(
-                v_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-            )
+            return attn_out, None, past_key_values
+
+        if past_key_values is not None:
+            if use_paged:
+                past_key_values.paged_fill_on_device(
+                    key_states,
+                    value_states,
+                    layer_idx=self.torch_layer.layer_idx,
+                    batch_idx=0,
+                )
+            else:
+                sin_torch = ttnn.to_torch(sin) if isinstance(sin, ttnn.Tensor) else sin
+                cos_torch = ttnn.to_torch(cos) if isinstance(cos, ttnn.Tensor) else cos
+                cache_kwargs = {"sin": sin_torch, "cos": cos_torch, "cache_position": cache_position}
+
+                k_torch = (
+                    ttnn.to_torch(_unwrap_ttnn(key_states))
+                    if isinstance(_unwrap_ttnn(key_states), ttnn.Tensor)
+                    else _unwrap_ttnn(key_states)
+                )
+                v_torch = (
+                    ttnn.to_torch(_unwrap_ttnn(value_states))
+                    if isinstance(_unwrap_ttnn(value_states), ttnn.Tensor)
+                    else _unwrap_ttnn(value_states)
+                )
+                k_torch, v_torch = past_key_values.update(k_torch, v_torch, self.torch_layer.layer_idx, cache_kwargs)
+                key_states = ttnn.from_torch(
+                    k_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                )
+                value_states = ttnn.from_torch(
+                    v_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                )
 
         original_q_len = query_states.shape[2]
         kv_len = key_states.shape[2]
@@ -1137,9 +1370,6 @@ class LlamaAttention(TTNNModule):
             )
             query_states = ttnn.concat([zero_pad, query_states], dim=2)
 
-        attn_scale = getattr(self.torch_layer, "scaling", None)
-        if attn_scale is None:
-            attn_scale = self.torch_layer.head_dim**-0.5
         attn_out = self.sdpa(
             self,
             query_states,
@@ -3080,19 +3310,16 @@ def _window_partition_unpartition_sam(
     pad_w = (window_size - W % window_size) % window_size
     Hp, Wp = H + pad_h, W + pad_w
 
+    x_own = ttnn.clone(x_bhwc, memory_config=memory_config)
     if pad_h > 0 or pad_w > 0:
-        if x_bhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x_bhwc = ttnn.to_layout(x_bhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
-        x_bhwc = ttnn.pad(
-            x_bhwc, padding=[(0, 0), (0, pad_h), (0, pad_w), (0, 0)], value=0, memory_config=memory_config
-        )
-
-    if pad_h > 0 or pad_w > 0:
-        x_rm = x_bhwc
+        if x_own.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x_own = ttnn.to_layout(x_own, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+        x_own = ttnn.pad(x_own, padding=[(0, 0), (0, pad_h), (0, pad_w), (0, 0)], value=0, memory_config=memory_config)
+        x_rm = x_own
     else:
-        x_rm = ttnn.to_layout(x_bhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
-        if x_rm is not x_bhwc:
-            ttnn.deallocate(x_bhwc)
+        x_rm = ttnn.to_layout(x_own, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+        if x_own.is_allocated() and x_own is not x_rm:
+            ttnn.deallocate(x_own)
     if tuple(x_rm.shape) != (B, Hp, Wp, C):
         x_rm = ttnn.reshape(x_rm, (B, Hp, Wp, C))
     nH, nW = Hp // window_size, Wp // window_size
@@ -3131,6 +3358,7 @@ def _window_partition_unpartition_sam(
     return out_tt
 
 
+@trace_disabled
 class TTNNSAMAttention(TTNNModule):
     """TTNN version of SAM image encoder Attention.
     Supports both global and windowed attention. Uses manual attention path
@@ -3147,7 +3375,6 @@ class TTNNSAMAttention(TTNNModule):
         self._use_rel_pos = False
         self._rel_pos_h = None
         self._rel_pos_w = None
-        self._rel_pos_tt_cache = {}
         self.sdpa = TTNNSDPAAttention()
         self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -3174,68 +3401,6 @@ class TTNNSAMAttention(TTNNModule):
             new_attn._rel_pos_w = sam_attn.rel_pos_w.detach()
         return new_attn
 
-    def _ensure_rel_pos_cache(self, H: int, W: int) -> None:
-        if (H, W) in self._rel_pos_tt_cache:
-            return
-        Rh = _get_rel_pos_sam(H, H, self._rel_pos_h).to(torch.bfloat16)
-        Rw = _get_rel_pos_sam(W, W, self._rel_pos_w).to(torch.bfloat16)
-        rh_slices = [
-            ttnn.from_torch(
-                Rh[h].T.unsqueeze(0).unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for h in range(H)
-        ]
-        rw_slices = [
-            ttnn.from_torch(
-                Rw[w].T.unsqueeze(0).unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for w in range(W)
-        ]
-        self._rel_pos_tt_cache[(H, W)] = {"rh": rh_slices, "rw": rw_slices}
-
-    def _compute_rel_pos_bias_ttnn(self, q: ttnn.Tensor, H: int, W: int) -> ttnn.Tensor:
-        self._ensure_rel_pos_cache(H, W)
-        cache = self._rel_pos_tt_cache[(H, W)]
-        rh_slices, rw_slices = cache["rh"], cache["rw"]
-        B, n_heads, S, head_dim = q.shape
-
-        rel_h_parts = []
-        for h_idx in range(H):
-            q_h = ttnn.slice(q, (0, 0, h_idx * W, 0), (B, n_heads, (h_idx + 1) * W, head_dim))
-            rel_h_parts.append(
-                ttnn.matmul(q_h, rh_slices[h_idx], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            )
-        rel_h = ttnn.concat(rel_h_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        q_wh_flat = ttnn.reshape(
-            ttnn.permute(ttnn.reshape(q, (B * n_heads, H, W, head_dim)), (0, 2, 1, 3)),
-            (B, n_heads, S, head_dim),
-        )
-        rel_w_parts = []
-        for w_idx in range(W):
-            q_w = ttnn.slice(q_wh_flat, (0, 0, w_idx * H, 0), (B, n_heads, (w_idx + 1) * H, head_dim))
-            rel_w_parts.append(
-                ttnn.matmul(q_w, rw_slices[w_idx], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            )
-        rel_w_wm = ttnn.concat(rel_w_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        rel_w = ttnn.reshape(
-            ttnn.permute(ttnn.reshape(rel_w_wm, (B * n_heads, W, H, W)), (0, 2, 1, 3)),
-            (B, n_heads, S, W),
-        )
-        rel_h_exp = ttnn.repeat(ttnn.reshape(rel_h, (B * n_heads, S, H, 1)), ttnn.Shape([1, 1, 1, W]))
-        rel_w_exp = ttnn.repeat(ttnn.reshape(rel_w, (B * n_heads, S, 1, W)), ttnn.Shape([1, 1, H, 1]))
-        bias = ttnn.add(rel_h_exp, rel_w_exp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(bias, (B, n_heads, S, S))
-
     def _forward_core(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Core attention on (B, H, W, C)."""
         B, H, W, C = x.shape
@@ -3256,7 +3421,17 @@ class TTNNSAMAttention(TTNNModule):
         ttnn.deallocate(qkv_out)
         attn_bias_tt = None
         if self._use_rel_pos and self._rel_pos_h is not None and self._rel_pos_w is not None:
-            attn_bias_tt = self._compute_rel_pos_bias_ttnn(q, H, W)
+            q_t = ttnn.to_torch(q)
+            if q_t.device.type != "cpu":
+                q_t = q_t.cpu()
+            attn_bias_torch = compute_sam_attn_bias(q_t, self._rel_pos_h, self._rel_pos_w, (H, W))
+            attn_bias_tt = ttnn.from_torch(
+                attn_bias_torch,
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         cfg = self._attn_compute_config
         qk = ttnn.matmul(
             q,

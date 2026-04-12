@@ -21,7 +21,7 @@ from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
 from models.experimental.tt_symbiote.modules.transformer import TTNNNoTPTransformer
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
@@ -44,6 +44,7 @@ def get_shape_from_module_name(module_name, model_config):
     return config.get("input_shapes", None)
 
 
+@trace_disabled
 class TTNNSAMLayerNorm(TTNNLayerNorm):
     """SAM-only LayerNorm: passes epsilon from torch layer (default 1e-5) for PCC match."""
 
@@ -849,6 +850,7 @@ class TTNNSAMMLPBlock(TTNNModule):
         return out
 
 
+@trace_disabled
 class TTNNSAMBlock(TTNNModule):
     """TTNN version of SAM Block.
     Residual: norm1 -> attn -> +shortcut; norm2 -> mlp -> +shortcut.
@@ -883,22 +885,22 @@ class TTNNSAMBlock(TTNNModule):
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        shortcut = x
+        shortcut = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = _unwrap_ttnn(self.norm1(x))
         attn_out = _unwrap_ttnn(self.attn(x))
-        ttnn.deallocate(x)
-        x = ttnn.add(_unwrap_ttnn(shortcut), attn_out)
-        ttnn.deallocate(attn_out)
 
-        shortcut = x
+        x = ttnn.add(shortcut, attn_out)
+        ttnn.deallocate(shortcut)
+
+        shortcut = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = _unwrap_ttnn(self.norm2(x))
         x = _unwrap_ttnn(self.mlp(x))
-        x = ttnn.add(_unwrap_ttnn(shortcut), x)
+        x = ttnn.add(shortcut, x)
         ttnn.deallocate(shortcut)
         return x
 
 
-@trace_enabled
+@trace_disabled
 class TTNNImageEncoderViT(TTNNModule):
     """TTNN SAM ImageEncoderViT: patch_embed, pos_embed, blocks, neck, net_2, net_3.
     Input NCHW, output BCHW.

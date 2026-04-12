@@ -19,7 +19,12 @@ from transformers import AutoModel, AutoTokenizer
 import pytest
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu, TTNNGelu
 from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
-from models.experimental.tt_symbiote.modules.attention import LlamaAttention, TTNNSAMAttention
+from models.experimental.tt_symbiote.modules.attention import (
+    LlamaAttention,
+    PagedAttentionConfig,
+    TTNNPagedAttentionKVCache,
+    TTNNSAMAttention,
+)
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNImageEncoderViT, TTNNVitModel
 from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
@@ -56,9 +61,31 @@ if not hasattr(DynamicCache, "get_usable_length"):
     DynamicCache.get_usable_length = _get_usable_length
 
 
+def create_paged_kv_cache(model_config, device, batch_size=1):
+    """On-device paged KV cache for DeepSeek-OCR decode (same pattern as ``test_ling_mini_2_0``).
+
+    ``infer()`` calls ``generate`` with ``max_new_tokens`` up to 8192; size the cache so long
+    OCR runs do not exceed the paged buffer.
+    """
+    # block_size=64, max_num_blocks=256 -> 16k tokens max per sequence
+    config = PagedAttentionConfig(
+        block_size=64,
+        max_num_blocks=256,
+        batch_size=batch_size,
+    )
+    head_dim = model_config.hidden_size // model_config.num_attention_heads
+    return TTNNPagedAttentionKVCache(
+        num_layers=model_config.num_hidden_layers,
+        num_kv_heads=model_config.num_key_value_heads,
+        head_dim=head_dim,
+        config=config,
+        device=None,
+    ).to_device(device)
+
+
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 245760, "trace_region_size": 200000000, "num_command_queues": 1}],
+    [{"l1_small_size": 245760}],
     indirect=True,
 )
 def test_deepseek_ocr(device):
@@ -98,40 +125,54 @@ def test_deepseek_ocr(device):
     image_file = "test.png"
     output_path = os.path.join(os.path.dirname(__file__), "output_deepseek_ocr")
 
+    use_traced = os.environ.get("TT_SYMBIOTE_RUN_MODE", "").upper() == "TRACED"
+    trace_warmup = os.environ.get("TT_SYMBIOTE_DEEPSEEK_TRACE_WARMUP", "0") == "1"
+    if use_traced:
+        TracedRun.configure(device=device)
+
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     set_device(model, device)
     for k, v in tqdm({**modules1, **modules2}.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
+
+    paged_cache = create_paged_kv_cache(model.config, device, batch_size=1)
+    _orig_generate = model.generate
+
+    def _generate_with_paged_kv(*args, **kwargs):
+        # ``setdefault`` does not replace an explicit ``past_key_values=None`` from HF.
+        if kwargs.get("past_key_values") is None:
+            kwargs["past_key_values"] = paged_cache
+        return _orig_generate(*args, **kwargs)
+
+    model.generate = _generate_with_paged_kv
+
     model.eval()
     torch.set_grad_enabled(False)
-    # Garbage output with warm-up due to TTNN vision state corruption
-    # res = model.infer(
-    #     tokenizer,
-    #     prompt=prompt,
-    #     image_file=image_file,
-    #     output_path=output_path,
-    #     base_size=1024,
-    #     image_size=640,
-    #     crop_mode=True,
-    #     save_results=True,
-    #     test_compress=True,
-    #     eval_mode=True,
-    # )
-    DispatchManager.clear_timings()
-    res = model.infer(
-        tokenizer,
+
+    infer_kwargs = dict(
+        tokenizer=tokenizer,
         prompt=prompt,
         image_file=image_file,
         output_path=output_path,
         base_size=1024,
         image_size=640,
         crop_mode=True,
-        save_results=True,
+        save_results=False,
         test_compress=True,
         eval_mode=True,
     )
+
+    if use_traced and trace_warmup:
+        paged_cache.reset()
+        model.infer(**infer_kwargs)
+        paged_cache.reset()
+        model.infer(**infer_kwargs)
+
+    DispatchManager.clear_timings()
+    paged_cache.reset()
+    res = model.infer(**{**infer_kwargs, "save_results": True})
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(output_path, f"run_{timestamp}")
     os.makedirs(run_dir, exist_ok=True)

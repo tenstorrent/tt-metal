@@ -29,7 +29,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled, trace_disabled
 import math
 
 
@@ -1039,6 +1039,7 @@ class TTNNMoERouterDecode(TTNNModule):
         return topk_expert_idx, topk_weights
 
 
+@trace_disabled
 class TTNNExperts(TTNNModule):
     """
     Baseline experts module for DeepSeek V3.
@@ -1684,7 +1685,7 @@ def _to_torch_for_fallback(tensor):
     return tensor
 
 
-# @trace_enabled
+@trace_disabled
 class TTNNDeepseekV2MoE(TTNNModule):
     """TTNN symbiote for DeepSeek V2 MoE.
     Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
