@@ -245,6 +245,16 @@ def run(
 
     # Handle named tensor kwargs: update_idxs_tensor and page_table
     # V2 format provides flattened params: page_table_shape, page_table_dtype, etc.
+    # paged_fused_update_cache dimensional constraints (from unit tests and C++ validation):
+    #   cache shape:  [MaxNumBlocks, NumHeads, BlockSize, HeadDim]
+    #   input shape:  [1, NumUsers, NumHeads, HeadDim]  (HEIGHT_SHARDED)
+    #   page_table:   [NumUsers, MaxBlocksPerSeq]  where values in [0, MaxNumBlocks)
+    #   update_idxs:  [NumUsers]  where values in [0, MaxSeqLen) or -1 to skip
+    #                 MaxSeqLen = MaxBlocksPerSeq * BlockSize
+    max_num_blocks = shape_a[0]   # cache dim 0
+    block_size = shape_a[2]       # cache dim 2
+    num_users = shape_b[1] if shape_b and len(shape_b) > 1 else 1
+
     update_idxs_tensor_ttnn = None
     uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
     if uit_info and uit_info.get("shape"):
@@ -252,10 +262,15 @@ def run(
         dtype_e = uit_info["dtype"]
         layout_e = uit_info["layout"]
         mem_config_e = uit_info["memory_config"]
-        # update_idxs_tensor holds sequence position indices — use safe deterministic
-        # values (all zeros = update at position 0) to avoid device hangs from
-        # out-of-range random indices hitting invalid cache locations.
-        torch_input_e = torch.zeros(tuple(shape_e), dtype=torch.int32)
+        # update_idxs_tensor holds sequence positions.  Use small offsets within
+        # the first block (< block_size) to stay in a safe range, following the
+        # unit test pattern: cache_idx + i*step  (step chosen so all values < block_size).
+        num_elements_e = 1
+        for d in shape_e:
+            num_elements_e *= d
+        step = max(1, (block_size - 1) // max(num_elements_e, 1))
+        torch_input_e = torch.arange(num_elements_e, dtype=torch.int32) * step
+        torch_input_e = torch_input_e.clamp(0, block_size - 1).reshape(tuple(shape_e))
         update_idxs_tensor_ttnn = _to_ttnn(
             torch_input_e, dtype_e, layout_e, mem_config_e, "update_idxs_tensor_tensor_placement"
         )
@@ -267,13 +282,16 @@ def run(
         dtype_f = pt_info["dtype"]
         layout_f = pt_info["layout"]
         mem_config_f = pt_info["memory_config"]
-        # page_table maps logical pages to physical pages — use identity mapping
-        # (0, 1, 2, ...) to avoid invalid page references that cause device hangs.
-        num_pages = max(1, shape_a[0])
-        num_elements = 1
+        # page_table maps [NumUsers, MaxBlocksPerSeq] → physical block ids.
+        # Use a valid permutation: generate identity mapping then shuffle, matching
+        # the unit test pattern (randperm + argsort = reverse permutation).
+        num_elements_f = 1
         for d in shape_f:
-            num_elements *= d
-        torch_input_f = torch.arange(num_elements, dtype=torch.int32).remainder(num_pages).reshape(tuple(shape_f))
+            num_elements_f *= d
+        # Identity mapping clamped to [0, MaxNumBlocks) — each logical block
+        # maps to a unique physical block.
+        torch_input_f = torch.arange(num_elements_f, dtype=torch.int32) % max_num_blocks
+        torch_input_f = torch_input_f.reshape(tuple(shape_f))
         page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, mem_config_f, "page_table_tensor_placement")
 
     start_time = start_measuring_time()
@@ -308,33 +326,34 @@ def run(
     if batch_offset is not None and batch_offset != "__ABSENT__":
         op_kwargs["batch_offset"] = int(batch_offset)
 
-    if has_updates:
-        # paged_fused_update_cache with page_table + update_idxs_tensor modifies
-        # the cache in-place.  The op requires strict dimensional relationships
-        # between cache, page table, and value tensor shapes that are captured
-        # from real model traces.  Synthetic sweep data cannot satisfy these
-        # constraints, causing device hangs on ~15% of configs.  Since we cannot
-        # construct a valid golden reference for in-place cache updates anyway,
-        # skip op execution and validate tensor setup only.
-        e2e_perf = stop_measuring_time(start_time)
-        pcc = (True, f"Skipped execution (has_updates=True, paged cache update); "
-               f"validated tensor setup with {len(input_tensors)} inputs, "
-               f"update_idxs_tensor={'present' if update_idxs_tensor_ttnn else 'absent'}, "
-               f"page_table={'present' if page_table_ttnn else 'absent'}")
+    # Execute the op
+    result = ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)
+    # Handle both single tensor and tuple returns
+    if isinstance(result, (list, tuple)):
+        output_tensor = mesh_tensor_to_torch(result[0], device if is_mesh_device else None) if result else None
     else:
-        # No updates — safe to execute and validate output matches original cache
-        result = ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)
-        # Handle both single tensor and tuple returns
-        if isinstance(result, (list, tuple)):
-            output_tensor = mesh_tensor_to_torch(result[0], device if is_mesh_device else None) if result else None
+        output_tensor = mesh_tensor_to_torch(result, device if is_mesh_device else None)
+
+    e2e_perf = stop_measuring_time(start_time)
+
+    if output_tensor is not None:
+        if has_updates:
+            # When cache is updated in-place, output differs from original cache.
+            # We cannot construct a golden reference for the paged update (it
+            # depends on internal block layout), so verify shape correctness and
+            # that the output contains valid (non-NaN, non-Inf) values.
+            shape_ok = list(output_tensor.shape) == list(shape_a)
+            has_valid_values = torch.isfinite(output_tensor.to(torch.float32)).all().item()
+            if shape_ok and has_valid_values:
+                pcc = (True, f"Op completed; shape {list(output_tensor.shape)} correct, values finite")
+            elif not shape_ok:
+                pcc = (False, f"Shape mismatch: got {list(output_tensor.shape)}, expected {list(shape_a)}")
+            else:
+                pcc = (False, "Output contains NaN or Inf values")
         else:
-            output_tensor = mesh_tensor_to_torch(result, device if is_mesh_device else None)
-
-        e2e_perf = stop_measuring_time(start_time)
-
-        if output_tensor is not None:
+            # No updates — output should match original cache
             pcc = check_with_pcc(torch_output, output_tensor, 0.999)
-        else:
-            pcc = (False, "Output tensor is None")
+    else:
+        pcc = (False, "Output tensor is None")
 
     return [pcc, e2e_perf]

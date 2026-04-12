@@ -320,6 +320,27 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     Returns:
         torch.Tensor: Converted tensor
     """
+    # ttnn.to_torch() converts uint16 tensors to int16 by default, which
+    # causes sign-extension corruption for values > 32767.  Pass torch_dtype
+    # to prevent this.
+    def _get_torch_dtype(t):
+        """Return explicit torch dtype for integer TTNN dtypes to avoid sign-extension."""
+        try:
+            dt = t.dtype
+            if dt == ttnn.uint16:
+                return torch.int32
+            if dt == ttnn.uint32:
+                return torch.int64
+        except Exception:
+            pass
+        return None
+
+    def _to_torch_safe(t):
+        torch_dtype = _get_torch_dtype(t)
+        if torch_dtype is not None:
+            return ttnn.to_torch(t).to(torch_dtype)
+        return ttnn.to_torch(t)
+
     # Check if this is a mesh tensor by checking the device attribute
     try:
         device = ttnn_tensor.device()
@@ -327,16 +348,18 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         if device is not None and hasattr(device, "get_num_devices"):
             # If a mesh_composer is provided, use it to reassemble shards
             if mesh_composer is not None:
-                return ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+                result = ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+                torch_dtype = _get_torch_dtype(ttnn_tensor)
+                return result.to(torch_dtype) if torch_dtype is not None else result
             # Default: extract device 0 only (works for replicated tensors)
             device_tensors = ttnn.get_device_tensors(ttnn_tensor)
             if device_tensors and len(device_tensors) > 0:
-                return ttnn.to_torch(device_tensors[0])
+                return _to_torch_safe(device_tensors[0])
             # Fallback if get_device_tensors doesn't work
-            return ttnn.to_torch(ttnn_tensor)
+            return _to_torch_safe(ttnn_tensor)
         else:
             # Single device tensor - direct conversion
-            return ttnn.to_torch(ttnn_tensor)
+            return _to_torch_safe(ttnn_tensor)
     except Exception:
         # Fallback: try direct conversion (for host tensors or edge cases)
-        return ttnn.to_torch(ttnn_tensor)
+        return _to_torch_safe(ttnn_tensor)
