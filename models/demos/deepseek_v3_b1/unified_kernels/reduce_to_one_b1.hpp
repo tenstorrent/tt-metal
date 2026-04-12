@@ -38,6 +38,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -470,6 +471,7 @@ struct ReduceToOneB1 {
             // Initialize for binary operations
             reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
+            pack_block_contiguous_init(CTArgs::scratch_cb);
 
             // Load local tiles to dest
             copy_tile_to_dst_init_short(CTArgs::local_cb);
@@ -512,9 +514,7 @@ struct ReduceToOneB1 {
             // Pack result to scratch_cb
             cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             tile_regs_wait();
-            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                pack_tile(i, CTArgs::scratch_cb, i);
-            }
+            pack_block_contiguous(0, CTArgs::scratch_cb, CTArgs::num_tiles);
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
 #endif

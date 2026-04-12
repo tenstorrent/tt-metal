@@ -768,6 +768,7 @@ struct SdpaReduceWorker {
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE, false>();
+            pack_block_contiguous_init(CTArgs::cb_l_out);
 
             bool local_valid = true;
             bool r1_neighbor_valid = true;

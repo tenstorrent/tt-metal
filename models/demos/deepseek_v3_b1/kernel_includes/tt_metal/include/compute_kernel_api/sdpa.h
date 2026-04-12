@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/pack_block.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
@@ -523,7 +524,7 @@ ALWI void sdpa_tail_l_block(
         pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
             cb_l_out, 1, block_index, 8, dense ? 2 : 4);
     } else {
-        pack_tile_block(0, cb_l_out, block_size);
+        pack_block_contiguous(0, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -599,6 +600,9 @@ ALWI void sdpa_tail(
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
+    }
+    if constexpr (!untilize) {
+        pack_block_contiguous_init(cb_l_out);
     }
 
     // Phase 2: Process all L blocks
