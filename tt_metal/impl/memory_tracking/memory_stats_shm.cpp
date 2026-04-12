@@ -36,9 +36,8 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     per_pid_tracking_enabled_(true)  // Enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1
     ,
     is_creator_(false) {
-    // Create shared memory name using composite asic_id
-    // Format: /tt_device_<asic_id>_memory
-    // asic_id = (board_id << 8) | asic_location is globally unique and never changes
+    // Format: /tt_device_<chip_unique_id>_memory
+    // chip_unique_id from UMD is globally unique and never changes
     std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";
 
     // Try exclusive create first to see if we're the first
@@ -85,9 +84,8 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     region_->reference_count.fetch_add(1, std::memory_order_relaxed);
 
     // ALWAYS update identifiers, even when reattaching to existing SHM
-    // Store composite asic_id for identification
-    region_->board_serial = asic_id_ >> 8;  // Extract board_id
-    region_->asic_id = asic_id_ & 0xFF;     // Extract asic_location
+    region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
+    region_->asic_id = asic_id_;  // Full UMD chip_unique_id
     region_->device_id = device_id_;
 
     // Check if tracking should be disabled (enabled by default)
@@ -233,8 +231,8 @@ void SharedMemoryStatsProvider::initialize_region() {
     region_->reference_count.store(0, std::memory_order_relaxed);
 
     // Set physical chip identification (for proper device correlation)
-    region_->board_serial = asic_id_ >> 8;  // Extract board_id
-    region_->asic_id = asic_id_ & 0xFF;     // Extract asic_location
+    region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
+    region_->asic_id = asic_id_;  // Full UMD chip_unique_id
     region_->device_id = device_id_;
 
     // Initialize atomic counters to zero

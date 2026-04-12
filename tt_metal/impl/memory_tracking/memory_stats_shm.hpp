@@ -23,7 +23,8 @@ constexpr size_t MAX_CHIPS_PER_DEVICE = 16;
 // IMPORTANT: Increment this version number whenever DeviceMemoryRegion, ChipStats,
 // or ProcessStats structures are modified (fields added/removed/reordered).
 // Readers should check this version to ensure compatibility with the SHM layout.
-constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 1;
+// v2: asic_id now stores UMD chip_unique_id directly (matches SHM filename)
+constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 2;
 
 // Shared memory region layout for per-device memory statistics
 // This structure is mapped into shared memory at /dev/shm/tt_device_*_memory
@@ -36,9 +37,10 @@ struct DeviceMemoryRegion {
     std::atomic<uint32_t> reference_count;  // Number of processes currently attached (always tracked)
 
     // Physical chip identification (for proper device correlation)
-    uint64_t board_serial;  // Unique board serial number from UMD (0 if not available)
-    uint64_t asic_id;       // ASIC ID for additional disambiguation (0 if not available)
-    int32_t device_id;      // Logical device ID used for SHM file naming (backwards compat)
+    // SHM filename uses chip_unique_id: /dev/shm/tt_device_<chip_unique_id>_memory
+    uint64_t board_serial;  // Reserved (0), use UMD board_id APIs for board correlation
+    uint64_t asic_id;       // UMD chip_unique_id - globally unique, matches SHM filename
+    int32_t device_id;      // Logical Metal device ID (for convenience)
 
     // Aggregated device-wide statistics (updated atomically on every allocation)
     // These counters track total memory usage across ALL processes and ALL chips
@@ -91,8 +93,7 @@ class SharedMemoryStatsProvider {
 public:
     // Create or attach to shared memory for the given device
     // If first process, initializes the region; otherwise attaches to existing
-    // Uses composite asic_id for SHM naming to ensure global uniqueness
-    // asic_id: Composite ID = (board_id << 8) | asic_location (globally unique)
+    // asic_id: UMD chip_unique_id from ClusterDescriptor (globally unique per chip)
     // device_id: Logical Metal device ID (for internal tracking only)
     explicit SharedMemoryStatsProvider(uint64_t asic_id, int device_id);
 
@@ -175,7 +176,7 @@ public:
     bool is_per_pid_tracking_enabled() const { return per_pid_tracking_enabled_; }
 
 private:
-    uint64_t asic_id_;               // Composite asic_id = (board_id << 8) | asic_location (for SHM naming)
+    uint64_t asic_id_;               // UMD chip_unique_id (for SHM naming)
     int device_id_;                  // Logical Metal device ID (for internal tracking)
     int shm_fd_;                     // Shared memory file descriptor
     DeviceMemoryRegion* region_;     // Mapped shared memory region
