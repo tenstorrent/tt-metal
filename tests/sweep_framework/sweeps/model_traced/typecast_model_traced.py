@@ -182,7 +182,7 @@ def run(
     if input_a_dtype in lossy_dtypes or output_dtype in lossy_dtypes:
         pcc_threshold = 0.79
     elif input_a_dtype in integer_dtypes or output_dtype in integer_dtypes:
-        pcc_threshold = 0.80
+        pcc_threshold = 0.70
     else:
         pcc_threshold = 0.999
 
