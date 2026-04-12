@@ -6,7 +6,14 @@
             "throughput": 61,
             "absolute_margin": 2.0,
             "token_pos": 127
+        },
+        "BH_GLX": {
+            "prefill_pcc": 0.90,
+            "decode_pcc": 0.94,
+            "throughput": 50,
+            "absolute_margin": 5.0,
+            "token_pos": 127
         }
     },
-    "description": "Targets for 6U with PCC and throughput metrics."
+    "description": "Targets for 6U (WH Galaxy) and BH_GLX (Blackhole Galaxy) with PCC and throughput metrics."
 }

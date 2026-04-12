@@ -133,7 +133,7 @@ class TtTransformer(LightweightModule):
                 self.setup_prefill()
             self.is_prefill_setup = True
 
-        if mode == "decode":
+        if mode == "decode" and self.args.use_prefetcher:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -192,7 +192,7 @@ class TtTransformer(LightweightModule):
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
-            n_tensors=5,
+            n_tensors=5 if self.args.use_prefetcher else 0,
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
@@ -590,7 +590,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -723,7 +723,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -770,9 +770,10 @@ class TtTransformer(LightweightModule):
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                if self.args.use_prefetcher:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    # Re-create global CB for decode (if it was not already created)
+                    self.prefetcher_setup.create_global_cb()
 
         else:
             if self.is_decode_setup:
@@ -804,13 +805,14 @@ class TtTransformer(LightweightModule):
         batch_size=1,
     ):
         if mode == "decode":
-            self.prefetcher_setup.create_global_cb()
-            garbage_tensor = ttnn.dram_prefetcher(
-                self.tt_tensors,
-                num_layers=self.n_layers,
-                global_cb=self.prefetcher_setup.global_circular_buffer,
-                enable_performance_mode=self.enable_prefetcher_performance_mode,
-            )
+            if self.args.use_prefetcher:
+                self.prefetcher_setup.create_global_cb()
+                garbage_tensor = ttnn.dram_prefetcher(
+                    self.tt_tensors,
+                    num_layers=self.n_layers,
+                    global_cb=self.prefetcher_setup.global_circular_buffer,
+                    enable_performance_mode=self.enable_prefetcher_performance_mode,
+                )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
         # Prefill: for prefix caching (start_pos > 0), slice rot_mats to [chunk_start_idx, max_seq_len).
@@ -859,7 +861,8 @@ class TtTransformer(LightweightModule):
             )
         # ttnn.deallocate(h)
         if mode == "decode":
-            ttnn.deallocate(garbage_tensor)
+            if self.args.use_prefetcher:
+                ttnn.deallocate(garbage_tensor)
 
             # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(

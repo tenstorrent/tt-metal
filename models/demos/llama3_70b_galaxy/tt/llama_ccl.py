@@ -32,7 +32,10 @@ class TT_CCL:
         is_qwen=False,
     ):
         self.mode = mode
-        all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        all_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+        )
 
         self.mesh_device = mesh_device
         self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
@@ -1048,7 +1051,7 @@ class TT_CCL:
             self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
-        num_links = 4
+        num_links = self.model_config["GALAXY_NUM_LINKS"]
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
             num_workers_per_link = 4
@@ -1148,8 +1151,9 @@ class TT_CCL:
             use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
         )
         if self.mode == "prefill" and buffer_key is not None:
-            # reshape input back
-            if buffer_key != "LM_HEAD":
+            # reshape input back; skip for LM_HEAD and WO_AG since their callers
+            # handle the shape (e.g. fast_reduce_nc along dim=0 for WO_AG)
+            if buffer_key not in ["LM_HEAD", "WO_AG"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
@@ -1171,7 +1175,7 @@ class TT_CCL:
         )
         # persistent_buffers = None
 
-        num_links = 4
+        num_links = self.model_config["GALAXY_NUM_LINKS"]
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:

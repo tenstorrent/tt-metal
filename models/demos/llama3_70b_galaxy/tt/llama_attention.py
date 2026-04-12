@@ -628,7 +628,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
-            num_links=3,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
             batch_size=batch_size,
@@ -748,7 +748,13 @@ class TtLlamaAttention(LightweightModule):
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
+        # Disabled for non-ring topology (e.g. BH GLX with FABRIC_1D) as ring all-gather is not supported
+        ring_distributed_sdpa = (
+            seq_len > 1024
+            and batch_size == 1
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
+        )
         use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
 
         if ring_distributed_sdpa:
@@ -794,7 +800,7 @@ class TtLlamaAttention(LightweightModule):
                 attn_output_84SD = self.tt_ccl.line_all_reduce(
                     attn_output_84SD,
                     cluster_axis=1,
-                    num_links=3,
+                    num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     buffer_key="ATTN_REPLICATE",
                 )
@@ -895,7 +901,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
-            num_links=3,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )

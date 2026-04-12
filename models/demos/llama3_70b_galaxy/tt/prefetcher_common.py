@@ -5,6 +5,7 @@ import ttnn
 import torch
 from loguru import logger
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
@@ -59,7 +60,12 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.active_sender_cores]
         )
 
-        self.all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+        # Determine actual compute grid from device; WH TG: (7,10), BH GLX: (13,10)
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        # Full compute grid covering all Tensix cores on this device type
+        self.all_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+        )
 
         ##### Setup up sub devices #####
 
@@ -86,7 +92,18 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-            self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
+            # On BH (13x10 grid), extend worker cores to include cols 7-12 in addition to WH's cols 1-3, 5-6.
+            # WH uses cols 0 and 4 for prefetcher senders; those stay in prefetcher_sub_device on BH too.
+            if is_blackhole():
+                bh_worker_cores_range_set = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, grid_size.y - 1)),
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)),
+                    ]
+                )
+                self.worker_sub_device = ttnn.SubDevice([bh_worker_cores_range_set])
+            else:
+                self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = ttnn.SubDeviceId(1)
             if mesh_sub_device_manager_id_decode is None:

@@ -24,7 +24,7 @@ DEVICE_PARAMS = {"trace_region_size": 120000000}
 
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
-    if tuple(mesh_device.shape) == (2, 4) and height == 480:
+    if tuple(mesh_device.shape) == (2, 4) or tuple(mesh_device.shape) == (1, 4):
         if is_blackhole():
             expected_metrics = {
                 "encoder": 0.08,
@@ -106,6 +106,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # FSDP is needed for 2x2 with encoder now on device
+        [(1, 4), (1, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, True],
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
@@ -117,6 +118,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
     ],
     ids=[
+        "bh_1x4sp1tp0",
         "2x2sp0tp1",
         "2x4sp0tp1",
         "bh_2x4sp1tp0",
