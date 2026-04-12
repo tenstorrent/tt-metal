@@ -68,11 +68,6 @@ HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology to
 
 const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
 
-bool HostStorage::is_uniform_storage() const {
-    const auto& buf = tensor.buffer();
-    return buf.shard_coords().size() == buf.shape().mesh_size();
-}
-
 const HostTensor& HostStorage::host_tensor() const { return tensor; }
 HostTensor& HostStorage::host_tensor() { return tensor; }
 

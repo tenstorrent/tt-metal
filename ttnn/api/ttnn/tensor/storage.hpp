@@ -46,9 +46,6 @@ public:
     // Returns the distributed host buffer.
     const DistributedHostBuffer& buffer() const;
 
-    // Returns true if the tensor spans across all devices in the mesh.
-    bool is_uniform_storage() const;
-
     // Returns the host tensor.
     const HostTensor& host_tensor() const;
     HostTensor& host_tensor();
