@@ -24,7 +24,6 @@ struct CombineSharedVariables {
     uint32_t zero_init_semaphore_id = 0;  // Local semaphore ID for reader->writer sync
     uint32_t zero_init_barrier_semaphore_id = 0;     // Barrier: writer signals reader after global init
     uint32_t counter_ready_semaphore_id = 0;         // Sender signals idle cores after token count multicast
-    uint32_t num_senders = 0;                        // Number of sender cores (= num_cores)
     std::vector<uint32_t> data_ready_semaphore_ids;  // One per sender: idle core signals sender data is ready
     std::vector<uint32_t> start_semaphore_ids;       // One per sender: sender signals idle core to start
 };
