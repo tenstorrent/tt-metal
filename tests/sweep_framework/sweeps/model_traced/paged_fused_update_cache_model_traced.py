@@ -177,27 +177,10 @@ def run(
     else:
         torch_input_d = None
 
-    # === DEBUG: understand why has_updates misdetects ===
-    print(f"\n{'='*60}")
-    print(f"[DEBUG paged_fused] update_idxs={update_idxs!r} (type={type(update_idxs).__name__})")
-    print(f"[DEBUG paged_fused] kwargs keys: {sorted(kwargs.keys())}")
-    _uit_shape_keys = [k for k in kwargs if 'update_idxs' in k.lower()]
-    print(f"[DEBUG paged_fused] update_idxs-related kwargs: {_uit_shape_keys}")
-    for k in _uit_shape_keys:
-        print(f"[DEBUG paged_fused]   {k} = {kwargs[k]!r}")
-    _pt_keys = [k for k in kwargs if 'page_table' in k.lower()]
-    print(f"[DEBUG paged_fused] page_table-related kwargs: {_pt_keys}")
-    for k in _pt_keys:
-        print(f"[DEBUG paged_fused]   {k} = {kwargs[k]!r}")
-    print(f"[DEBUG paged_fused] has_input_b={has_input_b}, has_input_c={has_input_c}, has_input_d={has_input_d}")
-    print(f"[DEBUG paged_fused] share_cache={share_cache!r}, batch_offset={batch_offset!r}")
-    print(f"{'='*60}")
-
     has_updates = (
         (update_idxs is not None and update_idxs != "__ABSENT__" and isinstance(update_idxs, list) and len(update_idxs) > 0)
         or (kwargs.get("update_idxs_tensor_shape") is not None)
     )
-    print(f"[DEBUG paged_fused] has_updates={has_updates}")
 
     torch_output = torch_input_a
 
@@ -264,15 +247,15 @@ def run(
     # V2 format provides flattened params: page_table_shape, page_table_dtype, etc.
     update_idxs_tensor_ttnn = None
     uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
-    print(f"[DEBUG paged_fused] uit_info={uit_info!r}")
     if uit_info and uit_info.get("shape"):
         shape_e = uit_info["shape"]
         dtype_e = uit_info["dtype"]
         layout_e = uit_info["layout"]
         mem_config_e = uit_info["memory_config"]
-        # update_idxs_tensor holds sequence position indices - must be integers in [0, seq_len)
-        seq_len = max(1, shape_a[2])  # shape_a[2] is the sequence/cache length dimension
-        torch_input_e = torch.randint(0, seq_len, tuple(shape_e), dtype=torch.int32)
+        # update_idxs_tensor holds sequence position indices — use safe deterministic
+        # values (all zeros = update at position 0) to avoid device hangs from
+        # out-of-range random indices hitting invalid cache locations.
+        torch_input_e = torch.zeros(tuple(shape_e), dtype=torch.int32)
         update_idxs_tensor_ttnn = _to_ttnn(
             torch_input_e, dtype_e, layout_e, mem_config_e, "update_idxs_tensor_tensor_placement"
         )
@@ -284,9 +267,13 @@ def run(
         dtype_f = pt_info["dtype"]
         layout_f = pt_info["layout"]
         mem_config_f = pt_info["memory_config"]
-        # page_table holds page indices - must be integers in [0, num_pages)
-        num_pages = max(1, shape_a[0])  # shape_a[0] is the batch/page dimension of the cache
-        torch_input_f = torch.randint(0, num_pages, tuple(shape_f), dtype=torch.int32)
+        # page_table maps logical pages to physical pages — use identity mapping
+        # (0, 1, 2, ...) to avoid invalid page references that cause device hangs.
+        num_pages = max(1, shape_a[0])
+        num_elements = 1
+        for d in shape_f:
+            num_elements *= d
+        torch_input_f = torch.arange(num_elements, dtype=torch.int32).remainder(num_pages).reshape(tuple(shape_f))
         page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, mem_config_f, "page_table_tensor_placement")
 
     start_time = start_measuring_time()
@@ -332,12 +319,6 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # check_with_pcc returns (bool, message) tuple
-    print(f"[DEBUG paged_fused] output_tensor is None: {output_tensor is None}")
-    print(f"[DEBUG paged_fused] has_updates={has_updates}, op_kwargs keys={list(op_kwargs.keys())}")
-    if 'update_idxs' in op_kwargs:
-        print(f"[DEBUG paged_fused] op_kwargs['update_idxs']={op_kwargs['update_idxs']!r}")
-    if 'update_idxs_tensor' in op_kwargs:
-        print(f"[DEBUG paged_fused] op_kwargs has update_idxs_tensor (ttnn tensor)")
     if output_tensor is not None:
         if has_updates:
             # When the cache is updated, output differs from the original cache.
