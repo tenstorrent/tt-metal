@@ -115,6 +115,20 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
+      - name: Derive MESH_DEVICE_SHAPE from test group
+        run: |
+          # Set MESH_DEVICE_SHAPE based on the hardware's native mesh topology.
+          # The sweeps_runner also derives per-module mesh shape from vector
+          # filenames (e.g., ".mesh_2x4"), which takes precedence when set.
+          # This provides a sensible default for modules without mesh suffix.
+          TEST_GROUP="${{ matrix.test_group_name }}"
+          case "$TEST_GROUP" in
+            *n300*)  echo "MESH_DEVICE_SHAPE=1x2" >> "$GITHUB_ENV" ;;
+            *t3k*)   echo "MESH_DEVICE_SHAPE=2x4" >> "$GITHUB_ENV" ;;
+            *galaxy*) echo "MESH_DEVICE_SHAPE=4x8" >> "$GITHUB_ENV" ;;
+            *)       ;; # N150, P150b: single device — leave unset
+          esac
+          echo "Test group: $TEST_GROUP → MESH_DEVICE_SHAPE=${MESH_DEVICE_SHAPE:-<unset>}"
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
