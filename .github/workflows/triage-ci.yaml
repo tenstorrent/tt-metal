@@ -24,6 +24,10 @@ on:
         type: string
         default: "999"
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   bug-escapes:
     uses: tenstorrent/tt-auto-triage/.github/workflows/bug-escapes-ci.yaml@ebanerjee/bug-escapes
