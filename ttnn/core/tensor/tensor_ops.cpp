@@ -119,8 +119,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     } else {
         auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
-        device_tensor.device_storage() =
-            DeviceStorage(std::move(device_tensor.device_storage().get_mesh_tensor()), std::move(coords));
+        device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
     }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
