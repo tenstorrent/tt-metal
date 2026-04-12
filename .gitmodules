@@ -4,8 +4,8 @@
 	branch = master
 [submodule "tt_metal/third_party/umd"]
 	path = tt_metal/third_party/umd
-	url = https://github.com/tenstorrent/tt-umd.git
-	branch = main
+	url = https://github.com/gsarabandoTT/tt-umd-eriscMap.git
+	branch = fix/erisc-19.8.0-mapping
 [submodule "models/demos/t3000/llama2_70b/reference/llama"]
 	path = models/demos/t3000/llama2_70b/reference/llama
 	url = https://github.com/tenstorrent-metal/llama.git
