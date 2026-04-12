@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <type_traits>
 
 #include "ccl_host_datastructures.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -1858,7 +1859,29 @@ void fabric_mux_connection_ct_args(
     worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4
 }
 
-void fabric_mux_connection_rt_args(
+namespace {
+
+template <typename ProgramOrDescriptor>
+uint32_t create_fabric_mux_worker_semaphore(
+    ProgramOrDescriptor& program_or_descriptor, const CoreCoord& worker_logical_core) {
+    if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+        auto semaphore_id_opt =
+            program_or_descriptor.find_available_semaphore_id(worker_logical_core, CoreType::WORKER);
+        TT_FATAL(semaphore_id_opt.has_value(), "No available semaphore ID for fabric MUX worker semaphore");
+        const uint32_t semaphore_id = semaphore_id_opt.value();
+        program_or_descriptor.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = semaphore_id,
+            .core_type = CoreType::WORKER,
+            .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return semaphore_id;
+    } else {
+        return CreateSemaphore(program_or_descriptor, {worker_logical_core}, 0);
+    }
+}
+
+template <typename ProgramOrDescriptor>
+void fabric_mux_connection_rt_args_impl(
     const bool mux_connection_valid,
     const bool is_termination_master,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -1866,10 +1889,21 @@ void fabric_mux_connection_rt_args(
     const uint32_t worker_id,
     const CoreCoord& worker_logical_core,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    tt::tt_metal::Program& program,
+    ProgramOrDescriptor& program_or_descriptor,
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    const uint32_t termination_sync_semaphore_id = termination_master_semaphore_id.value_or(
+        create_fabric_mux_worker_semaphore(program_or_descriptor, worker_logical_core));
+    const uint32_t local_fabric_mux_status_semaphore_id =
+        create_fabric_mux_worker_semaphore(program_or_descriptor, worker_logical_core);
+    const uint32_t local_flow_control_semaphore_id =
+        create_fabric_mux_worker_semaphore(program_or_descriptor, worker_logical_core);
+    const uint32_t local_teardown_semaphore_id =
+        create_fabric_mux_worker_semaphore(program_or_descriptor, worker_logical_core);
+    const uint32_t local_buffer_index_semaphore_id =
+        create_fabric_mux_worker_semaphore(program_or_descriptor, worker_logical_core);
+
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -1886,14 +1920,67 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
-        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_sync_semaphore_id);                        // termination_sync_address 10
+    worker_rt_args.push_back(local_fabric_mux_status_semaphore_id);                // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(local_flow_control_semaphore_id);                     // local_flow_control_address 12
+    worker_rt_args.push_back(local_teardown_semaphore_id);                         // local_teardown_address 13
+    worker_rt_args.push_back(local_buffer_index_semaphore_id);                     // local_buffer_index_address 14
     worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
+}
+
+}  // namespace
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    fabric_mux_connection_rt_args_impl(
+        mux_connection_valid,
+        is_termination_master,
+        channel_type,
+        mux_virtual_core,
+        worker_id,
+        worker_logical_core,
+        mux_kernel_config,
+        program,
+        termination_master_virtual_core,
+        worker_rt_args,
+        termination_master_semaphore_id);
+}
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& program_descriptor,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    fabric_mux_connection_rt_args_impl(
+        mux_connection_valid,
+        is_termination_master,
+        channel_type,
+        mux_virtual_core,
+        worker_id,
+        worker_logical_core,
+        mux_kernel_config,
+        program_descriptor,
+        termination_master_virtual_core,
+        worker_rt_args,
+        termination_master_semaphore_id);
 }
 
 }  // namespace ttnn::ccl
