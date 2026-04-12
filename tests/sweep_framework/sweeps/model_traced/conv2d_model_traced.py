@@ -49,12 +49,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -69,11 +69,20 @@ _DTYPE_MAP = {
     "DataType.UINT16": ttnn.uint16,
     "DataType.UINT32": ttnn.uint32,
     "DataType.INT32": ttnn.int32,
+    ttnn.bfloat16: ttnn.bfloat16,
+    ttnn.bfloat8_b: ttnn.bfloat8_b,
+    ttnn.bfloat4_b: ttnn.bfloat4_b,
+    ttnn.float32: ttnn.float32,
+    ttnn.uint16: ttnn.uint16,
+    ttnn.uint32: ttnn.uint32,
+    ttnn.int32: ttnn.int32,
 }
 
 _LAYOUT_MAP = {
     "Layout.ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
     "Layout.TILE": ttnn.TILE_LAYOUT,
+    ttnn.ROW_MAJOR_LAYOUT: ttnn.ROW_MAJOR_LAYOUT,
+    ttnn.TILE_LAYOUT: ttnn.TILE_LAYOUT,
 }
 
 _SHARD_LAYOUT_MAP = {
@@ -275,10 +284,8 @@ def run(
     # Parse layout
     input_layout = _LAYOUT_MAP.get(kwargs.get("input_tensor_layout"), ttnn.ROW_MAJOR_LAYOUT)
 
-    # conv2d manages its own input sharding (via conv_config.shard_layout).
-    # The traced input_tensor_memory_config reflects model runtime state (e.g., L1
-    # from a previous op), but we create from scratch so always start in DRAM.
-    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    # Parse memory configs from traced args
+    input_memory_config = _parse_memory_config(kwargs.get("input_tensor_memory_config"))
 
     # Parse conv_config
     conv_config = _parse_conv_config(kwargs.get("conv_config"))
@@ -288,17 +295,55 @@ def run(
     # Parse compute_config
     compute_config = _parse_compute_config(device, kwargs.get("compute_config"))
 
+    # --- Determine input NHWC shape from traced shape ---
+    # The trace records the exact NHWC tensor shape (e.g. (1,1,49,320) for a
+    # flattened spatial dim). Use it directly so the physical dimensions match
+    # the traced shard_spec.
+    traced_input_shape_raw = kwargs.get("input_tensor_shape")
+    if traced_input_shape_raw:
+        if isinstance(traced_input_shape_raw, (list, tuple)):
+            nhwc_shape = list(traced_input_shape_raw)
+        else:
+            nhwc_shape = [int(x) for x in re.findall(r"\d+", str(traced_input_shape_raw))]
+    else:
+        nhwc_shape = [batch_size, input_height, input_width, in_channels]
+
     # --- Create torch tensors ---
-    conv_input_shape = [batch_size, in_channels, input_height, input_width]
     conv_weight_shape = [out_channels, in_channels // groups, kernel_h, kernel_w]
     conv_bias_shape = [1, 1, 1, out_channels]
 
-    torch_input_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1)
+    # The traced NHWC shape may have a padded channel dim (e.g. 3→16 for alignment).
+    # Check if reshaping back to (N, H, W, C) is possible; if not, the channel dim
+    # was padded by the pipeline. In that case, create the true (N, C, H, W) NCHW
+    # tensor first and derive the NHWC tensor from it, zero-padding the channel dim
+    # to match the traced shape.
+    traced_channels = nhwc_shape[-1]
+    nchw_elements = batch_size * in_channels * input_height * input_width
+    nhwc_elements = 1
+    for d in nhwc_shape:
+        nhwc_elements *= d
+
+    if nhwc_elements == nchw_elements:
+        torch_input_nhwc = torch.randn(nhwc_shape, dtype=torch.bfloat16).float()
+        torch_input_nchw = (
+            torch_input_nhwc.reshape(batch_size, input_height, input_width, in_channels)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
+    else:
+        torch_input_nchw = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16).float()
+        nhwc_from_nchw = torch_input_nchw.permute(0, 2, 3, 1).reshape(
+            batch_size, 1, input_height * input_width, in_channels
+        )
+        if traced_channels > in_channels:
+            pad_width = traced_channels - in_channels
+            nhwc_from_nchw = torch.nn.functional.pad(nhwc_from_nchw, (0, pad_width))
+        torch_input_nhwc = nhwc_from_nchw.reshape(nhwc_shape)
+
     torch_weight = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
     torch_bias = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
 
-    # --- Golden reference ---
+    # --- Golden reference (uses standard NCHW conv2d) ---
     if full_padding is not None:
         pt, pb, pl, pr = full_padding
         golden_input = torch.nn.functional.pad(torch_input_nchw, (pl, pr, pt, pb))
@@ -337,13 +382,15 @@ def run(
     if input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         effective_input_layout = ttnn.TILE_LAYOUT
 
+    effective_mem_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+
     if is_mesh_device and input_a_tensor_placement:
         tt_input = create_tensor_on_mesh(
             torch_input_nhwc,
             device,
             input_dtype,
             effective_input_layout,
-            input_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            effective_mem_config,
             input_a_tensor_placement,
         )
     else:
@@ -352,10 +399,11 @@ def run(
             dtype=input_dtype,
             layout=effective_input_layout,
             device=device,
-            memory_config=input_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=effective_mem_config,
         )
 
-    # Weight/bias: BFLOAT8_B/BFLOAT4_B not supported as host dtypes, use float32
+    # conv2d requires weight/bias in ROW_MAJOR - it tilizes internally.
+    # The traced layout (TILE) reflects model pipeline state, not the API expectation.
     effective_weight_dtype = weight_dtype
     if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         effective_weight_dtype = ttnn.float32
