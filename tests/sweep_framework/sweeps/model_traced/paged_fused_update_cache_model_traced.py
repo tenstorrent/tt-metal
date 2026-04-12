@@ -185,13 +185,20 @@ def run(
     # Convert to ttnn tensors
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
         if not is_host:
-            raw_placement = kwargs.get(placement_key, input_a_tensor_placement)
-            placement = raw_placement
-            # Create tensor on DRAM first, then move to traced memory config.
-            # This 2-step approach handles sharded configs whose shard specs
-            # were captured on a different device topology.
-            if is_mesh_device and placement:
-                t = create_tensor_on_mesh(torch_tensor, device, dtype, layout, ttnn.DRAM_MEMORY_CONFIG, placement)
+            # Replicate to all devices instead of sharding.  We compare
+            # against device-0 output only, so each device must receive
+            # the full original tensor.  create_tensor_on_mesh repeats/
+            # shards the data which causes a mismatch when extracting
+            # only device 0.
+            if is_mesh_device:
+                t = ttnn.from_torch(
+                    torch_tensor,
+                    dtype=dtype,
+                    layout=layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
             else:
                 t = ttnn.from_torch(
                     torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
