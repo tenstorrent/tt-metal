@@ -4754,7 +4754,7 @@ class MoeOp:
             io_tensors += [ctx.bcast_intermediate_tensor]
         if ctx.sram_slots is not None:
             # Pin SRAM expert fused buffers (gate_up per slot + shared down buffer)
-            io_tensors += ctx.sram_slots._gate_up_fused
+            io_tensors += ctx.sram_slots.gate_up_fused
             io_tensors += [ctx.sram_slots.down_fused]
         if ctx.expert_freq_tensor is not None:
             io_tensors += [ctx.expert_freq_tensor]

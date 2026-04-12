@@ -196,17 +196,16 @@ class SramExpertSlots:
     """Fixed SRAM (L1) slots for hot routed experts.
 
     Each slot holds gate/up/down weights in the same layout as the shared expert.
-    Slots are allocated at init and can be swapped at runtime via :func:`swap_sram_expert`.
+    Slots are allocated at weight preparation time and remain static during inference.
     """
 
     num_slots: int
-    slot_experts: list[int]  # slot i → global expert index currently loaded
+    slot_experts: list[int]  # slot i → global expert index loaded
     gate_proj: list[OverlappedTensor]  # one per slot
     up_proj: list[OverlappedTensor]  # one per slot
     down_proj: list[OverlappedTensor]  # views into down_fused
     down_fused: ttnn.Tensor  # shared fused buffer for all down slots
-    _gate_up_fused: list[ttnn.Tensor]  # underlying fused buffers per slot (for swap rebuild)
-    _down_torch: list[torch.Tensor]  # preprocessed down tensors per slot (for rebuild)
+    gate_up_fused: list[ttnn.Tensor]  # underlying fused buffers per slot (for L1 pinning)
 
 
 @dataclass
@@ -1432,7 +1431,7 @@ def prepare_sram_slots(
     gate_proj_list: list[OverlappedTensor] = []
     up_proj_list: list[OverlappedTensor] = []
     gate_up_fused_list: list[ttnn.Tensor] = []
-    down_torch_list: list[torch.Tensor] = []
+    down_preprocessed: list[torch.Tensor] = []
 
     for slot_idx, expert_idx in enumerate(initial_expert_indices):
         assert 0 <= expert_idx < NUM_ROUTED_EXPERTS, f"Expert index {expert_idx} out of range [0, {NUM_ROUTED_EXPERTS})"
@@ -1463,13 +1462,13 @@ def prepare_sram_slots(
 
         # Down: same pipeline as shared expert
         down_pre = shared_down_torch_for_cache(down_w, moe_tp, mesh_shape)
-        down_torch_list.append(down_pre)
+        down_preprocessed.append(down_pre)
 
         logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
 
     # Pack all down_proj into a single overlap buffer
     down_views, down_fused = build_sram_down_overlap(
-        down_torch_list,
+        down_preprocessed,
         device,
         dtype=dtype,
         move_to_device=move_to_device,
@@ -1488,82 +1487,8 @@ def prepare_sram_slots(
         up_proj=up_proj_list,
         down_proj=down_views,
         down_fused=down_fused,
-        _gate_up_fused=gate_up_fused_list,
-        _down_torch=down_torch_list,
+        gate_up_fused=gate_up_fused_list,
     )
-
-
-def swap_sram_expert(
-    slots: SramExpertSlots,
-    slot_idx: int,
-    new_expert_idx: int,
-    gate_weight: torch.Tensor,
-    up_weight: torch.Tensor,
-    down_weight: torch.Tensor,
-    device,
-    *,
-    dtype: ttnn.DataType = ttnn.bfloat4_b,
-) -> None:
-    """Swap a cold expert into an SRAM slot, preserving L1 buffer addresses.
-
-    The caller provides raw HF-layout weight tensors (transposed to
-    ``(in_features, out_features)``):
-
-    - ``gate_weight``: ``(7168, 2048)``
-    - ``up_weight``: ``(7168, 2048)``
-    - ``down_weight``: ``(2048, 7168)``
-
-    Uses ``ttnn.copy`` to overwrite the existing device buffers so that
-    L1 addresses remain stable across swaps.
-    """
-    assert 0 <= slot_idx < slots.num_slots, f"slot_idx {slot_idx} out of range [0, {slots.num_slots})"
-    assert 0 <= new_expert_idx < NUM_ROUTED_EXPERTS
-
-    _, moe_tp = _tp_factors(device)
-    mesh_rows = device.shape[0] if device.get_num_devices() > 1 else 1
-    mesh_cols = device.shape[1] if device.get_num_devices() > 1 else 1
-    mesh_shape = (mesh_rows, mesh_cols)
-
-    logger.info(
-        "Swapping SRAM slot {} ← expert {} (was expert {})", slot_idx, new_expert_idx, slots.slot_experts[slot_idx]
-    )
-
-    # 1. Preprocess gate/up and build new fused buffer
-    preprocessed = preprocess_gate_up(gate_weight, up_weight, moe_tp, mesh_rows, mesh_cols)
-    gate_ov, up_ov, new_gu_fused = _build_sram_gate_up(
-        preprocessed["shared_gate_proj"],
-        preprocessed["shared_up_proj"],
-        device,
-        dtype=dtype,
-    )
-    # Copy into existing device buffer to preserve L1 address
-    ttnn.copy(new_gu_fused, slots._gate_up_fused[slot_idx])
-    ttnn.deallocate(new_gu_fused)
-    # Update views — byte offsets are stable since layout is identical;
-    # point fused_tensor back at the stable buffer.
-    gate_ov.fused_tensor = slots._gate_up_fused[slot_idx]
-    up_ov.fused_tensor = slots._gate_up_fused[slot_idx]
-    slots.gate_proj[slot_idx] = gate_ov
-    slots.up_proj[slot_idx] = up_ov
-
-    # 2. Preprocess down and rebuild entire down overlap
-    down_pre = shared_down_torch_for_cache(down_weight, moe_tp, mesh_shape)
-    slots._down_torch[slot_idx] = down_pre
-    new_down_views, new_down_fused = build_sram_down_overlap(
-        slots._down_torch,
-        device,
-        dtype=dtype,
-    )
-    # Copy into existing device buffer
-    ttnn.copy(new_down_fused, slots.down_fused)
-    ttnn.deallocate(new_down_fused)
-    # Update views to point at the stable fused buffer
-    for i, view in enumerate(new_down_views):
-        view.fused_tensor = slots.down_fused
-        slots.down_proj[i] = view
-
-    # 3. Update mapping
-    slots.slot_experts[slot_idx] = new_expert_idx
 
 
 def prepare_dense_layer_weights(
