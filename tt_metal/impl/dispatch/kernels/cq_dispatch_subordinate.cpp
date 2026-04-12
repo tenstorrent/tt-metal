@@ -286,9 +286,9 @@ void process_dispatch_s_wait_cmd() {
     //   - With CLEAR_STREAM: waits, forwards count to dispatch_d, then resets dispatch_s counter (original behavior).
     //   - Without CLEAR_STREAM: waits, forwards count to dispatch_d, leaves dispatch_s counter intact
     //     (used by event recording to snapshot the current worker count without disrupting cumulative tracking).
-    ASSERT(
-        (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM) &&
-        distributed_dispatcher);
+    // dispatch_s receives wait commands in all dispatch_s_enabled configs (WORKER and ETH dispatch),
+    // not just distributed_dispatcher (ETH 1CQ only). Remove that gate so WORKER dispatch works too.
+    ASSERT(cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
     volatile uint32_t* worker_sem =
