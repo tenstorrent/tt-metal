@@ -107,9 +107,13 @@ void forward_data(
     // To be root-caused in the future.
     uint8_t channel_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
+    // Invalidate the L1 data cache unconditionally before checking worker connections.
+    // check_worker_connections() reads the connection_live_semaphore from L1, which is written by the
+    // worker via NOC writes. Without this invalidation, when has_unsent_payload=false the MUX reads
+    // stale cached values and misses connect/teardown signals from the worker indefinitely.
+    invalidate_l1_cache();
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
-        invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();

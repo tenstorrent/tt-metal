@@ -44,6 +44,8 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -1115,6 +1117,24 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     // L1 (write/read counters) and corrupt credit state, causing a deterministic hang.
     mux_config.set_wait_for_fabric_endpoint_ready(true);
 
+    // Item 3: Sub-device separation - isolate worker cores (SD_COMPUTE) from MUX cores (SD_MUX).
+    // SD_COMPUTE (SubDeviceId{0}): worker cores {(1,0), (3,0)}
+    // SD_MUX     (SubDeviceId{1}): MUX cores    {(0,0), (2,0)}
+    // This decouples workload synchronization: the host can sync on SD_COMPUTE without
+    // waiting for MUX to complete, and DISPATCH_D tracks done signals per sub-device.
+    {
+        using tt::tt_metal::SubDevice;
+        CoreRangeSet sd_compute_cores(
+            std::set<CoreRange>{CoreRange(CoreCoord{1, 0}), CoreRange(CoreCoord{3, 0})});
+        CoreRangeSet sd_mux_cores(
+            std::set<CoreRange>{CoreRange(CoreCoord{0, 0}), CoreRange(CoreCoord{2, 0})});
+        SubDevice sd_compute(std::array{sd_compute_cores});
+        SubDevice sd_mux(std::array{sd_mux_cores});
+        auto sub_device_manager = mesh_device_->create_sub_device_manager({sd_compute, sd_mux}, 0);
+        mesh_device_->load_sub_device_manager(sub_device_manager);
+    }
+
+    // SD_COMPUTE is SubDeviceId{0}; use it for worker-scoped semaphores and syncs.
     auto sd_id = mesh_device_->get_sub_device_ids().at(0);
     auto available_cores = mesh_device_->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<ttnn::GlobalSemaphore> global_semaphores = {
