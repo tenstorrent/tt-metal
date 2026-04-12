@@ -43,9 +43,10 @@ except ImportError:
 # This bypasses vLLM's multimodal batching which can't handle the irregular shape
 _image_token_pooling_cache = {"last": None}
 
-# Note: Video processing now uses vLLM's standard multimodal pattern
-# with <|video|> placeholder and _get_prompt_updates() for token replacement.
-# No module-level cache needed.
+# Module-level cache for video timestamps
+# The processor computes actual timestamps from video metadata but get_replacement_video
+# runs in a different context (Molmo2MultiModalProcessor). Cache passes timestamps through.
+_video_timestamps_cache = {"last": None}
 
 
 def compute_image_token_pooling(
@@ -589,6 +590,9 @@ class Molmo2ProcessorWrapper:
                         "pooled_h": pooled_h_out,
                         "pooled_w": pooled_w_out,
                     }
+                    # Cache timestamps for get_replacement_video (runs in different context)
+                    _video_timestamps_cache["last"] = timestamps
+                    logger.info(f"    Cached video timestamps: {timestamps[:5]}... (len={len(timestamps)})")
 
         # Process images using raw pixels (same as video frame processing)
         # Our TTNN model expects [n_crops, 3, H, W] raw pixels, not HF's pre-embedded format
@@ -1064,9 +1068,21 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
                     """Generate video tokens using HF processor's get_video_string method.
 
                     Uses the same method as processor expansion to ensure exact token match.
+                    CRITICAL: Uses cached timestamps from _adaptive_sample_frames for parity with demo.
                     """
-                    # Generate timestamps (evenly spaced, ~0.5 sec apart)
-                    timestamps = np.arange(n_frames, dtype=float) * 0.5
+                    # Use cached timestamps from processor (matches demo's HF-derived timestamps)
+                    cached_timestamps = _video_timestamps_cache.get("last")
+                    if cached_timestamps is not None and len(cached_timestamps) == n_frames:
+                        timestamps = cached_timestamps
+                        logger.info(f"  get_replacement_video: Using CACHED timestamps: {timestamps[:5]}...")
+                    else:
+                        # Fallback: generate evenly spaced timestamps at 0.5 sec intervals
+                        timestamps = np.arange(n_frames, dtype=float) * 0.5
+                        logger.warning(
+                            f"  get_replacement_video: No cached timestamps (cached={cached_timestamps is not None}, "
+                            f"len={len(cached_timestamps) if cached_timestamps is not None else 0}, need={n_frames}), "
+                            f"using fallback: {timestamps[:5]}..."
+                        )
 
                     # Use HF processor's get_video_string to ensure exact match
                     video_grid = [n_frames, pooled_h, pooled_w]
@@ -2308,43 +2324,42 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
                 # If no valid token_type_ids from vLLM, generate our own
                 if final_token_type_ids is None:
-                    # Build token_type_ids: 0 for text, 1 for visual tokens
-                    # HF marks ALL tokens between <im_start> and <im_end> (inclusive) as visual
-                    # This includes frame markers, timestamps, row/col tokens, and <im_patch>
-                    im_start_id = 151936  # <im_start>
-                    im_end_id = 151937  # <im_end>
-                    # image_patch_id = 151938 already defined above
+                    # HF marks ONLY these specific token types (not ranges):
+                    # - <im_start> (151936)
+                    # - <im_end> (151937)
+                    # - <im_patch> (151938)
+                    # Timestamps, frame markers, etc. between visual regions are NOT marked.
+                    im_start_id = 151936
+                    im_end_id = 151937
+                    # im_patch_id = 151938 already defined above as image_patch_id
 
-                    # Find <im_start> and <im_end> positions to mark ALL tokens between them
                     tokens_flat = user_tokens[0]
-                    start_positions = (tokens_flat == im_start_id).nonzero(as_tuple=True)[0].tolist()
-                    end_positions = (tokens_flat == im_end_id).nonzero(as_tuple=True)[0].tolist()
 
-                    if len(start_positions) > 0 and len(end_positions) > 0:
-                        # Create token_type_ids with PADDED length (must match padded hidden states)
-                        final_token_type_ids = torch.zeros(1, padded_seq_len, dtype=torch.long)
+                    # Find all positions of visual tokens to mark
+                    visual_mask = (
+                        (tokens_flat == im_start_id) | (tokens_flat == im_end_id) | (tokens_flat == image_patch_id)
+                    )
 
-                        # Mark ALL tokens between each <im_start> and <im_end> pair (inclusive)
-                        num_regions = min(len(start_positions), len(end_positions))
-                        total_marked = 0
-                        for i in range(num_regions):
-                            start_pos = start_positions[i]
-                            end_pos = end_positions[i]
-                            # Mark all positions from start to end (inclusive)
-                            for pos in range(start_pos, min(end_pos + 1, padded_seq_len)):
-                                final_token_type_ids[0, pos] = 1
-                                total_marked += 1
+                    # Create token_type_ids marking only visual token positions
+                    final_token_type_ids = torch.zeros(1, padded_seq_len, dtype=torch.long)
 
-                        logger.info(
-                            f"    Generated token_type_ids: original_len={original_seq_len}, "
-                            f"visual_regions={num_regions}, marked={total_marked}, "
-                            f"padded_len={padded_seq_len}, first_start={start_positions[0]}, first_end={end_positions[0]}"
-                        )
-                    else:
-                        logger.warning(
-                            f"    No visual regions found (im_start positions={len(start_positions)}, "
-                            f"im_end positions={len(end_positions)}) - cannot generate token_type_ids"
-                        )
+                    # Mark visual token positions (positions stay same after fusion
+                    # since num_visual_tokens == num_placeholders for standard video)
+                    visual_positions = visual_mask.nonzero(as_tuple=True)[0]
+                    for pos in visual_positions:
+                        if pos < padded_seq_len:
+                            final_token_type_ids[0, pos] = 1
+
+                    n_im_start = (tokens_flat == im_start_id).sum().item()
+                    n_im_end = (tokens_flat == im_end_id).sum().item()
+                    n_im_patch = (tokens_flat == image_patch_id).sum().item()
+                    total_marked = visual_mask.sum().item()
+
+                    logger.info(
+                        f"    Generated token_type_ids: marked {total_marked} visual tokens "
+                        f"(<im_start>={n_im_start}, <im_end>={n_im_end}, <im_patch>={n_im_patch}), "
+                        f"padded_len={padded_seq_len}"
+                    )
 
                 # Convert user_hf_attention_mask if needed, or set to None
                 # We generally don't need the HF attention mask when we have token_type_ids
@@ -2396,6 +2411,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     last_token_logits = logits_torch[last_token_idx, :]
                 else:
                     last_token_logits = logits_torch  # Already [vocab_size]
+
+                # DEBUG: Log top-5 predictions like demo does
+                logger.info(f"=== VIDEO PREFILL DIAGNOSTICS (SERVER) ===")
+                logger.info(f"  original_seq_len={original_seq_len}, last_chunk_start={last_chunk_start}")
+                logger.info(f"  logits_torch shape: {logits_torch.shape}")
+                logger.info(f"  last_token_idx: {last_token_idx if logits_torch.dim() == 2 else 'N/A (1D)'}")
+                logger.info(f"  last_token_logits shape: {last_token_logits.shape}")
+                logger.info(
+                    f"  last_token_logits stats: mean={last_token_logits.mean().item():.4f}, "
+                    f"std={last_token_logits.std().item():.4f}, "
+                    f"min={last_token_logits.min().item():.4f}, max={last_token_logits.max().item():.4f}"
+                )
+                # Top 5 predictions
+                top5_values, top5_indices = torch.topk(last_token_logits, 5)
+                logger.info(f"  Top 5 predictions:")
+                for i, (val, idx) in enumerate(zip(top5_values.tolist(), top5_indices.tolist())):
+                    decoded = self.tokenizer.decode([idx])
+                    logger.info(f"    {i+1}. token={idx}, logit={val:.2f}, decoded='{decoded}'")
+                logger.info(f"=== END VIDEO PREFILL DIAGNOSTICS (SERVER) ===")
 
                 output_logits.append(last_token_logits.unsqueeze(0).unsqueeze(1))  # [1, 1, vocab_size]
 
