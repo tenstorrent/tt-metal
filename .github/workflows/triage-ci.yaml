@@ -23,6 +23,10 @@ on:
         description: "Max confirmed failures before Phase 2 stops"
         type: string
         default: "999"
+      auto-verify:
+        description: "Automatically dispatch verification for detected escapes"
+        type: string
+        default: "false"
 
 permissions:
   contents: read
@@ -37,6 +41,7 @@ jobs:
       consecutive-runs: ${{ inputs.consecutive-runs }}
       lookback-days: ${{ inputs.lookback-days }}
       max-candidates: ${{ inputs.max-candidates }}
+      auto-verify: ${{ inputs.auto-verify }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
