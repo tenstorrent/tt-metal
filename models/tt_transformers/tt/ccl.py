@@ -7,6 +7,8 @@ from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
 try:
     import sys as _sys, os as _os
+    if _os.environ.get("DISABLE_CCL_GEN"):
+        raise ImportError("disabled by DISABLE_CCL_GEN env var")
     _ccl_gen_path = _os.environ.get("CCL_GEN_PATH", "/localdev/nkapre/tt-ccl-codegen")
     if _ccl_gen_path not in _sys.path:
         _sys.path.insert(0, _ccl_gen_path)
