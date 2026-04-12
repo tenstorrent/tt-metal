@@ -177,16 +177,27 @@ def run(
     else:
         torch_input_d = None
 
-    # paged_fused_update_cache modifies the cache in-place at positions specified by
-    # update_idxs / update_idxs_tensor.  Computing an exact PyTorch golden requires
-    # simulating the page-table mapping for every config variant, which is fragile.
-    # The unit test (test_paged_fused_update_cache.py) already validates correctness.
-    # Here we only validate that the op runs without errors and produces a valid output
-    # tensor of the correct shape, which is the primary goal of model-traced sweeps.
+    # === DEBUG: understand why has_updates misdetects ===
+    print(f"\n{'='*60}")
+    print(f"[DEBUG paged_fused] update_idxs={update_idxs!r} (type={type(update_idxs).__name__})")
+    print(f"[DEBUG paged_fused] kwargs keys: {sorted(kwargs.keys())}")
+    _uit_shape_keys = [k for k in kwargs if 'update_idxs' in k.lower()]
+    print(f"[DEBUG paged_fused] update_idxs-related kwargs: {_uit_shape_keys}")
+    for k in _uit_shape_keys:
+        print(f"[DEBUG paged_fused]   {k} = {kwargs[k]!r}")
+    _pt_keys = [k for k in kwargs if 'page_table' in k.lower()]
+    print(f"[DEBUG paged_fused] page_table-related kwargs: {_pt_keys}")
+    for k in _pt_keys:
+        print(f"[DEBUG paged_fused]   {k} = {kwargs[k]!r}")
+    print(f"[DEBUG paged_fused] has_input_b={has_input_b}, has_input_c={has_input_c}, has_input_d={has_input_d}")
+    print(f"[DEBUG paged_fused] share_cache={share_cache!r}, batch_offset={batch_offset!r}")
+    print(f"{'='*60}")
+
     has_updates = (
         (update_idxs is not None and update_idxs != "__ABSENT__" and isinstance(update_idxs, list) and len(update_idxs) > 0)
         or (kwargs.get("update_idxs_tensor_shape") is not None)
     )
+    print(f"[DEBUG paged_fused] has_updates={has_updates}")
 
     torch_output = torch_input_a
 
@@ -253,6 +264,7 @@ def run(
     # V2 format provides flattened params: page_table_shape, page_table_dtype, etc.
     update_idxs_tensor_ttnn = None
     uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
+    print(f"[DEBUG paged_fused] uit_info={uit_info!r}")
     if uit_info and uit_info.get("shape"):
         shape_e = uit_info["shape"]
         dtype_e = uit_info["dtype"]
@@ -320,6 +332,12 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # check_with_pcc returns (bool, message) tuple
+    print(f"[DEBUG paged_fused] output_tensor is None: {output_tensor is None}")
+    print(f"[DEBUG paged_fused] has_updates={has_updates}, op_kwargs keys={list(op_kwargs.keys())}")
+    if 'update_idxs' in op_kwargs:
+        print(f"[DEBUG paged_fused] op_kwargs['update_idxs']={op_kwargs['update_idxs']!r}")
+    if 'update_idxs_tensor' in op_kwargs:
+        print(f"[DEBUG paged_fused] op_kwargs has update_idxs_tensor (ttnn tensor)")
     if output_tensor is not None:
         if has_updates:
             # When the cache is updated, output differs from the original cache.
