@@ -128,6 +128,9 @@ def gpt_oss_prepare_expert_tensors_ttnn(
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(batch_size_per_device, 1, seq_len, num_experts_per_tok))
 
+    # Note: topk_expert_weights is not converted to ROW_MAJOR here as it's used later
+    # in the decode_forward after combine. We return it reshaped but in original layout.
+
     return hidden_rm, topk_indices_rm, topk_expert_weights
 
 
