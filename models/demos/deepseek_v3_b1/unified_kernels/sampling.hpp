@@ -16,6 +16,7 @@
 #include "api/socket_api.h"
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
 
 // Bit-cast helpers without UB
 static inline uint32_t float_to_bits(float x) {
@@ -318,7 +319,7 @@ void softmax_mul_block_bcast_scalar() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, 0, 0, 0);
-        dprint_tensix_dest_reg(0);
+        // dprint_tensix_dest_reg(0);
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
@@ -473,6 +474,15 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
+    // Phase 1's llk_unpack_A_top32_rm_init modifies four unpacker registers for
+    // row-major mode. transpose_wh_init_short restores Haloize_mode and X counter,
+    // but Tile_x_dim and Y_stride must be restored explicitly here.
+    UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
+    UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
+    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
+        FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
+    UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(FACE_C_DIM)));
+
     cb_push_back(out_scores_cb, 1);
     cb_push_back(out_indices_cb, 1);
 }
@@ -487,8 +497,20 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     constexpr uint32_t increasing = 1;
     constexpr uint32_t chunk_size = 1024;
 
+    // deepseek_compute_kernel_hw_startup<true>(
+    //     in_scores_cb,
+    //     in_scores_cb,
+    //     out_scores_cb);
+
     cb_wait_front(in_scores_cb, num_input_tiles);
     cb_wait_front(in_indices_cb, num_input_tiles);
+    // DPRINT values in scores and indices
+    auto in0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in_scores_cb).fifo_rd_ptr << cb_addr_shift);
+    auto in1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(in_indices_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < 3232; ++i) {
+        UNPACK(DPRINT << "scores[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
+        UNPACK(DPRINT << "indices[" << i << "]: " << in1_ptr[i] << ENDL());
+    }
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
@@ -521,7 +543,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
         MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, increasing>(
             value_offset_tiles + 1)));
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>(value_offset_tiles)));
+        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>((value_offset_tiles))));
     }
 
     // Step 6: collapse per-face top-32 to a single top-32.
@@ -561,7 +583,18 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
+    auto out0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(out_scores_cb).fifo_wr_ptr << cb_addr_shift);
+    auto out1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(out_indices_cb).fifo_wr_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < 32; ++i) {
+        PACK(DPRINT << "out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
+        PACK(DPRINT << "out_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
+    }
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+
+    // Reset unpacker state for downstream operations (softmax)
+    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
+    UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
+    UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
 
     release_dst();
 
@@ -1184,10 +1217,13 @@ struct TopKSampling {
                             get_read_ptr(CTArgs::topk_out_indices_cb));
                         auto out_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_scores_l1);
                         auto out_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_indices_l1);
-                        for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
-                            out_scores[i] = llk_scores[i];
-                            out_indices[i] = llk_indices[i];
-                        }
+                        // DPRINT << "Sender idx: " << CTArgs::sender_idx << ENDL();
+                        // for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
+                        //     DPRINT << "llk_scores[" << i << "] = " << BF16(llk_scores[i]) << ENDL();
+                        //     DPRINT << "llk_indices[" << i << "] = " << llk_indices[i] << ENDL();
+                        //     out_scores[i] = llk_scores[i];
+                        //     out_indices[i] = llk_indices[i];
+                        // }
                     } else {
                         phase1_send_topk_to_final(
                             get_read_ptr(CTArgs::topk_out_scores_cb),
@@ -1234,9 +1270,20 @@ struct TopKSampling {
                 auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     winner_addr + CTArgs::topk_scores_stride);
 
+                // DPRINT scores and indices
+
                 if constexpr (CTArgs::topk_k == 32) {
                     constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
-
+                    
+                    auto all_cores_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        scores_cb_base + CTArgs::phase2_scores_byte_offset);
+                    auto all_cores_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        indices_cb_base + CTArgs::phase2_indices_byte_offset);
+                    constexpr uint32_t total_gathered = CTArgs::num_senders * CTArgs::topk_k;
+                    // for (uint32_t i = 0; i < total_gathered; ++i) {
+                    //     DPRINT << "all_cores_scores[" << i << "] = " << BF16(all_cores_scores[i]) << ENDL();
+                    //     DPRINT << "all_cores_indices[" << i << "] = " << all_cores_indices[i] << ENDL();
+                    // }
                     cb_reserve_back(CTArgs::topk_in_scores_cb, p2_tiles);
                     cb_push_back(CTArgs::topk_in_scores_cb, p2_tiles);
 
@@ -1245,6 +1292,8 @@ struct TopKSampling {
 
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
+
+
 
                     auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                         get_read_ptr(CTArgs::topk_out_scores_cb));
@@ -1508,9 +1557,9 @@ struct TopKSampling {
 
             // Phase 2: global merge via LLK (final core only, k==32)
             if constexpr (IsFinalCore && CTArgs::topk_k == 32) {
-                run_top32_llk<
+                run_top32_llk_presorted_1024_opt<
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
-                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb, true>(
+                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb>(
                     CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles);
             }
 
@@ -1534,6 +1583,7 @@ struct TopKSampling {
 
             // Softmax + random (final core only)
             if constexpr (IsFinalCore && (!CTArgs::mesh_mode || CTArgs::stage2_receiver)) {
+                // deepseek_compute_kernel_hw_startup<true>(CTArgs::softmax_in_cb, CTArgs::temp_cb, CTArgs::softmax_out_cb);
                 softmax_mul_block_bcast_scalar<CTArgs::softmax_in_cb, CTArgs::temp_cb, CTArgs::softmax_exp_cb, 1>();
                 softmax_reduce_c<
                     PoolType::MAX, ReduceDim::REDUCE_ROW,
