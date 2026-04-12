@@ -4,6 +4,7 @@
 
 import bz2
 import os
+import time
 import torch
 import pytest
 from loguru import logger
@@ -53,14 +54,15 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (2048, 4096, 8192),
+    (128, 2048, 4096, 8192, 16384, 32768, 65536),
     ids=[
-        # "128",
+        "128",
         "2048",
         "4096",
         "8192",
-        # "32k",
-        # "64k",
+        "16k",
+        "32k",
+        "64k",
     ],
 )
 @pytest.mark.parametrize(
@@ -72,9 +74,10 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "num_layers",
-    (64,),
+    (1, 64),
     ids=[
         "1layer",
+        "64layer",
     ],
 )
 @pytest.mark.parametrize(
@@ -105,7 +108,7 @@ def test_qwen_model_prefill_inference(
         if num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
+    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = num_layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
@@ -276,8 +279,8 @@ def test_qwen_model_prefill_inference(
         pt_prefill_input,
     )
 
-    # Run TT model
-    logger.info(f"Running TT model...")
+    # Run TT model — first call compiles kernels
+    logger.info(f"Running TT model (compile + first run)...")
     tt_out = tt_model(
         tt_prefill_input,
         current_pos=None,
@@ -286,28 +289,52 @@ def test_qwen_model_prefill_inference(
         mode="prefill",
         page_table=page_table_tt,
     )
+    ttnn.synchronize_device(mesh_device)
 
-    # Convert transformer output to torch tensor first
-    tt_output_torch = ttnn.to_torch(
-        tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-    tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.dim].view(
-        batch_size, seq_len, -1
-    )  # [batch, seq, hidden_dim]
-    tt_output_torch = tt_output_torch * torch.rsqrt(
-        tt_output_torch.pow(2).mean(-1, keepdim=True) + tt_model.norm.norm.eps
-    )
-    tt_output_torch = tt_output_torch * tt_model.norm_weight
+    # Time the actual execution (3 iterations, report average)
+    num_perf_iters = 3
+    latencies = []
+    for _ in range(num_perf_iters):
+        # Recreate input each iteration since the forward pass may deallocate it
+        tt_prefill_input_iter = model_args.prepare_residual_tensor_prefill(pt_prefill_input)
+        t0 = time.perf_counter()
+        tt_out = tt_model(
+            tt_prefill_input_iter,
+            current_pos=None,
+            rot_mats=rot_mats,
+            user_id=0,
+            mode="prefill",
+            page_table=page_table_tt,
+        )
+        ttnn.synchronize_device(mesh_device)
+        latencies.append(time.perf_counter() - t0)
 
-    # Apply LM head on host (CPU)
-    # Get the last token output for prefill
-    last_token_output = tt_output_torch[:, -1:, :]  # [batch, 1, hidden_dim]
+    avg_ms = (sum(latencies) / len(latencies)) * 1000
+    throughput = seq_len / (avg_ms / 1000)
+    logger.info(f"[PERF] ISL={seq_len} | latency={avg_ms:.1f}ms | throughput={throughput:.0f} t/s")
 
-    # Load the LM head weight from state dict and apply it on host
-    lm_head_weight = state_dict[f"{state_dict_prefix}output.weight"]  # [vocab_size, hidden_dim]
-    tt_output_torch = torch.matmul(last_token_output, lm_head_weight.T)  # [batch, 1, vocab_size]
-    logger.info(f"Finished running TT model.")
+    if run_ref_pt:
+        # Convert transformer output to torch tensor first
+        tt_output_torch = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.dim].view(
+            batch_size, seq_len, -1
+        )  # [batch, seq, hidden_dim]
+        tt_output_torch = tt_output_torch * torch.rsqrt(
+            tt_output_torch.pow(2).mean(-1, keepdim=True) + tt_model.norm.norm.eps
+        )
+        tt_output_torch = tt_output_torch * tt_model.norm_weight
+
+        # Apply LM head on host (CPU)
+        # Get the last token output for prefill
+        last_token_output = tt_output_torch[:, -1:, :]  # [batch, 1, hidden_dim]
+
+        # Load the LM head weight from state dict and apply it on host
+        lm_head_weight = state_dict[f"{state_dict_prefix}output.weight"]  # [vocab_size, hidden_dim]
+        tt_output_torch = torch.matmul(last_token_output, lm_head_weight.T)  # [batch, 1, vocab_size]
+        logger.info(f"Finished running TT model.")
 
     if run_ref_pt:
         # Run reference model

@@ -18,6 +18,7 @@ from models.tt_transformers.tt.common import (
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
+    is_blackhole,
 )
 
 # Qwen-specific imports
@@ -32,7 +33,7 @@ from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
 def load_demo_targets(filename):
     """
-    Load expected demo targets from a JSON file (6U Galaxy configuration).
+    Load expected demo targets from a JSON file (6U Galaxy or BH GLX configuration).
     """
     if not os.path.exists(filename):
         logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
@@ -45,8 +46,8 @@ def load_demo_targets(filename):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    # Always use 6U Galaxy configuration
-    demo_targets = demo_targets["targets"]["6U"]
+    key = "BH_GLX" if is_blackhole() else "6U"
+    demo_targets = demo_targets["targets"][key]
 
     return demo_targets
 
@@ -483,7 +484,7 @@ def test_qwen_demo_text(
 
     # Create batch output file
     benchmark_data = BenchmarkData()
-    profiler_step_name = "tg-qwen-demo-prefill-e2e"
+    profiler_step_name = "bh-glx-qwen-demo-prefill-e2e" if is_blackhole() else "tg-qwen-demo-prefill-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/qwen3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
@@ -1133,16 +1134,17 @@ def test_qwen_demo_text(
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:
+        device_label = "BH_GLX" if is_blackhole() else "6U"
         benchmark_data.add_measurement(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_6U",
+            f"ttft_e2e_{device_label}",
             round(avg_time_to_first_token * 1000, 2),
         )  # average TTFT in ms
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_qwen_text_demo_prefill_6U",
-            ml_model_name="qwen32b-tg",
+            run_type=f"tg_qwen_text_demo_prefill_{device_label}",
+            ml_model_name="qwen32b-tg" if not is_blackhole() else "qwen32b-bh-glx",
         )

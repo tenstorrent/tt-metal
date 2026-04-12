@@ -21,7 +21,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_hf_state_dict,
@@ -162,7 +162,9 @@ class TtQwenModelArgs(TtModelArgs):
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "BH_GLX" if is_blackhole() else "TG"}[
+            self.num_devices
+        ]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -195,6 +197,10 @@ class TtQwenModelArgs(TtModelArgs):
 
         if self.num_devices == 32:
             self.use_prefetcher = True
+        if self.num_devices == 32 and is_blackhole():
+            # BH P150 has 8 DRAM banks; the WH-specific DRAM prefetcher uses 12-sender core topology
+            # that is incompatible with BH, so disable it and fall back to direct DRAM reads
+            self.use_prefetcher = False
 
         # Set up prefetcher stuff
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
@@ -299,8 +305,8 @@ class TtQwenModelArgs(TtModelArgs):
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = 4  # 6U configuration
-        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Ring  # 6U configuration
+        self.model_config["GALAXY_NUM_LINKS"] = 1 if is_blackhole() else 4  # BH GLX FABRIC_1D=1 link, WH 6U RING=4
+        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Linear if is_blackhole() else ttnn.Topology.Ring
         if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -413,9 +419,11 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             # Chunk values based on what works best empirically,
-            # while sticking to sdpa limitations
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
+            # while sticking to sdpa limitations.
+            # Use the actual device compute grid (WH: 7x10, BH: 13x10).
+            sdpa_grid = (grid.x, grid.y)
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0, _g=sdpa_grid: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=_g,
                 exp_approx_mode=False,
                 q_chunk_size=256
                 if seqlen >= 2048 and chunk_start_idx == 0
@@ -436,8 +444,10 @@ class TtQwenModelArgs(TtModelArgs):
             # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
             # match KV cache block_size so one trace works for any block-aligned chunk at replay.
             # Required by llama_attention when use_chunked_sdpa is True (chunk_start_idx > 0).
-            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
+            self.model_config[
+                "SDPA_PROGCFG_FLEXIBLE_CHUNK"
+            ] = lambda seqlen, page_size, _g=sdpa_grid: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=_g,
                 exp_approx_mode=False,
                 q_chunk_size=min(page_size, 128),
                 k_chunk_size=min(page_size, 128),
@@ -1507,7 +1517,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.is_multichip = self.num_devices > 1
             self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = 2  # Always use Galaxy configuration
+            self.num_all_gather_links = 1 if is_blackhole() else 2  # BH GLX FABRIC_1D=1, WH 6U RING=2
             self.ccl_dtype = ttnn.bfloat8_b
 
     def is_distributed_norm(self, mode):
@@ -1798,7 +1808,7 @@ class TtQwenModelArgs(TtModelArgs):
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        dram_cores = self.dram_weight_grid.num_cores()  # WH=12, BH P150=8, BH P100=7
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1814,9 +1824,11 @@ class TtQwenModelArgs(TtModelArgs):
             """
             return b * math.ceil(a / b)
 
-        num_cores = 24
-        N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
-        N_per_shard_in_dram = N_per_shard * 2
+        num_logical_cores = 24  # Number of logical receiver cores (receiver side of prefetcher ring)
+        num_dram_cores = self.dram_weight_grid.num_cores()  # WH=12, BH P150=8, BH P100=7
+        N_per_shard = round_up(math.ceil(n // num_logical_cores), ttnn.TILE_SIZE)
+        # Each DRAM bank stores (num_logical_cores // num_dram_cores) logical shards
+        N_per_shard_in_dram = N_per_shard * (num_logical_cores // num_dram_cores)
         in1_shard_shape = [k, N_per_shard_in_dram]
         in1_shard_spec = ttnn.ShardSpec(self.dram_weight_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
