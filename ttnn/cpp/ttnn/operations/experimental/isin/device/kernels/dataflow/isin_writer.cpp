@@ -12,7 +12,8 @@ void kernel_main() {
     const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(1);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(2);
-    const auto output_addr_gtor = TensorAccessor{ctas.output_accessor_args, output_buffer_address, ctas.elements_size};
+    const decltype(TensorAccessor(ctas.output_accessor_args, output_buffer_address)) output_addr_gtor(
+        ctas.output_accessor_args, output_buffer_address, ctas.elements_size);
 
     constexpr uint32_t output_element_size = ctas.elements_tensor_datum_size;
 
