@@ -195,6 +195,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install GitHub CLI
+RUN mkdir -p /etc/apt/keyrings && \
+    wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && apt-get install -y --no-install-recommends gh && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # IWYU could be useful to developers
 # Not currently building, and unclear whether this is used; can put it back in if needed
 # RUN mkdir -p /tmp/iwyu \
