@@ -1110,6 +1110,10 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         0,  // num_buffers_header_only_channel
         packet_size_bytes,
         l1_unreserved_base);
+    // Ensure MUX waits for the ETH fabric router to report READY_FOR_TRAFFIC before
+    // opening its EDM connection. Without this, the MUX may read uninitialized EDM
+    // L1 (write/read counters) and corrupt credit state, causing a deterministic hang.
+    mux_config.set_wait_for_fabric_endpoint_ready(true);
 
     auto sd_id = mesh_device_->get_sub_device_ids().at(0);
     auto available_cores = mesh_device_->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
