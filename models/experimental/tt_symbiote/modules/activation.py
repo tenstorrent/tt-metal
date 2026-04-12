@@ -271,9 +271,11 @@ class TTNNSnakeBeta(TTNNModule):
                 pass
             return result
 
-        # Long sequences: avoid a full-length FP32 copy of activations (major DRAM spike with audio TTNN loaded).
-        # Do not ``deallocate`` slice/typecast/concat inputs or chunk outputs: ``ttnn.concat`` may retain views
-        # into chunk tensors; ``typecast`` may alias; early free caused truncated/garbled waveforms.
+        # Long sequences: chunk along T, then stitch. Device-side ``ttnn.concat`` over many chunks keeps
+        # every chunk tensor alive until concat completes and allocates a full-length output — peak DRAM
+        # can OOM on long code2wav streams (e.g. T~5e5). Stitch on host with ``torch.cat`` (same dtypes as
+        # the per-chunk TTNN outputs), deallocate each chunk TTNN tensor, then one ``from_torch`` upload —
+        # numerically identical to a single device concat, lower peak device memory.
         out_chunks = []
         for t0 in range(0, t_len, chunk_t):
             t1 = min(t0 + chunk_t, t_len)
@@ -288,13 +290,21 @@ class TTNNSnakeBeta(TTNNModule):
             else:
                 out_chunks.append(res_fp32)
 
-        merged = ttnn.concat(out_chunks, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        torch_parts = []
+        mesh_dev = self.device
+        for ch in out_chunks:
+            torch_parts.append(_ttnn_mesh_to_torch_one_replica(ch, mesh_dev))
+            try:
+                ttnn.deallocate(ch)
+            except Exception:
+                pass
+        merged_torch = torch.cat(torch_parts, dim=2)
         try:
             ttnn.deallocate(alpha_exp)
             ttnn.deallocate(reciprocal_beta)
         except Exception:
             pass
-        return merged
+        return _upload_bct_replicated(merged_torch, mesh_dev)
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
@@ -403,6 +413,21 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
         new.conv = TTNNConv1d.from_torch(m.conv)
         return new
 
+    @staticmethod
+    def _causal_conv_host_time_threshold() -> int:
+        """If padded time length exceeds this, run HF ``nn.Conv1d`` on host (same math as HF forward).
+
+        Very long code2wav streams (hundreds of k samples after upsampling) make a full-width TTNN
+        conv2d/reshape exceed device DRAM; host ``conv1d`` matches ``Qwen3OmniMoeCausalConvNet`` exactly.
+        Override with env ``TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T`` (default ``8192``).
+        """
+        raw = os.environ.get("TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T", "8192")
+        try:
+            v = int(raw)
+        except ValueError:
+            v = 8192
+        return max(512, v)
+
     def _get_extra_padding_for_conv1d(self, hidden_state: torch.Tensor) -> int:
         length = hidden_state.shape[-1]
         n_frames = (length - self.kernel_size + self.padding) / self.stride + 1
@@ -420,6 +445,15 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
         t_padded = int(x_t.shape[-1]) + self.padding + int(extra_padding)
         expected_t = (t_padded - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
         x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
+        t_pad = int(x_t.shape[-1])
+        # Long streams: TTNN conv uploads full [B,C,T] and can OOM in conv2d/DRAM slice (e.g. T~5e5).
+        # HF reference uses this same padded tensor → same nn.Conv1d weights as ``_fallback_torch_layer.conv``.
+        if t_pad > self._causal_conv_host_time_threshold():
+            hf = self._fallback_torch_layer
+            with torch.no_grad():
+                out_t = hf.conv(x_t).contiguous()
+            out = _upload_bct_replicated(out_t, self.device)
+            return _ensure_code2wav_bct_full_t(out, self.device, expected_t)
         out = self.conv(x_t)
         return _ensure_code2wav_bct_full_t(out, self.device, expected_t)
 

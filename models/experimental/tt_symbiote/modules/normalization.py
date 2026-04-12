@@ -238,8 +238,8 @@ class TTNNDistributedRMSNorm(TTNNModule):
         # ShardTensor2dMesh(..., dims=(None, 2), mesh_shape=(1, ncol)) requires the sharded axis
         # (tile rows) to align with the mesh — e.g. code_predictor q_norm (dim=128 → 4 tiles) on T3K
         # (ncol=8) does not shard as 8 chunks. Width-sharding [1,1,1,dim] breaks
-        # rms_norm_post_all_gather (gamma last dim must pad to TILE_WIDTH=32). Use PyTorch RMSNorm
-        # for those subgraphs instead (see test_qwen_omni ``_restore_torch_rmsnorm_in_code_predictor``).
+        # rms_norm_post_all_gather (gamma last dim must pad to TILE_WIDTH=32). Fall back to PyTorch RMSNorm
+        # for those subgraphs if needed (e.g. incompatible ``hidden_size`` vs mesh width).
         if ntiles % ncol == 0:
             relayout = w_bf16.view(1, 1, ntiles, 32)
             mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=mesh_shape)
