@@ -564,6 +564,23 @@ HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_t
 }
 
 // ======================================================================================
+//                            Transfer classification
+// ======================================================================================
+
+bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device) {
+    const auto& device_mesh_shape = device.shape();
+    const auto& host_buffer = host_tensor.buffer();
+
+    if (host_buffer.shape() != device_mesh_shape) {
+        return false;
+    }
+
+    auto all_coords = distributed::MeshCoordinateRange(device_mesh_shape);
+    return std::ranges::all_of(
+        all_coords, [&](const auto& coord) { return host_buffer.shard_coords().contains(coord); });
+}
+
+// ======================================================================================
 //                               .to_device() details
 // ======================================================================================
 
@@ -572,6 +589,10 @@ MeshTensor to_device(
     const HostTensor& host_tensor,
     distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
+    TT_FATAL(
+        is_uniform_write(host_tensor, mesh_device),
+        "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
+        "non-uniform data movement APIs.");
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
@@ -617,6 +638,10 @@ void copy_to_host(
 }
 
 void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+    TT_FATAL(
+        is_uniform_write(host_tensor, device_tensor.device()),
+        "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
+        "non-uniform data movement APIs.");
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(

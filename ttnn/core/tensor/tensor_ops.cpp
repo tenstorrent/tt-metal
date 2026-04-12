@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
+#include <ranges>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -99,7 +100,7 @@ Tensor to_device(
     }
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
     Tensor device_tensor;
-    if (input_tensor.host_storage().is_uniform_storage()) {
+    if (tensor_impl::is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
         device_tensor = Tensor(tensor_impl::to_device(cq, input_tensor.host_tensor(), *mesh_device, mem_config));
     } else {
         auto [mesh_tensor, coords] =
@@ -113,7 +114,7 @@ Tensor to_device(
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    if (host_tensor.host_storage().is_uniform_storage()) {
+    if (tensor_impl::is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         tensor_impl::copy_to_device(cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
         auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(
