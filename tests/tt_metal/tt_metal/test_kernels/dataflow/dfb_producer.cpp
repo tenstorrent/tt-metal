@@ -11,18 +11,15 @@ void kernel_main() {
     const uint32_t src_addr_base = get_compile_time_arg_val(0);
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
     constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
-    // BLOCKED consumer does block reads (TC0 fully exhausted before TC1, etc.), so the DFB
-    // uses a contiguous layout per producer. Producer i must write pages [i*N .. i*N+(N-1)]
-    // so that each consumer TC sees a contiguous, in-order slice.
-    // STRIDED consumer reads in round-robin (TC0, TC1, ..., TC0, ...), so the DFB uses an
-    // interleaved layout and producer i writes pages [i, i+P, i+2P, ...].
-    constexpr uint32_t blocked_consumer = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
     // Base page offset for this core's slice of the global buffer.
     // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
     const uint32_t chunk_offset = get_arg_val<uint32_t>(1);
+    // Total entries in this core's slice; used to clamp the last producer when
+    // num_entries_in_buffer is not a multiple of num_producers.
+    const uint32_t entries_per_core = get_arg_val<uint32_t>(2);
     const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
 
     experimental::DataflowBuffer dfb(0);
@@ -41,8 +38,13 @@ void kernel_main() {
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        const uint32_t page_id = blocked_consumer ? chunk_offset + producer_idx * num_entries_per_producer + tile_id
-                                                  : chunk_offset + tile_id * num_producers + producer_idx;
+        // Strided access: producer i owns pages i, i+P, i+2P, ...
+        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+        // Skip if this producer's slice overshoots the actual buffer size (happens when
+        // entries_per_core is not a multiple of num_producers).
+        if (page_id >= chunk_offset + entries_per_core) {
+            break;
+        }
         // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         // DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {

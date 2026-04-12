@@ -100,6 +100,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #ifndef COMPILE_FOR_TRISC
             if (per_risc_ptr->flags.is_producer) {
                 dfb_interface.num_txn_ids = init_ptr->producer_txn_descriptor.num_txn_ids;
+                dfb_interface.threshold = init_ptr->producer_txn_descriptor.num_entries_to_process_threshold;
                 dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
                 dfb_interface.num_entries_per_txn_id_per_tc =
                     init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
@@ -108,6 +109,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 }
             } else {
                 dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
+                dfb_interface.threshold = init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold;
                 dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
                 dfb_interface.num_entries_per_txn_id_per_tc =
                     init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
@@ -140,9 +142,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
             uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t producer_tcs[16] = {};
             uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t consumer_tcs[16] = {};
             for (uint8_t i = 0; i < num_riscs; i++) {
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 

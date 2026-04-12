@@ -26,6 +26,7 @@ inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interf
 inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.stride_size; }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
+    WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -53,6 +54,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
         while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
     }
 #endif
+    WAYPOINT("RBD");
 }
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
@@ -89,6 +91,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
+    WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -102,6 +105,7 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
     while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
+    WAYPOINT("WFD");
 }
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
@@ -190,12 +194,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
         }
     };
 
-    uint64_t threshold;
-    if constexpr (is_producer) {
-        threshold = GET_TILES_TO_PROCESS_THRES_TR_ACK(tail_txn_id);
-    } else {
-        threshold = GET_TILES_TO_PROCESS_THRES_WR_SENT(tail_txn_id);
-    }
+    uint16_t threshold = local_dfb_interface_.threshold;
 
     // Wait until this DM's tail reads have completed.
     // A transaction passes through three observable states:
@@ -213,7 +212,9 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             tack  = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
             tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
-        if (tack == 0 && tiles > 0) break;
+        if (tack == 0 && tiles > 0) {
+            break;
+        }
     }
 
     // Transactions are completed. Spin giving the ISR a chance to fire.
@@ -226,7 +227,9 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
         } else {
             tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
-        if (tiles > 0 && tiles < threshold) break;
+        if (tiles > 0 && tiles < threshold) {
+            break;
+        }
     }
 
     // Manually post missing credits if ISR did not fire.
@@ -272,8 +275,10 @@ uint32_t DataflowBuffer::prepare_implicit_read() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    WAYPOINT("PIRW");
     while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
     while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    WAYPOINT("PIRD");
     return local_dfb_interface_.txn_ids[ptxn_id_index_];
 }
 
@@ -299,8 +304,11 @@ uint32_t DataflowBuffer::prepare_implicit_write() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    WAYPOINT("PIWW");
     while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    // DPRINT << "Acked " << fast_llk_intf_read_acked(tensix_id, tc_id) << " occupancy " << fast_llk_intf_get_occupancy(tensix_id, tc_id) << ENDL();
     while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    WAYPOINT("PIWD");
     return local_dfb_interface_.txn_ids[ctxn_id_index_];
 }
 

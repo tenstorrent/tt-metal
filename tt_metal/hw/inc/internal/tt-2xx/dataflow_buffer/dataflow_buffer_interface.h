@@ -53,6 +53,7 @@ struct LocalDFBInterface {
     uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
 #else
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
+    uint8_t threshold;         // When this value is met, ISR to post/ack credits will fire. Used when last reads don't meet this value.
     uint8_t
         num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
@@ -67,7 +68,7 @@ struct LocalDFBInterface {
 // It is used by the ISR to understand which tile counters need to update which credits (post/ack)
 struct TxnDFBDescriptor {
     uint8_t num_counters;
-    dfb::PackedTileCounter tile_counters[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    dfb::PackedTileCounter tile_counters[18];
     union {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;
@@ -79,5 +80,5 @@ static_assert(sizeof(DFBTCSlot) == 23, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 109, "LocalDFBInterface size is incorrect");
 #else
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface size is incorrect");
 #endif
