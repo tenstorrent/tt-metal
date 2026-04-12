@@ -7,6 +7,7 @@
 #include "device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,7 @@ Tensor moreh_norm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_norm");
     if (!dim.has_value()) {
         ttnn::SmallVector<int64_t> dims(input.padded_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);

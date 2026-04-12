@@ -7,6 +7,7 @@
 #include <utility>
 #include "device/create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -17,6 +18,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads(
     const bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+    TT_OP_SCOPE("ttnn::experimental::create_qkv_heads");
     const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     TT_FATAL(

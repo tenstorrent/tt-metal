@@ -6,6 +6,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace tt::tt_metal {
 
@@ -92,6 +93,7 @@ Tensor global_avg_pool2d(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DataType>& output_dtype) {
+    TT_OP_SCOPE("ttnn::global_avg_pool2d");
     auto memory_config = memory_config_arg.value_or(input.memory_config());
     auto result = tt::tt_metal::global_avg_pool2d(input, memory_config, output_dtype);
     return result;

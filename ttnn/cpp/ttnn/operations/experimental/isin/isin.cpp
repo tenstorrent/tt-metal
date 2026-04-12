@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 namespace {
@@ -120,6 +121,7 @@ Tensor isin(
     bool assume_unique,
     bool invert,
     const std::optional<Tensor>& opt_out) {
+    TT_OP_SCOPE("ttnn::experimental::isin");
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Validate that input tensors have compatible data types

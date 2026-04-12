@@ -92,6 +92,31 @@ A concrete example:
    :caption: ttnn/cpp/ttnn/operations/examples/example/example.hpp
 
 
+Step 3: Add graph tracing support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every C++ operation exposed via ``bind_function<>`` must include a ``TT_OP_SCOPE`` guard
+at the top of its implementation. This ensures the operation appears with its correct ``ttnn::`` name
+in the TTNN visualizer graph reports, and that any sub-operations it calls are grouped under it.
+
+.. code-block:: cpp
+
+   #include "ttnn/graph/composite_trace.hpp"
+
+   Tensor my_operation(const Tensor& input_tensor) {
+       TT_OP_SCOPE("ttnn::my_operation", input_tensor);
+       // ... implementation ...
+   }
+
+The string passed to ``TT_OP_SCOPE`` must match the fully qualified name used in the Python
+binding (e.g. ``"ttnn::add"``, ``"ttnn::experimental::conv3d"``).
+
+.. note::
+   The CI script ``scripts/check_composite_tracing.py`` validates that all operations bound via
+   ``bind_function<>`` have a corresponding ``TT_OP_SCOPE``. New operations that are missing
+   this instrumentation will fail CI.
+
+
 Python Implementation
 ---------------------
 

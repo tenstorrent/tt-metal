@@ -5,6 +5,7 @@
 #include "moreh_arange.hpp"
 
 #include "device/moreh_arange_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -17,6 +18,7 @@ Tensor moreh_arange(
     bool untilize_out,
     const DataType& dtype,
     const MemoryConfig& memory_config) {
+    TT_OP_SCOPE("ttnn::moreh_arange");
     return ttnn::prim::moreh_arange(start, end, step, mesh_device, output, untilize_out, dtype, memory_config);
 }
 

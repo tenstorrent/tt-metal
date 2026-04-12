@@ -7,6 +7,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -20,6 +21,7 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation) {
+    TT_OP_SCOPE("ttnn::experimental::dit_rms_norm_unary_fused");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     auto rank = input_tensor.logical_shape().size();

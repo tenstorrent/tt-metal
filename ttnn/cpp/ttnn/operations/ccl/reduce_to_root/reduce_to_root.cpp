@@ -4,6 +4,7 @@
 ///
 #include "device/reduce_to_root_op.hpp"
 #include "reduce_to_root.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -20,6 +21,7 @@ std::vector<ttnn::Tensor> reduce_to_root(
     const std::optional<ttnn::Tensor>& optional_output_tensor_m,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
+    TT_OP_SCOPE("ttnn::reduce_to_root");
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::reduce_to_root(
                input_tensor_l,

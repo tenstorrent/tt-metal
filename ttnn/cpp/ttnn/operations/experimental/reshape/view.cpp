@@ -6,28 +6,34 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
 ttnn::Tensor view(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
+    TT_OP_SCOPE("ttnn::experimental::view");
     return tt::tt_metal::view(tensor, logical_shape, padded_shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+    TT_OP_SCOPE("ttnn::experimental::view");
     return tt::tt_metal::view(tensor, shape, shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape_vector) {
+    TT_OP_SCOPE("ttnn::experimental::view");
     auto shape = ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector);
     return tt::tt_metal::view(tensor, shape, shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::SmallVector<int32_t>& shape_vector) {
+    TT_OP_SCOPE("ttnn::experimental::view");
     return ttnn::experimental::view(tensor, ttsl::Span<const int32_t>(shape_vector.data(), shape_vector.size()));
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, int32_t N, int32_t C, int32_t H, int32_t W) {
+    TT_OP_SCOPE("ttnn::experimental::view");
     ttnn::SmallVector<int32_t> shape_vec{N, C, H, W};
     return ttnn::experimental::view(tensor, ttsl::Span<const int32_t>(shape_vec.data(), shape_vec.size()));
 }

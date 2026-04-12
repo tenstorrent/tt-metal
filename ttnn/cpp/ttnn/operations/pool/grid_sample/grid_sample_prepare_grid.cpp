@@ -11,6 +11,7 @@
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -208,7 +209,7 @@ ttnn::Tensor prepare_grid_sample_grid(
     const std::string& padding_mode,
     bool align_corners,
     const std::optional<DataType>& output_dtype) {
-    // Validate inputs
+    TT_OP_SCOPE("ttnn::prepare_grid_sample_grid", grid);
     TT_FATAL(is_cpu_tensor(grid), "Grid tensor must be on host");
     TT_FATAL(grid.layout() == Layout::ROW_MAJOR, "Grid tensor must be in row major layout");
     TT_FATAL(grid.logical_shape().rank() == 4, "Grid tensor must be 4D");

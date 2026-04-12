@@ -12,6 +12,7 @@
 #include <utility>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -22,6 +23,7 @@ Tensor cumsum(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::cumsum");
     return operations::reduction::accumulation::common::accumulation_invoke(
         input, dim, dtype, std::move(optional_out), reverse_order, memory_config, ttnn::prim::AccumulationOp::CUMSUM);
 }

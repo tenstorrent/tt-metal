@@ -7,6 +7,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "device/ring_attention_all_gather_async_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -21,6 +22,7 @@ std::vector<ttnn::Tensor> ring_attention_all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    TT_OP_SCOPE("ttnn::experimental::ring_attention_all_gather_async");
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     return ttnn::prim::ring_attention_all_gather_async(
         input_tensors,

@@ -7,6 +7,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::transformer {
 
@@ -17,6 +18,7 @@ ttnn::Tensor attention_softmax(
     const ttnn::SoftmaxProgramConfig& /*program_config*/,
     const std::optional<bool> causal_mask,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::transformer::attention_softmax");
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
 
@@ -46,6 +48,7 @@ ttnn::Tensor attention_softmax_(
     const ttnn::SoftmaxProgramConfig& /*program_config*/,
     const std::optional<bool> causal_mask,
     const std::optional<ttnn::MemoryConfig>& /*memory_config*/) {
+    TT_OP_SCOPE("ttnn::transformer::attention_softmax_");
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
 

@@ -4,16 +4,19 @@
 
 #include "generic_op.hpp"
 #include "device/generic_op_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    TT_OP_SCOPE("ttnn::generic_op");
     return ttnn::prim::generic_op(io_tensors, mesh_program_descriptor);
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    TT_OP_SCOPE("ttnn::generic_op");
     TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
     auto* mesh_device = io_tensors.front().device();
     TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");

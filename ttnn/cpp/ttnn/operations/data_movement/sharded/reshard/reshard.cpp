@@ -5,6 +5,7 @@
 #include "ttnn/operation.hpp"
 #include "device/reshard_device_operation.hpp"
 #include "reshard.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -14,6 +15,7 @@ ttnn::Tensor reshard(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::reshard");
     return ttnn::prim::reshard(input_tensor, memory_config, optional_output_tensor);
 }
 

@@ -4,11 +4,13 @@
 
 #include "narrow.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor narrow(
     const ttnn::Tensor& input_tensor, const int32_t narrow_dim, const int32_t narrow_start, const uint32_t length) {
+    TT_OP_SCOPE("ttnn::narrow");
     auto input_tensor_shape = input_tensor.padded_shape();
     uint32_t dim = input_tensor_shape.get_normalized_index(narrow_dim);
     uint32_t start = operations::data_movement::wrap_index(narrow_start, input_tensor_shape[dim]);

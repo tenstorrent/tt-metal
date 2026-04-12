@@ -474,6 +474,12 @@ def import_graph(
                 "l1_num_banks": dev.get("l1_num_banks", 0),
             }
 
+    def _to_python_name(name: str) -> str:
+        """Normalize C++ ``ttnn::foo`` to Python ``ttnn.foo`` for consistent naming."""
+        if name.startswith("ttnn::"):
+            return "ttnn." + name[6:]
+        return name
+
     # -------------------------------------------------------------------
     # Build per-name queues from Python I/O records.
     # Each function_start whose name matches consumes the next record.
@@ -481,7 +487,7 @@ def import_graph(
     python_io_by_name: dict[str, deque] = defaultdict(deque)
     if python_io:
         for rec in python_io:
-            python_io_by_name[rec["name"]].append(rec)
+            python_io_by_name[_to_python_name(rec["name"])].append(rec)
 
     # Track function start nodes to pair with function end
     function_stack = []
@@ -512,6 +518,7 @@ def import_graph(
     all_nested_input_ids = set()
     # Arguments lifted from the first C++ child operation for argument-less Python ops
     first_child_arguments = None
+
     # Internal C++ wrapper operations to skip (transparent: children still visible).
     _FILTERED_OP_PREFIXES = (
         "ttnn::convert_python_tensor_to_tt_tensor",
@@ -563,18 +570,20 @@ def import_graph(
             current_op_nodes.append(node)
 
         if node_type == "function_start":
-            name = params.get("name", "unknown")
-            is_prefix_filtered = name.startswith(_FILTERED_OP_PREFIXES)
+            raw_name = params.get("name", "unknown")
+            name = _to_python_name(raw_name)
+            is_prefix_filtered = raw_name.startswith(_FILTERED_OP_PREFIXES)
             is_leading_from_torch = name == "ttnn.from_torch" and not seen_compute_op
             is_filtered = is_prefix_filtered or is_leading_from_torch
             if not is_filtered and real_function_depth == 0 and name != "ttnn.from_torch":
                 seen_compute_op = True
             is_nested = real_function_depth > 0 or is_filtered
 
-            # Consume matching Python I/O record (keep queues in sync for
-            # both nested and non-nested ops).
+            # Consume matching Python I/O record only for top-level ops.
+            # Nested ops (including C++ FunctionScope / TT_OP_SCOPE with the same
+            # normalized name) must NOT consume records from the queue.
             py_io_record = None
-            if name in python_io_by_name and python_io_by_name[name]:
+            if not is_nested and name in python_io_by_name and python_io_by_name[name]:
                 py_io_record = python_io_by_name[name].popleft()
 
             function_stack.append(
@@ -605,7 +614,7 @@ def import_graph(
                 op_nesting_depth += 1
 
         elif node_type == "function_end":
-            name = params.get("name", "unknown")
+            name = _to_python_name(params.get("name", "unknown"))
 
             start_node = function_stack.pop() if function_stack else None
             if start_node and start_node.get("nested"):
@@ -700,12 +709,19 @@ def import_graph(
                     for idx, tid in enumerate(direct_inputs):
                         input_tensors_batch.append((operation_id, idx, tid))
                 elif nested_input_tensor_ids:
+                    scope_start = start_node["counter"] if start_node else 0
                     seen = set()
                     lifted_inputs = []
                     for tid in nested_input_tensor_ids:
                         if tid in all_nested_output_ids:
                             continue
                         if tid in seen:
+                            continue
+                        # Skip tensors whose first appearance is inside
+                        # this function scope -- they are internal
+                        # intermediates, not true external inputs.
+                        first_c = tensor_first_counter.get(tid)
+                        if first_c is not None and first_c > scope_start:
                             continue
                         seen.add(tid)
                         lifted_inputs.append(tid)
@@ -749,10 +765,17 @@ def import_graph(
                 # If parent had no direct outputs, lift from nested children.
                 if output_idx == 0 and nested_output_tensor_ids:
                     intermediate_tids = all_nested_output_ids & all_nested_input_ids
+                    has_scope_marker = not start_node.get("input_tensors") if start_node else False
                     seen = set()
                     kept_nodes = []
                     for i, tid in enumerate(nested_output_tensor_ids):
                         if tid in intermediate_tids:
+                            continue
+                        # When the parent is a scope marker (no direct
+                        # input_tensors), also treat any output consumed
+                        # by another nested op as internal, even if the
+                        # consumer is at a different nesting depth.
+                        if has_scope_marker and tid in all_nested_input_ids:
                             continue
                         tensor_node = nested_output_tensor_nodes[i]
                         if tid not in seen:
@@ -917,7 +940,7 @@ def import_graph(
             if not function_stack:
                 # Synthesize a deallocate operation if not inside a function_start/end pair
                 operation_id = base_operation_id + operation_counter
-                op_name = "ttnn::deallocate"
+                op_name = "ttnn.deallocate"
                 operations_batch.append((operation_id, op_name, 0))
                 nodes_batch.append((base_operation_id, counter, operation_counter, op_name))
 
@@ -965,7 +988,7 @@ def import_graph(
         elif node_type == "error":
             error_type = params.get("error_type", "unknown")
             error_message = params.get("error_message", "")
-            error_operation = params.get("error_operation", "")
+            error_operation = _to_python_name(params.get("error_operation", ""))
             errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", ""))
 
     # Detect orphan function_start nodes (started but never ended = operation error).

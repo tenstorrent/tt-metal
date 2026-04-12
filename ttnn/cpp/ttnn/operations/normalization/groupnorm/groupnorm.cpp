@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace {
 
@@ -147,6 +148,7 @@ Tensor group_norm(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& negative_mask,
     bool use_welford) {
+    TT_OP_SCOPE("ttnn::group_norm");
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),

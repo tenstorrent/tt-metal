@@ -20,6 +20,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::pool {
 
@@ -1070,6 +1071,7 @@ std::vector<Tensor> max_pool2d(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
+    TT_OP_SCOPE("ttnn::max_pool2d");
     auto result = pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
@@ -1118,6 +1120,7 @@ Tensor avg_pool2d(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
+    TT_OP_SCOPE("ttnn::avg_pool2d");
     auto result = pool2d(
         input_tensor,
         Pool2DType::AVG_POOL2D,

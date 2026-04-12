@@ -7,6 +7,7 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::grid_sample {
 
@@ -22,6 +23,7 @@ ttnn::Tensor grid_sample(
     bool use_precomputed_grid,
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::grid_sample");
     return ttnn::prim::grid_sample(
         input_tensor,
         grid,

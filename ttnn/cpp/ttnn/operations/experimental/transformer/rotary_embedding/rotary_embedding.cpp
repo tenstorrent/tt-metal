@@ -7,6 +7,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -17,6 +18,7 @@ ttnn::Tensor rotary_embedding(
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::rotary_embedding");
     using namespace tt::constants;
 
     using tt::tt_metal::PadValue;

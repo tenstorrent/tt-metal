@@ -18,6 +18,7 @@
 #include "conv2d/device/conv2d_device_operation_types.hpp"
 #include "conv_transpose2d/conv_transpose2d.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -181,6 +182,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
+    TT_OP_SCOPE("ttnn::prepare_conv_transpose2d_weights", weight_tensor);
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
@@ -426,6 +428,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    TT_OP_SCOPE("ttnn::prepare_conv_transpose2d_bias", bias_tensor);
     // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
     // full_input dimensions. Calculate these dimensions for bias preparation.
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0

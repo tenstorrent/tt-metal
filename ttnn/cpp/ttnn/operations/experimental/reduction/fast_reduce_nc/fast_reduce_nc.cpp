@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental::reduction {
 
@@ -17,6 +18,7 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::fast_reduce_nc");
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor storage type must be DEVICE but got {}",

@@ -28,6 +28,7 @@
 #include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -1555,6 +1556,7 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
+    TT_OP_SCOPE("ttnn::gelu_bw");
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(grad);

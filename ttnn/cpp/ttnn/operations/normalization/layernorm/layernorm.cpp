@@ -9,6 +9,7 @@
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -28,6 +29,7 @@ Tensor layer_norm(
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor) {
+    TT_OP_SCOPE("ttnn::layer_norm");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
 
