@@ -199,9 +199,17 @@ void kernel_main() {
     }
 
     // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
-    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
-    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
+    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient)
+    // NOTE: The scatter addrgen overload derives both the payload size and destination addresses
+    // from the same TensorAccessor page size. The CB is configured with SRC_ALIGNED_PAGE_SIZE
+    // stride, so we override the page size here to match. This is a workaround — using a page
+    // size larger than the destination buffer's aligned page size will write past the allocated
+    // page slots when src alignment > dst alignment (e.g. DRAM src → L1 dst with non-power-of-2
+    // page sizes). The proper fix is to decouple the CB stride from the destination page size in
+    // the scatter API.
+    const decltype(TensorAccessor(ta_args, dst_base)) scatter_acc(
+        ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;
