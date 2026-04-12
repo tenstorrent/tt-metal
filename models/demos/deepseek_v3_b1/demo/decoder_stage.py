@@ -49,6 +49,7 @@ class DecoderStage(StageKind):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        freq_window_size: int = 0,
     ) -> None:
         if state_dict is None and weights is None:
             raise ValueError("Either state_dict or weights must be provided")
@@ -65,6 +66,7 @@ class DecoderStage(StageKind):
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._freq_window_size = freq_window_size
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -177,6 +179,9 @@ class DecoderStage(StageKind):
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
+            sram_slots=d.get("sram_slots"),
+            expert_freq_tensor=d.get("expert_freq_tensor"),
+            freq_window_size=self._freq_window_size,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -229,6 +234,24 @@ class DecoderStage(StageKind):
                 is_moe=False,
                 preloaded_weights=self._weights,
             )
+        # Create expert frequency tracking tensor on sender core (MoE layers only)
+        if self._is_moe:
+            sender_core = ttnn.CoreCoord(mesh_device.compute_with_storage_grid_size().x - 1, self.MOE_SENDER_CORE.y)
+            sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+            freq_shard_spec = ttnn.ShardSpec(sender_core_grid, (1, 257), ttnn.ShardOrientation.ROW_MAJOR)
+            freq_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, freq_shard_spec
+            )
+            expert_freq_tensor = ttnn.from_torch(
+                torch.zeros((1, 257), dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=freq_mem_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            d["expert_freq_tensor"] = expert_freq_tensor
+
         ttnn.synchronize_device(mesh_device)
 
         recv_socket = pipeline_block.get_downstream_socket()
@@ -254,6 +277,15 @@ class DecoderStage(StageKind):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])
 
+    def read_expert_frequencies(self) -> torch.Tensor:
+        """Read expert frequency counters from device. Shape ``(256,)`` uint32."""
+        freq_tensor = self._state["d"].get("expert_freq_tensor")
+        if freq_tensor is None:
+            raise RuntimeError("Expert frequency tracking is not enabled (not an MoE stage)")
+        raw = ttnn.to_torch(freq_tensor, mesh_composer=ttnn.ListMeshToTensor(freq_tensor.device()))
+        # Each device has its own (1, 257) tensor; return list of per-device (256,) counts
+        return [r.squeeze(0)[:256] for r in raw]
+
 
 class MoEDecoderStage(DecoderStage):
     """Decoder stage: bcast + fused attention + MoE + reduce-to-one.
@@ -278,6 +310,7 @@ class MoEDecoderStage(DecoderStage):
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
+        freq_window_size: int = 0,
     ) -> None:
         super().__init__(
             state_dict,
@@ -291,6 +324,7 @@ class MoEDecoderStage(DecoderStage):
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
+            freq_window_size=freq_window_size,
         )
 
 

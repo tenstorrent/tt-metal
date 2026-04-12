@@ -841,6 +841,10 @@ def create_decoder_block_tensors(
         "shared_down_weights_tensor": layer.shared_down_proj,
         "shared_k_parallel": SharedExpert.K_PARALLEL,
         "shared_n_parallel": SharedExpert.N_PARALLEL,
+        # SRAM hot expert slots (None when not configured)
+        "sram_slots": getattr(layer, "sram_slots", None),
+        # Expert frequency tracking tensor (created by decoder_stage, not here)
+        "expert_freq_tensor": None,
         # Reduce-to-one
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,

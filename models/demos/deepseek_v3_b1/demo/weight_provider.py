@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
+    prepare_sram_slots,
 )
 
 
@@ -51,7 +52,14 @@ class WeightProvider(Protocol):
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         ...
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        num_sram_slots: int = 0,
+        initial_sram_experts: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         ...
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -242,7 +250,14 @@ class CacheWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         return prepare_lm_head_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        num_sram_slots: int = 0,
+        initial_sram_experts: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         """Load MoE layer from tensor cache; routed experts use fast dispatch, rest uses slow dispatch."""
         t_load = time.perf_counter()
         cache_config = self._cache_config(device)
@@ -307,6 +322,21 @@ class CacheWeightProvider:
         assert isinstance(attn.gate_mm, OverlappedTensor)
         assert attn.gate_bias is not None
         assert isinstance(routed, MoERoutedExpertWeights)
+
+        sram_slots = None
+        if num_sram_slots > 0:
+            assert initial_sram_experts is not None and len(initial_sram_experts) == num_sram_slots
+            t0 = time.perf_counter()
+            sram_slots = prepare_sram_slots(
+                device,
+                self._state_dict,
+                layer_id,
+                initial_sram_experts,
+                move_to_device=True,
+            )
+            sram_s = time.perf_counter() - t0
+            logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_sram_slots {sram_s:.3f}s")
+
         return DeepSeekV3MoELayerWeights(
             q_a_proj=attn.q_a_proj,
             q_b_proj=attn.q_b_proj,
@@ -326,6 +356,7 @@ class CacheWeightProvider:
             routed_gate_proj=routed.routed_gate_proj,
             routed_up_proj=routed.routed_up_proj,
             routed_down_proj=routed.routed_down_proj,
+            sram_slots=sram_slots,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -373,10 +404,23 @@ class SyntheticWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        num_sram_slots: int = 0,
+        initial_sram_experts: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
-            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+            device,
+            sd,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+            num_sram_slots=num_sram_slots,
+            initial_sram_experts=initial_sram_experts,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -403,13 +447,22 @@ class StateDictWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        num_sram_slots: int = 0,
+        initial_sram_experts: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
+            num_sram_slots=num_sram_slots,
+            initial_sram_experts=initial_sram_experts,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
