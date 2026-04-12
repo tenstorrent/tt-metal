@@ -137,3 +137,36 @@ def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:
         return
     # ``TTNNModule`` is not an ``nn.Module``; assign via ``_modules`` like ``register_module_replacement_dict``.
     thinker._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+
+
+def replace_code_predictor_lm_head_with_ttnn(talker: nn.Module) -> None:
+    """Replace ``talker.code_predictor.lm_head`` (``nn.ModuleList[nn.Linear]``) with TTNN heads.
+
+    Uses a plain ``list`` for multiple heads: ``nn.ModuleList`` only accepts ``nn.Module`` children,
+    while :class:`TTNNQwenOmniThinkerLmHead` is a ``TTNNModule`` (not ``nn.Module``).
+    HF only does ``self.lm_head[i](hidden_states)``, so a list is sufficient.
+    """
+    cp = getattr(talker, "code_predictor", None)
+    if cp is None:
+        return
+    old = getattr(cp, "lm_head", None)
+    if old is None:
+        return
+    if isinstance(old, nn.ModuleList):
+        new_heads = [TTNNQwenOmniThinkerLmHead.from_torch(m) if isinstance(m, nn.Linear) else m for m in old]
+        if "lm_head" in cp._modules:
+            del cp._modules["lm_head"]
+        cp.lm_head = new_heads
+        return
+    if isinstance(old, nn.Linear):
+        cp._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+
+
+def replace_talker_codec_head_with_ttnn(talker: nn.Module) -> None:
+    """Replace ``talker.codec_head`` (``nn.Linear``) with :class:`TTNNQwenOmniThinkerLmHead`."""
+    if "codec_head" not in getattr(talker, "_modules", {}):
+        return
+    old = talker._modules.get("codec_head")
+    if old is None or not isinstance(old, nn.Linear):
+        return
+    talker._modules["codec_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
