@@ -416,11 +416,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_output_cb"),
                 get_named_compile_time_arg_val("gate_output_indices_cb")>;
 
-#ifdef ENABLE_FREQ_TRACKING
             // Expert frequency tracking (raw L1 buffer, not a CB)
             static constexpr uint32_t expert_freq_l1_addr = get_named_compile_time_arg_val("expert_freq_l1_addr");
             static constexpr uint32_t freq_window_size = get_named_compile_time_arg_val("freq_window_size");
-#endif
 
             // Index Mcast (sender)
             deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
@@ -1087,7 +1085,6 @@ void kernel_main() {
             gate();
         }
 
-#ifdef ENABLE_FREQ_TRACKING
         // 4a. Update expert frequency counters (sender core BRISC only)
         {
             DeviceZoneScopedN("FREQ_UPDATE");
@@ -1115,7 +1112,6 @@ void kernel_main() {
             }
 #endif
         }
-#endif  // ENABLE_FREQ_TRACKING
 
         // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
         // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj

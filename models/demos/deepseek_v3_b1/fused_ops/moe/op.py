@@ -4775,8 +4775,6 @@ class MoeOp:
             defines += [("ENABLE_BCAST", "1")]
         if self.ctx.reconfig_moe_cbs:
             defines += [("RECONFIG_MOE_CBS", "1")]
-        if self.ctx.expert_freq_tensor is not None:
-            defines += [("ENABLE_FREQ_TRACKING", "1")]
         return defines
 
     def _build_descriptors(self):
