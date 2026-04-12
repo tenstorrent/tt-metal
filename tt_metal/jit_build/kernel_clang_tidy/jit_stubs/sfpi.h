@@ -194,7 +194,9 @@ struct vInt : __vIntBase {
 };
 
 inline vInt operator+(int, const vInt&) { return {}; }
+inline vInt operator+(unsigned int, const vInt&) { return {}; }  // disambiguate 127U + vInt
 inline vInt operator-(int, const vInt&) { return {}; }
+inline vInt operator-(unsigned int, const vInt&) { return {}; }
 inline vInt operator&(int, const vInt&) { return {}; }
 inline vInt operator|(int, const vInt&) { return {}; }
 
@@ -484,6 +486,8 @@ sfpi_inline vInt exman8(const vFloat&) { return {}; }
 sfpi_inline vInt exman9(const vFloat&) { return {}; }
 
 sfpi_inline vFloat abs(const vFloat&) { return {}; }
+sfpi_inline vInt abs(const vInt&) { return {}; }
+sfpi_inline vUInt abs(const vUInt&) { return {}; }
 sfpi_inline vFloat float_to_fp16b(const vFloat&, int = 0) { return {}; }
 sfpi_inline vFloat float_to_fp16a(const vFloat&, int = 0) { return {}; }
 sfpi_inline vInt float_to_int16(const vFloat&, int = 0) { return {}; }
