@@ -39,4 +39,4 @@ jobs:
       poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
       max-wait-minutes: ${{ inputs.max-wait-minutes }}
     secrets:
-      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
