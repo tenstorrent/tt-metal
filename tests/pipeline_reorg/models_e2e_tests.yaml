@@ -364,7 +364,7 @@
 
 - name: Gemma4 E2B e2e demo (N150)
   cmd: |
-    uv pip install --upgrade transformers
+    uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E2B-it
     pytest models/demos/gemma4/demo/text_demo.py -k "1x1" --timeout 600
   model: gemma4-e2b
@@ -377,7 +377,7 @@
 
 - name: Gemma4 E4B e2e demo (N150)
   cmd: |
-    uv pip install --upgrade transformers
+    uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
     pytest models/demos/gemma4/demo/text_demo.py -k "1x1" --timeout 600
   model: gemma4-e4b
@@ -390,7 +390,7 @@
 
 - name: Gemma4 E4B e2e demo (N300)
   cmd: |
-    uv pip install --upgrade transformers
+    uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
     pytest models/demos/gemma4/demo/text_demo.py -k "1x2" --timeout 600
   model: gemma4-e4b-n300
@@ -403,7 +403,7 @@
 
 - name: Gemma4 A4B e2e demo (T3K)
   cmd: |
-    uv pip install --upgrade transformers
+    uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
     pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
   model: gemma4-a4b-t3k
@@ -416,7 +416,7 @@
 
 - name: Gemma4 31B e2e demo (T3K)
   cmd: |
-    uv pip install --upgrade transformers
+    uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
     pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
   model: gemma4-31b-t3k

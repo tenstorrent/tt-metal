@@ -100,7 +100,7 @@ def test_attention_prefill(layer_idx, seq_len, mesh_device):
     hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
     causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
     with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask)
+        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask, shared_kv_states=None)
 
     # TT forward
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
@@ -184,7 +184,13 @@ def test_attention_decode(layer_idx, mesh_device):
     cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
     mask = torch.zeros(1, 1, 1, cache_len + 1)
     with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
+        ref_output, _ = hf_attn(
+            x_torch,
+            position_embeddings=(cos, sin),
+            past_key_values=hf_cache,
+            attention_mask=mask,
+            shared_kv_states=None,
+        )
 
     # TT decode
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, cache_len + 32, layer_idx)
@@ -280,7 +286,13 @@ def test_attention_decode_paged(layer_idx, mesh_device):
     cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
     mask = torch.zeros(1, 1, 1, cache_len + 1)
     with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
+        ref_output, _ = hf_attn(
+            x_torch,
+            position_embeddings=(cos, sin),
+            past_key_values=hf_cache,
+            attention_mask=mask,
+            shared_kv_states=None,
+        )
 
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, 128, layer_idx)
     x_tt = ttnn.from_torch(

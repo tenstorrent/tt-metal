@@ -223,13 +223,13 @@ run_t3000_gemma3-small_tests() {
 }
 
 run_t3000_gemma4_a4b_tests() {
-  uv pip install --upgrade transformers
+  uv pip install -r models/demos/gemma4/requirements.txt
   export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
   pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
 }
 
 run_t3000_gemma4_31b_tests() {
-  uv pip install --upgrade transformers
+  uv pip install -r models/demos/gemma4/requirements.txt
   export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
   pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
 }
