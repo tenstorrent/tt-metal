@@ -545,7 +545,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
-HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
+HostTensor enqueue_read_mesh_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
     auto& device = device_tensor.device();
 
@@ -581,10 +581,10 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
 }
 
 // ======================================================================================
-//                               .to_device() details
+//                        enqueue_write_mesh_tensor details
 // ======================================================================================
 
-MeshTensor to_device(
+MeshTensor enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
     distributed::MeshDevice& mesh_device,
@@ -603,11 +603,11 @@ MeshTensor to_device(
                                   : &host_tensor.tensor_spec();
 
     auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
-    tt::tt_metal::tensor_impl::copy_to_device(cq, host_tensor, result);
+    tt::tt_metal::tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, result);
     return result;
 }
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
@@ -621,13 +621,13 @@ void copy_to_host(
     host_tensor.update_tensor_topology(device_tensor.tensor_topology());
 }
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region,
     bool blocking) {
-    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_host only supports single device mesh");
+    TT_FATAL(queue.device()->num_devices() == 1, "enqueue_read_mesh_tensor only supports single device mesh");
     std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
@@ -635,7 +635,8 @@ void copy_to_host(
     queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_invariant_breaking(), blocking);
 }
 
-void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+void enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
     TT_FATAL(
         is_uniform_write(host_tensor, device_tensor.device()),
         "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
@@ -656,12 +657,12 @@ void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_te
         host_tensor.tensor_topology());
 }
 
-void copy_to_device(
+void enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
     MeshTensor& device_tensor,
     const std::optional<BufferRegion>& region) {
-    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_device only supports single device mesh");
+    TT_FATAL(queue.device()->num_devices() == 1, "enqueue_write_mesh_tensor only supports single device mesh");
     std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
@@ -670,12 +671,12 @@ void copy_to_device(
 }
 
 // ======================================================================================
-//                      Non-uniform .to_host() and .to_device()
+//              Non-uniform enqueue_read/write_mesh_tensor
 // ======================================================================================
 
 namespace non_uniform_data_movement {
 
-HostTensor to_host(
+HostTensor enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const MeshTensor& device_tensor,
     std::span<const distributed::MeshCoordinate> coords,
@@ -687,11 +688,11 @@ HostTensor to_host(
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     HostTensor result(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
-    copy_to_host(cq, device_tensor, result, coords, blocking);
+    enqueue_read_mesh_tensor(cq, device_tensor, result, coords, blocking);
     return result;
 }
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const MeshTensor& device_tensor,
     HostTensor& host_tensor,
@@ -734,7 +735,7 @@ void copy_to_host(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
 }
 
-std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
     distributed::MeshDevice& mesh_device,
@@ -749,7 +750,7 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
                                   : &host_tensor.tensor_spec();
 
     auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
-    auto coords = tensor_impl::non_uniform_data_movement::copy_to_device(cq, host_tensor, result);
+    auto coords = tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, result);
     return {std::move(result), std::move(coords)};
 }
 
@@ -780,7 +781,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::vector<distributed::MeshCoordinate> copy_to_device(
+std::vector<distributed::MeshCoordinate> enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");

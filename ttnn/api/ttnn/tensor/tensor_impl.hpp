@@ -118,24 +118,26 @@ MeshTensor allocate_mesh_tensor(
 bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device);
 
 // ======================================================================================
-//                        Uniform .to_host() and .to_device()
+//                   Uniform enqueue_read/write_mesh_tensor
 // ======================================================================================
 
-HostTensor to_host(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
+HostTensor enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
 
-MeshTensor to_device(
+MeshTensor enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
     distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
+void enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
-//                      Non-uniform .to_host() and .to_device()
+//                Non-uniform enqueue_read/write_mesh_tensor
 // ======================================================================================
 
 // Data movement for tensors whose shards don't cover the entire MeshDevice.
@@ -143,42 +145,42 @@ void copy_to_device(distributed::MeshCommandQueue& cq, const HostTensor& host_te
 // so the resulting DeviceStorage must track which coordinates were actually written.
 namespace non_uniform_data_movement {
 
-HostTensor to_host(
+HostTensor enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const MeshTensor& device_tensor,
     std::span<const distributed::MeshCoordinate> coords,
     bool blocking = true);
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const MeshTensor& device_tensor,
     HostTensor& host_tensor,
     std::span<const distributed::MeshCoordinate> coords,
     bool blocking = true);
 
-std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> to_device(
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
     distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-std::vector<distributed::MeshCoordinate> copy_to_device(
+std::vector<distributed::MeshCoordinate> enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 }  // namespace non_uniform_data_movement
 
 // ======================================================================================
-//                       Unit Tensor .to_host() and .to_device()
+//                    Unit Tensor enqueue_read/write_mesh_tensor
 // ======================================================================================
 
-void copy_to_host(
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void copy_to_device(
+void enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
     MeshTensor& device_tensor,
