@@ -42,7 +42,7 @@ using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator
 inline static CoreDescriptorSet GetAllCores(
     tt::Cluster& cluster, tt::tt_fabric::ControlPlane& control_plane, ChipId device_id) {
     CoreDescriptorSet all_cores;
-    // The set of all printable cores is Tensix + Eth cores
+    // The set of all printable cores is Tensix + Eth + DRAM (when supported)
     CoreCoord logical_grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
@@ -54,6 +54,13 @@ inline static CoreDescriptorSet GetAllCores(
     }
     for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
+    }
+    const auto& hal = MetalContext::instance().hal();
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
+            all_cores.insert({{dram_core.x, dram_core.y}, CoreType::DRAM});
+        }
     }
 
     return all_cores;
@@ -73,13 +80,14 @@ inline static CoreDescriptorSet GetAllCores(
 }
 
 inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
-    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+    auto core_type = llrt::get_core_type(device_id, virtual_core);
+    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
+        core_type, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
 inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    return tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
@@ -196,6 +204,16 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
                 }
                 add_legacy_entry(std::string{name[0]}, name);
             }
+        }
+    } else if (core_type == HalProgrammableCoreType::DRAM) {
+        // DRAM cores (Blackhole DRISC): single processor
+        uint32_t num = hal.get_num_risc_processors(core_type);
+        for (uint32_t i = 0; i < num; ++i) {
+            info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
+        }
+        for (uint32_t i = 0; i < num; ++i) {
+            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            add_legacy_entry(abbrev, info.processor_names[i]);
         }
     } else {
         // ACTIVE_ETH/IDLE_ETH: collect names (arch-independent), then symbols (arch-specific)
