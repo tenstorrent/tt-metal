@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Literal, Union
 
 import ttnn
-from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 
 @dataclass(frozen=True)
@@ -64,50 +63,20 @@ class TensorTarget:
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
     tile_shape: tuple[int, int] = (32, 32)
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
-    transform_version: int = 0  # bump when preprocess logic for this target changes
 
 
-@dataclass(frozen=True)
-class RegionSpec:
-    """Sub-tensors sharing a core range, stacked per core.
-
-    Each subtensor is an :class:`OverlappedTensorSpec` with its ``name``
-    field set.  The ``core_range_set`` on the region groups subtensors
-    that share the same cores.
-    """
-
-    core_range_set: ttnn.CoreRangeSet
-    subtensors: tuple[OverlappedTensorSpec, ...]
-
-
-@dataclass(frozen=True)
-class FusionGroupSpec:
-    """Complete packing layout for an overlapped (fused) tensor group."""
-
-    kind: Literal["fusion_group"] = "fusion_group"
-    name: str = ""
-    regions: tuple[RegionSpec, ...] = ()
-    sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
-    transform_version: int = 0  # bump when shuffle/preprocess logic changes
-
-
-ArtifactTarget = TensorTarget | FusionGroupSpec
+ArtifactTarget = TensorTarget  # Will become TensorTarget | FusionGroupSpec in Phase 2
 
 
 @dataclass(frozen=True)
 class Fingerprint:
-    """Cache key. All fields are known before any computation runs.
-
-    The ``transform_version`` lives inside the ``target`` field
-    (:class:`TensorTarget` or :class:`FusionGroupSpec`), not here, so that
-    each artifact carries its own version next to the code it protects.
-    """
+    """Cache key. All fields are known before any computation runs."""
 
     schema_version: int
     source: SourceTensorSelection
     hf_model_id: str
     hf_revision: str
+    transform_version: int
     mesh_shape: tuple[int, int]
     target: ArtifactTarget
 
@@ -117,13 +86,13 @@ class CacheContext:
     """Bundles the common cache key fields shared across all tensors in a model.
 
     Prepare functions accept this to avoid repeating hf_model_id, hf_revision, etc.
-    for every standalone tensor they cache.  The ``transform_version`` is not
-    here — it lives on each :class:`TensorTarget` / :class:`FusionGroupSpec`.
+    for every standalone tensor they cache.
     """
 
     schema_version: int
     hf_model_id: str
     hf_revision: str
+    transform_version: int
     mesh_shape: tuple[int, int]
 
     def fingerprint(self, *, source: SourceTensorSelection, target: ArtifactTarget) -> Fingerprint:
@@ -132,6 +101,7 @@ class CacheContext:
             source=source,
             hf_model_id=self.hf_model_id,
             hf_revision=self.hf_revision,
+            transform_version=self.transform_version,
             mesh_shape=self.mesh_shape,
             target=target,
         )
