@@ -152,6 +152,35 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # === DEBUG: dump input tensor from device before typecast ===
+    _debug = input_a_dtype == ttnn.uint16 and output_dtype == ttnn.int32
+    if _debug:
+        print(f"\n{'='*80}")
+        print(f"[DEBUG typecast] UINT16→INT32 detected")
+        print(f"[DEBUG typecast] is_mesh_device={is_mesh_device}, shape={shape}")
+        print(f"[DEBUG typecast] input_a_dtype={input_a_dtype}, output_dtype={output_dtype}")
+        print(f"[DEBUG typecast] placement={input_a_tensor_placement}")
+        if is_mesh_device:
+            print(f"[DEBUG typecast] num_devices={device.get_num_devices()}")
+            # Read back input from device 0 BEFORE typecast
+            dev_tensors_in = ttnn.get_device_tensors(input_tensor_a)
+            input_back_d0 = ttnn.to_torch(dev_tensors_in[0])
+            print(f"[DEBUG typecast] input_back_d0 shape={input_back_d0.shape}, dtype={input_back_d0.dtype}")
+            print(f"[DEBUG typecast] input_back_d0 first 16 values: {input_back_d0.flatten()[:16].tolist()}")
+            print(f"[DEBUG typecast] input_back_d0 min={input_back_d0.min().item()}, max={input_back_d0.max().item()}")
+            # Also check golden
+            print(f"[DEBUG typecast] torch_input (host) first 16: {torch_input_tensor_a.flatten()[:16].tolist()}")
+            print(f"[DEBUG typecast] torch_input (host) dtype={torch_input_tensor_a.dtype}")
+            # Check if device 0 input matches host input
+            host_flat = torch_input_tensor_a.flatten()[:16].to(torch.int32)
+            dev_flat = input_back_d0.flatten()[:16].to(torch.int32)
+            print(f"[DEBUG typecast] host_as_int32={host_flat.tolist()}")
+            print(f"[DEBUG typecast] dev0_as_int32={dev_flat.tolist()}")
+            match = torch.equal(host_flat, dev_flat)
+            print(f"[DEBUG typecast] input host==dev0: {match}")
+        else:
+            print(f"[DEBUG typecast] single device mode")
+
     start_time = start_measuring_time()
     output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
     # Use device-0 extraction (no mesh composer) to get per-device output that
@@ -172,6 +201,26 @@ def run(
     else:
         torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
         output_tensor_f32 = output_tensor.to(torch.float32)
+
+    # === DEBUG: dump output comparison details ===
+    if _debug:
+        print(f"[DEBUG typecast] output_tensor shape={output_tensor.shape}, dtype={output_tensor.dtype}")
+        print(f"[DEBUG typecast] output first 16: {output_tensor.flatten()[:16].tolist()}")
+        print(f"[DEBUG typecast] golden first 16: {torch_output_tensor.flatten()[:16].tolist()}")
+        print(f"[DEBUG typecast] output_f32 first 16: {output_tensor_f32.flatten()[:16].tolist()}")
+        print(f"[DEBUG typecast] golden_f32 first 16: {torch_output_tensor_f32.flatten()[:16].tolist()}")
+        # Element-wise diff
+        n_total = output_tensor_f32.numel()
+        n_mismatch = (output_tensor_f32 != torch_output_tensor_f32).sum().item()
+        print(f"[DEBUG typecast] total elements={n_total}, mismatches={n_mismatch} ({100*n_mismatch/max(n_total,1):.1f}%)")
+        # Show some mismatched indices
+        diff_mask = (output_tensor_f32 != torch_output_tensor_f32).flatten()
+        diff_indices = torch.where(diff_mask)[0][:10]
+        for idx in diff_indices:
+            g = torch_output_tensor_f32.flatten()[idx].item()
+            o = output_tensor_f32.flatten()[idx].item()
+            print(f"[DEBUG typecast]   idx={idx.item()}: golden={g}, output={o}, diff={o-g}")
+        print(f"{'='*80}\n")
 
     # bfloat8_b and bfloat4_b are block floating-point formats with significant
     # quantisation loss, especially for wide value ranges.  Use a relaxed PCC
