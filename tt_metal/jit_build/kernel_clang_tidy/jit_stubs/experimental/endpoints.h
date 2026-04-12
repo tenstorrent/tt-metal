@@ -1,6 +1,26 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-//
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+// KCT stub for experimental/endpoints.h — full replacement.
+//
+// The real header has two clang-20 parse errors that cannot be worked around
+// with compiler flags (they are hard parse errors, not suppressible warnings):
+//
+//   1. AllocatorBank<bank_type>::get_noc_addr_from_bank_id() calls:
+//        ::get_noc_addr_from_bank_id < bank_type == AllocatorBankType::DRAM > (...)
+//      Clang-20 cannot disambiguate '<' from less-than when the template name
+//      is not yet known to be a template.  Fix: add parentheses around the
+//      boolean expression so the '<' unambiguously starts a template arg list:
+//        ::get_noc_addr_from_bank_id<(bank_type == AllocatorBankType::DRAM)>(...)
+//
+//   2. noc_traits_t<AllocatorBank<bank_type>>::src_addr / dst_addr call:
+//        src.template get_noc_addr_from_bank_id(...)
+//      get_noc_addr_from_bank_id is NOT a template member — '.template' on a
+//      non-template is a hard error in clang-20.  Fix: remove '.template'.
+//
+// This is a verbatim copy of the real header with only those two fixes applied.
+// The real header MUST NOT be modified — all KCT workarounds live in jit_stubs/.
+// Keep this stub in sync with the real header when the real header changes.
 
 #pragma once
 
@@ -45,7 +65,8 @@ enum AllocatorBankType { L1, DRAM };
 template <AllocatorBankType bank_type>
 struct AllocatorBank {
     uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t addr, uint8_t noc) const {
-        return ::get_noc_addr_from_bank_id < bank_type == AllocatorBankType::DRAM > (bank_id, addr, noc);
+        // KCT fix #1: parentheses added so '<' is unambiguously a template arg delimiter.
+        return ::get_noc_addr_from_bank_id<(bank_type == AllocatorBankType::DRAM)>(bank_id, addr, noc);
     }
 };
 
@@ -112,13 +133,15 @@ struct noc_traits_t<AllocatorBank<bank_type>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const AllocatorBank<bank_type>& src, const Noc& noc, const src_args_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        // KCT fix #2: '.template' removed — get_noc_addr_from_bank_id is not a template.
+        uint64_t noc_addr = src.get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
         return noc_addr;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const AllocatorBank<bank_type>& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        // KCT fix #2: '.template' removed — get_noc_addr_from_bank_id is not a template.
+        uint64_t noc_addr = dst.get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
         return noc_addr;
     }
 };
