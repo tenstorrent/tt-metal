@@ -149,13 +149,6 @@ constexpr uint16_t unpack_tile_size[32] = {
 #include "risc_common.h"
 #include "tensix.h"
 
-// Workaround: In the TT RISC-V GCC toolchain, "uint short" is valid syntax
-// (GCC extension for "unsigned short").  Clang doesn't support this.
-// Since tensix.h already processed `using uint = std::uint32_t;`, we can
-// safely redefine `uint` as `unsigned` so that `uint short` → `unsigned short`.
-// On 32-bit RISC-V, unsigned int == uint32_t, so this is type-safe.
-#define uint unsigned
-
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 
@@ -180,6 +173,11 @@ uint8_t my_y[NUM_NOCS];
 // From firmware_common.h — bank-to-NOC coordinate lookup tables
 uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+
+// From firmware wrappers (brisc.cc / active_erisc.cc / etc.) — bank address offset tables
+// declared as extern in firmware_common.h, used by dataflow_api_addrgen.h
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
+int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 // From firmware_common.h — virtual coordinate lookup tables
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];

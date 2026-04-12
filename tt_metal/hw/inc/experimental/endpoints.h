@@ -45,7 +45,7 @@ enum AllocatorBankType { L1, DRAM };
 template <AllocatorBankType bank_type>
 struct AllocatorBank {
     uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t addr, uint8_t noc) const {
-        return ::get_noc_addr_from_bank_id < bank_type == AllocatorBankType::DRAM > (bank_id, addr, noc);
+        return ::get_noc_addr_from_bank_id<(bank_type == AllocatorBankType::DRAM)>(bank_id, addr, noc);
     }
 };
 
@@ -112,13 +112,13 @@ struct noc_traits_t<AllocatorBank<bank_type>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const AllocatorBank<bank_type>& src, const Noc& noc, const src_args_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        uint64_t noc_addr = src.get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
         return noc_addr;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const AllocatorBank<bank_type>& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        uint64_t noc_addr = dst.get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
         return noc_addr;
     }
 };

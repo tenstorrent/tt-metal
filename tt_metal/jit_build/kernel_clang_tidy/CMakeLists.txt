@@ -104,6 +104,46 @@ set_directory_properties(
             ""
 )
 
+# ── Detect SFPI toolchain location ──────────────────────────────────────────
+# Mirrors the fallback logic in tt_metal/jit_build/build.cpp (JitBuildEnv ctor).
+# SFPI is not a git submodule — it is either checked out locally at
+# runtime/sfpi/ (for development) or provided by the CI Docker image at
+# /opt/tenstorrent/sfpi/.
+
+set(KCT_SFPI_ROOT "")
+foreach(
+    _sfpi_candidate
+    "${CMAKE_SOURCE_DIR}/runtime/sfpi"
+    "/opt/tenstorrent/sfpi"
+)
+    if(EXISTS "${_sfpi_candidate}/compiler/bin/riscv-tt-elf-g++")
+        set(KCT_SFPI_ROOT "${_sfpi_candidate}")
+        break()
+    endif()
+endforeach()
+
+if(KCT_SFPI_ROOT)
+    # Detect the GCC version from the directory structure rather than
+    # hardcoding "15.1.0" — avoids breakage when SFPI updates its GCC.
+    file(GLOB _sfpi_cxx_dirs "${KCT_SFPI_ROOT}/compiler/riscv-tt-elf/include/c++/*")
+    if(_sfpi_cxx_dirs)
+        list(GET _sfpi_cxx_dirs 0 _sfpi_cxx_dir)
+        get_filename_component(KCT_SFPI_GCC_VER "${_sfpi_cxx_dir}" NAME)
+    else()
+        set(KCT_SFPI_GCC_VER "15.1.0") # fallback if glob finds nothing
+    endif()
+    message(STATUS "[kernel_clang_tidy] SFPI found at ${KCT_SFPI_ROOT} (GCC ${KCT_SFPI_GCC_VER})")
+    set(KCT_HAVE_SFPI TRUE)
+else()
+    message(
+        WARNING
+        "[kernel_clang_tidy] SFPI not found at runtime/sfpi/ or /opt/tenstorrent/sfpi/. "
+        "Falling back to system C++ headers (host target instead of riscv32-unknown-elf). "
+        "SFPI-dependent compute kernels will have reduced analysis coverage."
+    )
+    set(KCT_HAVE_SFPI FALSE)
+endif()
+
 # ── Create the OBJECT library ───────────────────────────────────────────────
 
 add_library(kernel_clang_tidy OBJECT EXCLUDE_FROM_ALL ${ALL_KERNEL_FILES})
@@ -149,7 +189,7 @@ target_include_directories(
         # sfpi.h requires TT RISC-V compiler builtins that clang doesn't have.
         # Compute kernels using SFPI will hit a compile error in sfpi.h, but
         # clang-tidy still analyses the rest of their code (with -ferror-limit=0).
-        "${CMAKE_SOURCE_DIR}/runtime/sfpi/include"
+        $<$<BOOL:${KCT_HAVE_SFPI}>:${KCT_SFPI_ROOT}/include>
 )
 
 # ── Compiler flags ──────────────────────────────────────────────────────────
@@ -161,13 +201,17 @@ target_compile_options(
     kernel_clang_tidy
     PRIVATE
         -std=c++17
-        --target=riscv32-unknown-elf # Parse as 32-bit RISC-V (matching real target)
-        # RISC-V standard library headers (from the SFPI toolchain)
-        -nostdinc++
-        -isystem${CMAKE_SOURCE_DIR}/runtime/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0
-        -isystem${CMAKE_SOURCE_DIR}/runtime/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf
-        -isystem${CMAKE_SOURCE_DIR}/runtime/sfpi/compiler/riscv-tt-elf/include
-        -isystem${CMAKE_SOURCE_DIR}/runtime/sfpi/compiler/lib/gcc/riscv-tt-elf/15.1.0/include
+        # When SFPI is available: parse as 32-bit RISC-V (matching the real JIT
+        # target) and use the SFPI toolchain's C++ standard library headers.
+        # When SFPI is absent: fall back to host target + system headers so that
+        # local development still runs clang-tidy on the subset of kernel code
+        # that doesn't need RISC-V-specific headers.
+        $<IF:$<BOOL:${KCT_HAVE_SFPI}>,--target=riscv32-unknown-elf,>
+        $<IF:$<BOOL:${KCT_HAVE_SFPI}>,-nostdinc++,>
+        $<$<BOOL:${KCT_HAVE_SFPI}>:-isystem${KCT_SFPI_ROOT}/compiler/riscv-tt-elf/include/c++/${KCT_SFPI_GCC_VER}>
+        $<$<BOOL:${KCT_HAVE_SFPI}>:-isystem${KCT_SFPI_ROOT}/compiler/riscv-tt-elf/include/c++/${KCT_SFPI_GCC_VER}/riscv-tt-elf>
+        $<$<BOOL:${KCT_HAVE_SFPI}>:-isystem${KCT_SFPI_ROOT}/compiler/riscv-tt-elf/include>
+        $<$<BOOL:${KCT_HAVE_SFPI}>:-isystem${KCT_SFPI_ROOT}/compiler/lib/gcc/riscv-tt-elf/${KCT_SFPI_GCC_VER}/include>
         -O0 # No optimisation — just parse
         -fno-exceptions
         -ferror-limit=0 # Don't stop after 20 errors per file
