@@ -70,18 +70,18 @@ def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if mesh_shape:
         try:
-            device = create_mesh_device(mesh_shape)
+            device = create_mesh_device(mesh_shape, l1_small_size=65536)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -92,7 +92,7 @@ def mesh_device_fixture():
 # paged_fused_update_cache operates on large KV cache tensors (1024-2048 pages)
 # which need more time, especially on multi-device setups.
 _prev_op_timeout = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
-os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "30"
+os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "60"
 
 
 def run(
