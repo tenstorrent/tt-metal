@@ -43,7 +43,7 @@ def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if mesh_shape:
         try:
-            device = create_mesh_device(mesh_shape)
+            device = create_mesh_device(mesh_shape, l1_small_size=65536)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
