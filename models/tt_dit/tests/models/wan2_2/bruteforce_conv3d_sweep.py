@@ -903,6 +903,7 @@ def test_bruteforce_sweep_h4w32_480p_full_t(
         w_factor=w_factor,
         max_combos=500,
         max_t_block=8,
-        # No hw_product: 4x32 480p W=3-26 is too narrow for h*w=32.
-        hw_product=None,
+        # hw_product=32: large stages (W=14-26) support h*w=32 pairs; small
+        # stages (W=3-8) get fewer combos but still avoid hang-triggering shapes.
+        hw_product=32,
     )
