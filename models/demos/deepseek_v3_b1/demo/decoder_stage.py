@@ -937,7 +937,7 @@ class MoEDecoderStage(DecoderStage):
         layer_idx: int = 4,
         num_routed_experts: int = 256,
         position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        max_seq_len: int = 128 * 1024,
         persistent_mode: bool = True,
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
@@ -970,7 +970,7 @@ class DenseDecoderStage(DecoderStage):
         weights: DeepSeekV3DenseLayerWeights,
         layer_idx: int = 0,
         position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        max_seq_len: int = 128 * 1024,
         persistent_mode: bool = True,
         is_torus: bool = True,
     ) -> None:

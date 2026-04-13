@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import gc
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -115,7 +117,12 @@ class ModelPipeline:
             )
             for tid in tokens
         ]
+        prefill_start = time.perf_counter()
         last_output = self.model.prefill(prompt_token_tensors)
+        prefill_end = time.perf_counter()
+        prefill_time = prefill_end - prefill_start
+        logger.info(f"Prefill time: {prefill_time:.2f}s")
+        logger.info(f"Prefill tokens/s: {len(tokens) / prefill_time:.2f}")
         next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return next_token_id
@@ -125,11 +132,7 @@ class ModelPipeline:
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
-        output = self.model.decode_step(
-            torch.tensor([[input_token]], dtype=torch.int32),
-        )
-        next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
-        return next_token_id
+        return self.model.decode_step_fast(input_token)
 
     def run_inference(
         self,
@@ -148,6 +151,7 @@ class ModelPipeline:
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+        gc.disable()
         next_token_id = self.prefill_forward(prompt_token_ids)
         if on_token is not None:
             on_token(next_token_id)
@@ -155,19 +159,26 @@ class ModelPipeline:
             generated_tokens = [next_token_id]
 
         # Generation loop: feed y[t], get output, sample y[t+1].
-        num_decode_steps = 0
+        num_decode_steps = max_new_tokens - 1
+        decode_start = time.perf_counter()
         for i in range(max_new_tokens - 1):
-            if eos_token_id is not None and next_token_id == eos_token_id:
-                logger.debug("EOS token {} at decode step {}", eos_token_id, i)
-                break
+            # if eos_token_id is not None and next_token_id == eos_token_id:
+            #     # logger.debug("EOS token {} at decode step {}", eos_token_id, i)
+            #     break
             next_token_id = self.decode_forward(next_token_id)
-            num_decode_steps += 1
+            # num_decode_steps += 1
             if on_token is not None:
                 on_token(next_token_id)
             if return_generated_tokens:
                 generated_tokens.append(next_token_id)
-            logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
+            # logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
 
+        decode_end = time.perf_counter()
+        gc.collect()
+        gc.enable()
+        decode_time = decode_end - decode_start
+        logger.info(f"Decode time: {decode_time:.2f}s")
+        logger.info(f"Decode tokens/s: {num_decode_steps / decode_time:.2f}")
         logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
         if return_generated_tokens:
             return generated_tokens
