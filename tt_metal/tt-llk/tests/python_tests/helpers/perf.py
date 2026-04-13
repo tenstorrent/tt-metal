@@ -28,53 +28,14 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     """
-    Read zone names from ELF .perf_counter_meta section.
+    ELF-based perf zone name discovery is currently unsupported.
 
-    The section contains strings in "line:name" format (e.g. "38:INIT",
-    "53:TILE_LOOP"). We sort by line number to recover source declaration
-    order, then deduplicate by name. This matches the runtime zone allocation
-    order since zones are allocated on first call in source order.
-
-    Returns list of unique zone names in order, or None if section not found.
+    The previous implementation attempted to read a `.perf_counter_meta`
+    section from kernel ELFs, but the firmware/build side does not currently
+    emit that section. Return None unconditionally until `.perf_counter_meta`
+    is actually produced by firmware/linker metadata emission.
     """
-    # Try any ELF in the directory (all threads have the same metadata)
-    elf_candidates = list(elf_dir.glob("*.elf")) if elf_dir.exists() else []
-    if not elf_candidates:
-        return None
-
-    for elf_path in elf_candidates:
-        try:
-            result = subprocess.run(
-                ["readelf", "-p", ".perf_counter_meta", str(elf_path)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                continue
-
-            # Parse readelf output: lines like "  [     0]  38:INIT"
-            entries = []
-            for line in result.stdout.splitlines():
-                match = re.search(r"\]\s+(\d+):(\w+)", line)
-                if match:
-                    line_num = int(match.group(1))
-                    zone_name = match.group(2)
-                    entries.append((line_num, zone_name))
-
-            if entries:
-                entries.sort(key=lambda e: e[0])
-                seen = set()
-                names = []
-                for _, name in entries:
-                    if name not in seen:
-                        seen.add(name)
-                        names.append(name)
-                return names
-
-        except (subprocess.TimeoutExpired, OSError):
-            continue
-
+    _ = elf_dir
     return None
 
 
