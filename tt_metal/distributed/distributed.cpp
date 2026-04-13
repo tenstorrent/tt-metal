@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
 
@@ -35,9 +36,11 @@ void EventSynchronize(const MeshEvent& event) {
     }
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
-            ;
-        }
+        auto& sysmem = physical_device->sysmem_manager();
+        const auto cq_id = event.mesh_cq_id();
+        const auto target_id = event.id();
+        ttsl::nice_spin_until(
+            [&sysmem, cq_id, target_id] { return sysmem.get_last_completed_event(cq_id) >= target_id; });
     }
 }
 

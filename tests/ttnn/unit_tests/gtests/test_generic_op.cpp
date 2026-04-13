@@ -1482,12 +1482,22 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     log_info(tt::LogTest, "Executing all_gather via generic_op with MUX...");
     ttnn::generic_op(std::vector<Tensor>{input_tensor, output_tensor}, mesh_program_descriptor);
     log_info(tt::LogTest, "generic_op dispatch returned for all_gather via generic_op with MUX");
-    mesh_device_->quiesce_devices();
-    log_info(tt::LogTest, "generic_op mesh quiesced for all_gather via generic_op with MUX");
 
     log_info(tt::LogTest, "Reading output tensor via parent mesh CQ...");
     auto host_output = output_tensor.cpu(/*blocking=*/true);
-    log_info(tt::LogTest, "Output tensor copied to host, validating per-device data...");
+    log_info(tt::LogTest, "Output tensor copied to host");
+
+    // Deallocate all device tensors BEFORE quiesce_devices() resets event counters to 0.
+    // MeshBuffer::deallocate() calls wait_for_pending_events() → EventSynchronize() which
+    // busy-spins on last_completed_event. If quiesce resets counters first, any buffer with
+    // a stale pending_event_id > 0 will spin forever.
+    input_tensor.deallocate(true);
+    output_tensor.deallocate(true);
+    input_tensors.clear();
+    output_tensors.clear();
+
+    mesh_device_->quiesce_devices();
+    log_info(tt::LogTest, "generic_op mesh quiesced, validating per-device data...");
 
     const auto& host_buf = host_output.host_tensor().buffer();
     const size_t per_device_elements = tensor_spec.logical_shape().volume();
