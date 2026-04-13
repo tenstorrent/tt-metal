@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "device.hpp"
+#include "mesh_buffer_impl.hpp"
 #include "mesh_device_impl.hpp"
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
@@ -78,6 +79,61 @@ Shape2D ShardedBufferConfig::physical_shard_shape() const {
     return Shape2D(shard_height == 0 ? global_height : shard_height, shard_width == 0 ? global_width : shard_width);
 }
 
+// ---------------------------------------------------------------------------
+// MeshBuffer::Impl method definitions
+// ---------------------------------------------------------------------------
+
+void MeshBuffer::Impl::initialize_device_buffers() {
+    for (auto& [coord, device_buffer] : buffers_) {
+        auto mesh_device = mesh_device_.lock();
+        if (mesh_device == nullptr) {
+            continue;
+        }
+        if (!mesh_device->impl().is_local(coord)) {
+            continue;
+        }
+        std::shared_ptr<Buffer> buffer = Buffer::create(
+            mesh_device->impl().get_device(coord),
+            address_,
+            device_local_size_,
+            device_local_config_.page_size,
+            device_local_config_.buffer_type,
+            device_local_config_.sharding_args,
+            device_local_config_.bottom_up,
+            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+        // For per-core allocation, propagate per-core addresses from the backing buffer.
+        if (per_core_allocation::is_per_core_allocation(*buffer)) {
+            TT_FATAL(
+                std::holds_alternative<OwnedBufferState>(state_),
+                "Per-core allocation is not supported for externally-owned MeshBuffers");
+            auto& owned = std::get<OwnedBufferState>(state_);
+            per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
+        }
+        device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
+    }
+}
+
+void MeshBuffer::Impl::deallocate() {
+    auto mesh_device = mesh_device_.lock();
+    if (mesh_device) {
+        state_ = DeallocatedState{};
+        return;
+    }
+
+    // Special handling is required if MeshDevice is already deallocated
+    if (std::holds_alternative<OwnedBufferState>(state_)) {
+        auto& owned_state = std::get<OwnedBufferState>(state_);
+        owned_state.backing_buffer->mark_as_deallocated();
+    }
+    state_ = DeallocatedState{};
+}
+
+// ---------------------------------------------------------------------------
+// MeshBuffer
+// ---------------------------------------------------------------------------
+
+MeshBuffer::MeshBuffer(std::unique_ptr<Impl> impl) : pimpl_(std::move(impl)) {}
+
 std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
@@ -95,13 +151,13 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         mesh_buffer_config);
 
     if (mesh_device->get_view().get_devices().empty()) {
-        auto mesh_buffer =
-            std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
-        mesh_buffer->initialize_device_buffers();
-        return mesh_buffer;
+        auto impl = std::make_unique<Impl>(
+            mesh_buffer_config, device_local_config, DeviceAddr{0}, DeviceAddr{0}, mesh_device, /*empty_tag=*/true);
+        impl->initialize_device_buffers();
+        return std::shared_ptr<MeshBuffer>(new MeshBuffer(std::move(impl)));
     }
 
-    std::shared_ptr<MeshBuffer> mesh_buffer;
+    std::unique_ptr<Impl> impl;
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
@@ -114,119 +170,90 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
 
-        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
-            mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
+        impl = std::make_unique<Impl>(
+            mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer));
     } else {
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
+        impl = std::make_unique<Impl>(
+            mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device);
     }
 
-    mesh_buffer->initialize_device_buffers();
-
-    return mesh_buffer;
+    impl->initialize_device_buffers();
+    return std::shared_ptr<MeshBuffer>(new MeshBuffer(std::move(impl)));
 }
 
-void MeshBuffer::initialize_device_buffers() {
-    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
-        std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->impl().get_device(coord),
-            address_,
-            device_local_size_,
-            device_local_config_.page_size,
-            device_local_config_.buffer_type,
-            device_local_config_.sharding_args,
-            device_local_config_.bottom_up,
-            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
-        // For per-core allocation, propagate per-core addresses from the backing buffer.
-        if (per_core_allocation::is_per_core_allocation(*buffer)) {
-            TT_FATAL(
-                std::holds_alternative<OwnedBufferState>(state_),
-                "Per-core allocation is not supported for externally-owned MeshBuffers");
-            auto& owned = std::get<OwnedBufferState>(state_);
-            per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
-        }
-        return buffer;
-    };
-
-    for (auto& [coord, device_buffer] : buffers_) {
-        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->impl().is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
-            }
-        }
+MeshBuffer::~MeshBuffer() {
+    if (pimpl_) {
+        pimpl_->deallocate();
     }
+}
+
+MeshBuffer::MeshBuffer(MeshBuffer&&) noexcept = default;
+
+MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
+    if (this != &other) {
+        if (pimpl_) {
+            pimpl_->deallocate();
+        }
+        pimpl_ = std::move(other.pimpl_);
+    }
+    return *this;
 }
 
 bool MeshBuffer::is_allocated() const {
-    if (std::holds_alternative<DeallocatedState>(state_)) {
+    if (!pimpl_) {
         return false;
     }
-    if (mesh_device_.lock() == nullptr) {
+    if (std::holds_alternative<MeshBuffer::Impl::DeallocatedState>(pimpl_->state_)) {
+        return false;
+    }
+    if (pimpl_->mesh_device_.lock() == nullptr) {
         return false;
     }
     return true;
 }
 
-MeshBuffer::~MeshBuffer() { deallocate(); }
-
-MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(other.config_),
-    device_local_config_(std::move(other.device_local_config_)),
-    mesh_device_(std::move(other.mesh_device_)),
-    address_(other.address_),
-    device_local_size_(other.device_local_size_),
-    buffers_(std::move(other.buffers_)),
-    state_(std::move(other.state_)) {
-    other.state_ = DeallocatedState{};
-    other.address_ = 0;
-    other.device_local_size_ = 0;
-}
-
-MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
-    if (this != &other) {
-        deallocate();
-        config_ = other.config_;
-        device_local_config_ = std::move(other.device_local_config_);
-        mesh_device_ = std::move(other.mesh_device_);
-        address_ = other.address_;
-        device_local_size_ = other.device_local_size_;
-        buffers_ = std::move(other.buffers_);
-        state_ = std::move(other.state_);
-
-        other.state_ = DeallocatedState{};
-        other.address_ = 0;
-        other.device_local_size_ = 0;
-    }
-    return *this;
-}
-
-void MeshBuffer::deallocate() {
-    auto mesh_device = mesh_device_.lock();
-    if (mesh_device) {
-        state_ = DeallocatedState{};
-        return;
-    }
-
-    // Special handling is required if MeshDevice is already deallocated
-    if (std::holds_alternative<OwnedBufferState>(state_)) {
-        auto& owned_state = std::get<OwnedBufferState>(state_);
-        owned_state.backing_buffer->mark_as_deallocated();
-    }
-    state_ = DeallocatedState{};
-}
+void MeshBuffer::deallocate() { pimpl_->deallocate(); }
 
 MeshDevice* MeshBuffer::device() const {
-    auto device = mesh_device_.lock();
+    auto device = pimpl_->mesh_device_.lock();
     TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
     return device.get();
 }
 
+DeviceAddr MeshBuffer::size() const {
+    return std::visit(
+        tt::stl::overloaded{
+            [&](const ReplicatedBufferConfig& config) { return config.size; },
+            [&](const ShardedBufferConfig& config) { return config.global_size; }},
+        pimpl_->config_);
+}
+
+DeviceAddr MeshBuffer::device_local_size() const { return pimpl_->device_local_size_; }
+
+DeviceAddr MeshBuffer::address() const { return pimpl_->address_; }
+
+MeshBufferLayout MeshBuffer::global_layout() const {
+    return std::holds_alternative<ReplicatedBufferConfig>(pimpl_->config_) ? MeshBufferLayout::REPLICATED
+                                                                           : MeshBufferLayout::SHARDED;
+}
+
+const MeshBufferConfig& MeshBuffer::global_config() const { return pimpl_->config_; }
+
+const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
+    TT_FATAL(
+        (global_layout() == MeshBufferLayout::SHARDED),
+        "Can only query the global shard spec for a sharded MeshBuffer");
+    return std::get<ShardedBufferConfig>(pimpl_->config_);
+}
+
+const DeviceLocalBufferConfig& MeshBuffer::device_local_config() const { return pimpl_->device_local_config_; }
+
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).value().get();
+    return pimpl_->buffers_.at(device_coord).value().get();
 }
 
 Buffer* MeshBuffer::get_reference_buffer() const {
-    for (const auto& buffer : buffers_.values()) {
+    for (const auto& buffer : pimpl_->buffers_.values()) {
         if (buffer.is_local()) {
             return buffer.value().get();
         }
@@ -235,30 +262,10 @@ Buffer* MeshBuffer::get_reference_buffer() const {
 }
 
 Buffer* MeshBuffer::get_backing_buffer() const {
-    if (const auto* owned_state = std::get_if<OwnedBufferState>(&state_)) {
+    if (const auto* owned_state = std::get_if<Impl::OwnedBufferState>(&pimpl_->state_)) {
         return owned_state->backing_buffer.get();
     }
     return nullptr;
-}
-
-DeviceAddr MeshBuffer::size() const {
-    return std::visit(
-        tt::stl::overloaded{
-            [&](const ReplicatedBufferConfig& config) { return config.size; },
-            [&](const ShardedBufferConfig& config) { return config.global_size; }},
-        config_);
-}
-
-MeshBufferLayout MeshBuffer::global_layout() const {
-    return std::holds_alternative<ReplicatedBufferConfig>(config_) ? MeshBufferLayout::REPLICATED
-                                                                   : MeshBufferLayout::SHARDED;
-}
-
-const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
-    TT_FATAL(
-        (global_layout() == MeshBufferLayout::SHARDED),
-        "Can only query the global shard spec for a sharded MeshBuffer");
-    return std::get<ShardedBufferConfig>(config_);
 }
 
 uint32_t MeshBuffer::datum_size_bytes() const {
@@ -273,7 +280,7 @@ Shape2D MeshBuffer::physical_shard_shape() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query physical shard shape for buffers sharded across the Mesh");
-    auto sharded_config = std::get<ShardedBufferConfig>(config_);
+    auto sharded_config = std::get<ShardedBufferConfig>(pimpl_->config_);
     return sharded_config.physical_shard_shape();
 }
 
@@ -283,6 +290,14 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
         "Can only query replicated dims for buffers sharded across the Mesh");
     return this->global_shard_spec().replicated_dims();
 }
+
+uint32_t MeshBuffer::page_size() const { return pimpl_->device_local_config_.page_size; }
+
+uint32_t MeshBuffer::num_pages() const { return pimpl_->device_local_size_ / pimpl_->device_local_config_.page_size; }
+
+// ---------------------------------------------------------------------------
+// AnyBuffer
+// ---------------------------------------------------------------------------
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
