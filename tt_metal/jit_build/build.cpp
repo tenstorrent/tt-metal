@@ -16,6 +16,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -515,56 +517,78 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
                 defines += ss.str() + " ";
             });
 
-        // Generate header with named arg namespaces (rt_args:: for runtime, ct_args:: for compile-time).
-        // RT args: rt_args::get<rt_args::ns::field>() — tagged constexpr Arg with dispatch type
-        // CT args: ct_args::ns::field — plain constexpr uint32_t values
-        std::ostringstream header_rt, header_ct;
-        settings->process_named_runtime_args([&header_rt](const NamedRuntimeArgNamespaces& namespaces) {
+        // Generate named_args_generated.h with a single ct_args:: namespace.
+        // Each prefix becomes a struct containing both CT values (uint32_t) and
+        // RT arg descriptors (rt_args::Arg / rt_args::ArrayArg).  Kernel code
+        // accesses both via the template parameter Args:
+        //   ct_args::my_op::src            — compile-time value
+        //   rt_args::get<Args::field>(i)   — runtime value via descriptor
+
+        // Accumulate RT entries per namespace.
+        std::map<std::string, std::vector<NamedRuntimeArgEntry>> rt_by_ns;
+        settings->process_named_runtime_args([&rt_by_ns](const NamedRuntimeArgNamespaces& namespaces) {
             for (const auto& [ns, entries] : namespaces) {
-                if (!ns.empty()) {
-                    header_rt << "namespace " << ns << " {\n";
-                }
-                for (const auto& entry : entries) {
-                    const char* dispatch_str =
-                        entry.dispatch == RuntimeArgDispatch::COMMON ? "Dispatch::COMMON" : "Dispatch::PER_CORE";
-                    if (entry.length > 1) {
-                        header_rt << "    constexpr ArrayArg " << entry.field << " = {" << entry.index << ", "
-                                  << entry.length << ", " << dispatch_str << "};\n";
-                    } else {
-                        header_rt << "    constexpr Arg " << entry.field << " = {" << entry.index << ", "
-                                  << dispatch_str << "};\n";
-                    }
-                }
-                if (!ns.empty()) {
-                    header_rt << "}\n";
-                }
+                rt_by_ns[ns].insert(rt_by_ns[ns].end(), entries.begin(), entries.end());
             }
         });
-        settings->process_named_ct_arg_namespaces([&header_ct](const NamedCTArgNamespaces& namespaces) {
+
+        // Accumulate CT entries per namespace.
+        std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> ct_by_ns;
+        settings->process_named_ct_arg_namespaces([&ct_by_ns](const NamedCTArgNamespaces& namespaces) {
             for (const auto& [ns, entries] : namespaces) {
-                if (!ns.empty()) {
-                    header_ct << "struct " << ns << " {\n";
-                }
-                for (const auto& [field, value] : entries) {
+                ct_by_ns[ns].insert(ct_by_ns[ns].end(), entries.begin(), entries.end());
+            }
+        });
+
+        // Collect all non-empty namespaces from both CT and RT maps.
+        std::set<std::string> all_ns;
+        for (const auto& [ns, _] : ct_by_ns) {
+            all_ns.insert(ns);
+        }
+        for (const auto& [ns, _] : rt_by_ns) {
+            if (!ns.empty()) {
+                all_ns.insert(ns);
+            }
+        }
+
+        // Emit one struct per namespace containing both CT fields and RT descriptors.
+        std::ostringstream header_ct;
+        for (const auto& ns : all_ns) {
+            if (!ns.empty()) {
+                header_ct << "struct " << ns << " {\n";
+            }
+            // CT fields
+            if (auto it = ct_by_ns.find(ns); it != ct_by_ns.end()) {
+                for (const auto& [field, value] : it->second) {
                     header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
                 }
-                if (!ns.empty()) {
-                    header_ct << "};\n";
+            }
+            // RT descriptors
+            if (auto it = rt_by_ns.find(ns); it != rt_by_ns.end()) {
+                for (const auto& entry : it->second) {
+                    const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                                   ? "rt_args::Dispatch::COMMON"
+                                                   : "rt_args::Dispatch::PER_CORE";
+                    if (entry.length > 1) {
+                        header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                                  << ", " << entry.length << ", " << dispatch_str << "};\n";
+                    } else {
+                        header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index
+                                  << ", " << dispatch_str << "};\n";
+                    }
                 }
             }
-        });
-        auto rt_str = header_rt.str();
+            if (!ns.empty()) {
+                header_ct << "};\n";
+            }
+        }
+
         auto ct_str = header_ct.str();
-        if (!rt_str.empty() || !ct_str.empty()) {
+        if (!ct_str.empty()) {
             std::string header_path = out_dir + "named_args_generated.h";
             std::ostringstream content;
             content << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
-            if (!rt_str.empty()) {
-                content << "namespace rt_args {\n" << rt_str << "}\n\n";
-            }
-            if (!ct_str.empty()) {
-                content << "namespace ct_args {\n" << ct_str << "}\n";
-            }
+            content << "namespace ct_args {\n" << ct_str << "}\n";
             std::ofstream f(header_path);
             f << content.str();
             defines += fmt::format("-include {} ", header_path);
@@ -716,7 +740,12 @@ void JitBuildState::weaken(const string& out_dir) const {
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
+    // Mutex to serialize concurrent writes to the shared zone src locations log file.
+    // Multiple kernels are compiled in parallel; without serialization their grep outputs
+    // interleave in the file, producing corrupted lines that fail to parse.
+    static std::mutex zone_log_mutex;
     if (env_.get_rtoptions().get_profiler_enabled()) {
+        std::lock_guard<std::mutex> lk(zone_log_mutex);
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
             std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }
