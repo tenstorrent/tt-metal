@@ -6,9 +6,12 @@ import os
 import pytest
 import random
 from loguru import logger
+from math import prod
 import torch
+
 import ttnn
 
+from ttnn.experimental.moe_compute_utils import cluster_distance, map_shared_experts
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     get_mesh_mapper,
     gen_tensors,
@@ -47,9 +50,78 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
+def _metadata_ref_with_shared_experts(
+    metadata_orig, shared_expert_ids_to_devices, batch, seq_len, total_experts_per_token, devices
+):
+    selected_experts_k = metadata_orig.shape[-1]  # Get selected_experts_k from original metadata shape
+
+    # Create expanded metadata tensor that includes shared experts
+    # Original metadata: [devices, batch, seq_len, selected_experts_k]
+    metadata_expanded = torch.zeros(devices, batch, seq_len, total_experts_per_token, dtype=metadata_orig.dtype)
+    # Copy selected experts
+    metadata_expanded[:, :, :, :selected_experts_k] = metadata_orig
+    # Add shared experts to each token
+    for i, shared_expert_id in enumerate(shared_expert_ids_to_devices):
+        metadata_expanded[:, :, :, selected_experts_k + i] = shared_expert_id
+
+    return metadata_expanded
+
+
+def _scores_ref_with_shared_experts(expert_scores, batch, seq_len, total_experts_per_token):
+    selected_experts_k = expert_scores.shape[-1]  # Get selected_experts_k from original scores shape
+
+    # Create expanded scores tensor
+    expert_scores_expanded = torch.zeros(batch, 1, seq_len, total_experts_per_token, dtype=expert_scores.dtype)
+    # Copy selected expert scores
+    expert_scores_expanded[:, :, :, :selected_experts_k] = expert_scores
+
+    # I believe whatever necessary scaling is applied to the shared expert weights so any further scaling should be a
+    # no-op.
+    expert_scores_expanded[:, :, :, selected_experts_k:] = 1.0
+
+    return expert_scores_expanded
+
+
+def _sparse_output_with_shared_experts(
+    input_tokens,
+    sparse_output_token_tensor,
+    expert_mapping_new,
+    shared_expert_ids_to_devices,
+    mesh_shape,
+    cluster_axis,
+    total_tokens,
+    seq_len,
+):
+    """Add shared expert dispatch to the sparse output tensor"""
+
+    devices = prod(mesh_shape)
+    dispatch_devices = mesh_shape[cluster_axis]
+
+    # Process each token to determine where it should be dispatched
+    for src_device in range(devices):
+        for local_token_idx in range(total_tokens // dispatch_devices):
+            token_idx = src_device * (total_tokens // dispatch_devices) + local_token_idx
+            batch_idx = token_idx // seq_len
+            seq_idx = token_idx % seq_len
+
+            # Get the token data
+            token_data = input_tokens[batch_idx, 0, seq_idx, :]
+
+            # Check all experts (routed and shared) for this token
+            for shared_expert_id in shared_expert_ids_to_devices:
+                # Use the expert mapping to find target device
+                target_device = expert_mapping_new[src_device, shared_expert_id].item()
+
+                if cluster_distance(src_device, target_device, mesh_shape, cluster_axis) is not None:
+                    # Dispatch token to target device, if on axis
+                    sparse_output_token_tensor[target_device, batch_idx, seq_idx, :] = token_data
+
+    return sparse_output_token_tensor
+
+
 def gen_tensors_for_metadata_op(
     batch,
-    experts,
+    routed_experts,
     selected_experts_k,
     hidden_size,
     seq_len,
@@ -58,14 +130,18 @@ def gen_tensors_for_metadata_op(
     cluster_axis=1,
     scheme="random",
     dtype=torch.bfloat16,
+    shared_expert_ids_to_devices=None,
 ):
     """
     Generate tensors for the all_to_all_dispatch_metadata operation.
 
     This function generates tensors with shapes matching the new operation format:
     - Output: [devices, total_tokens, hidden_size] where total_tokens = batch * seq_len
-    - Metadata (indices): [devices, total_tokens, selected_experts_k]
-    - Scores: [devices, total_tokens, selected_experts_k]
+    - Metadata (indices): [devices, total_tokens, selected_experts_k + num_shared_experts] if shared experts
+    - Scores: [devices, total_tokens, selected_experts_k + num_shared_experts] if shared experts
+
+    Args:
+        shared_expert_ids_to_devices: Map of of shared expert IDs to device IDs where they are replicated
 
     Returns:
         input_tokens: [batch, 1, seq_len, hidden_size] - input tokens per device
@@ -73,45 +149,78 @@ def gen_tensors_for_metadata_op(
         expert_scores: [batch, 1, seq_len, selected_experts_k] - expert scores per device
         expert_mapping_new: [devices, experts] - new format expert to device mapping (direct device ID)
         sparse_output_token_tensor: [devices, total_tokens, hidden_size] - golden output tokens
-        metadata_tensor: [devices, total_tokens, selected_experts_k] - golden indices (all-gathered)
-        scores_tensor: [devices, total_tokens, selected_experts_k] - golden scores (all-gathered)
+        metadata_tensor: [devices, total_tokens, selected_experts_k + num_shared_experts] - golden indices
+        scores_tensor: [devices, total_tokens, selected_experts_k + num_shared_experts] - golden scores
     """
 
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else devices
     num_replicated_devices = devices // num_dispatch_devices
-    experts_per_cluster = experts // num_replicated_devices
-    experts_per_device = experts // devices
+    experts_per_cluster = routed_experts // num_replicated_devices
+    experts_per_device = routed_experts // devices
 
     # Use original gen_tensors to get base tensors
     input_tokens, expert_indices, expert_mapping_old, sparse_output_orig, metadata_orig = gen_tensors(
-        batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
+        batch, routed_experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
     )
 
     expert_mapping_new = gen_expert_mapping(
-        devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+        devices, num_replicated_devices, cluster_axis, routed_experts, experts_per_cluster, experts_per_device
     )
 
+    # If we have shared experts, extend the expert mapping to include them
+    if shared_expert_ids_to_devices is not None:
+        expert_mapping_new = map_shared_experts(
+            expert_mapping_new, shared_expert_ids_to_devices, mesh_shape, cluster_axis
+        )
+
     total_tokens = batch * seq_len
+    num_shared_experts = len(shared_expert_ids_to_devices) if shared_expert_ids_to_devices is not None else 0
+    total_experts_per_token = selected_experts_k + num_shared_experts
 
-    # Reshape sparse output from [devices, batch, seq_len, hidden_size] to [devices, total_tokens, hidden_size]
-    sparse_output_token_tensor = sparse_output_orig.reshape(devices, total_tokens, hidden_size)
+    # If we have shared experts, we need to expand metadata and scores to include them
+    if num_shared_experts > 0:
+        metadata_expanded = _metadata_ref_with_shared_experts(
+            metadata_orig, shared_expert_ids_to_devices, batch, seq_len, total_experts_per_token, devices
+        )
+        # Reshape to [devices, total_tokens, total_experts_per_token]
+        metadata_tensor = metadata_expanded.reshape(devices, total_tokens, total_experts_per_token)
+    else:
+        # No shared experts, just reshape original metadata
+        metadata_tensor = metadata_orig.reshape(devices, total_tokens, selected_experts_k)
 
-    # Reshape metadata from [devices, batch, seq_len, selected_experts_k] to [devices, total_tokens, selected_experts_k]
-    metadata_tensor = metadata_orig.reshape(devices, total_tokens, selected_experts_k)
-
-    # Generate expert scores (same shape as expert_indices)
+    # Generate expert scores (same shape as expert_indices initially)
     # Shape: [batch, 1, seq_len, selected_experts_k]
     expert_scores = torch.rand(expert_indices.shape, dtype=torch.float32).to(dtype)
-    # Normalize scores so they sum to 1 per token (softmax-like)
-    expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
+
+    # If we have shared experts, expand scores to include them
+    if num_shared_experts > 0:
+        output_expert_scores = _scores_ref_with_shared_experts(expert_scores, batch, seq_len, total_experts_per_token)
+    else:
+        output_expert_scores = expert_scores
 
     # Create scores golden tensor (all-gathered scores, same structure as metadata)
     # First reshape expert_scores from [batch, 1, seq_len, k] to [1, batch, seq_len, k]
-    scores_reshaped = expert_scores.permute(1, 0, 2, 3)  # [1, batch, seq_len, k]
+    scores_reshaped = output_expert_scores.permute(1, 0, 2, 3)  # [1, batch, seq_len, k]
     # Replicate across devices (same as metadata golden)
     scores_golden = scores_reshaped.repeat(devices, 1, 1, 1)  # [devices, batch, seq_len, k]
-    # Reshape to [devices, total_tokens, selected_experts_k]
-    scores_tensor = scores_golden.reshape(devices, total_tokens, selected_experts_k)
+    # Reshape to [devices, total_tokens, total_experts_per_token]
+    scores_tensor = scores_golden.reshape(devices, total_tokens, total_experts_per_token)
+
+    if num_shared_experts > 0:
+        # Use helper function to add shared experts
+        sparse_output_token_tensor = _sparse_output_with_shared_experts(
+            input_tokens,
+            sparse_output_orig,
+            expert_mapping_new,
+            shared_expert_ids_to_devices,
+            mesh_shape,
+            cluster_axis,
+            total_tokens,
+            seq_len,
+        ).reshape(devices, total_tokens, hidden_size)
+    # No shared experts
+    else:
+        sparse_output_token_tensor = sparse_output_orig.reshape(devices, total_tokens, hidden_size)
 
     return (
         input_tokens,
@@ -128,7 +237,7 @@ def run_all_to_all_dispatch_metadata_test(
     mesh_device,
     mesh_shape,
     batch,
-    experts,
+    routed_experts,
     select_experts_k,
     hidden_size,
     seq_len,
@@ -144,11 +253,16 @@ def run_all_to_all_dispatch_metadata_test(
     worker_mode=ttnn.WorkerMode.DIRECT,
     dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
     use_persistent_mode=False,
+    shared_expert_ids_to_devices: dict | None = None,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
+
+    # Calculate number of shared experts
+    num_shared_experts = len(shared_expert_ids_to_devices) if shared_expert_ids_to_devices is not None else 0
+    total_experts_per_token = select_experts_k + num_shared_experts
 
     expert_indices_tensors = []
     expert_scores_tensors = []
@@ -186,6 +300,7 @@ def run_all_to_all_dispatch_metadata_test(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
     )
     # Shard shape: [1 row, seq_len * select_experts_k columns]
+    # Note: Input indices/scores still only have select_experts_k, shared experts are added during dispatch
     input_indices_shard_spec = ttnn.ShardSpec(
         input_indices_scores_core_range,
         [1, seq_len * select_experts_k],
@@ -213,7 +328,7 @@ def run_all_to_all_dispatch_metadata_test(
             scores_tensor,
         ) = gen_tensors_for_metadata_op(
             batch,
-            experts,
+            routed_experts,
             select_experts_k,
             hidden_size,
             seq_len,
@@ -222,6 +337,7 @@ def run_all_to_all_dispatch_metadata_test(
             cluster_axis=cluster_axis,
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
+            shared_expert_ids_to_devices=shared_expert_ids_to_devices,
         )
 
         if iter == 0:
@@ -303,7 +419,8 @@ def run_all_to_all_dispatch_metadata_test(
 
         # Compute output shapes - use global shapes [devices, ...] for sharding across mesh
         output_tokens_shape = [devices, total_tokens, hidden_size]
-        metadata_shape = [devices, total_tokens, select_experts_k]
+        # Metadata and scores shapes include shared experts if present
+        metadata_shape = [devices, total_tokens, total_experts_per_token]
 
         # Create core range set for worker cores (needed for global semaphore creation)
         worker_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
@@ -313,7 +430,7 @@ def run_all_to_all_dispatch_metadata_test(
         drain_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core, drain_core)})
         metadata_shard_spec = ttnn.ShardSpec(
             drain_core_range_set,
-            [total_tokens, select_experts_k],
+            [total_tokens, total_experts_per_token],
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         metadata_sharded_mem_config = ttnn.MemoryConfig(
@@ -387,6 +504,7 @@ def run_all_to_all_dispatch_metadata_test(
                 expert_indices_tensors[buffer_index],
                 expert_scores_tensors[buffer_index],
                 expert_mapping_new_tensors[buffer_index],  # New format: [devices, experts]
+                shared_expert_ids=list(shared_expert_ids_to_devices) if shared_expert_ids_to_devices else None,
                 cluster_axis=cluster_axis,
                 num_links=num_links,
                 # Only pass drain_sync_tilizer_core when not using persistent mode
@@ -507,7 +625,8 @@ def run_all_to_all_dispatch_metadata_test(
         # New shapes: [devices, total_tokens, ...] where total_tokens = batch * seq_len
         devices = tt_metadata_tensor.shape[0]
         total_tokens_out = tt_metadata_tensor.shape[1]
-        selected_experts_k = tt_metadata_tensor.shape[2]
+        # Note: metadata tensor now includes both selected and shared experts
+        experts_per_token_out = tt_metadata_tensor.shape[2]
 
         # Verify metadata (indices)
         metadata_all_close = torch.allclose(
@@ -519,9 +638,13 @@ def run_all_to_all_dispatch_metadata_test(
         if not metadata_all_close or not metadata_all_equal:
             metadata_passed = False
             first_failed_metadata_index = tensor_index
-            failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
+            failed_metadata_indices = torch.where(
+                tt_metadata_tensor.to(torch.int16) != output_metadata_goldens_list[tensor_index]
+            )
             logger.info(f"All failed metadata devices: {failed_metadata_indices}")
-            logger.info(f"Failing tt_metadata_tensor tensor {tt_metadata_tensor[failed_metadata_indices]}")
+            logger.info(
+                f"Failing tt_metadata_tensor tensor {tt_metadata_tensor.to(torch.int16)[failed_metadata_indices]}"
+            )
             logger.info(
                 f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[tensor_index][failed_metadata_indices]}"
             )
@@ -553,7 +676,8 @@ def run_all_to_all_dispatch_metadata_test(
         for t in range(total_tokens_out):
             # Determine which source device this token came from
             src_device = t // tokens_per_src_device
-            for k in range(selected_experts_k):
+            # Check all experts (both selected and shared)
+            for k in range(experts_per_token_out):
                 expert_id = tt_metadata_tensor[src_device, t, k]
                 # Use the source device's copy of the expert mapping for the lookup
                 target_device = torch_expert_mappings_new[tensor_index][src_device, expert_id].item()
@@ -608,6 +732,25 @@ def run_all_to_all_dispatch_metadata_test(
         ), f"First failing index: {first_failed_tensor_index} token {first_failed_batch_index} sequence {first_failed_sequence_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
+def get_shared_expert_to_device_map(routed_experts, devices, mode):
+    if mode == "no_shared":
+        return None
+
+    # fully replicated shared expert
+    elif mode == "all_shared":
+        return {routed_experts: list(range(devices))}
+
+    # alternate routed shared expert assignment based on device parity
+    elif mode == "alternate_shared":
+        return {
+            routed_experts: list(range(0, devices, 2)),
+            routed_experts + 1: list(range(1, devices, 2)),
+        }
+
+    else:
+        raise RuntimeError("Invalid shared expert mode")
+
+
 # Correctness test - single focused test case for pipeline validation
 # Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
 @pytest.mark.skipif(
@@ -653,10 +796,11 @@ def run_all_to_all_dispatch_metadata_test(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("experts_per_device", [2])
-def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
+@pytest.mark.parametrize("routed_experts_per_device", [2])
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
+def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device, shared_expert_mode):
     batches_per_device = 32
-    experts = experts_per_device * mesh_shape[cluster_axis]
+    routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1
@@ -666,17 +810,19 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     dtype = ttnn.bfloat16
     congestion_scheme = "random_sequential_experts"
     worker_mode = ttnn.WorkerMode.DIRECT
-    use_persistent_mode = False
+    use_persistent_mode = True
 
     dispatch_devices = mesh_shape[cluster_axis]
     batch = batches_per_device * dispatch_devices
     trace_mode = True
 
+    shared_expert_ids_to_devices = get_shared_expert_to_device_map(routed_experts, prod(mesh_shape), shared_expert_mode)
+
     run_all_to_all_dispatch_metadata_test(
         mesh_device,
         mesh_shape,
         batch,
-        experts,
+        routed_experts,
         select_experts_k,
         hidden_size,
         seq_len,
@@ -690,6 +836,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
         worker_mode=worker_mode,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
         use_persistent_mode=use_persistent_mode,
+        shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
 
 
@@ -729,7 +876,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("experts", [2 * 16])
+@pytest.mark.parametrize("routed_experts", [2 * 16])
 @pytest.mark.parametrize(
     "select_experts_k", [8, 7, 6, 5, 4, 3, 2, 1], ids=["k8", "k7", "k6", "k5", "k4", "k3", "k2", "k1"]
 )
@@ -754,12 +901,13 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     [ttnn.WorkerMode.DIRECT, ttnn.WorkerMode.MUX_TOKEN_SPLIT, ttnn.WorkerMode.MUX_PAYLOAD_SPLIT],
     ids=["direct", "token_split", "payload_split"],
 )
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
 def test_decode_perf(
     mesh_device,
     mesh_shape,
     cluster_axis,
     batches_per_device,
-    experts,
+    routed_experts,
     select_experts_k,
     hidden_size,
     seq_len,
@@ -770,6 +918,7 @@ def test_decode_perf(
     congestion_scheme,
     use_persistent_mode,
     worker_mode,
+    shared_expert_mode,
 ):
     # Skip based on mesh shape and required mesh graph descriptor
     if mesh_shape == (16, 1):
@@ -787,6 +936,8 @@ def test_decode_perf(
     batch = batches_per_device * dispatch_devices
     trace_mode = True
 
+    shared_expert_ids_to_devices = get_shared_expert_to_device_map(routed_experts, prod(mesh_shape), shared_expert_mode)
+
     profiler = BenchmarkProfiler()
     step_name = "All2AllDispatchMetadataOp"
     profiler.start(step_name)
@@ -796,7 +947,7 @@ def test_decode_perf(
         mesh_device,
         mesh_shape,
         batch,
-        experts,
+        routed_experts,
         select_experts_k,
         hidden_size,
         seq_len,
@@ -810,6 +961,7 @@ def test_decode_perf(
         worker_mode=worker_mode,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
         use_persistent_mode=use_persistent_mode,
+        shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
 
     signpost(header="stop")
