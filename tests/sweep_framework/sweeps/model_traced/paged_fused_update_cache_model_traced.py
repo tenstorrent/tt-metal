@@ -187,16 +187,18 @@ def run(
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Convert to ttnn tensors
+    # Convert to ttnn tensors.
+    # IMPORTANT: Do NOT attempt to_memory_config with traced shard specs.
+    # paged_fused_update_cache value inputs require HEIGHT_SHARDED L1 with
+    # device-specific shard specs (grid size, core ranges).  Traced shard specs
+    # are tied to the original model's device grid and are incompatible with
+    # sweep test hardware.  Calling to_memory_config with an incompatible shard
+    # spec causes a device-level hang (NOC deadlock) that is NOT catchable via
+    # try/except — only a 60s timeout kills it.  Keep all tensors on DRAM.
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
         if not is_host:
-            # Replicate to all devices instead of sharding.  We compare
-            # against device-0 output only, so each device must receive
-            # the full original tensor.  create_tensor_on_mesh repeats/
-            # shards the data which causes a mismatch when extracting
-            # only device 0.
             if is_mesh_device:
-                t = ttnn.from_torch(
+                return ttnn.from_torch(
                     torch_tensor,
                     dtype=dtype,
                     layout=layout,
@@ -205,16 +207,9 @@ def run(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                 )
             else:
-                t = ttnn.from_torch(
+                return ttnn.from_torch(
                     torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
-            # Move to traced memory config if sharded
-            if mem_config is not None and hasattr(mem_config, "is_sharded") and mem_config.is_sharded():
-                try:
-                    t = ttnn.to_memory_config(t, mem_config)
-                except Exception:
-                    pass  # Stay on DRAM if shard spec is incompatible
-            return t
         else:
             return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
 
