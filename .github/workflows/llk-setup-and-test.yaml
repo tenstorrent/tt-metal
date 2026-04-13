@@ -61,7 +61,7 @@ permissions:
   contents: read
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   generate-matrix:
@@ -90,8 +90,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Step 2: Install SFPI
       - name: Install SFPI
