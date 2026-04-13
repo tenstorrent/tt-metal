@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "emulated_program_runner.hpp"
-#include "emulated_run_stats.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -19,7 +19,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -245,13 +244,6 @@ struct CoreSetup {
 };
 
 // ---------------------------------------------------------------------------
-// Last-run stats (populated by execute_program_emulated)
-// ---------------------------------------------------------------------------
-static EmulatedRunStats g_last_run_stats;
-
-const EmulatedRunStats& get_last_emulated_run_stats() { return g_last_run_stats; }
-
-// ---------------------------------------------------------------------------
 // JIT Compilation Cache (in-memory + persistent disk cache)
 // ---------------------------------------------------------------------------
 
@@ -280,7 +272,10 @@ static std::string get_jit_cache_dir() {
 // dlopen a previously cached .so and return the kernel entry function.
 // Returns nullptr on failure (missing file, symbol resolution error, etc.).
 static std::function<void()> dlopen_cached_so(const std::string& so_path) {
-    dlopen("libtt_metal.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    void* metal_lib = dlopen("libtt_metal.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!metal_lib) {
+        log_warning(tt::LogMetal, "dlopen_cached_so: could not promote libtt_metal.so to RTLD_GLOBAL: {}", dlerror());
+    }
     void* handle = dlopen(so_path.c_str(), RTLD_NOW);
     if (!handle) {
         return nullptr;
@@ -340,7 +335,7 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 // JIT Kernel Compilation
 // ---------------------------------------------------------------------------
 
-std::function<void()> jit_compile_kernel(
+static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
@@ -445,6 +440,9 @@ std::function<void()> jit_compile_kernel(
     std::string full_cmd = cmd.str();
     log_debug(tt::LogMetal, "JIT compile: {}", full_cmd);
 
+    // Safety: all path/flag inputs are derived from tt-metal internals and CMake
+    // constants, not from untrusted user input. Kernel defines are written as
+    // #define in the wrapper file, not as -D shell flags.
     int rc = std::system(full_cmd.c_str());
     if (rc != 0) {
         throw std::runtime_error(
@@ -455,7 +453,10 @@ std::function<void()> jit_compile_kernel(
     // Promote libtt_metal.so to RTLD_GLOBAL so kernel.so can resolve TLS symbols
     // (e.g. __emule_cbs) that are defined in libtt_metal.so. When loaded via
     // Python module import, shared libraries default to RTLD_LOCAL.
-    dlopen("libtt_metal.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    void* metal_lib = dlopen("libtt_metal.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!metal_lib) {
+        log_warning(tt::LogMetal, "jit_compile_kernel: could not promote libtt_metal.so to RTLD_GLOBAL: {}", dlerror());
+    }
     void* handle = dlopen(so_path.c_str(), RTLD_NOW);
     if (!handle) {
         throw std::runtime_error(std::string("jit_compile_kernel: dlopen failed: ") + dlerror());
@@ -648,7 +649,10 @@ static void collect_kernels(
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
-            auto defines = kernel->defines();
+            // Use process_defines() instead of defines() to include derived
+            // defines like NOC_INDEX and NOC_MODE from kernel subclasses.
+            std::map<std::string, std::string> defines;
+            kernel->process_defines([&](const std::string& k, const std::string& v) { defines[k] = v; });
 
             defines["NUM_DRAM_BANKS"] = std::to_string(num_dram_channels ? num_dram_channels : 1);
             defines["NUM_L1_BANKS"] = std::to_string(EMULE_NUM_L1_BANKS);
@@ -1104,36 +1108,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
         }
     }
 
-    // Record execution metadata for test introspection
-    {
-        g_last_run_stats.num_cores = static_cast<uint32_t>(core_kernels.size());
-        g_last_run_stats.kernel_paths.clear();
-        std::set<std::string> seen_paths;
-        const uint32_t num_pct2 = MetalContext::instance().hal().get_programmable_core_type_count();
-        for (uint32_t pct = 0; pct < num_pct2; ++pct) {
-            auto& kernels = impl.get_kernels(pct);
-            for (auto& [kernel_id, kernel] : kernels) {
-                const auto& ksrc = kernel->kernel_source();
-                std::string basename;
-                if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                    basename = std::filesystem::path(ksrc.path_).filename().string();
-                } else {
-                    basename = "<inline>";
-                }
-                if (seen_paths.insert(basename).second) {
-                    g_last_run_stats.kernel_paths.push_back(basename);
-                }
-            }
-        }
-        log_info(
-            tt::LogMetal,
-            "execute_program_emulated: {} logical cores, {} unique kernels",
-            core_kernels.size(),
-            g_last_run_stats.kernel_paths.size());
-        for (auto& kp : g_last_run_stats.kernel_paths) {
-            log_info(tt::LogMetal, "  JIT kernel: {}", kp);
-        }
-    }
+    log_info(tt::LogMetal, "execute_program_emulated: {} logical cores", core_kernels.size());
 
     // Phase 2: Build core map and set up per-core state
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id);

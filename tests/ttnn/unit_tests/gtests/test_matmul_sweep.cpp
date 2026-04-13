@@ -25,8 +25,6 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-#include "impl/emulation/emulated_run_stats.hpp"
-
 namespace ttnn::operations::matmul::test {
 
 // Shape parameters: M, K, N
@@ -65,16 +63,6 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
     auto t_end = std::chrono::steady_clock::now();
     double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
-    // Get execution metadata
-    const auto& stats = tt::tt_metal::emule::get_last_emulated_run_stats();
-    std::string kernels_str;
-    for (size_t i = 0; i < stats.kernel_paths.size(); ++i) {
-        if (i > 0) {
-            kernels_str += ", ";
-        }
-        kernels_str += stats.kernel_paths[i];
-    }
-
     // Verify result: expected = full(c_dims, float(K))
     float expected_val = static_cast<float>(K);
     const auto expected = ttnn::full(ttnn::Shape(c_dims), expected_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -88,9 +76,8 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
     // Print result row
     std::ostringstream row;
     row << "| " << std::setw(5) << M << " | " << std::setw(5) << K << " | " << std::setw(5) << N << " | "
-        << std::setw(6) << out_tiles << " | " << std::setw(5) << stats.num_cores << " | " << std::setw(6)
-        << (pass ? "PASS" : "FAIL") << " | " << std::setw(8) << std::fixed << std::setprecision(1) << elapsed_ms
-        << " | " << kernels_str << " |";
+        << std::setw(6) << out_tiles << " | " << std::setw(6) << (pass ? "PASS" : "FAIL") << " | " << std::setw(8)
+        << std::fixed << std::setprecision(1) << elapsed_ms << " |";
     std::cout << row.str() << std::endl;
 
     if (!pass) {
@@ -122,15 +109,9 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
 
 // Print table header before first test
 static bool print_header() {
-    std::cout << "+-------+-------+-------+--------+-------+--------+----------+"
-                 "-------------------------------------------+"
-              << std::endl;
-    std::cout << "|     M |     K |     N |  tiles | cores | status | time(ms) |"
-                 " kernels                                   |"
-              << std::endl;
-    std::cout << "+-------+-------+-------+--------+-------+--------+----------+"
-                 "-------------------------------------------+"
-              << std::endl;
+    std::cout << "+-------+-------+-------+--------+--------+----------+" << std::endl;
+    std::cout << "|     M |     K |     N |  tiles | status | time(ms) |" << std::endl;
+    std::cout << "+-------+-------+-------+--------+--------+----------+" << std::endl;
     return true;
 }
 static bool header_printed = print_header();

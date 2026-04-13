@@ -870,7 +870,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
 #ifdef TT_METAL_USE_EMULE
         if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-            // JIT-compile kernels to x86 and execute synchronously.
+            // Emulated mode always executes synchronously (slow dispatch only).
+            // The wait_until_cores_done flag is not honored; all kernels complete
+            // before this function returns.
             emule::execute_program_emulated(device, program);
             return;
         }

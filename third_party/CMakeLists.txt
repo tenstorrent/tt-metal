@@ -418,5 +418,10 @@ CPMAddPackage(
 # tt-emule (software emulation, header-only consumption)
 ############################################################################################################################
 if(TT_METAL_USE_EMULE)
-    CPMAddPackage(NAME tt_emule GITHUB_REPOSITORY tenstorrent/tt-emule GIT_TAG main EXCLUDE_FROM_ALL YES)
+    CPMAddPackage(
+        NAME tt_emule
+        GITHUB_REPOSITORY tenstorrent/tt-emule
+        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
+        EXCLUDE_FROM_ALL YES
+    )
 endif()
