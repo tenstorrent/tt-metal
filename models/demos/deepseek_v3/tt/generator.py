@@ -170,7 +170,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         sample_on_device: bool = False,
         enable_mtp: bool = False,
         sampling_params: SamplingParams | None = None,
+        vllm_context: bool = False,
     ) -> None:
+        self.vllm_context = vllm_context  # track if Generator is initialized in vLLM context
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
@@ -300,9 +302,28 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
 
+    def _get_prefill_warmup_prompt_lens(self) -> list[int]:
+        """Build and cache supported prefill warmup lengths.
+
+        The list starts at ``ttnn.TILE_SIZE`` and doubles each step
+        (tile, 2*tile, 4*tile, ...), then includes ``hf_config.max_seq_len``
+        to guarantee coverage of the configured maximum sequence length.
+        Returned values are unique and sorted in ascending order.
+        """
+        if hasattr(self, "_prefill_warmup_prompt_lens"):
+            return self._prefill_warmup_prompt_lens
+        prompt_lens_set: set[int] = set()
+        prompt_len = ttnn.TILE_SIZE
+        while prompt_len <= self.hf_config.max_seq_len:
+            prompt_lens_set.add(prompt_len)
+            prompt_len *= 2
+        prompt_lens_set.add(self.hf_config.max_seq_len)
+        self._prefill_warmup_prompt_lens = sorted(prompt_lens_set)
+        return self._prefill_warmup_prompt_lens
+
     def _validate_and_initialize_sampling(
         self,
-        sampling_params: SamplingParams | None,
+        new_sampling_params: SamplingParams | None,
         sample_on_device: bool,
         enable_trace: bool = False,
         enable_mtp: bool = False,
@@ -310,60 +331,49 @@ class DeepseekGenerator(WarmupForwardMixin):
         if enable_mtp and sample_on_device:
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
 
-        current_sampling_params = getattr(self, "sampling_params", None)
-        params_same = (
-            sampling_params is not None
-            and current_sampling_params is not None
-            and self._are_sampling_params_same(sampling_params, current_sampling_params)
-        )
-        if not params_same:
-            self.sampling_generator = None
-            self.sampling_params = None
-
-        if not sample_on_device:
-            self.sampling_generator = None
-
-        if getattr(self, "sampling_generator", None) is not None:
-            return
-
         self.sample_on_device = sample_on_device
+        previous_sampling_params = getattr(self, "sampling_params", None)
+
         # sampling params of all users are assumed to be the same default values if not provided.
-        self.sampling_params = (
-            self._to_local_sampling_params(sampling_params)
-            if sampling_params is not None
+        normalized_sampling_params = (
+            self._to_local_sampling_params(new_sampling_params)
+            if new_sampling_params is not None
             else SamplingParams(
                 temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
                 top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
                 top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
             )
         )
-        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and sample_on_device:
-            raise SystemExit(
-                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
-            )
-        if sample_on_device:
-            enable_internal_trace_sampling = enable_trace and self.sample_on_device
-            self.sampling_args = make_deepseek_sampling_args(
-                self.mesh_device,
-                self.hf_config.vocab_size,
-                max_batch_size=self.batch_size_per_row,
-            )
-            self.sampling_generator = SamplingGenerator(
-                args=self.sampling_args,
-                mesh_device=self.mesh_device,
-                tt_ccl=self.ccl,
-                enable_internal_trace=enable_internal_trace_sampling,
+
+        if self.sample_on_device:
+            params_same = previous_sampling_params is not None and self._are_sampling_params_same(
+                normalized_sampling_params, previous_sampling_params
             )
 
-            self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
+            if self._get_sampling_value(normalized_sampling_params.top_k, 0) == 0:
+                raise SystemExit(
+                    "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
+                )
 
-        logger.info(f"Sampling mode: {'device' if sample_on_device else 'host'}")
-        logger.info(
-            f"Sampling parameters for first user (other users may have different values): "
-            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
-            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
-            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
-        )
+            if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+                # sampling generator exists; reset if params are different
+                if not params_same:
+                    self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
+            else:
+                # create new sampling generator
+                enable_internal_trace_sampling = enable_trace
+                self.sampling_args = make_deepseek_sampling_args(
+                    self.mesh_device, self.hf_config.vocab_size, max_batch_size=self.batch_size_per_row
+                )
+                self.sampling_generator = SamplingGenerator(
+                    args=self.sampling_args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.ccl,
+                    enable_internal_trace=enable_internal_trace_sampling,
+                )
+                self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
+
+        self.sampling_params = normalized_sampling_params
 
     def _to_local_sampling_params(self, params_obj) -> SamplingParams:
         """Project duck-typed sampling params to local SamplingParams fields."""
@@ -761,7 +771,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _sample_tokens_device(
-        self, logits: ttnn.Tensor, enable_trace: bool = False, user_slots: list[int] | None = None
+        self,
+        logits: ttnn.Tensor,
+        enable_trace: bool = False,
+        user_slots: list[int] | None = None,
     ) -> ttnn.Tensor:
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
@@ -2208,6 +2221,20 @@ class DeepseekGenerator(WarmupForwardMixin):
             out.append(1)
         return out
 
+    def _pad_seq_len_to_warmup_prompt_lens(self, seq_len: int) -> int:
+        """Return the smallest supported prefill length >= seq_len.
+
+        Raise ValueError if seq_len is larger than all values in the list
+        returned by _get_prefill_warmup_prompt_lens().
+        """
+        for supported_len in self._get_prefill_warmup_prompt_lens():
+            if seq_len <= supported_len:
+                return supported_len
+
+        raise ValueError(
+            f"seq_len {seq_len} is greater than all supported prefill lengths {self._get_prefill_warmup_prompt_lens()}"
+        )
+
     def _prefill(
         self,
         tokens: torch.Tensor,
@@ -2231,6 +2258,28 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
+        if self.vllm_context:
+            # In vLLM context, we perform warmup for prefill and decode.
+            # prefill warmup is performed for all supported prompt lengths in the list returned by _get_prefill_warmup_prompt_lens()
+            # We need to pad the seq_len to the closest supported warmup prompt length, otherwise memory corruption can happen.
+            # The memory corruption happens when any new device memory is allocated when trace is active.
+            max_supported_seq_len = max(self._get_prefill_warmup_prompt_lens())
+            if seq_len > max_supported_seq_len:
+                raise ValueError(
+                    f"seq_len {seq_len} is greater than {max_supported_seq_len}. "
+                    "Crash here early rather than wait for memory corruption to happen and crash later."
+                )
+            padded_seq_len = self._pad_seq_len_to_warmup_prompt_lens(seq_len)
+            if padded_seq_len > seq_len:
+                pad_token_id = getattr(self, "pad_token_id", 0)
+                pad_tokens = torch.full(
+                    (tokens.shape[0], tokens.shape[1], padded_seq_len - seq_len),
+                    pad_token_id,
+                    dtype=tokens.dtype,
+                    device=tokens.device,
+                )
+                tokens = torch.cat((tokens, pad_tokens), dim=-1)
+                seq_len = padded_seq_len
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(
@@ -2833,9 +2882,55 @@ class DeepseekGenerator(WarmupForwardMixin):
                 ttnn.ReadDeviceProfiler(self.mesh_device)
             return logits.squeeze(0).squeeze(0)
 
+    def _get_warmup_page_size(self) -> int:
+        for attr_name in ("page_size", "block_size", "kv_cache_page_size"):
+            value = getattr(self, attr_name, None)
+            if isinstance(value, int) and value > 0:
+                return value
+        for container_name in ("model_args", "model_config", "config"):
+            container = getattr(self, container_name, None)
+            if container is None:
+                continue
+            for attr_name in ("page_size", "block_size", "kv_cache_page_size"):
+                value = getattr(container, attr_name, None)
+                if isinstance(value, int) and value > 0:
+                    return value
+        return 1
+
+    def _build_warmup_page_table(self, prompt_len: int) -> torch.Tensor:
+        page_size = self._get_warmup_page_size()
+        num_pages = max(1, (prompt_len + page_size - 1) // page_size)
+        return torch.arange(num_pages, dtype=torch.int32).unsqueeze(0)
+
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
-        logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
-        logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
+        if enable_trace:
+            logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator; skipping warmup.")
+            return
+
+        user_id = 0
+        for sample_on_device in [False, True]:
+            for prompt_len in self._get_prefill_warmup_prompt_lens():
+                tokens = torch.zeros(1, prompt_len, dtype=torch.int32)
+                # TODO: MTP path warmup needed?
+                page_table = self._build_warmup_page_table(prompt_len)
+                prefill_logits = self._prefill(
+                    tokens=tokens,
+                    user_id=user_id,
+                    sample_on_device=sample_on_device,
+                    page_table=page_table,
+                    return_last_hidden=False,
+                )
+                if sample_on_device:
+                    self._validate_and_initialize_sampling(
+                        None,
+                        sample_on_device,
+                        enable_trace=enable_trace,
+                    )
+
+                    prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
+                    self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+
+        logger.info("Prefill warmup completed.")
 
     def get_kv_cache(self):
         assert self.model_state is not None, "Model state is not initialized"
