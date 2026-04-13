@@ -238,19 +238,18 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 
     echo ""
     echo "Running cluster validation..."
+    local ttrun_args=(
+        --not-mesh-aware
+        --hosts "$HOSTS"
+        --mpi-args "--mca btl_tcp_if_exclude docker0,lo,tailscale0"
+    )
     if [[ -n "$DOCKER_IMAGE" ]]; then
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${VALIDATION_ARGS[@]}"
-    else
-        mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
-            --tag-output \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${VALIDATION_ARGS[@]}"
+        ttrun_args+=(--docker-image "$DOCKER_IMAGE" --docker-empty-entrypoint)
     fi
+
+    tt-run "${ttrun_args[@]}" \
+        ./build/tools/scaleout/run_cluster_validation \
+        "${VALIDATION_ARGS[@]}"
 else
     echo "Skipping validation (--skip-validation)"
 fi
