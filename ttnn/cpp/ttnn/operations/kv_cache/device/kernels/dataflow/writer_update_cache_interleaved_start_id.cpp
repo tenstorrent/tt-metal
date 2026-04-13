@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto cache_args = TensorAccessorArgs<6>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const auto s0 = decltype(TensorAccessor(cache_args, cache_addr)){cache_args, cache_addr, cache_tile_bytes};
+    const auto s0 = TensorAccessor(cache_args, cache_addr);
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
