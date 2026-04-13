@@ -109,13 +109,13 @@ models:
     wh_llmbox: 198
     wh_llmbox_perf: 330
     wh_n150: 70
-    wh_n300: 40
+    wh_n300: 50
     wh_galaxy: 90
   unit:
     wh_llmbox: 370
     wh_llmbox_perf: 220
     wh_n150: 90
-    wh_n300: 40
+    wh_n300: 50
     wh_galaxy: 85
   integration:
     wh_llmbox: 422
