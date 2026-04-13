@@ -50,6 +50,7 @@
 #include "tt_emule/device.hpp"
 
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/common/stable_hash.hpp"
 
 #ifndef TT_EMULE_JIT_INCLUDE_DIR
 #error "TT_EMULE_JIT_INCLUDE_DIR must be defined by CMake (path to tt-emule's include/jit_hw)"
@@ -87,15 +88,20 @@ thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = n
 // Exported via -rdynamic so JIT .so files can resolve them at dlopen time.
 // Match firmware declarations: uint16_t[NUM_NOCS][NUM_DRAM_BANKS], etc.
 // ---------------------------------------------------------------------------
-uint16_t dram_bank_to_noc_xy[2][32] = {};
-int32_t bank_to_dram_offset[32] = {};
-uint16_t l1_bank_to_noc_xy[2][32] = {};
-int32_t bank_to_l1_offset[32] = {};
+static constexpr uint32_t NUM_NOCS = 2;
+static constexpr uint32_t MAX_NUM_BANKS = 32;
+// Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
+static constexpr uint32_t EMULE_NUM_CBS = 32;
+
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][MAX_NUM_BANKS] = {};
+int32_t bank_to_dram_offset[MAX_NUM_BANKS] = {};
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][MAX_NUM_BANKS] = {};
+int32_t bank_to_l1_offset[MAX_NUM_BANKS] = {};
 
 // Per-core NOC coordinates — set per kernel thread (thread_local).
 // On real HW these are read from NOC registers; we set them from physical coords.
-thread_local uint8_t my_x[2] = {};
-thread_local uint8_t my_y[2] = {};
+thread_local uint8_t my_x[NUM_NOCS] = {};
+thread_local uint8_t my_y[NUM_NOCS] = {};
 thread_local uint32_t __emule_logical_x = 0;
 thread_local uint32_t __emule_logical_y = 0;
 
@@ -155,7 +161,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // than a firmware-style L1 offset.  Worker L1 slots are 2 MB-aligned, so
     // masking with SLOT_MASK extracts the true within-slot offset.  For
     // firmware-style offsets (< 2 MB) this is a no-op.
-    static constexpr uint32_t L1_SLOT_MASK = (2u * 1024 * 1024) - 1;  // 0x1FFFFF
+    static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
+    static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
 
     if (!__emule_core_map) {
@@ -250,13 +257,12 @@ static std::unordered_map<std::string, std::function<void()>> g_jit_cache;
 // Disk JIT cache — survives process restarts (critical for --forked mode)
 // ---------------------------------------------------------------------------
 
+static constexpr size_t FNV_HEX_BUF_SIZE = 17;  // 16 hex digits + null
+
 static uint64_t fnv1a_hash(const std::string& s) {
-    uint64_t h = 14695981039346656037ULL;
-    for (unsigned char c : s) {
-        h ^= static_cast<uint64_t>(c);
-        h *= 1099511628211ULL;
-    }
-    return h;
+    tt::FNV1a hasher;
+    hasher.update(s);
+    return hasher.digest();
 }
 
 static std::string get_jit_cache_dir() {
@@ -291,7 +297,7 @@ static std::function<void()> dlopen_cached_so(const std::string& so_path) {
 // Returns a callable if cache hit (and source mtime is not newer), else nullptr.
 static std::function<void()> disk_cache_lookup(const std::string& cache_key, const std::string& src_path) {
     std::string cache_dir = get_jit_cache_dir();
-    char hex[17];
+    char hex[FNV_HEX_BUF_SIZE];
     std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(cache_key));
     std::string so_path = cache_dir + "/" + hex + ".so";
 
@@ -320,7 +326,7 @@ static std::function<void()> disk_cache_lookup(const std::string& cache_key, con
 static std::string disk_cache_so_path(const std::string& cache_key) {
     std::string cache_dir = get_jit_cache_dir();
     std::filesystem::create_directories(cache_dir);
-    char hex[17];
+    char hex[FNV_HEX_BUF_SIZE];
     std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(cache_key));
     return cache_dir + "/" + hex + ".so";
 }
@@ -514,7 +520,7 @@ static void populate_bank_mapping(
     // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
     std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
     std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
-    for (uint32_t ch = 0; ch < num_dram_channels_out && ch < 32; ch++) {
+    for (uint32_t ch = 0; ch < num_dram_channels_out && ch < MAX_NUM_BANKS; ch++) {
         auto dc = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
         uint16_t noc_xy = (static_cast<uint16_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc.x);
         dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
@@ -539,9 +545,10 @@ static void populate_bank_mapping(
 // build_worker_coord_maps: Build logical→virtual coordinate mapping strings.
 // ---------------------------------------------------------------------------
 static void build_worker_coord_maps(IDevice* device, std::string& worker_col_map_str, std::string& worker_row_map_str) {
+    static constexpr uint32_t MAX_LOGICAL_GRID_DIM = 64;
     auto grid = device->compute_with_storage_grid_size();
     std::ostringstream col_ss;
-    for (uint32_t lx = 0; lx < 64; lx++) {
+    for (uint32_t lx = 0; lx < MAX_LOGICAL_GRID_DIM; lx++) {
         if (lx) {
             col_ss << ',';
         }
@@ -555,7 +562,7 @@ static void build_worker_coord_maps(IDevice* device, std::string& worker_col_map
     worker_col_map_str = col_ss.str();
 
     std::ostringstream row_ss;
-    for (uint32_t ly = 0; ly < 64; ly++) {
+    for (uint32_t ly = 0; ly < MAX_LOGICAL_GRID_DIM; ly++) {
         if (ly) {
             row_ss << ',';
         }
@@ -659,16 +666,16 @@ static void collect_kernels(
                 if (!core_range_set.ranges().empty()) {
                     auto first_core = core_range_set.ranges().begin()->start_coord;
                     auto cb_impls = impl.circular_buffers_on_core(first_core);
-                    uint32_t tile_sizes[32] = {};
+                    uint32_t tile_sizes[EMULE_NUM_CBS] = {};
                     for (auto& cb_impl : cb_impls) {
                         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-                            if (idx < 32) {
+                            if (idx < EMULE_NUM_CBS) {
                                 tile_sizes[idx] = cb_impl->page_size(idx);
                             }
                         }
                     }
                     std::ostringstream ts;
-                    for (int i = 0; i < 32; i++) {
+                    for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
                         if (i) {
                             ts << ',';
                         }
@@ -683,7 +690,7 @@ static void collect_kernels(
             if (ksrc.source_type_ == KernelSource::FILE_PATH) {
                 cache_key = src_path;
             } else {
-                char hex[17];
+                char hex[FNV_HEX_BUF_SIZE];
                 std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ksrc.source_));
                 cache_key = std::string("inline:") + hex;
             }
@@ -824,7 +831,7 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         // Add DRAM cores (metal_SocDescriptor preferred worker coords)
         {
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < 32; ch++) {
+            for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
                 auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, 0);
                 auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
                 uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
@@ -847,7 +854,6 @@ static void setup_core_state(
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
     std::vector<CoreSetup>& core_setups) {
-    static constexpr uint32_t MAX_CBS = 32;
     static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
     for (auto& [logical_core, ki_list] : core_kernels) {
@@ -868,7 +874,7 @@ static void setup_core_state(
         auto cb_impls = impl.circular_buffers_on_core(logical_core);
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
-                if (idx >= MAX_CBS) {
+                if (idx >= EMULE_NUM_CBS) {
                     continue;
                 }
                 uint32_t cb_addr = cb_impl->address();
@@ -897,7 +903,7 @@ static void setup_core_state(
             uint32_t sem_id = sem.id();
             uint32_t initial_value = sem.initial_value();
             uint32_t sem_addr = emule_sem_base + sem_id * EMULE_SEM_ALIGN;
-            if (sem_addr + 4 <= core->l1_size()) {
+            if (sem_addr + sizeof(uint32_t) <= core->l1_size()) {
                 auto* sem_ptr = reinterpret_cast<uint32_t*>(core->l1_ptr(sem_addr));
                 *sem_ptr = initial_value;
                 log_debug(
