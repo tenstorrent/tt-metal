@@ -201,7 +201,11 @@ void kernel_main() {
         uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
-            noc_async_read_tile(tile, attention_sink_reader, attention_sink_write_ptr);
+            uint64_t sink_noc_addr = attention_sink_reader.get_noc_addr(tile);
+            // Use noc_async_read with explicit size instead of noc_async_read_tile because
+            // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
+            // noc_async_read_tile would read buffer->aligned_page_size() bytes, overflowing the CB.
+            noc_async_read(sink_noc_addr, attention_sink_write_ptr, attention_sink_tile_bytes);
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
         noc_async_read_barrier();
