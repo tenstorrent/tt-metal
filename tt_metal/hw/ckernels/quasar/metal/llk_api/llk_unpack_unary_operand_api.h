@@ -6,7 +6,6 @@
 
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_operand.h"
-#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK — single-operand unary unpack (UNP_A / UNP_B / UNP_DEST)

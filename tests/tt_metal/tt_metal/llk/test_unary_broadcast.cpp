@@ -445,13 +445,17 @@ TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
         GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";
     }
     constexpr BroadcastDim k_quasar_dims[] = {
-        BroadcastDim::ROW, BroadcastDim::COL /*, BroadcastDim::SCALAR — returns zeros, needs investigation */};
+        BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
     constexpr struct { tt::DataFormat in_t; tt::DataFormat out_t; } k_formats[] = {
         {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
         {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
     };
     for (BroadcastDim bcast_dim : k_quasar_dims) {
         for (const auto& fmt : k_formats) {
+            // TODO (#38092): Remove when we can run back to back tests on Quasar
+            if (bcast_dim != BroadcastDim::ROW || fmt.in_t != tt::DataFormat::Float16_b) {
+                continue;
+            }
             UnaryBroadcastConfig test_config = {
                 .broadcast_dim = bcast_dim,
                 .in_t = fmt.in_t,
