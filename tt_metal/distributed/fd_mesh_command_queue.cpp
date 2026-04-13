@@ -1357,6 +1357,22 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         }
         finish_nolock({});
 
+        // finish_nolock() causes the completion thread to write last_completed_event=0
+        // (for the event=0 flush it just processed). Restore UINT32_MAX so that any
+        // subsequent EventSynchronize() calls on live MeshBuffers — e.g. from tensor
+        // destructors running after quiesce — immediately return rather than spinning
+        // forever on "last_completed_event >= N" with N > 0.
+        //
+        // This is safe: finish_nolock() drained all in-flight completions, so the
+        // completion thread is now idle and will not update last_completed_event again
+        // until a new event is enqueued (which requires in_use_ = true first, and we
+        // hold the API lock here so no concurrent enqueue can happen).
+        for (auto* device : mesh_device_->get_devices()) {
+            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
+            device->sysmem_manager().set_current_and_last_completed_event(
+                id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
+        }
+
         in_use_ = false;
     }
 }
