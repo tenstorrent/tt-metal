@@ -384,6 +384,3 @@ def test_pipeline_performance(
     assert pass_perf_check, "\n".join(assert_msgs)
 
     logger.info("Performance test completed successfully!")
-
-    profiler.disable()
-    logger.info("Tracy profiling disabled")
