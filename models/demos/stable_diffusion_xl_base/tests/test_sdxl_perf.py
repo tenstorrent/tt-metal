@@ -132,15 +132,15 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 324_271_938,
+        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
         "blackhole": 143_563_697,
     },
     "vae_encode_512x512": {
-        "wormhole": 85_005_572,
+        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_570_000,
+        "wormhole": 40_995_000,  # Note: this is an average value of 30 test runs due to high variability
         "blackhole": 19_377_824,
     },
     "clip_encoder_2": {
