@@ -15,19 +15,20 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
     max_wo_mm_chunk_seq_len,
 )
 
-# SDPA chunk sizes must be multiples of the Tensor tile width (see sdpa_device_operation validation).
-_SDPA_Q_CHUNK = 128
-_SDPA_CANDIDATE_K_CHUNKS = (256, 128)
+# SDPA chunk sizes must be multiples of TILE_WIDTH (32); Metal also expects power-of-two chunks in practice.
+# Cap at **256** (not 512): large K tiles increase per-kernel working set and can dominate device time or
+# stress the profiler. Prefer **256-wide Q** when it divides seq_len to halve Q-axis tiling vs 128.
+_SDPA_Q_CHUNKS = (256, 128)
+_SDPA_K_CHUNKS = (256, 128)
 
 
 def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
-    """Largest K chunk (128/256) that divides seq_len; Q chunk matches the model's 128-token tiling."""
-    if seq_len % _SDPA_Q_CHUNK != 0:
-        raise ValueError(f"seq_len {seq_len} must be divisible by {_SDPA_Q_CHUNK}")
-    for k_chunk in _SDPA_CANDIDATE_K_CHUNKS:
-        if k_chunk <= seq_len and seq_len % k_chunk == 0:
-            return _SDPA_Q_CHUNK, k_chunk
-    raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len} (expected a multiple of 128)")
+    """Pick largest (q_chunk, k_chunk) from candidate lists that divide ``seq_len``."""
+    if seq_len % 128 != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by 128")
+    q_chunk = next(q for q in _SDPA_Q_CHUNKS if q <= seq_len and seq_len % q == 0)
+    k_chunk = next(k for k in _SDPA_K_CHUNKS if k <= seq_len and seq_len % k == 0)
+    return q_chunk, k_chunk
 
 
 def _sdpa_storage_grid(mesh_device: ttnn.MeshDevice | None):
@@ -195,6 +196,7 @@ class BgeM3Attention(LightweightModule):
         assert seq_len > 0, "seq_len must be positive"
         if seq_len > 128:
             assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
+        assert seq_len > 0 and seq_len % 128 == 0, "seq_len must be divisible by 128"
 
         cfg = self.config
 
@@ -371,11 +373,11 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         to_set["mesh_device"] = mesh_device
 
     if config.score_prg_config is None:
-        q128, k128 = _sdpa_chunks_for_seq_len(128)
+        q0, k0 = _sdpa_chunks_for_seq_len(128)
         to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=_sdpa_storage_grid(mesh_device),
-            q_chunk_size=q128,
-            k_chunk_size=k128,
+            q_chunk_size=q0,
+            k_chunk_size=k0,
             exp_approx_mode=False,
         )
 
