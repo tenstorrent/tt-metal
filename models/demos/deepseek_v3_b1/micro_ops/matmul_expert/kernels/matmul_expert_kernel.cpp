@@ -22,7 +22,10 @@ void kernel_main() {
     constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t cb_index = get_named_compile_time_arg_val("cb_index");
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("num_tiles_k");
-    unified_kernels::setup_sharded_buffer(cb_in0, num_tiles_k);
+    constexpr uint32_t accum_experts = get_named_compile_time_arg_val("accum_experts");
+    constexpr uint32_t num_active_experts = get_named_compile_time_arg_val("num_active_experts");
+    constexpr uint32_t cb_in0_pages = accum_experts ? num_tiles_k * num_active_experts : num_tiles_k;
+    unified_kernels::setup_sharded_buffer(cb_in0, cb_in0_pages);
     unified_kernels::setup_sharded_buffer(cb_index, 1);
 
     if constexpr (get_named_compile_time_arg_val("sram_active") != 0) {

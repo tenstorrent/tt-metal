@@ -323,15 +323,17 @@ struct MatmulExpertCompressedDRAM {
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
             const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
 
-            // Count DRAM experts.
+            // Count DRAM experts and record activation tile offsets.
             uint32_t num_dram_experts = 0;
-            uint32_t dram_expert_eids[num_active_experts];
+            uint32_t dram_act_tile_offset[num_active_experts];
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (!is_dram_arr[eid]) {
                     continue;
                 }
-                dram_expert_eids[num_dram_experts] = eid;
+                if constexpr (CTArgs::accum_experts) {
+                    dram_act_tile_offset[num_dram_experts] = exp_i * num_tiles_k;
+                }
                 num_dram_experts++;
             }
 
@@ -348,7 +350,11 @@ struct MatmulExpertCompressedDRAM {
                     PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
                 }
 
-                cb_wait_front(CTArgs::cb_in0, num_tiles_k);
+                if constexpr (CTArgs::accum_experts) {
+                    cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
+                } else {
+                    cb_wait_front(CTArgs::cb_in0, num_tiles_k);
+                }
 
                 uint32_t addr_in0 = 0;
                 uint32_t in0_face_r_dim = 0;
@@ -365,6 +371,7 @@ struct MatmulExpertCompressedDRAM {
 
                 if constexpr (CTArgs::accum_experts) {
                     // Packer L1 accumulation: each expert packs per_core_n tiles sequentially.
+                    // Each expert uses a distinct activation at its index-tensor position.
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
                         cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
@@ -378,10 +385,11 @@ struct MatmulExpertCompressedDRAM {
                         const volatile uint32_t* fmt_base_ptr = nullptr;
                         uint32_t fmt_tile_offset = 0;
                         bool fmt_waited = false;
+                        uint32_t addr_in0_expert = addr_in0 + dram_act_tile_offset[i] * in0_tile_size;
 
                         for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
                             tile_regs_acquire();
-                            uint32_t addr_in0_subblock = addr_in0;
+                            uint32_t addr_in0_subblock = addr_in0_expert;
 
                             for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                                 cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
@@ -503,7 +511,11 @@ struct MatmulExpertCompressedDRAM {
             }
 
             if constexpr (pop_in0) {
-                cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+                if constexpr (CTArgs::accum_experts) {
+                    cb_pop_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
+                } else {
+                    cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+                }
             }
             if constexpr (pop_index) {
                 cb_pop_front(CTArgs::cb_index, 1);

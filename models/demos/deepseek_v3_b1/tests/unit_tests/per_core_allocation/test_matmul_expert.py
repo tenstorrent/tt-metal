@@ -331,7 +331,7 @@ def _validate_sram_output(
 
 def _validate_sram_output_accum(
     sram_out_tensor,
-    torch_a,
+    torch_a_per_expert,
     torch_b_all,
     active_sram,
     sram_per_core_N,
@@ -349,7 +349,9 @@ def _validate_sram_output_accum(
             start = ci * sram_core_width
             slices.append(sram_output_dev[..., start : start + sram_core_width])
         accum_output = torch.cat(slices, dim=-1)
-        torch_expected = sum(torch_a.float() @ torch_b_all[eidx][dev_idx].float() for eidx in active_sram).bfloat16()
+        torch_expected = sum(
+            torch_a_per_expert[eidx].float() @ torch_b_all[eidx][dev_idx].float() for eidx in active_sram
+        ).bfloat16()
         passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
         logger.info(f"Device {dev_idx} accum (SRAM) PCC: {msg}")
         assert passing, f"Device {dev_idx} accum (SRAM) failed: {msg}"
@@ -392,7 +394,7 @@ def _validate_dram_output(
 
 def _validate_dram_output_accum(
     result,
-    torch_a,
+    torch_a_per_expert,
     torch_b_all,
     active_dram,
     dram_per_core_N,
@@ -414,7 +416,7 @@ def _validate_dram_output_accum(
         # Expert parallel: each device accumulates only its own expert.
         dev_active_dram = active_dram if tp_expert else [active_dram[dev_idx]]
         torch_expected = sum(
-            torch_a.float() @ torch_b_all[eidx][dev_idx].float() for eidx in dev_active_dram
+            torch_a_per_expert[eidx].float() @ torch_b_all[eidx][dev_idx].float() for eidx in dev_active_dram
         ).bfloat16()
         passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
         logger.info(f"Device {dev_idx} accum (DRAM) PCC: {msg}")
@@ -1067,7 +1069,11 @@ def _run_accum(
 
     assert len(formats_per_device) == num_devices
     torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    # Per-expert activations: each expert gets a distinct activation, laid out
+    # in index-tensor order so the kernel can offset incrementally.
+    num_active = len(active_expert_ids)
+    torch_a_per_expert = {eid: torch.randn((M, K), dtype=torch.bfloat16) for eid in active_expert_ids}
+    torch_a_all = torch.cat([torch_a_per_expert[eid] for eid in active_expert_ids], dim=-1)
     assigner = _build_assigner(formats_per_device)
     torch_b_all = _build_weight_tensors(
         num_experts,
@@ -1097,7 +1103,9 @@ def _run_accum(
         Kt,
         tile_w,
     )
-    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    a_tensor = _build_activation_tensor(
+        torch_a_all, mesh_device, compute_core_grid, num_cores, M, K * num_active, tile_w
+    )
     index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
 
     active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
@@ -1181,7 +1189,7 @@ def _run_accum(
     if active_sram:
         _validate_sram_output_accum(
             sram_out_tensor,
-            torch_a,
+            torch_a_per_expert,
             torch_b_all,
             active_sram,
             sram_per_core_N,
@@ -1192,7 +1200,7 @@ def _run_accum(
     if active_dram:
         _validate_dram_output_accum(
             result,
-            torch_a,
+            torch_a_per_expert,
             torch_b_all,
             active_dram,
             dram_per_core_N,

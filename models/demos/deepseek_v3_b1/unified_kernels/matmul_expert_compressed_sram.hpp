@@ -141,46 +141,70 @@ struct MatmulExpertCompressedSRAM {
             const volatile uint8_t* table_idx_arr =
                 reinterpret_cast<const volatile uint8_t*>(CTArgs::table_idx_l1_addr);
 
+            union SramExpertInfo {
+                uint32_t packed;
+                struct {
+                    uint16_t eid;
+                    uint16_t act_tile_offset;
+                };
+            };
+
             uint32_t num_sram_experts = 0;
-            uint32_t sram_expert_eids[num_active_experts];
+            SramExpertInfo sram_expert_info[num_active_experts];
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i]);
                 if (is_dram_arr[eid]) {
                     continue;
                 }
-                sram_expert_eids[num_sram_experts] = eid;
+                SramExpertInfo info;
+                info.eid = static_cast<uint16_t>(eid);
+                if constexpr (CTArgs::accum_experts) {
+                    info.act_tile_offset = static_cast<uint16_t>(exp_i * num_tiles_k);
+                }
+                sram_expert_info[num_sram_experts] = info;
                 num_sram_experts++;
             }
 
             if (num_sram_experts > 0) {
                 reconfig_data_format<false, true>(cb_in1, cb_in0);
                 pack_reconfig_data_format<true>(cb_out);
-                cb_wait_front(cb_in0, num_tiles_k);
+                if constexpr (CTArgs::accum_experts) {
+                    cb_wait_front(cb_in0, num_tiles_k * num_active_experts);
+                } else {
+                    cb_wait_front(cb_in0, num_tiles_k);
+                }
 
                 uint32_t addr_in0 = 0;
+                uint32_t addr_in0_base = 0;
                 uint32_t in0_face_r_dim = 0;
+                uint32_t in0_tile_size = 0;
 
                 compressed::custom_mm_compressed_block_init_short<true, out_w, true, true>(cb_in0, cb_in1, cb_out);
 
                 UNPACK(({
                     uint32_t in0_id = get_operand_id(cb_in0);
-                    addr_in0 = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
+                    addr_in0_base = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
                     in0_face_r_dim = get_operand_face_r_dim(in0_id);
+                    in0_tile_size = get_local_cb_interface(in0_id).fifo_page_size;
+                    addr_in0 = addr_in0_base;
                     // Advance activation pointer by k_offset tiles for K-sliced matmul.
                     if constexpr (k_offset > 0) {
-                        addr_in0 += k_offset * get_local_cb_interface(in0_id).fifo_page_size;
+                        addr_in0 += k_offset * in0_tile_size;
                     }
                 }));
 
                 if constexpr (CTArgs::accum_experts) {
                     // Accumulate all SRAM experts into the same dest registers.
+                    // Each expert uses a distinct activation at its index-tensor position.
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_eids[i]]);
+                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_info[i].eid]);
                         uint32_t fmt_l1_addr = 0;
                         uint32_t addr_in1 = 0;
+                        uint32_t addr_in0_expert =
+                            addr_in0_base + (sram_expert_info[i].act_tile_offset + k_offset) * in0_tile_size;
 
                         UNPACK(({
                             auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
@@ -200,10 +224,10 @@ struct MatmulExpertCompressedSRAM {
 
                         if (i < num_sram_experts - 1) {
                             compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, false>(
-                                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                                fmt_l1_addr, addr_in0_expert, addr_in1, in0_face_r_dim, 0);
                         } else {
                             compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, true>(
-                                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                                fmt_l1_addr, addr_in0_expert, addr_in1, in0_face_r_dim, 0);
                         }
                     }
 
@@ -216,7 +240,7 @@ struct MatmulExpertCompressedSRAM {
                     cb_push_back(cb_out, out_w);
                 } else {
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_eids[i]]);
+                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_info[i].eid]);
                         uint32_t fmt_l1_addr = 0;
                         uint32_t addr_in1 = 0;
 
@@ -259,7 +283,11 @@ struct MatmulExpertCompressedSRAM {
                 cb_pop_front(cb_in1, 1);
             }
             if constexpr (pop_in0) {
-                cb_pop_front(cb_in0, num_tiles_k);
+                if constexpr (CTArgs::accum_experts) {
+                    cb_pop_front(cb_in0, num_tiles_k * num_active_experts);
+                } else {
+                    cb_pop_front(cb_in0, num_tiles_k);
+                }
             }
             if constexpr (pop_index) {
                 cb_pop_front(cb_index, 1);

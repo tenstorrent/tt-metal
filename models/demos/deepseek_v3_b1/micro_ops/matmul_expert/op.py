@@ -227,7 +227,10 @@ def _build_program_for_device(
     """
 
     core_grid = a_tensor.memory_config().shard_spec.grid
-    K = a_tensor.memory_config().shard_spec.shape[1]
+    K_total = a_tensor.memory_config().shard_spec.shape[1]
+    # When accum_experts, activation holds per-expert activations concatenated
+    # in index-tensor order; per-expert K = total width / num_active_experts.
+    K = K_total // num_active_experts if accum_experts else K_total
     Kt = K // 32
 
     # CB indices: always separate — SRAM B data = 1, DRAM streaming = 4, fmt metadata = 5, SRAM output = 6.
