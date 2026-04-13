@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "api/debug/dprint.h"
 
@@ -20,6 +23,9 @@ void kernel_main() {
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::Noc noc;
+
     constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
@@ -46,14 +52,14 @@ void kernel_main() {
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
                                             uint32_t num_rows_to_write) {
-        cb_wait_front(cb_id_out0, num_tiles_per_input_block);
+        cb_out0.wait_front(num_tiles_per_input_block);
 
         // Base address of the row of elements we are going to be writing.
         // If the input is unevenly sharded width wise and we are processing a block in the
         // last shard width wise, we will not be writing the entire row of elements as the
         // last x elements will be garbage. Tracking the base address of the row allows us to
         // easily increment the current_read_addr to the next row of elements.
-        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t base_l1_read_addr = cb_out0.get_read_ptr();
 
         // Process each row of elements in the input block
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
@@ -93,8 +99,13 @@ void kernel_main() {
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
                 // Perform the write
-                uint64_t dst_noc_addr = accessor_dst.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
-                noc_async_write(current_l1_read_addr, dst_noc_addr, num_bytes_to_write);
+                uint32_t src_offset = current_l1_read_addr - cb_out0.get_read_ptr();
+                noc.async_write(
+                    cb_out0,
+                    accessor_dst,
+                    num_bytes_to_write,
+                    {.offset_bytes = src_offset},
+                    {.page_id = output_page_id, .offset_bytes = output_offset_within_page_in_bytes});
 
                 // Increment the number of cols we've processed in the input block
                 num_input_cols_processed += num_cols_to_write;
@@ -113,8 +124,8 @@ void kernel_main() {
             }
         }
 
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+        noc.async_write_barrier();
+        cb_out0.pop_front(num_tiles_per_input_block);
     };
 
     uint32_t output_tensor_shape[tensor_rank];
@@ -150,8 +161,8 @@ void kernel_main() {
             }
 
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
-                cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+                cb_out0.wait_front(num_tiles_per_input_block);
+                cb_out0.pop_front(num_tiles_per_input_block);
                 continue;
             }
 

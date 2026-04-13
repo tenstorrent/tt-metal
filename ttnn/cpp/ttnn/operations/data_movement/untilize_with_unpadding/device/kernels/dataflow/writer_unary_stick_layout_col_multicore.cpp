@@ -5,9 +5,14 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::Noc noc;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr uint32_t ncores = get_compile_time_arg_val(1);
@@ -30,12 +35,10 @@ void kernel_main() {
         uint32_t onetile = 1;
         bool has_rows = (num_rows) > 0;
 
-        cb_wait_front(cb_id_out0, onetile * has_rows);
-        uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
+        cb_out0.wait_front(onetile * has_rows);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
 
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
-
             uint32_t total_size = mul * size_per_row_per_block + start_id + width_size;
             uint32_t padded_size = total_size - unpadded_X_size;
             uint32_t write_size = width_size;
@@ -44,18 +47,24 @@ void kernel_main() {
                 write_size = width_size - padded_size;
             }
 
-            noc_async_write(l1_read_addr, dst_noc_addr + start_id + mul * size_per_row_per_block, write_size);
+            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
+            noc.async_write(
+                cb_out0,
+                s,
+                write_size,
+                {.offset_bytes = src_offset},
+                {.page_id = size_2d + k, .offset_bytes = start_id + mul * size_per_row_per_block});
 
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
             if (k > 0 && (k % tile_width == 0)) {
-                cb_pop_front(cb_id_out0, onetile * has_rows);
-                cb_wait_front(cb_id_out0, onetile * has_rows);
+                cb_out0.pop_front(onetile * has_rows);
+                cb_out0.wait_front(onetile * has_rows);
             }
             l1_read_addr += width_size;
         }
 
-        cb_pop_front(cb_id_out0, onetile * has_rows);
+        cb_out0.pop_front(onetile * has_rows);
     };
 
     const uint32_t size_per_row_per_block = get_arg_val<uint32_t>(3);

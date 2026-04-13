@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
@@ -28,23 +31,26 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_tensor_args, src_addr, page_size);
 
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::Noc noc;
+
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
-        cb_reserve_back(cb_id_in0, num_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(num_tiles);
+        uint32_t l1_write_offset = 0;
         for (uint32_t k = 0; k < tile_height; k++) {
             // Need an inner loop for pages within row. Only relevant for ND-sharded case on multicore
             // (otherwise this loop only has 1 iteration).
             for (uint32_t l = 0; l < num_pages_in_row; l++) {
-                uint64_t src_noc_addr = static_cast<uint64_t>(s.get_noc_addr(page_id));
-                page_id++;
                 uint32_t width_size =
                     (l == num_pages_in_row - 1) ? size_of_valid_data_in_last_page_in_row : block_width_size;
-                noc_async_read(src_noc_addr, l1_write_addr, width_size);
-                l1_write_addr += width_size;
+                noc.async_read(
+                    s, cb, width_size, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = l1_write_offset});
+                page_id++;
+                l1_write_offset += width_size;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_tiles);
+        noc.async_read_barrier();
+        cb.push_back(num_tiles);
     };
 
     uint32_t page_id = start_page_id;

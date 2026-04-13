@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
@@ -11,6 +14,8 @@ void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::Noc noc;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
@@ -42,28 +47,32 @@ void kernel_main() {
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_wait_front(cb_id_out0, num_tiles_block_c);
-            cb_pop_front(cb_id_out0, num_tiles_block_c);
+            cb_out0.wait_front(num_tiles_block_c);
+            cb_out0.pop_front(num_tiles_block_c);
         }
     };
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_wait_front(cb_id_out0, num_tiles_block_c);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(num_tiles_block_c);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(curr_stick_id, s) + offset;
-
             // Write out tmp buffer
-            noc_async_write(l1_read_addr, dst_noc_addr, block_size);
+            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
+            noc.async_write(
+                cb_out0,
+                s,
+                block_size,
+                {.offset_bytes = src_offset},
+                {.page_id = curr_stick_id, .offset_bytes = offset});
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
 
             // Block write
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
-        cb_pop_front(cb_id_out0, num_tiles_block_c);
+        cb_out0.pop_front(num_tiles_block_c);
     };
 
     auto write_block_rows = [&](uint32_t num_rows_block, uint32_t base_stick_id) {

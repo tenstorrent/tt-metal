@@ -5,11 +5,16 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::Noc noc;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
@@ -26,8 +31,8 @@ void kernel_main() {
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_wait_front(cb_id_out0, num_tiles_per_row);
-            cb_pop_front(cb_id_out0, num_tiles_per_row);
+            cb_out0.wait_front(num_tiles_per_row);
+            cb_out0.pop_front(num_tiles_per_row);
         }
     };
 
@@ -35,18 +40,22 @@ void kernel_main() {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_wait_front(cb_id_out0, num_tiles_per_row * has_rows);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(num_tiles_per_row * has_rows);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(base_stick_id + k, s);
-
             // Write out tmp buffer
-            noc_async_write(l1_read_addr, dst_noc_addr, unpadded_X_size);
+            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
+            noc.async_write(
+                cb_out0,
+                s,
+                unpadded_X_size,
+                {.offset_bytes = src_offset},
+                {.page_id = base_stick_id + k, .offset_bytes = 0});
 
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             l1_read_addr += padded_X_size;
         }
-        cb_pop_front(cb_id_out0, num_tiles_per_row * has_rows);
+        cb_out0.pop_front(num_tiles_per_row * has_rows);
     };
 
     uint32_t stick_id = start_stick_id;

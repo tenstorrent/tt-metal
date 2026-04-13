@@ -5,9 +5,14 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::Noc noc;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
@@ -26,11 +31,10 @@ void kernel_main() {
                            uint32_t single_block_size) {
         bool has_rows = (num_rows) > 0;
 
-        cb_wait_front(cb_id_out0, single_block_size * has_rows);
-        uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
+        cb_out0.wait_front(single_block_size * has_rows);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
             uint32_t total_size = start_column_id + width_size;
             uint32_t write_size = width_size;
 
@@ -39,14 +43,20 @@ void kernel_main() {
                 write_size -= padded_size;
             }
 
-            noc_async_write(l1_read_addr, dst_noc_addr + start_column_id, write_size);
+            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
+            noc.async_write(
+                cb_out0,
+                s,
+                write_size,
+                {.offset_bytes = src_offset},
+                {.page_id = size_2d + k, .offset_bytes = start_column_id});
 
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
             l1_read_addr += width_size;
         }
 
-        cb_pop_front(cb_id_out0, single_block_size * has_rows);
+        cb_out0.pop_front(single_block_size * has_rows);
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(1);

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
 // and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
@@ -59,6 +60,8 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
 
+    experimental::CircularBuffer cb(cb_id_in0);
+
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
                           uint32_t start_column_id,
@@ -68,10 +71,10 @@ void kernel_main() {
         uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_reserve_back(cb_id_in0, single_block_size * has_rows);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(single_block_size * has_rows);
+        uint32_t l1_write_addr = cb.get_write_ptr();
 
-        uint32_t original_addr = get_write_ptr(cb_id_in0);
+        uint32_t original_addr = cb.get_write_ptr();
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
 
@@ -95,7 +98,7 @@ void kernel_main() {
             l1_write_addr += width_size;
         }
 
-        cb_push_back(cb_id_in0, single_block_size * has_rows);
+        cb.push_back(single_block_size * has_rows);
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(2);

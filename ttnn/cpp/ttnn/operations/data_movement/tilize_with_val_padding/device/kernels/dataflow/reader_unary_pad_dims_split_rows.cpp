@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
@@ -40,25 +41,27 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
 
+    experimental::CircularBuffer cb(cb_id_in0);
+
     uint32_t stick_id = 0;
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_reserve_back(cb_id_in0, num_tiles_block_c);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb.reserve_back(num_tiles_block_c);
+            uint32_t l1_write_addr = cb.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
             // 8 = tile_height / 4
             for (uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
             }
-            cb_push_back(cb_id_in0, num_tiles_block_c);
+            cb.push_back(num_tiles_block_c);
         }
     };
 
     auto read_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_reserve_back(cb_id_in0, num_tiles_block_c);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(num_tiles_block_c);
+        uint32_t l1_write_addr = cb.get_write_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s) + offset;
@@ -84,7 +87,7 @@ void kernel_main() {
                 dst[z] = pad_value;
             }
         }
-        cb_push_back(cb_id_in0, num_tiles_block_c);
+        cb.push_back(num_tiles_block_c);
     };
 
     auto read_block_rows = [&](uint32_t base_stick_id, uint32_t num_rows_block) {

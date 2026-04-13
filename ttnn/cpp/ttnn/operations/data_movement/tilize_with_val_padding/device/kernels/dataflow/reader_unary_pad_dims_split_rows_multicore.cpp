@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // This function is templated to choose the pointer data-type based on 'val' size
 // to avoid unaligned addresses and out-of-bounds access.
@@ -79,13 +80,15 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
 
+    experimental::CircularBuffer cb(cb_id_in0);
+
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_reserve_back(cb_id_in0, num_tiles_per_row);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb.reserve_back(num_tiles_per_row);
+            uint32_t l1_write_addr = cb.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
-            cb_push_back(cb_id_in0, num_tiles_per_row);
+            cb.push_back(num_tiles_per_row);
         }
     };
 
@@ -93,8 +96,8 @@ void kernel_main() {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_reserve_back(cb_id_in0, num_tiles_per_row * has_rows);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(num_tiles_per_row * has_rows);
+        uint32_t l1_write_addr = cb.get_write_ptr();
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             uint64_t src_noc_addr;
@@ -114,7 +117,7 @@ void kernel_main() {
 
         fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_tiles_per_row * has_rows);
+        cb.push_back(num_tiles_per_row * has_rows);
     };
 
     uint32_t page_id = start_page_id;

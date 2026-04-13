@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Constexpr
@@ -22,26 +25,35 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
 
-    uint64_t base_src_noc_addr[tile_height];
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::Noc noc;
+
+    uint32_t base_stick_ids[tile_height];
+    uint32_t base_offsets[tile_height];
 
     auto read_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size) {
-        cb_reserve_back(cb_id_in0, num_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(num_tiles);
+        uint32_t l1_write_offset = 0;
         for (uint32_t k = 0; k < tile_height; k++) {
-            uint64_t src_noc_addr = base_src_noc_addr[k];
-            noc_async_read(src_noc_addr, l1_write_addr, width_size);
-            l1_write_addr += width_size;
-            base_src_noc_addr[k] += width_size;
+            noc.async_read(
+                s,
+                cb,
+                width_size,
+                {.page_id = base_stick_ids[k], .offset_bytes = base_offsets[k]},
+                {.offset_bytes = l1_write_offset});
+            l1_write_offset += width_size;
+            base_offsets[k] += width_size;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_tiles);
+        noc.async_read_barrier();
+        cb.push_back(num_tiles);
     };
 
     uint32_t stick_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
-            base_src_noc_addr[j] = get_noc_addr(stick_id, s);
+            base_stick_ids[j] = stick_id;
+            base_offsets[j] = 0;
             stick_id++;
         }
 
