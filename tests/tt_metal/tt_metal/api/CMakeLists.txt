@@ -43,3 +43,28 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+# Per-core allocation tests need their own binary so TT_METAL_ALLOCATOR_MODE_HYBRID
+# env var is set before the RunTimeOptions singleton caches it.
+add_executable(unit_tests_per_core_allocation allocator/test_per_core_allocation.cpp)
+target_include_directories(
+    unit_tests_per_core_allocation
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+)
+target_link_libraries(
+    unit_tests_per_core_allocation
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
+target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)
+set_target_properties(
+    unit_tests_per_core_allocation
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
