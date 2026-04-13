@@ -986,7 +986,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("qkv_rope_cos_sin_cb"),
         get_named_compile_time_arg_val("qrope_trans_mat_cb"),
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
         get_common_arg_val<uint32_t>(15),  // qrope_trans_mat_addr
     };
@@ -1040,7 +1039,6 @@ void kernel_main() {
     constexpr uint32_t krope_cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb");
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
-    constexpr uint32_t krope_cos_sin_interm_cb = get_named_compile_time_arg_val("krope_cos_sin_interm_cb");
     constexpr uint32_t krope_output_cb = get_named_compile_time_arg_val("krope_output_cb");
 
     // Compute args: all CB indices
@@ -1049,7 +1047,6 @@ void kernel_main() {
         .cos_sin_cb = krope_cos_sin_cb,
         .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
-        .cos_sin_interm_cb = krope_cos_sin_interm_cb,
         .out_cb = krope_output_cb,
         .trans_mat_address_override = get_common_arg_val<uint32_t>(15),
     };
