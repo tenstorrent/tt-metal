@@ -14,7 +14,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import collect_device_perf
 from models.demos.deepseek_v3.tests.test_moe import generate_reference_io
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -47,7 +47,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": get_fabric_config()},
+        {"fabric_config": get_fabric_config(), "trace_region_size": 2967552},
     ],
     indirect=True,
 )
@@ -63,11 +63,15 @@ def reference_model(hf_config):
     ],
 )
 @pytest.mark.parametrize("weight_type", [pytest.param("real", id="real_weights")])
+@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
+@pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 def test_ds_moe_forward(
     device_params,
     mode,
     seq_len,
     weight_type,
+    program_cache_enabled,
+    trace_mode,
     set_deterministic_env,
     reference_model,
     hf_config,
@@ -80,18 +84,48 @@ def test_ds_moe_forward(
     del set_deterministic_env
     del weight_type
 
+    # Trace capture replays pre-compiled binaries. Without program cache,
+    # trace can trigger forbidden compile/program writes during capture.
+    if trace_mode and not program_cache_enabled:
+        pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
+
+    if not program_cache_enabled:
+        mesh_device.disable_and_clear_program_cache()
+
+    perf_mode_enabled = os.getenv(DEVICE_PERF_ENV_VAR) is not None
+    if perf_mode_enabled:
+        logger.info(
+            f"[{DEVICE_PERF_ENV_VAR}] Device perf mode enabled; running initial setup and correctness pass first"
+        )
+
     module_path = "model.layers.3.mlp"
     checkpoint_state_dict = request.getfixturevalue("state_dict")
     num_tokens = USERS_PER_ROW * mesh_device.shape[0] if mode == "decode" else seq_len
-    state_dict, torch_input, reference_output = generate_reference_io(
-        mode=mode,
-        num_tokens=num_tokens,
-        reference_model=reference_model,
-        hf_config=hf_config,
-        weight_type="real",
-        checkpoint_state_dict=checkpoint_state_dict,
-        module_path=module_path,
-    )
+    if perf_mode_enabled:
+        # Perf runs should not depend on reference IO cache files or host-side PCC checks.
+        # Keep real MoE weights (layer-scoped), but use synthetic input for faster bring-up.
+        state_dict = {
+            name: tensor
+            for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
+            if not name.startswith("shared_experts.") and not name.endswith(".weight_scale_inv")
+        }
+        if not state_dict:
+            pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
+        torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
+        reference_output = None
+        logger.info(
+            f"[{DEVICE_PERF_ENV_VAR}] Using synthetic input in perf mode (skipping reference IO cache dependency)"
+        )
+    else:
+        state_dict, torch_input, reference_output = generate_reference_io(
+            mode=mode,
+            num_tokens=num_tokens,
+            reference_model=reference_model,
+            hf_config=hf_config,
+            weight_type="real",
+            checkpoint_state_dict=checkpoint_state_dict,
+            module_path=module_path,
+        )
 
     weight_config = get_test_weight_config(
         MoE,
@@ -105,8 +139,10 @@ def test_ds_moe_forward(
         layer_id=module_path,
     )
 
+    # MoE gate topk fallback performs host IO (to_torch/from_torch), which is illegal during trace capture.
+    # Match fused-op trace behavior by forcing pure device topk path when trace_mode is enabled.
     model_config = get_model_config(
-        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=True
+        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=not trace_mode
     )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
@@ -129,33 +165,60 @@ def test_ds_moe_forward(
         return tt_input, tt_output
 
     tt_input, tt_output = run_op()
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+    if perf_mode_enabled:
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
+        logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: real")
+        logger.info(f"[{DEVICE_PERF_ENV_VAR}] Skipping correctness PCC check in perf mode")
+    else:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
+        logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: real")
+        assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
 
-    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: real")
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
-
-    if os.getenv(DEVICE_PERF_ENV_VAR) is not None:
+    if perf_mode_enabled:
         from tracy import signpost
 
-        def op_fn():
+        def eager_op_fn():
             local_tt_input, local_tt_output = run_op()
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(local_tt_input)
             ttnn.deallocate(local_tt_output)
 
-        for _ in range(DEVICE_PERF_WARMUP_ITERS):
-            op_fn()
+        logger.info(f"[{DEVICE_PERF_ENV_VAR}] Correctness pass complete; entering profiled iteration loops")
+        logger.info(f"[{DEVICE_PERF_ENV_VAR}] Starting warmup phase with {DEVICE_PERF_WARMUP_ITERS} iteration(s)")
+        if trace_mode:
+            trace_input = build_tt_input()
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            trace_output = run_module_forward(MoE, mode, trace_input, run_config, handle_tensor_parallel=True)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            for _ in range(DEVICE_PERF_WARMUP_ITERS):
+                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            logger.info(f"[{DEVICE_PERF_ENV_VAR}] Starting perf measurement with {DEVICE_PERF_ITERS} iteration(s)")
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+            ttnn.release_trace(mesh_device, trace_id)
+            ttnn.deallocate(trace_input)
+            ttnn.deallocate(trace_output)
+        else:
+            for _ in range(DEVICE_PERF_WARMUP_ITERS):
+                eager_op_fn()
 
-        ttnn.synchronize_device(mesh_device)
-        signpost("start")
-        for _ in range(DEVICE_PERF_ITERS):
-            op_fn()
-        signpost("stop")
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"[{DEVICE_PERF_ENV_VAR}] Starting perf measurement with {DEVICE_PERF_ITERS} iteration(s)")
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                eager_op_fn()
+            signpost("stop")
 
 
 @pytest.mark.parametrize(
@@ -177,7 +240,8 @@ def test_ds_moe_forward_device_perf(mode, seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"ds_moe_forward_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py"
-    expr = f"test_ds_moe_forward and {mode} and {seq_len} and real_weights"
+    trace_filter = "trace" if mode == "decode" else "eager"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_forward -k "{expr}"'
 
     perf_profiler.start("run")

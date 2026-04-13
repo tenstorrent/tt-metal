@@ -81,7 +81,7 @@ def generate_reference_io(
         moe_state_dict = {
             name: tensor
             for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
-            if not name.startswith("shared_experts.")
+            if not name.startswith("shared_experts.") and not name.endswith(".weight_scale_inv")
         }
         if not moe_state_dict:
             pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
