@@ -63,7 +63,7 @@ DispatchSKernel::DispatchSKernel(
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
 
     uint32_t dispatch_s_buffer_base = 0xff;
     if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
@@ -187,7 +187,7 @@ void DispatchSKernel::ConfigureCore() {
     }
     // Just need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {

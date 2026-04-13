@@ -92,8 +92,7 @@ public:
 
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
-    const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
-    const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+    const DispatchMemMap& dispatch_mem_map() const;
     inspector::Data* get_inspector_data() const {
         return inspector_data_.get();
     }
@@ -242,7 +241,7 @@ private:
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
+    std::unique_ptr<DispatchMemMap> dispatch_mem_map_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
