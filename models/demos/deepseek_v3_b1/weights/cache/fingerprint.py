@@ -50,6 +50,7 @@ def _canonical_subtensor(st: OverlappedTensorSpec) -> dict:
         "tensor_shape": list(st.raw_tensor_shape),
         "dtype": st.dtype.name,
         "tile_shape": [st.tile_h, st.tile_w],
+        "overlap_priority": st.overlap_priority,
     }
 
 
