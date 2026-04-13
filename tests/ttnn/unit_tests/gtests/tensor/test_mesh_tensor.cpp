@@ -637,7 +637,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_FullCoverage) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
     EXPECT_TRUE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_NO_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_NO_THROW(enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SingleShard) {
@@ -645,7 +645,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SingleShard) {
     auto host_tensor = make_single_shard_host_tensor(shape, 1);
     EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_PartialCoverage) {
@@ -654,7 +654,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_PartialCoverage) {
     auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, {0, 0});
     EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SmallerMeshShape) {
@@ -663,7 +663,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SmallerMeshShape) {
     auto host_tensor = make_full_coverage_host_tensor(shape, smaller_mesh, {0, 0});
     EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
@@ -673,7 +673,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
     HostTensor host_tensor(std::move(dhb), spec, TensorTopology{});
     EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
 
 // ---------------------------------------------------------------------------
@@ -686,8 +686,8 @@ TEST_F(MeshTensorDataMovementTest, UniformToDevice_ToHost_Roundtrip) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
-    HostTensor result = tensor_impl::enqueue_read_mesh_tensor(cq, device_tensor);
+    MeshTensor device_tensor = enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_mesh_tensor(cq, device_tensor);
 
     expect_host_tensors_eq(host_tensor, result);
 }
@@ -704,14 +704,14 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
-    tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
+    enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
     HostTensor result(std::move(result_dhb), spec, TensorTopology{});
-    tensor_impl::enqueue_read_mesh_tensor(cq, device_tensor, result);
+    enqueue_read_mesh_tensor(cq, device_tensor, result);
 
     expect_host_tensors_eq(host_tensor, result);
 }
@@ -728,7 +728,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_RejectsPartialCoverage) {
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor));
+    EXPECT_ANY_THROW(enqueue_write_mesh_tensor(cq, host_tensor, device_tensor));
 }
 
 // ---------------------------------------------------------------------------
@@ -805,7 +805,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformToHost_ShedsExtraShards) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+    MeshTensor device_tensor = enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
 
     std::vector<distributed::MeshCoordinate> subset = {{0, 1}, {1, 0}};
     HostTensor result = tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, subset);
@@ -821,7 +821,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToHost_ShedsExtraShards) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+    MeshTensor device_tensor = enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
 
     // Pass a full-coverage host tensor as the destination, but only read back a subset of coords.
     std::vector<distributed::MeshCoordinate> subset = {{1, 1}};

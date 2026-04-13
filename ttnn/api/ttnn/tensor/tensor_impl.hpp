@@ -23,25 +23,6 @@ namespace tt::tt_metal::tensor_impl {
 // ===============================================================================================================================================
 
 // ======================================================================================
-//                   Uniform enqueue_read/write_mesh_tensor
-// ======================================================================================
-
-HostTensor enqueue_read_mesh_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
-
-void enqueue_read_mesh_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
-
-MeshTensor enqueue_write_mesh_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    distributed::MeshDevice& mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
-
-void enqueue_write_mesh_tensor(
-    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
-
-// ======================================================================================
 //                Non-uniform enqueue_read/write_mesh_tensor
 // ======================================================================================
 
