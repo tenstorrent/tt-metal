@@ -13,6 +13,8 @@ Configuration:
 - Tokens per device: 16 (reduced from 32 due to L1 memory constraints)
 - cluster_axis: 0 (dispatch along axis-0)
 
+Run with:
+'MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/individual_ops/test_compute_tg.py -v'
 """
 
 import os
@@ -132,8 +134,6 @@ def run_moe_compute_test(
         torch_w1_tensors.append(torch_w1)
         torch_w2_tensors.append(torch_w2)
 
-    # Determine DRAM core mapping for matmul weights
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
 
     MATMUL_FULL_CORES = {0, 3, 6, 9}

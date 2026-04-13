@@ -12,6 +12,9 @@ This test validates dispatch operations with:
 - 4x8 mesh configuration
 
 If this test fails, dispatch is likely broken on quad as well.
+
+Run with:
+'MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/tg_moe_tests/individual_ops/test_dispatch_tg.py -v'
 """
 
 import random
@@ -132,12 +135,6 @@ def run_all_to_all_dispatch_metadata_test(
     output_scores_goldens_list = []
     mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
 
-    if cluster_axis == 1:
-        shard_dims = (None, shard_dim)
-    else:
-        shard_dims = (shard_dim, None)
-
-    total_tokens = batch * seq_len
     num_dispatch_devices = mesh_shape[cluster_axis]
     tokens_per_device = batch // num_dispatch_devices
 
@@ -319,16 +316,6 @@ def run_all_to_all_dispatch_metadata_test(
             f"Metadata shape mismatch: got {tt_metadata_tensor.shape}, expected ({expected_devices}, {expected_batch}, {expected_k}). "
             f"All {expected_devices} devices should output metadata (cluster_axis={cluster_axis}, "
             f"batch={batch} tokens total). If this fails, check all_to_all_dispatch_device_operation.cpp!"
-        )
-
-        # This check catches cluster_axis bugs: batch dimension MUST match expected_dispatch_devices * batches_per_device
-        # If the C++ code swaps num_rows/num_cols, this will fail
-        assert calculated_batch_from_shape == expected_batch, (
-            f"CRITICAL: Batch dimension {calculated_batch_from_shape} doesn't match expected {expected_batch}! "
-            f"This suggests cluster_axis logic is wrong. With cluster_axis={cluster_axis}, "
-            f"dispatch_devices should be mesh_shape[{cluster_axis}]={expected_dispatch_devices}, "
-            f"and batch should be {expected_batch}. If you swapped num_rows/num_cols in "
-            f"all_to_all_dispatch_device_operation.cpp line 104, this is the bug!"
         )
 
         # This check catches cluster_axis bugs: batch dimension MUST match expected_dispatch_devices * batches_per_device

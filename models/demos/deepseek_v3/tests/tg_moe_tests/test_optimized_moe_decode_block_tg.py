@@ -10,7 +10,7 @@ Single Galaxy 16x1 Torus: Development/testing setup using top 2 rows of 4x8 TG
    - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
 
 Run with:
-'MESH_DEVICE=TG16X1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto" \
+'MESH_DEVICE=TG16X1 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto" \
  pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
 """
 
