@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
@@ -51,7 +52,9 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
+    auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
+    auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
+    CoreCoord end_core = cores.back();
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
     auto* src_buffer = input.buffer();
@@ -105,7 +108,6 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         }
     }
 
-    auto all_cores = shard_spec.grid;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
@@ -200,7 +202,6 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
         if (input.layout() == Layout::TILE) {
