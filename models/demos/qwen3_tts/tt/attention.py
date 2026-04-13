@@ -95,29 +95,126 @@ class Attention(LightweightModule):
         v_proj_weight = state_dict[f"{layer_prefix}.self_attn.v_proj.weight"]
         o_proj_weight = state_dict[f"{layer_prefix}.self_attn.o_proj.weight"]
 
-        qkv_weight = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
-        qkv_weight = torch.transpose(qkv_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+        # Torch reference (fused QKV on CPU, then as_tensor):
+        # qkv_weight = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
+        # qkv_weight = torch.transpose(qkv_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+        # self.wqkv = ttnn.as_tensor(
+        #     qkv_weight,
+        #     device=device,
+        #     dtype=weight_dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("wqkv"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
 
-        self.wqkv = ttnn.as_tensor(
-            qkv_weight,
-            device=device,
+        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _fused_qkv = (num_heads + 2 * num_kv_heads) * head_dim
+        # Q/K/V from state_dict are torch.Tensor (checkpoint); ttnn.concat needs device ttnn.Tensor.
+        q_tt = ttnn.from_torch(
+            q_proj_weight,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("wqkv"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            device=device,
+            memory_config=_dram,
+            mesh_mapper=_mesh_mapper,
         )
+        k_tt = ttnn.from_torch(
+            k_proj_weight,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_dram,
+            mesh_mapper=_mesh_mapper,
+        )
+        v_tt = ttnn.from_torch(
+            v_proj_weight,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_dram,
+            mesh_mapper=_mesh_mapper,
+        )
+        qkv_cat = ttnn.concat([q_tt, k_tt, v_tt], dim=0, memory_config=_dram)
+        ttnn.deallocate(q_tt)
+        ttnn.deallocate(k_tt)
+        ttnn.deallocate(v_tt)
+        qkv_tx = ttnn.transpose(qkv_cat, -2, -1, memory_config=_dram)
+        ttnn.deallocate(qkv_cat)
+        qkv_4d = ttnn.reshape(qkv_tx, [1, 1, hidden_size, _fused_qkv], memory_config=_dram)
+        ttnn.deallocate(qkv_tx)
+        _wqkv_host = ttnn.to_torch(qkv_4d).contiguous()
+        ttnn.deallocate(qkv_4d)
+        _wqkv_cache = get_cache_name("wqkv")
+        if _wqkv_cache is not None:
+            self.wqkv = ttnn.as_tensor(
+                _wqkv_host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                cache_file_name=_wqkv_cache,
+                mesh_mapper=_mesh_mapper,
+            )
+        else:
+            # Re-upload from logical host tensor so linear() matches the old as_tensor(from_torch) layout.
+            self.wqkv = ttnn.from_torch(
+                _wqkv_host,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
 
-        o_proj_weight = torch.transpose(o_proj_weight, -2, -1).unsqueeze(0).unsqueeze(0)
-        self.wo = ttnn.as_tensor(
+        # Torch reference (o_proj transpose on CPU, then as_tensor):
+        # o_proj_weight = torch.transpose(o_proj_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+        # self.wo = ttnn.as_tensor(
+        #     o_proj_weight,
+        #     device=device,
+        #     dtype=weight_dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("wo"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
+
+        _o_rows = num_heads * head_dim
+        o_tt = ttnn.from_torch(
             o_proj_weight,
-            device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("wo"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            device=device,
+            memory_config=_dram,
+            mesh_mapper=_mesh_mapper,
         )
+        o_tx = ttnn.transpose(o_tt, -2, -1, memory_config=_dram)
+        ttnn.deallocate(o_tt)
+        o_4d = ttnn.reshape(o_tx, [1, 1, _o_rows, hidden_size], memory_config=_dram)
+        ttnn.deallocate(o_tx)
+        _wo_host = ttnn.to_torch(o_4d).contiguous()
+        ttnn.deallocate(o_4d)
+        _wo_cache = get_cache_name("wo")
+        if _wo_cache is not None:
+            self.wo = ttnn.as_tensor(
+                _wo_host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                cache_file_name=_wo_cache,
+                mesh_mapper=_mesh_mapper,
+            )
+        else:
+            self.wo = ttnn.from_torch(
+                _wo_host,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
 
         # QK-norm weights (per-head RMSNorm)
         q_norm_weight = state_dict[f"{layer_prefix}.self_attn.q_norm.weight"]
@@ -127,25 +224,66 @@ class Attention(LightweightModule):
         q_norm_torch = q_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
         k_norm_torch = k_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
 
-        self.q_norm_weight = ttnn.as_tensor(
-            q_norm_torch,
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("q_norm"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        )
+        # Torch reference (as_tensor from row-major torch):
+        # self.q_norm_weight = ttnn.as_tensor(
+        #     q_norm_torch,
+        #     device=device,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("q_norm"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
+        _qn_cache = get_cache_name("q_norm")
+        if _qn_cache is not None:
+            self.q_norm_weight = ttnn.as_tensor(
+                q_norm_torch,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=_dram,
+                cache_file_name=_qn_cache,
+                mesh_mapper=_mesh_mapper,
+            )
+        else:
+            self.q_norm_weight = ttnn.from_torch(
+                q_norm_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
 
-        self.k_norm_weight = ttnn.as_tensor(
-            k_norm_torch,
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("k_norm"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        )
+        # self.k_norm_weight = ttnn.as_tensor(
+        #     k_norm_torch,
+        #     device=device,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("k_norm"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
+        _kn_cache = get_cache_name("k_norm")
+        if _kn_cache is not None:
+            self.k_norm_weight = ttnn.as_tensor(
+                k_norm_torch,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=_dram,
+                cache_file_name=_kn_cache,
+                mesh_mapper=_mesh_mapper,
+            )
+        else:
+            self.k_norm_weight = ttnn.from_torch(
+                k_norm_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -379,28 +517,59 @@ class Attention(LightweightModule):
                 # The returned k_cache/v_cache tensors may have new addresses if reallocated.
                 # The decode trace is captured AFTER prefill, so it will capture the new addresses.
                 max_seq = k_cache.shape[2]
-                k_torch = ttnn.to_torch(k).to(torch.bfloat16)
-                v_torch = ttnn.to_torch(v).to(torch.bfloat16)
-                k_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
-                v_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
-                k_padded[:, :, :k_seq, :] = k_torch
-                v_padded[:, :, :k_seq, :] = v_torch
+                # Torch reference (host pad + from_torch):
+                # k_torch = ttnn.to_torch(k).to(torch.bfloat16)
+                # v_torch = ttnn.to_torch(v).to(torch.bfloat16)
+                # k_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
+                # v_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
+                # k_padded[:, :, :k_seq, :] = k_torch
+                # v_padded[:, :, :k_seq, :] = v_torch
+                # ttnn.deallocate(k_cache)
+                # ttnn.deallocate(v_cache)
+                # k_cache = ttnn.from_torch(
+                #     k_padded,
+                #     device=self.device,
+                #     dtype=ttnn.bfloat16,
+                #     layout=ttnn.TILE_LAYOUT,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                # v_cache = ttnn.from_torch(
+                #     v_padded,
+                #     device=self.device,
+                #     dtype=ttnn.bfloat16,
+                #     layout=ttnn.TILE_LAYOUT,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                # TTNN: pad seq on device with zeros + concat (avoids update_cache on a fresh buffer, which hung).
+                _kv_dram = ttnn.DRAM_MEMORY_CONFIG
+                if max_seq > k_seq:
+                    _pad_len = max_seq - k_seq
+                    _tail_shape = [batch_size, self.num_kv_heads, _pad_len, self.head_dim]
+                    k_tail = ttnn.zeros(
+                        _tail_shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=_kv_dram,
+                    )
+                    v_tail = ttnn.zeros(
+                        _tail_shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=_kv_dram,
+                    )
+                    k_new = ttnn.concat([k, k_tail], dim=2, memory_config=_kv_dram)
+                    v_new = ttnn.concat([v, v_tail], dim=2, memory_config=_kv_dram)
+                    ttnn.deallocate(k_tail)
+                    ttnn.deallocate(v_tail)
+                else:
+                    k_new = ttnn.clone(k, memory_config=_kv_dram)
+                    v_new = ttnn.clone(v, memory_config=_kv_dram)
                 ttnn.deallocate(k_cache)
                 ttnn.deallocate(v_cache)
-                k_cache = ttnn.from_torch(
-                    k_padded,
-                    device=self.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                v_cache = ttnn.from_torch(
-                    v_padded,
-                    device=self.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                k_cache = k_new
+                v_cache = v_new
 
             updated_kv_cache = (k_cache, v_cache)
 
