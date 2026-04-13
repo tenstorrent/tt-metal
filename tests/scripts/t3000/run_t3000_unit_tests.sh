@@ -96,13 +96,13 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  ./build/test/ttnn/unit_tests_ttnn
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
-  ./build/test/ttnn/unit_tests_ttnn_ccl
-  ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
-  ./build/test/ttnn/unit_tests_ttnn_ccl_ops
-  ./build/test/ttnn/unit_tests_ttnn_accessor
-  ./build/test/ttnn/test_ccl_multi_cq_multi_device
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
+  timeout 300 ./build/test/ttnn/test_ccl_multi_cq_multi_device ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
