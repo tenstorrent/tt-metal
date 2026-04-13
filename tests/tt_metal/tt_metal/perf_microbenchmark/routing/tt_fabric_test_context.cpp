@@ -93,43 +93,17 @@ void TestContext::wait_for_programs_with_progress() {
     progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
-    // Poll and check for completion in this thread
-    log_info(
-        tt::LogTest,
-        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
-        progress_config_.poll_interval_seconds,
-        progress_config_.hung_threshold_seconds);
-    bool completed = monitor.poll_until_complete();
-
-    if (!completed) {
-        last_test_hung_ = true;
-        has_test_failures_ = true;
-        log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
-        return;
-    }
-
-    log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
     if (progress_config_.granular) {
-        // Post-launch barrier: ensures all hosts have dispatched programs before
-        // the granular monitor starts reading device memory
         fixture_->barrier();
 
         log_info(
             tt::LogTest,
-            "Progress monitoring started (poll interval: {}s, hung threshold: {}s, "
-            "granular mode, confirmation rounds: {})",
+            "Granular progress monitoring started (poll interval: {}s, hung threshold: {}s, "
+            "confirmation rounds: {})",
             progress_config_.poll_interval_seconds,
             progress_config_.hung_threshold_seconds,
             progress_config_.hung_confirmation_rounds);
-    } else {
-        log_info(
-            tt::LogTest,
-            "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
-            progress_config_.poll_interval_seconds,
-            progress_config_.hung_threshold_seconds);
-    }
 
-    if (progress_config_.granular) {
         auto result = monitor.poll_until_complete_or_hung();
 
         if (result == MonitorResult::HUNG_DETECTED) {
@@ -188,7 +162,20 @@ void TestContext::wait_for_programs_with_progress() {
 
         log_info(tt::LogTest, "All endpoints complete, waiting for programs to finish...");
     } else {
-        monitor.poll_until_complete();
+        log_info(
+            tt::LogTest,
+            "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds);
+
+        bool completed = monitor.poll_until_complete();
+
+        if (!completed) {
+            last_test_hung_ = true;
+            has_test_failures_ = true;
+            log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
+            return;
+        }
         log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
     }
 

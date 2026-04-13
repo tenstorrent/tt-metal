@@ -112,16 +112,16 @@ void kernel_main() {
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
 
-    // Final per-config flush so per-config data matches aggregate completion
+    // Final per-config flush — write per-config counters for progress monitoring.
+    // Do NOT overwrite total_packets_received: in the skip-validation path,
+    // num_packets_processed is never advanced, so summing it would zero out
+    // the correct aggregate that was already computed in the main loop.
     {
         auto* per_config_results = get_per_config_results(receiver_config->get_result_buffer_address());
-        uint64_t final_packets_received = 0;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             uint64_t config_packets = receiver_config->traffic_configs()[i]->num_packets_processed;
-            final_packets_received += config_packets;
             write_per_config_result(&per_config_results[i], config_packets);
         }
-        total_packets_received = final_packets_received;
     }
 
     // Write test results

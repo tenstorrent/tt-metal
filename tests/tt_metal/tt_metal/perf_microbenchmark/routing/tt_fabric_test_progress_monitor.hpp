@@ -165,8 +165,9 @@ public:
     TestProgressMonitor(TestProgressMonitor&&) = delete;
     TestProgressMonitor& operator=(TestProgressMonitor&&) = delete;
 
-    // Non-granular mode: poll until all devices complete (legacy behavior)
-    void poll_until_complete();
+    // Non-granular mode: poll until all devices complete or all remaining are hung.
+    // Returns true if all completed, false if all remaining are hung.
+    bool poll_until_complete();
 
     // Granular mode: poll until all endpoints complete or hung is confirmed
     MonitorResult poll_until_complete_or_hung();
@@ -189,7 +190,8 @@ private:
     // --- Device-level polling (non-granular) ---
     std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> poll_devices();
     DeviceProgress poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device);
-    void check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+    bool check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+    void generate_hung_report(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
     void display_progress(
         const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
         std::chrono::duration<double> elapsed_since_last_poll);

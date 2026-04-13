@@ -643,26 +643,32 @@ ConnectionKey TestDevice::register_fabric_connection(
         link_idx,
         static_cast<int>(outgoing_direction));
 
-    // Check if this core already registered this connection
-    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, dst_node_id};
+    // Normalize dst_node_id to the immediate next-hop neighbor so that:
+    //  1. append_fabric_connection_rt_args() receives the direct neighbor (not a multi-hop final dest)
+    //  2. All cardinal-direction traffic sharing the same physical link collapses to one ConnectionKey,
+    //     preventing semaphore exhaustion in all-to-all patterns.
+    // For Z links the provided dst_node_id already IS the direct Z-neighbor.
+    FabricNodeId key_dst = (outgoing_direction == RoutingDirection::Z)
+                               ? dst_node_id
+                               : route_manager_->get_neighbor_node_id(fabric_node_id_, outgoing_direction);
+
+    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, key_dst};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
-        // Connection already registered - reuse it
         return connection_key;
     }
 
-    // Register the new connection with the connection manager
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, dst_node_id, vc_id);
+    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, key_dst, vc_id);
 
     log_debug(
         tt::LogTest,
-        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, dst={}",
+        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, next_hop={}",
         static_cast<int>(worker_type),
         logical_core,
         static_cast<int>(outgoing_direction),
         link_idx,
-        dst_node_id);
+        key_dst);
 
     return connection_key;
 }

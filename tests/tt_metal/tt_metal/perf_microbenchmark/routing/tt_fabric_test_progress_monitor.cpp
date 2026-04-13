@@ -70,7 +70,7 @@ TestProgressMonitor::~TestProgressMonitor() = default;
 // Non-granular polling (legacy path)
 // =====================================================================
 
-void TestProgressMonitor::poll_until_complete() {
+bool TestProgressMonitor::poll_until_complete() {
     start_time_ = std::chrono::steady_clock::now();
     last_poll_time_ = start_time_;
 
