@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
+// Isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
+// Two input operands are unpacked into adjacent SrcS slices (slice 0 and slice 1),
+// added by the SFPU, and the result is stored to slice 2 then packed to L1.
 // All logic runs in LLK_TRISC_ISOLATE_SFPU; UNPACK, MATH, PACK are stubbed.
-// SrcS dvalid is controlled by UNPACR2/PACR1 TILE_INC (SetDatValid/ClrDatValid in llk_srcs_tdma.h).
 
 #include <cstdint>
 
@@ -40,7 +41,6 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "llk_math_eltwise_unary_sfpu_common.h"
 #include "llk_srcs_tdma.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_square.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -67,30 +67,45 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
 
     // -------------------------------------------------------------------------
-    // Buffer descriptor and HW setup
+    // Buffer descriptors and HW setup
     // -------------------------------------------------------------------------
 
-    constexpr std::uint32_t buf_desc_id_unpack = 0;
-    constexpr std::uint32_t buf_desc_id_pack   = 8;
+    constexpr std::uint32_t buf_desc_id_unpack_0 = 0; // First input operand (buffer_A)
+    constexpr std::uint32_t buf_desc_id_unpack_1 = 1; // Second input operand (buffer_B)
+    constexpr std::uint32_t buf_desc_id_pack     = 8;
 
-    buffer_descriptor_u bd_unpack = {0};
-    tdma_descriptor_t td_unpack;
+    buffer_descriptor_u bd_unpack_0 = {0};
+    tdma_descriptor_t td_unpack_0;
+    buffer_descriptor_u bd_unpack_1 = {0};
+    tdma_descriptor_t td_unpack_1;
     buffer_descriptor_u bd_pack = {0};
     tdma_descriptor_t td_pack;
 
-    // Unpack BD: L1 input -> SrcS
-    bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_A[0]);
-    bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack.buf_desc        = bd_unpack;
-    td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+    // Unpack BD 0: L1 input A -> SrcS slice 0
+    bd_unpack_0.f.l1_addr_16B   = L1_ADDRESS(params.buffer_A[0]);
+    bd_unpack_0.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_0.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_unpack_0.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_unpack_0.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_unpack_0.buf_desc        = bd_unpack_0;
+    td_unpack_0.buf_desc_id     = buf_desc_id_unpack_0;
+    td_unpack_0.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    _configure_buf_desc_table_(td_unpack_0.buf_desc_id, td_unpack_0.buf_desc);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_0);
 
-    // Pack BD: SrcS -> L1 output
+    // Unpack BD 1: L1 input B -> SrcS slice 1
+    bd_unpack_1.f.l1_addr_16B   = L1_ADDRESS(params.buffer_B[0]);
+    bd_unpack_1.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_1.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_unpack_1.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_unpack_1.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_unpack_1.buf_desc        = bd_unpack_1;
+    td_unpack_1.buf_desc_id     = buf_desc_id_unpack_1;
+    td_unpack_1.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    _configure_buf_desc_table_(td_unpack_1.buf_desc_id, td_unpack_1.buf_desc);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_1);
+
+    // Pack BD: SrcS slice 2 -> L1 output
     bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
     bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
     bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
@@ -110,15 +125,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SFPU configuration and execution
     // -------------------------------------------------------------------------
 
-    // If SrcS is 32-bit, we need 16 slices (unpack/pack) per tile
+    // Binary: 2 instructions per auto-loop iteration (one per operand)
     if (PARAM_SRCS_32BIT_MODE)
     {
-        _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 16>();
+        _llk_unpack_srcs_config_<2, 16>();
         _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 16>();
     }
     else
     {
-        _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 8>();
+        _llk_unpack_srcs_config_<2, 8>();
         _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 8>();
     }
     _llk_math_eltwise_unary_sfpu_init_();
@@ -126,30 +141,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
-        // Unpack/Pack calls can be moved outside the loop by incorporating the loop into the auto-loop registers
-        // Keeping them here for now since num_tiles is not a compile-time constant
-        _llk_unpack_srcs_unary_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
+        // _llk_unpack_srcs_binary_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack_0, buf_desc_id_unpack_1, i * PARAM_SRCS_SLICE_COUNT);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
+        TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+        TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
 
-        // Pack is placed before SFPU because SFPU loop fills up and clogs the instruction buffer leading to hangs
-        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to write
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            // Square is inlined instead of _calculate_square_ / _calculate_square_sfp_rows_: those
-            // helpers assume fixed operand addresses (and default sfpmem); this kernel needs explicit
-            // SrcS load/store bases and sfpmem_mod. Passing addresses into calculate_* will land in a
-            // follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
+            // SFPU add inlined for sfpmem_mod control (same rationale as square kernel).
+            // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
+            // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
+            const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
+            const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
+            const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
 
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                // Multiply LREG0 * LREG0, store result in LREG0
-                TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-                // Store result back to destination
-                TT_SFPSTORE(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod, ADDR_MOD_7, 0, in1_base + (d << 1));
+                // Add LREG0 + LREG1, store result in LREG2
+                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
+                TTI_NOP;
+                // Store result back to output slice
+                TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, out_base + (d << 1));
             }
 
             _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
