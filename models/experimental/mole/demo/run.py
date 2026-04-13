@@ -162,14 +162,16 @@ def resolve_checkpoint_path(checkpoint_file: str) -> str:
     if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
         raise ValueError("checkpoint_file is not in the predefined safelist")
 
-    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, checkpoint_file))
-    if not my_path.startswith(BASE_DIRECTORY):
+    base_directory = Path(CHECKPOINT_BASE_DIR).resolve(strict=False)
+    my_path = (base_directory / checkpoint_file).resolve(strict=False)
+    try:
+        my_path.relative_to(base_directory)
+    except ValueError:
         raise ValueError("checkpoint path escapes checkpoint base directory")
 
-    if not os.path.isfile(my_path):
+    if not my_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {my_path}")
-    return my_path
+    return str(my_path)
 
 
 def _resolve_checkpoint_path(checkpoint_file: str) -> str:
@@ -177,18 +179,20 @@ def _resolve_checkpoint_path(checkpoint_file: str) -> str:
 
 
 def _resolve_dataset_csv_path() -> Path:
-    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
-    if not os.path.isdir(BASE_DIRECTORY):
-        raise FileNotFoundError(f"dataset directory not found: {BASE_DIRECTORY}")
+    base_directory = Path(CHECKPOINT_BASE_DIR).resolve(strict=False)
+    if not base_directory.is_dir():
+        raise FileNotFoundError(f"dataset directory not found: {base_directory}")
 
     if DATASET_FILE not in ALLOWED_DATASET_FILES:
         raise ValueError("dataset_file is not in the predefined safelist")
 
-    my_path = os.path.abspath(DATASET_PATH)
-    if not my_path.startswith(BASE_DIRECTORY):
+    my_path = Path(DATASET_PATH).resolve(strict=False)
+    try:
+        my_path.relative_to(base_directory)
+    except ValueError:
         raise ValueError("dataset path escapes dataset base directory")
 
-    csv_path = Path(my_path)
+    csv_path = my_path
     if csv_path.exists():
         return csv_path
     raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
