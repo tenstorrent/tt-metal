@@ -15,6 +15,7 @@ Usage:
     python models/demos/qwen3_tts/demo/web_demo.py
 """
 
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -54,11 +55,12 @@ _decoder_weights = None
 _config = None
 _ctx: TTSServerContext = None
 _lock = None  # threading.Lock set at startup
+_use_2cq = False
 
 
 def _startup():
     """Load weights, open device, init model, pre-warm all buckets and capture traces."""
-    global _device, _model, _tokenizer, _main_weights, _decoder_weights, _config, _ctx, _lock
+    global _device, _model, _tokenizer, _main_weights, _decoder_weights, _config, _ctx, _lock, _use_2cq
 
     import threading
 
@@ -79,10 +81,14 @@ def _startup():
     _tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base", trust_remote_code=True)
 
     print("\n[3/5] Opening TT device...")
+    _use_2cq = os.environ.get("QWEN3_TTS_USE_2CQ", "").lower() in ("1", "true", "yes")
+    if _use_2cq:
+        print("  QWEN3_TTS_USE_2CQ set: opening device with 2 command queues (H2D overlap)")
     _device = ttnn.open_device(
         device_id=0,
         l1_small_size=32768,
         trace_region_size=100_000_000,
+        num_command_queues=2 if _use_2cq else 1,
     )
     _device.enable_program_cache()
 
@@ -160,6 +166,7 @@ def generate(ref_audio_path, ref_text: str, target_text: str):
                 trailing_text_hidden=trailing_text_hidden,
                 tts_pad_embed=tts_pad_embed,
                 config=_config,
+                use_2cq=_use_2cq,
             )
 
             if codes is None:
