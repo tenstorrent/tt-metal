@@ -61,7 +61,7 @@ void kernel_main() {
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<20>();
-    const auto in1_reader = decltype(TensorAccessor(in1_args, in1_addr)){in1_args, in1_addr, in1_tile_size};
+    const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = decltype(TensorAccessor(in2_args, in2_addr)){in2_args, in2_addr, in2_tile_size};
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
 
 #ifdef FUSE_TERNARY
@@ -91,8 +91,8 @@ void kernel_main() {
     constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
     constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
 
-    const auto ternary_a_reader = decltype(TensorAccessor(ternary_a_args, ternary_a_addr)){ternary_a_args, ternary_a_addr, ternary_a_tile_size};
-    const auto ternary_b_reader = decltype(TensorAccessor(ternary_b_args, ternary_b_addr)){ternary_b_args, ternary_b_addr, ternary_b_tile_size};
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);

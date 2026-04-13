@@ -106,7 +106,7 @@ void kernel_main() {
 #endif
 
     // WRITER
-    const auto s = decltype(TensorAccessor(out_args, out_tensor_addr)){out_args, out_tensor_addr, output_single_tile_size_bytes};
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
