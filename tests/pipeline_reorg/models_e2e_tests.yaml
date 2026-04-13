@@ -261,7 +261,7 @@
   model: qwq-32b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
