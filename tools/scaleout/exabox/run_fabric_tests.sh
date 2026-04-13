@@ -23,6 +23,8 @@ Optional:
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
+    --no-show-progress                  Disable real-time progress monitoring (enabled by default)
+    --no-show-workers                   Disable per-device worker/location logging (enabled by default)
     --help                              Display this help message and exit
 
 Example:
@@ -44,6 +46,8 @@ MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
 FILTER=""
+SHOW_PROGRESS=true
+SHOW_WORKERS=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -118,6 +122,14 @@ while [[ $# -gt 0 ]]; do
             FILTER="$2"
             shift 2
             ;;
+        --no-show-progress)
+            SHOW_PROGRESS=false
+            shift
+            ;;
+        --no-show-workers)
+            SHOW_WORKERS=false
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -180,7 +192,12 @@ echo ""
 
 EXTRA_BINARY_ARGS=""
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
-    EXTRA_BINARY_ARGS="--show-progress --show-workers"
+    if [[ "$SHOW_PROGRESS" == true ]]; then
+        EXTRA_BINARY_ARGS+=" --show-progress"
+    fi
+    if [[ "$SHOW_WORKERS" == true ]]; then
+        EXTRA_BINARY_ARGS+=" --show-workers"
+    fi
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
