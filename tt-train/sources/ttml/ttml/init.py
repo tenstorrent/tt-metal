@@ -153,7 +153,7 @@ def uniform(a: float = 0.0, b: float = 1.0):
     def uniform_init(shape, mapper=None):
         if mapper is not None:
             data = np.random.uniform(a, b, size=shape).astype(np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         return ttml.ops.rand(shape, a, b)
 
     return uniform_init
@@ -165,7 +165,7 @@ def normal(mean: float = 0.0, std: float = 1.0):
     def normal_init(shape, mapper=None):
         if mapper is not None:
             data = np.random.normal(mean, std, size=shape).astype(np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         return ttml.ops.randn(shape, mean, std)
 
     return normal_init
@@ -177,7 +177,7 @@ def constant(val: float):
     def constant_init(shape, mapper=None):
         if mapper is not None:
             data = np.full(shape, val, dtype=np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.full(
             shape,
@@ -197,7 +197,7 @@ def zeros():
     def zeros_init(shape, mapper=None):
         if mapper is not None:
             data = np.zeros(shape, dtype=np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.zeros(
             shape,
@@ -216,7 +216,7 @@ def ones():
     def ones_init(shape, mapper=None):
         if mapper is not None:
             data = np.ones(shape, dtype=np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.ones(
             shape,
