@@ -82,7 +82,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset_one = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = decltype(TensorAccessor(input_tensor_args, input_tensor_address)){input_tensor_args, input_tensor_address, page_size};
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -109,7 +109,7 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset_one>();
     constexpr uint32_t ct_offset_two = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_tensor_addrgen = decltype(TensorAccessor(intermediate_tensor_args, intermediate_tensor_address)){intermediate_tensor_args, intermediate_tensor_address, page_size};
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -133,7 +133,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset_one + ct_offset_two>();
-    auto output_tensor_addrgen = decltype(TensorAccessor(output_tensor_args, output_tensor_address)){output_tensor_args, output_tensor_address, page_size};
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 #endif
 
     ReduceScatterOpReceiver matmul_receiver;

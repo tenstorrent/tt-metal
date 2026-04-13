@@ -44,7 +44,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    const auto s0 = decltype(TensorAccessor(s0_args, cache_addr)){s0_args, cache_addr, cache_tile_bytes};
+    const auto s0 = TensorAccessor(s0_args, cache_addr);
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;

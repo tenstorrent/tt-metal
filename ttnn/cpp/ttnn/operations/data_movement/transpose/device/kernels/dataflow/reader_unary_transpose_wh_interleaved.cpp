@@ -42,7 +42,7 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, tile_bytes};
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

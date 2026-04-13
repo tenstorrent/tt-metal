@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
-    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, new_stick_size};
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

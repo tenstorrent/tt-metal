@@ -35,7 +35,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_id_attn_obj(cb_id_attn);
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
 
-    const auto addr_mask = decltype(TensorAccessor(mask_args, mask_addr)){mask_args, mask_addr, mask_tile_bytes};
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
@@ -54,7 +54,7 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 #endif
 
-    const auto src_a = decltype(TensorAccessor(src0_args, src_addr)){src0_args, src_addr, src0_tile_bytes};
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);

@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, tile_bytes};
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb(cb_id_out);

@@ -21,7 +21,7 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(output_cb);
 
-    const auto output_accessor = decltype(TensorAccessor(output_args, output_addr)){output_args, output_addr, tile_bytes};
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t tile_id = tile_row * output_tiles_per_row;

@@ -74,7 +74,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = decltype(TensorAccessor(gamma_args, gamma_addr)){gamma_args, gamma_addr, stick_size};
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
@@ -105,7 +105,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-        const auto beta = decltype(TensorAccessor(beta_args, beta_addr)){beta_args, beta_addr, stick_size};
+        const auto beta = TensorAccessor(beta_args, beta_addr);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;

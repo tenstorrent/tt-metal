@@ -29,7 +29,7 @@ void kernel_main() {
     uint32_t scaler = get_arg_val<uint32_t>(4);
     generate_reduce_scaler(cb_reduce, scaler);
 
-    const auto src_a = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, src0_tile_bytes};
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
     // Generate constant tiles for reduce scalar
     uint32_t inp_tile_idx = tile_offset;

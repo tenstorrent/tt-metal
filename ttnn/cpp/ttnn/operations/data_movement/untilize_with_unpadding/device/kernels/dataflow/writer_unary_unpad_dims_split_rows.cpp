@@ -38,7 +38,7 @@ void kernel_main() {
         FLOAT32_DTYPE ? block_row_size / 128
                       : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
 
-    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, unpadded_X_size};
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
