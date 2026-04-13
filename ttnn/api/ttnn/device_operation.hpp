@@ -242,7 +242,9 @@ void enqueue_mesh_workload(
     }
 
     auto& mesh_cq = mesh_device->mesh_command_queue();
+    log_warning(tt::LogMetal, "[device_operation] EnqueueMeshWorkload start");
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+    log_warning(tt::LogMetal, "[device_operation] EnqueueMeshWorkload done");
 
     // Record a host-visible completion event after the workload so buffers referenced by
     // this op cannot be deallocated and immediately reused while the device is still using
@@ -260,7 +262,9 @@ void enqueue_mesh_workload(
         auto workload_sub_device_ids = workload.determine_sub_device_ids(mesh_device);
         std::vector<tt::tt_metal::SubDeviceId> sub_device_id_vec(
             workload_sub_device_ids.begin(), workload_sub_device_ids.end());
+        log_warning(tt::LogMetal, "[device_operation] enqueue_record_event_to_host start");
         auto completion_event = mesh_cq.enqueue_record_event_to_host(sub_device_id_vec);
+        log_warning(tt::LogMetal, "[device_operation] enqueue_record_event_to_host done");
         detail::track_completion_event_on_tensors(tensor_args, completion_event);
         detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
     }

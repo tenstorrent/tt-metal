@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
@@ -193,7 +194,9 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
                     mesh_device_->impl().get_device(coord)->id());
             }
         }
+        log_warning(LogMetal, "[enqueue_write_shard_to_sub_grid] about to dispatch_thread_pool_->wait()");
         dispatch_thread_pool_->wait();
+        log_warning(LogMetal, "[enqueue_write_shard_to_sub_grid] dispatch_thread_pool_->wait() returned");
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
@@ -260,7 +263,9 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
                 mesh_device_->impl().get_device(shard_coord)->id());
         }
     }
+    log_warning(LogMetal, "[enqueue_write_shards_nolock] about to dispatch_thread_pool_->wait()");
     dispatch_thread_pool_->wait();
+    log_warning(LogMetal, "[enqueue_write_shards_nolock] dispatch_thread_pool_->wait() returned");
 
     if (blocking) {
         this->finish_nolock();

@@ -261,7 +261,9 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    log_warning(LogMetal, "[enqueue_mesh_workload] cq={} acquiring lock (blocking={})", id_, blocking);
     auto lock = lock_api_function_();
+    log_warning(LogMetal, "[enqueue_mesh_workload] cq={} lock acquired", id_);
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -457,6 +459,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
     }
+    log_warning(LogMetal, "[enqueue_mesh_workload] cq={} done (blocking={})", id_, blocking);
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
@@ -757,7 +760,9 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         dispatch_thread_pool_->enqueue(
             [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
     });
+    log_warning(LogMetal, "[enqueue_record_event_helper] about to dispatch_thread_pool_->wait() notify_host={}", notify_host);
     dispatch_thread_pool_->wait();
+    log_warning(LogMetal, "[enqueue_record_event_helper] dispatch_thread_pool_->wait() returned notify_host={}", notify_host);
     return event;
 }
 
