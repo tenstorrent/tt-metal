@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <tt_stl/assert.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -132,7 +133,7 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
-    return __emule_bridge_l1 ? __emule_bridge_l1 + static_cast<uint32_t>(addr) : nullptr;
+    return nullptr;
 }
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
@@ -181,6 +182,10 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
                 uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
                 if (size == sizeof(uint32_t)) {
+                    TT_FATAL(
+                        reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
+                        "multicast_write: L1 offset 0x{:x} is not 4-byte aligned for atomic store",
+                        l1_offset);
                     // Atomic store for semaphore-sized writes (4 bytes)
                     uint32_t val;
                     std::memcpy(&val, src, sizeof(uint32_t));
