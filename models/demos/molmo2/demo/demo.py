@@ -3740,6 +3740,7 @@ def run_video_demo(
     use_data_parallel: bool = False,
     frames_per_device: int = 8,
     repetition_penalty: float = 1.0,
+    use_async_ccl: bool = False,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -3790,7 +3791,14 @@ def run_video_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            use_async_ccl=use_async_ccl,
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -3901,6 +3909,7 @@ def run_demo(
     batch_size: int = 1,
     num_devices: int = 8,
     repetition_penalty: float = 1.0,
+    use_async_ccl: bool = False,
 ):
     """
     Run the Molmo2 demo.
@@ -3975,7 +3984,14 @@ def run_demo(
 
     try:
         # Create model
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            use_async_ccl=use_async_ccl,
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         # Create generator
@@ -4068,6 +4084,7 @@ def run_batched_demo(
     use_vision_trace: bool = False,
     batch_size: int = 4,
     num_devices: int = 8,
+    use_async_ccl: bool = False,
 ):
     """
     Run batched demo with multiple different prompts processed in parallel.
@@ -4146,7 +4163,14 @@ def run_batched_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
+        model = create_model(
+            device,
+            state_dict,
+            num_layers,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            use_async_ccl=use_async_ccl,
+        )
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -4326,6 +4350,12 @@ def main():
         default=1.0,
         help=">1.0 down-weights repeated tokens (HF greedy uses 1.0). Values like 1.1 can garble short multiple-choice answers.",
     )
+    parser.add_argument(
+        "--use-async-ccl",
+        action="store_true",
+        default=False,
+        help="Use async CCL operations for tensor parallelism (reduces trace hangs with DP>1)",
+    )
 
     args = parser.parse_args()
 
@@ -4357,6 +4387,7 @@ def main():
             use_vision_trace=trace_vision_image_text,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
+            use_async_ccl=args.use_async_ccl,
         )
     elif args.video is not None:
         if args.prompt is not None:
@@ -4397,6 +4428,7 @@ def main():
             device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
+            use_async_ccl=args.use_async_ccl,
             max_frames=args.max_video_frames,
             max_fps=args.max_video_fps,
             use_trace=trace_prefill_video,
@@ -4442,6 +4474,7 @@ def main():
             batch_size=args.batch_size,
             num_devices=args.num_devices,
             repetition_penalty=args.repetition_penalty,
+            use_async_ccl=args.use_async_ccl,
         )
 
 

@@ -25,6 +25,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias_ttnn
 from models.demos.molmo2.tt.text_model import TextModel
 from models.demos.molmo2.tt.vision_backbone import VisionBackbone
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class Molmo2Model(LightweightModule):
@@ -69,6 +70,7 @@ class Molmo2Model(LightweightModule):
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
         dtype=ttnn.bfloat8_b,
+        use_async_ccl: bool = False,
     ):
         """
         Initialize Molmo2Model.
@@ -123,6 +125,15 @@ class Molmo2Model(LightweightModule):
         )
         logger.info("VisionBackbone created")
 
+        # Create TT_CCL for async CCL operations (avoids trace hangs with DP>1)
+        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+        tt_ccl = None
+        if use_async_ccl and is_mesh_device:
+            logger.info("Creating TT_CCL for async CCL operations...")
+            tt_ccl = TT_CCL(mesh_device)
+            logger.info("TT_CCL created")
+        self.tt_ccl = tt_ccl
+
         logger.info("Creating TextModel...")
         # Text model (Language Model)
         self.text_model = TextModel(
@@ -141,6 +152,7 @@ class Molmo2Model(LightweightModule):
             rms_norm_eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
+            tt_ccl=tt_ccl,
         )
 
     def embed_image(

@@ -1961,6 +1961,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 num_layers=None,
                 max_batch_size=batch_per_dp,
                 max_seq_len=max_seq_len,
+                use_async_ccl=True,  # Use async CCL for better trace compatibility
             )
             model_args_i = Molmo2ModelArgs(
                 mesh_device=submesh,

@@ -27,6 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 
 
 class TextAttention(LightweightModule):
@@ -51,6 +52,7 @@ class TextAttention(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer.blocks",
         dtype=ttnn.bfloat8_b,
+        tt_ccl: Optional[TT_CCL] = None,
     ):
         """
         Initialize TextAttention with tensor parallelism support.
@@ -82,6 +84,7 @@ class TextAttention(LightweightModule):
 
         self.scale = head_dim**-0.5
         self.rms_norm_eps = rms_norm_eps
+        self.tt_ccl = tt_ccl
 
         # Tile alignment
         self.tile_size = 32
@@ -458,14 +461,26 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(attn_output)
 
-        # All-reduce for tensor parallelism
+        # All-reduce for tensor parallelism (async CCL with reduce_scatter + all_gather)
         if self.is_mesh_device and self.num_devices > 1:
-            output = ttnn.all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if self.tt_ccl is not None:
+                output = tt_all_reduce(
+                    output,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,  # T3K uses axis 0 for 1D linear topology
+                    dim=3,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    sharded=False,
+                )
+            else:
+                output = ttnn.all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         return output, new_kv_cache
 
@@ -757,15 +772,27 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(attn_output)
 
-        # All-reduce for tensor parallelism
+        # All-reduce for tensor parallelism (async CCL with reduce_scatter + all_gather)
         # Note: all_reduce needs DRAM input, convert from L1 first
         if self.is_mesh_device and self.num_devices > 1:
             output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
-            output = ttnn.all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if self.tt_ccl is not None:
+                output = tt_all_reduce(
+                    output,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,  # T3K uses axis 0 for 1D linear topology
+                    dim=3,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    sharded=False,
+                )
+            else:
+                output = ttnn.all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         return output
