@@ -44,9 +44,12 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_idx = tt::CBIndex::c_10;
+    // When pre_rescaled: push KV directly to sdpa's native CBs (c_1/c_2).
+    // sdpa_standard handles the data format natively (BFP8 or BFP4).
+    // Reader pushes 1 chunk, sdpa consumes it, reader pushes next — pipelined.
+    constexpr uint32_t cb_k_idx = pre_rescaled ? tt::CBIndex::c_1 : tt::CBIndex::c_10;
     constexpr uint32_t cb_k_norms = tt::CBIndex::c_11;
-    constexpr uint32_t cb_v_idx = tt::CBIndex::c_12;
+    constexpr uint32_t cb_v_idx = pre_rescaled ? tt::CBIndex::c_2 : tt::CBIndex::c_12;
     constexpr uint32_t cb_v_norms = tt::CBIndex::c_13;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);

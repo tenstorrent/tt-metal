@@ -38,8 +38,8 @@ def test_full_dequant(device, seq_len=128, head_dim=128, nqh=8, nkh=8, bits=3):
     )
 
     q_dev = ttnn.from_torch(q_raw, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    ki = ttnn.from_torch(k_idx.float(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
-    vi = ttnn.from_torch(v_idx.float(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    ki = ttnn.from_torch(k_idx.float(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    vi = ttnn.from_torch(v_idx.float(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     kn_p, vn_p = torch.zeros(B, nkh, seq_p, 32), torch.zeros(B, nkh, seq_p, 32)
     kn_p[..., 0], vn_p[..., 0] = k_n.squeeze(-1), v_n.squeeze(-1)
     kn = ttnn.from_torch(kn_p, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -69,8 +69,8 @@ def test_pre_rescaled(device, seq_len=128, head_dim=128, nqh=8, nkh=8):
     q_raw = torch.randn(B, nqh, 1, head_dim)
 
     # Store as BFP4 (pre-rescaled: values not indices)
-    k_bfp4 = ttnn.from_torch(k_raw, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
-    v_bfp4 = ttnn.from_torch(v_raw, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    k_bfp4 = ttnn.from_torch(k_raw, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    v_bfp4 = ttnn.from_torch(v_raw, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     k_rt, v_rt = ttnn.to_torch(k_bfp4).float(), ttnn.to_torch(v_bfp4).float()
     hpk = nqh // nkh
     ref = reference_sdpa(

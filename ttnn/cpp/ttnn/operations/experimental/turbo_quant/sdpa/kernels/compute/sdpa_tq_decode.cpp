@@ -224,42 +224,13 @@ void kernel_main() {
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                if constexpr (pre_rescaled) {
-                    // ── Pre-rescaled mode: typecast BFP4→BF16 only (K transposed) ──
-                    // Reader pushes K transposed to cb_k_idx, V non-transposed to cb_v_idx.
-                    init_sfpu(cb_k_idx, cb_k_in);
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                    for (uint32_t t = 0; t < k_chunk_tiles; t++) {
-                        tile_regs_acquire();
-                        cb_wait_front(cb_k_idx, 1);
-                        copy_tile(cb_k_idx, 0, 0);
-                        typecast_tile_init<DF_BFP4, DF_BF16>();
-                        typecast_tile<DF_BFP4, DF_BF16>(0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, cb_k_in);
-                        cb_pop_front(cb_k_idx, 1);
-                        tile_regs_release();
-                    }
-                    cb_push_back(cb_k_in, k_chunk_tiles);
-
-                    init_sfpu(cb_v_idx, cb_v_in);
-                    cb_reserve_back(cb_v_in, v_chunk_tiles);
-                    for (uint32_t t = 0; t < v_chunk_tiles; t++) {
-                        tile_regs_acquire();
-                        cb_wait_front(cb_v_idx, 1);
-                        copy_tile(cb_v_idx, 0, 0);
-                        typecast_tile_init<DF_BFP4, DF_BF16>();
-                        typecast_tile<DF_BFP4, DF_BF16>(0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, cb_v_in);
-                        cb_pop_front(cb_v_idx, 1);
-                        tile_regs_release();
-                    }
-                    cb_push_back(cb_v_in, v_chunk_tiles);
-                } else {
+            // ── Pre-fill for full dequant mode only ──
+            // Pre-rescaled: reader pushes BFP8 directly to cb_k_in/cb_v_in.
+            //   sdpa_standard reads natively via the matmul unpacker.
+            //   CB capacity = 1 chunk → pipelined with reader → 128K+ context.
+            // Full dequant: compute typecasts + gathers all chunks into BF16 CBs.
+            if constexpr (!pre_rescaled) {
+                for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                     // ── Full dequant mode: typecast + centroid gather + norm multiply ──
                     // Pass 1K: Typecast K BFP4→BF16 into cb_dq_temp
                     init_sfpu(cb_k_idx, cb_dq_temp);
@@ -390,10 +361,12 @@ void kernel_main() {
                     cb_pop_front(cb_dq_temp, v_chunk_tiles);
                     cb_pop_front(cb_v_norms, Sk_chunk_t);
                     cb_push_back(cb_v_in, v_chunk_tiles);
-                }  // end else (full dequant)
-            }  // end k_chunk loop
+                }  // end k_chunk loop
+            }  // end if (!pre_rescaled)
 
-            // ── Run SDPA on the BF16 K/V ──
+            // ── Run SDPA ──
+            // For pre_rescaled: cb_k_in/cb_v_in are filled by reader (BFP8 native).
+            // For full dequant: cb_k_in/cb_v_in were pre-filled with BF16 above.
             mm_init(cb_q_in, cb_k_in, cb_out);
             sdpa_standard<
                 cb_qk_im,

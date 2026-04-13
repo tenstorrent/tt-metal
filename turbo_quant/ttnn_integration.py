@@ -431,7 +431,9 @@ class TTNNTurboQuantCache:
         max_seq_padded = ((max_seq_len + 31) // 32) * 32
         self.max_seq_padded = max_seq_padded
 
-        idx_dtype = ttnn.bfloat4_b if memory_efficient else ttnn.bfloat16
+        # BFP8 for memory-efficient mode: ~1 byte/elem, natively supported by SDPA matmul.
+        # (BFP4 is 0.5 byte/elem but not supported by the matmul unpacker.)
+        idx_dtype = ttnn.bfloat8_b if memory_efficient else ttnn.bfloat16
         zero_idx = torch.zeros(max_batch_size, num_kv_heads, max_seq_padded, head_dim, dtype=torch.bfloat16)
         self.k_indices_dev = [
             ttnn.from_torch(
