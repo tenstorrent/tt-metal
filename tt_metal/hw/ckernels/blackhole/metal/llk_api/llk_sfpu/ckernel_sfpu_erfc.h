@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -17,7 +19,7 @@ namespace ckernel::sfpu {
 //
 // Uses abs(x) symmetry: erfc(-x) = 2 - erfc(x)
 // Fit on [0, 5.0] only, 2 segments with n4/d5 rational per segment.
-// BF16 MaxULP=61  (was 128 with 3-seg n4/d4 on [-5,5])
+// BF16 MaxULP=118 (was 128 with 3-seg n4/d4 on [-5,5])
 // FP32 MaxULP≈9M  (was 1.47B)
 // 18 FMAs          (was 24)
 // ======================================================================
@@ -62,9 +64,16 @@ inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat ax = sfpi::setsgn(x, 0);
-        sfpi::vFloat r =
-            piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, false, true>(
-                ERFC_LUT, ax);
+        sfpi::vFloat r = piecewise_rational_eval<
+            ERFC_NUM_DEGREE,
+            ERFC_DEN_DEGREE,
+            ERFC_NUM_SEGMENTS,
+            ERFC_LUT_SIZE,
+            false,
+            APPROXIMATION_MODE>(ERFC_LUT, ax);
+        // Clamp: erfc(x) ~ 0 for |x| > 5
+        v_if(ax > 5.0f) { r = 0.0f; }
+        v_endif;
         // erfc(-x) = 2 - erfc(x)
         v_if(x < 0.0f) { r = 2.0f - r; }
         v_endif;
