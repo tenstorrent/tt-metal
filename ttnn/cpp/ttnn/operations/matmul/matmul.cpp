@@ -362,30 +362,53 @@ Tensor linear(
         sub_device_id};
     auto out_tensor = bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 
-    // Adjust logical shape to honor broadcasting semantics with 1D bias (e.g., bias [1, 1, N] + matmul [M, N] -> [1, M,
-    // N])
-    if (bias.has_value()) {
-        const auto& bias_shape = bias.value().logical_shape();
-        const auto& out_shape = out_tensor.logical_shape();
-        // Reshape when bias has higher rank to reflect broadcasted leading dims
-        if (bias_shape.rank() > out_shape.rank()) {
-            std::vector<uint32_t> new_shape;
-            new_shape.reserve(bias_shape.rank());
-            for (int i = 0; i < static_cast<int>(bias_shape.rank()) - 2; ++i) {
-                new_shape.push_back(static_cast<uint32_t>(bias_shape[i]));
-            }
-            new_shape.push_back(static_cast<uint32_t>(out_shape[-2]));
-            new_shape.push_back(static_cast<uint32_t>(out_shape[-1]));
-            ttsl::Span<const uint32_t> span(new_shape.data(), new_shape.size());
-            out_tensor = ttnn::reshape(out_tensor, ttnn::Shape(span));
-        }
-    }
-    // If user provided an output tensor with a different rank, align to that logical shape
+    /* If user provided an output tensor with a different rank, align to that logical shape */
     if (optional_output_tensor.has_value()) {
         const auto& desired = optional_output_tensor->logical_shape();
         const auto& current = out_tensor.logical_shape();
-        if (desired.rank() != current.rank()) {
+
+        /* Check total elements */
+        TT_FATAL(
+            desired.volume() == current.volume(),
+            "Invalid reshape: total elements mismatch ({} vs {})",
+            desired.volume(),
+            current.volume());
+
+        /* Check last dimension (feature dim must match for linear) */
+        TT_FATAL(
+            desired[-1] == current[-1],
+            "Invalid reshape: last dimension mismatch ({} vs {})",
+            desired[-1],
+            current[-1]);
+
+        /* Perform reshape if needed */
+        if (desired != current) {
             out_tensor = ttnn::reshape(out_tensor, desired);
+        }
+    } else if (bias.has_value()) {
+        const auto& a = out_tensor.logical_shape();
+        const auto& b = bias.value().logical_shape();
+
+        int rank_a = static_cast<int>(a.rank());
+        int rank_b = static_cast<int>(b.rank());
+        int max_rank = std::max(rank_a, rank_b);
+
+        std::vector<uint32_t> result(max_rank, 1);
+
+        for (int offset = 0; offset < max_rank; ++offset) {
+            int idx_a = rank_a - 1 - offset;
+            int idx_b = rank_b - 1 - offset;
+
+            uint32_t dim_a = (idx_a >= 0) ? a[idx_a] : 1;
+            uint32_t dim_b = (idx_b >= 0) ? b[idx_b] : 1;
+
+            TT_FATAL(dim_a == dim_b || dim_a == 1 || dim_b == 1, "Broadcast error: %d vs %d", dim_a, dim_b);
+            result[max_rank - 1 - offset] = std::max(dim_a, dim_b);
+        }
+
+        if (result != std::vector<uint32_t>(a.begin(), a.end())) {
+            ttsl::Span<const uint32_t> span(result.data(), result.size());
+            out_tensor = ttnn::reshape(out_tensor, ttnn::Shape(span));
         }
     }
 
