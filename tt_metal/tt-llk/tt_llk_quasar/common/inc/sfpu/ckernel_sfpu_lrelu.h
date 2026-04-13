@@ -58,12 +58,13 @@ inline void _calculate_relu_min_sfp_rows_()
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
-inline void _calculate_relu_min_(const int iterations, const std::uint32_t threshold)
+template <typename VectorType = std::uint32_t, bool APPROXIMATION_MODE = false, int ITERATIONS = SFPU_ITERATIONS, typename T = std::uint32_t>
+inline void _relu_min_(const std::uint32_t threshold)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_relu_min_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
