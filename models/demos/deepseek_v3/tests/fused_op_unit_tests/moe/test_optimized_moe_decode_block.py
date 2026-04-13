@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import random
 
-import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -166,7 +166,7 @@ def create_torch_dispatch_input_expert_indices_tensor(
                 elif scheme == "random" or scheme == "random_sequential_experts":
                     # need to ensure a set of unique indices
                     current_indices = expert_indices[b, 0, s, :].tolist()
-                    expert_indices[b, 0, s, k] = rng.choice(
+                    expert_indices[b, 0, s, k] = random.choice(
                         list(filter(lambda e: e not in current_indices, range(experts)))
                     )
                 elif scheme == "sliding_window":
@@ -184,7 +184,7 @@ def create_torch_dispatch_input_expert_indices_tensor(
                     # Fallback: if all capped experts are used, pick any expert not in current token
                     if not available_experts:
                         available_experts = [e for e in range(experts) if e not in current_indices]
-                    chosen_expert = rng.choice(available_experts)
+                    chosen_expert = random.choice(available_experts)
                     expert_indices[b, 0, s, k] = chosen_expert
                     expert_token_count[chosen_expert] += 1
                 elif scheme == "worst_perf":  # worst perf is when the expert index is always on the last device
@@ -590,8 +590,8 @@ def test_optimized_moe_decode_block(
     # initial setup
     ############################################
 
-    torch.manual_seed(2003)
-    rng = np.random.default_rng(2003)
+    torch.manual_seed(2005)
+    random.seed(2005)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
