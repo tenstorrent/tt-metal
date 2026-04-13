@@ -7,6 +7,11 @@
 #include <stdint.h>
 #include <algorithm>
 
+namespace detail {
+
+enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
+
+}  // namespace detail
 //=============================================================================
 // MoE Ring All-to-All Configuration
 //

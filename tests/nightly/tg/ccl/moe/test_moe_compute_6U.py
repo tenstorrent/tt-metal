@@ -10,6 +10,7 @@ import pytest
 import random
 import torch
 import ttnn
+from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
 
@@ -831,8 +832,15 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     return golden_e_t, experts_per_device
 
 
+# hardcoded for GPT-OSS
+def _swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
+    gate_c = torch.clamp(gate, max=clamp_limit)
+    up_c = torch.clamp(up, min=-clamp_limit, max=clamp_limit)
+    return (up_c + 1.0) * gate_c * torch.sigmoid(alpha * gate_c)
+
+
 def compute_matmul_golden(
-    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden
+    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden, activation_type
 ):
     tokens = tokens_per_device * devices
 
@@ -850,10 +858,19 @@ def compute_matmul_golden(
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
-    torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
-    torch_w1_output_ref = torch_input_ref @ torch_w1
-    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+
+    if activation_type == MoEActivationFunction.SILU:
+        # SILU: silu(x @ w0) * (x @ w1)
+        torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+        # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
+        torch_w1_output_ref = torch_input_ref @ torch_w1
+        torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.SWIGLU:
+        torch_intermediate_ref = torch_intermediate_ref = _swiglu_reference(
+            torch_w0_output_ref, torch_w2
+        )  # (L, E, T, N/2)
+    else:
+        raise ValueError(f"Unsupported activation type: {activation_type}")
 
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
@@ -993,6 +1010,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
+@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
 def test_moe_compute(
     mesh_device,
     mesh_shape,
@@ -1008,6 +1026,7 @@ def test_moe_compute(
     output_width_shard_dim,
     dtype,
     enable_trace,
+    activation_type,
     device_params,
 ):
     """
@@ -1046,6 +1065,7 @@ def test_moe_compute(
     logger.info(f"  dtype: {dtype}")
     logger.info(f"  num_iterations: {num_iterations}")
     logger.info(f"  enable_trace: {enable_trace}")
+    logger.info(f"  activation_type: {activation_type}")
 
     #########################################
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
@@ -1235,6 +1255,7 @@ def test_moe_compute(
         num_devices,
         tokens_per_device,
         hidden_size,
+        activation_type,
     )
 
     # compute goldens for combine
@@ -1385,6 +1406,7 @@ def test_moe_compute(
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
+            activation_type=activation_type,
         )
 
     #########################################
