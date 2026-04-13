@@ -620,50 +620,108 @@ class Gemma4Model:
 
         return logits
 
+    def switch_mode(self, mode):
+        """Generator compatibility — no prefetcher to reinitialize."""
+
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+        """Create host tensors for one decode step, including pre-computed embedding + PLI.
+
+        Called by Generator._capture_decode_trace_text and _decode_forward_trace_text.
+        Returns tuple of host ttnn tensors that copy_host_to_device will transfer.
+
+        Args:
+            tokens: torch.Tensor [batch] of token IDs
+            current_pos: torch.Tensor [batch] of current positions
+            page_table: optional torch.Tensor [batch, max_blocks] page table
+        """
+        import torch.nn.functional as F
+
+        is_mesh = hasattr(self.mesh_device, "shape")
+        replicate = (
+            ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh and self.mesh_device.get_num_devices() > 1 else None
+        )
+
+        # Host embedding + PLI (keeps these off the device trace)
+        token_id = tokens[0].item()
+        embeds, pli = self.compute_host_embeddings(token_id)
+
+        embeds_tt = ttnn.from_torch(embeds, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+
+        # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
+        pos = current_pos[0].item() if hasattr(current_pos, "item") else int(current_pos[0])
+        pos_padded = F.pad(torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
+        pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
+
+        # int32 position for KV cache update + SDPA
+        pos_int32_tt = ttnn.from_torch(
+            torch.tensor([pos], dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=replicate,
+        )
+
+        # Page table
+        page_table_tt = None
+        if page_table is not None:
+            page_table_tt = ttnn.from_torch(
+                page_table[0:1] if page_table.dim() > 1 else page_table.unsqueeze(0),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=replicate,
+            )
+
+        # PLI
+        pli_tt = None
+        if pli is not None:
+            pli_tt = ttnn.from_torch(
+                pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+            )
+
+        return (embeds_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
+
+    def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
+        """Wrapper: prepare_decode_inputs_host + copy to device."""
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
+        return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+
     def ttnn_decode_forward(
         self,
-        precomputed_embeds,
+        x,
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        rope_mats=None,
-        pli_device_tensors=None,
-        position_idx_cache=None,
-        precomputed_pli=None,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
-        Embeddings and PLI are computed on host via compute_host_embeddings() and
-        passed as ROW_MAJOR device tensors.  This keeps embedding off the device
-        trace for better 1x1 throughput.
+        x is pre-computed embeddings from prepare_decode_inputs_host (ROW_MAJOR).
+        Generator calls: prepare_decode_inputs_host → copy_host_to_device → ttnn_decode_forward.
 
         Args:
-            precomputed_embeds: [1,1,1,hidden_size] ROW_MAJOR device tensor from host embedding.
+            x: [1,1,1,hidden_size] ROW_MAJOR device tensor (pre-computed embedding).
             current_pos: [1,32] uint32 position tensor for RoPE embedding lookup.
-            rope_mats: Optional dict {layer_type: (cos_tt, sin_tt)} of pre-sliced RoPE device tensors.
-            pli_device_tensors: Optional list of pre-computed PLI device tensors for trace mode.
-            position_idx_cache: Optional [batch] int32 tensor for KV cache/SDPA.
-            precomputed_pli: Optional [1,1,n_layers,pli_size] ROW_MAJOR device tensor from host PLI.
+            rot_mat_idxs: Unused (RoPE computed internally from current_pos).
+            page_table: Optional paged attention table.
+            kv_cache: Optional KV cache override.
+            sampling_on_device: If True and self.sampling exists, sample on device.
+            capture_sampling_trace: If True, return logits for split-trace sampling.
         """
-        # Convert ROW_MAJOR host data to TILE on device.  This creates a new
-        # tensor, so the original trace input buffer is preserved when the model
-        # forward deallocates hidden_states via residual.deallocate(True).
-        input_embeds = ttnn.to_layout(precomputed_embeds, ttnn.TILE_LAYOUT)
+        # Convert ROW_MAJOR host data to TILE on device
+        input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        # Get position as int for token_index (only needed for legacy 4D RoPE path)
-        # When using 2D rope caches (default decode path), position is handled via
-        # on-device embedding lookup and token_index is unused.
-        if rope_mats is not None:
-            token_index = 0  # Pre-sliced rope from caller
-        elif self.rope_caches_2d:
-            token_index = None  # On-device embedding lookup handles position
-        elif isinstance(current_pos, ttnn.Tensor):
-            is_mesh = hasattr(self.mesh_device, "shape")
-            pos_cpu = ttnn.get_device_tensors(current_pos)[0] if is_mesh else current_pos
-            token_index = int(ttnn.to_torch(pos_cpu).item())
-        else:
-            token_index = int(current_pos)
+        # RoPE: always use internal 2D caches with on-device embedding lookup
+        token_index = None if self.rope_caches_2d else 0
+
+        # Unpack extra inputs if present (PLI from prepare_decode_inputs_host)
+        # Generator passes (x, pos, pos_int32, page_table, pli) via *device_inputs
+        # but the standard signature only has (x, current_pos, ..., page_table, ...)
+        # PLI is passed as a separate tensor in the tuple from prepare_inputs_decode
+        position_idx_cache = rot_mat_idxs  # Generator passes pos_int32 as rot_mat_idxs (3rd tuple element)
+        precomputed_pli = None  # PLI comes from 5th tuple element if present
 
         logits = self(
             hidden_states=input_embeds,
@@ -672,24 +730,18 @@ class Gemma4Model:
             kv_caches=kv_cache,
             is_decode=True,
             token_index=token_index,
-            rope_mats=rope_mats,
-            pli_device_tensors=pli_device_tensors,
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(precomputed_pli, ttnn.TILE_LAYOUT) if precomputed_pli is not None else None,
         )
 
-        # On-device sampling for TP >= 2 (SamplingGenerator handles distributed top-k)
-        if self.sampling is not None:
+        # On-device sampling
+        if sampling_on_device and self.sampling is not None:
+            if capture_sampling_trace:
+                return logits  # Split-trace: return logits for separate sampling trace
             batch_dim = logits.shape[2]
             if batch_dim < 32:
                 logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            tt_tokens, _ = self.sampling.sample(logits, enable_trace=False)
-            return tt_tokens, None
+            tt_tokens, tt_log_probs = self.sampling.sample(logits, enable_trace=False)
+            return tt_tokens, tt_log_probs
 
-        # TODO: On-device sampling for single-device (TP=1) with large vocab.
-        # ttnn.argmax returns garbage uint32 values on vocab >= 262k (likely a WH op bug).
-        # ttnn.topk(k=1) works but is slow (~5 t/s vs ~15+ t/s target).
-        # For now, return raw logits and let the caller do host torch.argmax.
-        # Fixing ttnn.argmax upstream or using TTSampling's multi_step_reduction
-        # (split-topk with pre-computed index tensors) would restore on-device sampling.
         return logits, None

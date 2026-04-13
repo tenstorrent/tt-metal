@@ -170,6 +170,37 @@ class Gemma4ModelArgs:
         """Load HuggingFace config."""
         return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
+    # ── Generator compatibility properties ─────────────────────────────────
+    # The tt_transformers Generator expects these attribute names.
+
+    @property
+    def dim(self):
+        return self.hidden_size
+
+    @property
+    def n_layers(self):
+        return self.num_hidden_layers
+
+    @property
+    def max_batch_size(self):
+        return getattr(self, "_max_batch_size", 1)
+
+    @max_batch_size.setter
+    def max_batch_size(self, value):
+        self._max_batch_size = value
+
+    @property
+    def max_seq_len(self):
+        return getattr(self, "_max_seq_len", 131072)
+
+    @max_seq_len.setter
+    def max_seq_len(self, value):
+        self._max_seq_len = value
+
+    def get_warmup_prefill_supported_seq_lens(self):
+        """Sequence lengths to compile during prefill warmup."""
+        return [32, 128, 512]
+
     def weight_cache_path(self, model_path, dtype):
         """Return weight cache path for the model."""
         cache_dir = os.getenv("TT_CACHE_PATH")

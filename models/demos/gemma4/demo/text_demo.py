@@ -253,12 +253,12 @@ def run_generation(
 
         def _fwd(device_inputs):
             return model.ttnn_decode_forward(
-                precomputed_embeds=device_inputs["embeds"],
+                x=device_inputs["embeds"],
                 current_pos=device_inputs["position"],
-                kv_cache=tt_kv_cache,
+                rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
-                position_idx_cache=device_inputs["position_int32"],
-                precomputed_pli=device_inputs.get("pli"),
+                kv_cache=tt_kv_cache,
+                sampling_on_device=on_device_sampling,
             )
 
         def _inputs_to_device(inputs):
