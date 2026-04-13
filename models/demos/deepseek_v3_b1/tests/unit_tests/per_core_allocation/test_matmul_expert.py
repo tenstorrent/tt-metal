@@ -914,7 +914,6 @@ def _run_standard(
     active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
     num_active_experts = len(active_sram) + len(active_dram)
     num_sram_cores_active = len(sram_cores_list) if sram_expert_ids else 0
-    num_cores = compute_core_grid.num_cores()
     sram_per_core_N = N // num_sram_cores_active // tile_w if num_sram_cores_active else 0
 
     sram_cts = (
@@ -1112,7 +1111,6 @@ def _run_accum(
     active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
     num_active_experts = len(active_sram) + len(active_dram)
     num_sram_cores_active = len(sram_cores_list) if sram_expert_ids else 0
-    num_cores = compute_core_grid.num_cores()
     sram_per_core_N = N // num_sram_cores_active // tile_w if num_sram_cores_active else 0
 
     sram_cts = (
