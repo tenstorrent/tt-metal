@@ -49,6 +49,7 @@ def create_model(
     num_layers: Optional[int] = None,
     max_batch_size: int = 1,
     max_seq_len: int = 8192,
+    use_async_ccl: bool = False,
 ):
     """
     Create the Molmo2 TTNN model.
@@ -100,6 +101,7 @@ def create_model(
         rope_theta=1000000.0,
         rms_norm_eps=1e-6,
         dtype=ttnn.bfloat8_b,
+        use_async_ccl=use_async_ccl,
     )
 
     logger.info("Model created successfully")

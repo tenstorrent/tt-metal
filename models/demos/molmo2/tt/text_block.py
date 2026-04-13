@@ -12,13 +12,16 @@ Implements a pre-norm decoder block:
 With RMSNorm (no bias) following Llama architecture.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.text_attention import TextAttention
 from models.demos.molmo2.tt.text_mlp import TextMLP
 from models.demos.molmo2.tt.text_rmsnorm import TextRMSNorm
+
+if TYPE_CHECKING:
+    from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class TextBlock(LightweightModule):
@@ -45,6 +48,7 @@ class TextBlock(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer.blocks",
         dtype=ttnn.bfloat8_b,
+        tt_ccl: Optional["TT_CCL"] = None,
     ):
         """
         Initialize TextBlock.
@@ -98,6 +102,7 @@ class TextBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             state_dict_prefix=state_dict_prefix,
             dtype=dtype,
+            tt_ccl=tt_ccl,
         )
 
         # Feed-forward normalization
