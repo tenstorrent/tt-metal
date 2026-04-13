@@ -27,7 +27,7 @@ void kernel_main() {
     const uint32_t ublock_size_bytes = get_tile_size(CB_OUT);
     const uint32_t output_tile_bytes = ublock_size_bytes;
 
-    const auto output_addrg = decltype(TensorAccessor(output_addrg_args, output_base_addr)){output_addrg_args, output_base_addr, output_tile_bytes};
+    const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_out_obj(CB_OUT);

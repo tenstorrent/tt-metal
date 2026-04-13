@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
 
-    const auto addr_mask = decltype(TensorAccessor(mask_args, mask_addr)){mask_args, mask_addr, size};
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_attn_obj(cb_attn);
