@@ -268,7 +268,7 @@ void FDMeshCommandQueue::mark_in_use() {
             device->sysmem_manager().set_quiesced(id_, false);
         }
     }
-    mark_in_use();
+    in_use_ = true;
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
