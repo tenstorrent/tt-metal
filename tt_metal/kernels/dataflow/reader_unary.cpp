@@ -28,11 +28,10 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
 #ifdef ARCH_QUASAR
     uint32_t ublock_size_bytes = dfb_in.get_entry_size() * ublock_size_tiles;
+    experimental::Noc noc;
 #else
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
 #endif
-
-    experimental::Noc noc;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

@@ -175,11 +175,6 @@ bool run_sfpu_all_same_buffer(
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                                 // per_core_block_cnt
-    };
-
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
         byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
@@ -282,6 +277,11 @@ bool run_sfpu_all_same_buffer(
         sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+
+        vector<uint32_t> compute_kernel_args = {
+            uint32_t(test_config.num_tiles),  // per_core_block_cnt
+            1                                 // per_core_block_cnt
+        };
 
         if (device->arch() == ARCH::QUASAR) {
             compute_kernel_args.push_back(in_dfb);
