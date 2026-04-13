@@ -4,6 +4,8 @@
 
 """Embedding layer implementations for TTNN."""
 
+import os
+
 from torch import nn
 
 import ttnn
@@ -14,6 +16,10 @@ from models.experimental.tt_symbiote.core.run_config import (
     trace_enabled,
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
+
+# Bailing rotary: long padded sequences make ``matmul @ position_ids`` and the following ``transpose`` large;
+# chunk along sequence to cap peak DRAM (see :meth:`TTNNRotaryEmbeddingCompute.forward`).
+_BAILING_ROPE_MATMUL_SEQ_CHUNK = max(32, int(os.environ.get("TT_SYMBIOTE_BAILING_ROPE_MATMUL_SEQ_CHUNK", "1024")))
 
 
 def _aligned_up(x: int, alignment: int) -> int:
@@ -258,22 +264,42 @@ class TTNNRotaryEmbeddingCompute(TTNNModule):
 
         # Reshape [batch, padded_seq] -> [batch, 1, padded_seq]
         position_ids = ttnn.reshape(position_ids, (position_ids.shape[0], 1, -1))
+        b = int(position_ids.shape[0])
+        seq = int(position_ids.shape[2])
+        chunk = _BAILING_ROPE_MATMUL_SEQ_CHUNK
 
-        # freqs = inv_freq @ position_ids -> [batch, rotary_dim/2, seq] -> transpose -> [batch, seq, rotary_dim/2]
-        freqs = ttnn.matmul(tt_inv_freq, position_ids)
-        freqs = ttnn.transpose(freqs, -2, -1)
+        def _cos_sin_from_emb(emb):
+            c = ttnn.cos(emb)
+            s = ttnn.sin(emb)
+            if self.torch_layer.attention_scaling != 1.0:
+                c = ttnn.multiply(c, self.torch_layer.attention_scaling)
+                s = ttnn.multiply(s, self.torch_layer.attention_scaling)
+            return c, s
 
-        # emb = cat(freqs, freqs) -> [batch, seq, rotary_dim]
-        emb = ttnn.concat([freqs, freqs], dim=-1)
+        if seq <= chunk:
+            # freqs = inv_freq @ position_ids -> [batch, rotary_dim/2, seq] -> transpose -> [batch, seq, rotary_dim/2]
+            freqs = ttnn.matmul(tt_inv_freq, position_ids)
+            freqs = ttnn.transpose(freqs, -2, -1)
+            emb = ttnn.concat([freqs, freqs], dim=-1)
+            return _cos_sin_from_emb(emb)
 
-        # cos/sin
-        cos = ttnn.cos(emb)
-        sin = ttnn.sin(emb)
+        cos_parts = []
+        sin_parts = []
+        for s0 in range(0, seq, chunk):
+            s1 = min(s0 + chunk, seq)
+            pos_sl = ttnn.slice(position_ids, [0, 0, s0], [b, 1, s1])
+            freqs = ttnn.matmul(tt_inv_freq, pos_sl)
+            freqs = ttnn.transpose(freqs, -2, -1)
+            emb = ttnn.concat([freqs, freqs], dim=-1)
+            c, s = _cos_sin_from_emb(emb)
+            cos_parts.append(c)
+            sin_parts.append(s)
 
-        if self.torch_layer.attention_scaling != 1.0:
-            cos = ttnn.multiply(cos, self.torch_layer.attention_scaling)
-            sin = ttnn.multiply(sin, self.torch_layer.attention_scaling)
-
+        cos = cos_parts[0]
+        sin = sin_parts[0]
+        for i in range(1, len(cos_parts)):
+            cos = ttnn.concat([cos, cos_parts[i]], dim=1)
+            sin = ttnn.concat([sin, sin_parts[i]], dim=1)
         return cos, sin
 
 
