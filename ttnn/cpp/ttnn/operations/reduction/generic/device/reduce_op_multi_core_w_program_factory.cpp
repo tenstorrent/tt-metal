@@ -45,9 +45,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     tt_metal::IDevice* device = a.device();
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
-    CoreCoord compute_with_storage_grid_size{2, 1};  // = device->compute_with_storage_grid_size();
-    log_info(
-        tt::LogOp, "grid size {} cwsgs {}\n", device->compute_with_storage_grid_size(), compute_with_storage_grid_size);
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_rows = NC * Ht;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -61,7 +59,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
     }
-    log_info(tt::LogOp, "grid size {} num_cores {}\n", device->compute_with_storage_grid_size(), num_cores);
 
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
