@@ -16,7 +16,7 @@ jobs:
       slack-notify: false
       issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
-      max-issues: "10"
+      max-issues: "2"
       slack-channel-id: C0APK6215B5
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
