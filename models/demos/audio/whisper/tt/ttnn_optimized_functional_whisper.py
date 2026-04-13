@@ -341,9 +341,11 @@ def functional_sdpa(
             memory_config=WHISPER_MEMORY_CONFIG,
         )
         ttnn.deallocate(query_states)
+        # When K/V are backed by pre-allocated cross_attn_cache, do not deallocate either;
+        # value_states shares the same lifetime as key_states (see whisper_attention).
         if deallocate_cross_key_states:
             ttnn.deallocate(key_states)
-        ttnn.deallocate(value_states)
+            ttnn.deallocate(value_states)
 
     elif (not is_decode) and (query_states.shape[-2] == value_states.shape[-2]):
         ## Encoder-self-attention
