@@ -281,7 +281,14 @@ class Generator(WarmupForwardMixin):
         self.model.switch_mode("prefill")
 
         # Phase 2: sp1 traces (prefix caching): batch 1 only, one per supported length.
-        # Uses a fixed cached prefix aligned to both SDPA chunk size and page block size.
+        # Skip on linear topology (e.g. BH GLX with FABRIC_1D) since chunked_scaled_dot_product_attention
+        # used in the prefix caching path is not supported on BH.
+        if self.model.args.model_config.get("CCL_TOPOLOGY") == ttnn.Topology.Linear:
+            logger.info("Skipping prefix caching warmup (Phase 2) for linear topology (BH GLX)")
+            logger.info("Prefill warmup completed")
+            self.warming_up_prefill = False
+            return
+
         num_cached = SDPA_CHUNK_ALIGN
         num_blocks_for_prefix_cache = max(
             num_blocks_in_seq(num_cached + sl, block_size) for sl in warmup_sequence_lengths

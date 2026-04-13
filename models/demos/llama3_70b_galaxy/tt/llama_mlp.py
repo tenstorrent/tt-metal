@@ -120,25 +120,58 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-            x,
-            self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1_3,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
+        compute_kernel = (
+            self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
         )
 
-        ttnn.deallocate(x)
+        if self.model_config["USE_PREFETCHER"]:
+            w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+                x,
+                self.w1,
+                self.w3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(x)
+        else:
+            # BH path: no global_cb, so use separate matmuls + reduce-scatter
+            # double_matmul_line_reduce_scatter fails on BH because it passes 3 tensors
+            # to the internal matmul, which requires global_cb to use multi-tensor path
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+            ttnn.deallocate(x)
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(w1_out)
 
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,

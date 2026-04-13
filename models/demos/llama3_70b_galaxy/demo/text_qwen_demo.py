@@ -73,8 +73,8 @@ def create_tt_qwen_model(
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
     )
-    # When running running prefill-only profile, run just 1 layer
-    tt_model_args.n_layers = num_layers if not prefill_profile else 1
+    # Use the specified number of layers (num_layers=1 in prefill-profile case for tracy, 64 for bh-glx-prefill-* cases)
+    tt_model_args.n_layers = num_layers
 
     state_dict = tt_model_args.load_state_dict()
     page_table = None
@@ -299,7 +299,7 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
+        (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only (for tracy profiling)
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -313,10 +313,162 @@ def create_tt_qwen_model(
             False,  # apc_test
             False,  # pcc_check
             True,  # prefill-only profile
-            64,  # num layers
+            1,  # num layers (1 layer for tracy profiling to reduce zones)
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
+        ),
+        (  # bh-glx-prefill-128 - BH GLX prefill-only, ISL=128
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-1k - BH GLX prefill-only, ISL=1k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-4k - BH GLX prefill-only, ISL=4k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-8k - BH GLX prefill-only, ISL=8k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-16k - BH GLX prefill-only, ISL=16k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-32k - BH GLX prefill-only, ISL=32k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-64k - BH GLX prefill-only, ISL=64k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
+        ),
+        (  # bh-glx-prefill-128k - BH GLX prefill-only, ISL=128k
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            True,
+            64,
+            True,
+            False,
+            False,
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -368,6 +520,14 @@ def create_tt_qwen_model(
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
         "prefill-profile",  # prefill-only profile run
+        "bh-glx-prefill-128",
+        "bh-glx-prefill-1k",
+        "bh-glx-prefill-4k",
+        "bh-glx-prefill-8k",
+        "bh-glx-prefill-16k",
+        "bh-glx-prefill-32k",
+        "bh-glx-prefill-64k",
+        "bh-glx-prefill-128k",
         "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-64L",  # pcc check for 64L + teacher forced
     ],
@@ -442,7 +602,11 @@ def test_qwen_demo_text(
         demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json")
 
     if prefill_profile:  # Special mode where we only run prefill with tracy
-        from tracy import signpost
+        try:
+            from tracy import signpost
+        except ImportError:
+            logger.warning("Tracy not available, running prefill-only without signposts")
+            signpost = lambda x: None
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -737,6 +901,15 @@ def test_qwen_demo_text(
         logger.info(f"Prefill finished")
 
         if prefill_profile:  # If we are profiling prefill, we stop here
+            total_inference_prefill_time = profiler.get_duration("inference_prefill")
+            isl = prefill_lens[0] if prefill_lens else max_encoded_prompt_len
+            prefill_tok_s = isl / total_inference_prefill_time * batch_size
+            logger.info(f"")
+            logger.info(f"=== BH GLX Prefill Performance ===")
+            logger.info(
+                f"ISL={isl} | TTFT={total_inference_prefill_time*1000:.1f}ms | throughput={prefill_tok_s:.0f} t/s (batch={batch_size})"
+            )
+            logger.info(f"===================================")
             model.tt_ccl.close()
             return True
 

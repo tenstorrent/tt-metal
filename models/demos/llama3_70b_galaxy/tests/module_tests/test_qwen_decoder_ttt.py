@@ -145,13 +145,16 @@ def test_qwen_decoder_ttt_inference(
 
     prefetcher_setup = TtLlamaPrefetcherSetup(
         mesh_device,
-        n_tensors=5,  # More tensors needed for decoder (attention + MLP)
+        n_tensors=5 if model_args.use_prefetcher else 0,
         n_layers=1,
         is_qwen=True,
     )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
+    if model_args.use_prefetcher:
+        mesh_device.set_sub_device_stall_group(
+            [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+        )
+    else:
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
 
@@ -207,8 +210,9 @@ def test_qwen_decoder_ttt_inference(
         ),
     )
 
-    # Explicitly allocate global CB to avoid memory fragmentation
-    prefetcher_setup.create_global_cb()
+    # Explicitly allocate global CB to avoid memory fragmentation (only when prefetcher is enabled)
+    if model_args.use_prefetcher:
+        prefetcher_setup.create_global_cb()
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
@@ -232,12 +236,13 @@ def test_qwen_decoder_ttt_inference(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
-        ttnn.dram_prefetcher(
-            prefetcher_setup.get_input_tensors(),
-            num_layers=1,
-            global_cb=prefetcher_setup.global_circular_buffer,
-        )
-        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        if model_args.use_prefetcher:
+            ttnn.dram_prefetcher(
+                prefetcher_setup.get_input_tensors(),
+                num_layers=1,
+                global_cb=prefetcher_setup.global_circular_buffer,
+            )
+            mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         res = None
         tt_out, res = tt_model(
