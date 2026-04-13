@@ -61,8 +61,6 @@ std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
-
 // ======================================================================================
 //                                  HostTensor Factory Functions
 // ======================================================================================
