@@ -1485,15 +1485,19 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     mesh_device_->quiesce_devices();
     log_info(tt::LogTest, "generic_op mesh quiesced for all_gather via generic_op with MUX");
 
-    auto disaggregated_output = tt::tt_metal::experimental::unit_mesh::disaggregate(output_tensor);
+    log_info(tt::LogTest, "Reading output tensor via parent mesh CQ...");
+    auto all_data = output_tensor.to_vector<bfloat16>();
+    log_info(tt::LogTest, "Read {} elements, validating...", all_data.size());
+
+    const size_t per_device_elements = tensor_spec.logical_shape().volume();
     for (uint32_t dev_idx = 0; dev_idx < ring_size; dev_idx++) {
-        auto data = disaggregated_output[dev_idx].to_vector<bfloat16>();
-        for (size_t i = 0; i < data.size(); i++) {
+        for (size_t i = 0; i < per_device_elements; i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
-            auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
-            EXPECT_EQ(static_cast<float>(data[i]), expected);
+            auto expected = static_cast<float>(i / per_device_elements);
+            EXPECT_EQ(static_cast<float>(all_data[dev_idx * per_device_elements + i]), expected);
         }
     }
+    log_info(tt::LogTest, "Validation complete");
 }
 
 class Fabric1DFixtureGeneric : public tt::tt_fabric::fabric_router_tests::Fabric1DFixture {
