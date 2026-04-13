@@ -1139,6 +1139,26 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             circular_buffer->globally_allocated(),
             device);
         circular_buffer->set_locally_allocated_address(computed_addr);
+        // Mirrors blaze.l1_profile.print_cb_stats format for direct cross-referencing.
+        // Only emitted when BLAZE_L1_PROFILE is set in the environment.
+        if (std::getenv("BLAZE_L1_PROFILE")) {
+            for (uint8_t idx : circular_buffer->buffer_indices()) {
+                const auto& tile_opt = circular_buffer->tile(idx);
+                std::string tile_str =
+                    tile_opt.has_value() ? fmt::format("{}x{}", tile_opt->get_height(), tile_opt->get_width()) : "?x?";
+                log_info(
+                    tt::LogMetal,
+                    "[l1_profile]   cb type=scratch buffer_index={} total_size_B={} l1_addr=0x{:x}  "
+                    "[dtype={} page_size_B={} tile={}]\n[l1_profile]     core_ranges={}",
+                    idx,
+                    circular_buffer->size(),
+                    computed_addr,
+                    circular_buffer->data_format(idx),
+                    circular_buffer->page_size(idx),
+                    tile_str,
+                    circular_buffer->core_ranges().str());
+            }
+        }
     }
     this->local_circular_buffer_allocation_needed_ = false;
 }
