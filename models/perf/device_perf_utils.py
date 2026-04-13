@@ -408,6 +408,7 @@ def run_model_device_perf_test(
         batch_size (int, optional): Batch size for the model. Defaults to 1.
         margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
         comments (str, optional): Additional comments or settings description for the report. Defaults to "".
+        op_support_count (int, optional): Number of operations to support. Defaults to None.
 
     Raises:
         AssertionError: If the measured performance is outside the acceptable margin from expected performance.
