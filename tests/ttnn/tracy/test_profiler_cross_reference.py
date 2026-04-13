@@ -64,6 +64,7 @@ def test_profiler_cross_reference(monkeypatch, tmp_path):
     # creation and never re-reads the environment.
     for var, value in {
         "TT_METAL_DEVICE_PROFILER": "1",
+        "TT_METAL_PROFILER_SYNC": "1",
         "TT_METAL_PROFILER_MID_RUN_DUMP": "1",
         "TT_METAL_PROFILER_CPP_POST_PROCESS": "1",
         "TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES": "1",

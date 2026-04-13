@@ -66,7 +66,6 @@
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "impl/profiler/profiler_state_manager.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
@@ -2188,60 +2187,28 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
 
-    // Run host-device sync for each device, or use profiler sync value if already available
-    const std::unique_ptr<tt::tt_metal::ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
-    const bool use_profiler_sync =
-        MetalContext::instance().rtoptions().get_profiler_sync_enabled() && (profiler_state_manager != nullptr);
-
+    // Always run the real-time profiler's own host-device sync.
+    // The device profiler's SyncInfo (from TT_METAL_PROFILER_SYNC) cannot be reused here
+    // because syncDeviceHost reconstructs device timestamps with a 12-bit masked high word
+    // (sync_times[0] & 0xFFF), truncating the 64-bit wall clock. The real-time profiler
+    // reads full 64-bit timestamps, so using the truncated anchor would shift all zones
+    // by hours in Tracy.
     for (auto& dev_state : realtime_profiler_devices_) {
-        std::optional<tt::tt_metal::SyncInfo> profiler_sync_info;
-        if (use_profiler_sync) {
-            auto it = profiler_state_manager->device_profiler_map.find(dev_state.chip_id);
-            if (it != profiler_state_manager->device_profiler_map.end()) {
-                const tt::tt_metal::DeviceProfiler& device_profiler = it->second;
-                if (!device_profiler.device_core_sync_info.empty()) {
-                    profiler_sync_info = device_profiler.device_core_sync_info.begin()->second;
-                }
+        constexpr uint32_t kMaxSyncRetries = 3;
+        constexpr uint32_t kRetryDelayMs = 500;
+        for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
+            if (attempt > 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} sync retry {}/{}",
+                    dev_state.chip_id,
+                    attempt,
+                    kMaxSyncRetries);
+                std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
             }
-        }
-
-        if (profiler_sync_info.has_value()) {
-            const tt::tt_metal::SyncInfo& sync_info = profiler_sync_info.value();
-            dev_state.sync_host_start = static_cast<int64_t>(sync_info.cpu_time);
-            dev_state.first_timestamp = static_cast<uint64_t>(sync_info.device_time);
-            // Realtime profiler expects frequency in GHz (cycles per ns). Profiler sync stores frequency
-            // in Hz (cycles per second) from the regression; convert to GHz. If value is already in GHz
-            // (e.g. < 1000), use as-is.
-            dev_state.sync_frequency =
-                (sync_info.frequency >= 1000.0) ? (sync_info.frequency / 1e9) : sync_info.frequency;
-            log_info(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} using profiler sync: frequency={:.6f} GHz, device_time_at_sync={} "
-                "cycles",
-                dev_state.chip_id,
-                dev_state.sync_frequency,
-                dev_state.first_timestamp);
-        } else {
-            // The device kernel may not be ready immediately after launch.
-            // Retry with increasing delays to give the kernel time to initialize
-            // and start responding to sync requests.
-            constexpr uint32_t kMaxSyncRetries = 3;
-            constexpr uint32_t kRetryDelayMs = 500;
-            for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
-                if (attempt > 0) {
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {} sync retry {}/{}",
-                        dev_state.chip_id,
-                        attempt,
-                        kMaxSyncRetries);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-                }
-                run_realtime_profiler_sync(dev_state, 100);
-                if (dev_state.first_timestamp != 0) {
-                    break;
-                }
+            run_realtime_profiler_sync(dev_state, 100);
+            if (dev_state.first_timestamp != 0) {
+                break;
             }
         }
     }
