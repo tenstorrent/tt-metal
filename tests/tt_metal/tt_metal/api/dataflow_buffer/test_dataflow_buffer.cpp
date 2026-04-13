@@ -283,7 +283,11 @@ void run_single_dfb_program(
                             if (page_id >= co + entries_per_core) {
                                 break;
                             }
-                            const uint32_t dst_slot = p * num_entries_per_producer + e;
+                            const uint32_t dst_slot =
+                                (dfb_config.cap == dfb::AccessPattern::STRIDED)
+                                    ? e * dfb_config.num_producers + p
+                                    : p * num_entries_per_producer + e;
+
                             std::copy(
                                 input.begin() + page_id * wpe,
                                 input.begin() + page_id * wpe + wpe,
