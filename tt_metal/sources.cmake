@@ -103,6 +103,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
     api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/tensor/impl/tensor_impl.hpp
     api/tt-metalium/experimental/udm/types.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
