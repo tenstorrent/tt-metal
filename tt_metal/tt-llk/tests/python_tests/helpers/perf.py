@@ -501,17 +501,13 @@ class PerfConfig(TestConfig):
                 # Python NOC write is skipped to avoid L1 controller state change that
                 # causes ~7 cycle overhead on Float16 unpack operations.
 
-                self.write_runtimes_to_L1(location)
-                self.run_elf_files(location)
-                self.wait_for_tensix_operations_finished(location)
-
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
-                        counter_results = read_counters(location=location)
+                        counter_results = read_counters(location=TestConfig.TENSIX_LOCATION)
                         if counter_results is not None and not counter_results.empty:
                             counter_results["run_index"] = run_index
                             variant_counter_results.append(counter_results)
