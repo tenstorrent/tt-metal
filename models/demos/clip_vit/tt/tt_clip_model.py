@@ -1,8 +1,8 @@
 from typing import Optional, Tuple
 
 import ttnn
-from models.demos.clip_vit.tt.tt_clip_text_optimized import TtCLIPTextModelOptimized
-from models.demos.clip_vit.tt.tt_clip_vision_optimized import TtCLIPVisionModel
+from models.demos.clip_vit.tt.tt_clip_text import TtCLIPTextModel
+from models.demos.clip_vit.tt.tt_clip_vision import TtCLIPVisionModel
 
 
 def l2_normalize(tensor: ttnn.Tensor, dim: int = -1, epsilon: float = 1e-12):
@@ -22,7 +22,7 @@ class TtCLIPModel:
         text_config = config.text_config
         vision_config = config.vision_config
 
-        self.text_model = TtCLIPTextModelOptimized(text_config, parameters.text_model, device)
+        self.text_model = TtCLIPTextModel(text_config, parameters.text_model, device)
         self.vision_model = TtCLIPVisionModel(vision_config, parameters.vision_model, device)
 
         self.projection_dim = config.projection_dim
@@ -57,7 +57,6 @@ class TtCLIPModel:
         Returns:
             text_features: shape (batch_size, projection_dim)
         """
-
         text_outputs = self.text_model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -101,11 +100,11 @@ class TtCLIPModel:
         self,
         input_ids: ttnn.Tensor,
         pixel_values: ttnn.Tensor,
-        attention_mask: Optional[ttnn.Tensor] = None,
         position_ids: Optional[ttnn.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
         return_loss: Optional[bool] = None,
         interpolate_pos_encoding: bool = False,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         image_features = self.get_image_features(pixel_values)
         text_features = self.get_text_features(
             input_ids=input_ids,
