@@ -13,7 +13,7 @@ Covers:
 - Concat on every valid dimension
 - Edge cases: single tensor, many tensors (batched concat), unaligned shapes
 - Groups parameter for height-sharded width concat
-- Known unsupported cases (block sharding)
+- Known unsupported cases (mismatched ranks, non-rectangular grids, etc.)
 """
 
 import pytest
@@ -1120,8 +1120,28 @@ class TestUnsupportedCases:
         with pytest.raises(RuntimeError):
             ttnn.concat([], dim=0)
 
-    def test_block_sharded_not_supported(self, device):
-        """Block sharded inputs should raise."""
+    def test_block_sharded_non_tile_aligned_shard(self, device):
+        """Non-tile-aligned shard dims are rejected by the infrastructure at tensor creation."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 48, 48)
+        shard_shape = (24, 24)
+
+        block_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+
+        with pytest.raises(RuntimeError):
+            ttnn.from_torch(
+                torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem
+            )
+
+    def test_block_sharded_unsupported_dim(self, device):
+        """Block-sharded concat only supports dim=2 and dim=3; dim=0 should raise."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
         shape = (1, 1, 64, 64)
         shard_shape = (32, 32)
@@ -1138,7 +1158,32 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.to_memory_config(ttnn_a, block_mem)
 
         with pytest.raises(RuntimeError):
-            ttnn.concat([ttnn_a, ttnn_a], dim=3, memory_config=block_mem)
+            ttnn.concat([ttnn_a, ttnn_a], dim=0, memory_config=block_mem)
+
+    def test_block_sharded_non_rectangular_grid(self, device):
+        """Non-rectangular CoreRangeSet is rejected by the infrastructure at tensor creation."""
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1)),
+            }
+        )
+        shape = (1, 1, 6, 64)
+        shard_shape = (2, 64)
+
+        block_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+
+        with pytest.raises(RuntimeError):
+            ttnn.from_torch(
+                torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem
+            )
 
     def test_mismatched_ranks(self, device):
         """Tensors with different ranks should raise."""

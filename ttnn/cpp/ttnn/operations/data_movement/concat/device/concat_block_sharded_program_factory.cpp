@@ -19,7 +19,8 @@ using namespace tt::tt_metal;
 
 struct TransferDesc {
     CoreCoord src_physical_core;
-    uint32_t src_l1_addr;
+    uint32_t src_cb_id;
+    uint32_t src_l1_offset;
     uint32_t src_stride;
     uint32_t dst_offset;
     uint32_t dst_stride;
@@ -33,8 +34,14 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
     const uint32_t dim = operation_attributes.dim;
     Tensor& output = tensor_return_value;
 
-    TT_FATAL(dim == 2 || dim == 3, "Block-sharded concat only supports dim=2 or 3");
-    const bool is_width_concat = dim == 3;
+    const uint32_t rank = input_tensors[0].logical_shape().rank();
+    TT_FATAL(
+        dim == rank - 2 || dim == rank - 1,
+        "Block-sharded concat only supports the last two dims (H={}, W={}), got dim={}",
+        rank - 2,
+        rank - 1,
+        dim);
+    const bool is_width_concat = dim == rank - 1;
 
     Program program = CreateProgram();
 
@@ -47,6 +54,10 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
     const uint32_t element_size = input_tensors[0].element_size();
 
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
+    TT_FATAL(
+        all_cores.ranges().size() == 1,
+        "Block-sharded concat requires a single contiguous rectangular CoreRange, got {} ranges",
+        all_cores.ranges().size());
     const auto& core_range = *all_cores.ranges().begin();
     const uint32_t start_x = core_range.start_coord.x;
     const uint32_t start_y = core_range.start_coord.y;
@@ -73,11 +84,30 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
         const auto& ss = input_tensors[i].shard_spec().value();
         input_shard_h[i] = ss.shape[0];
         input_shard_w[i] = ss.shape[1];
+        if (!rm_layout) {
+            TT_FATAL(
+                input_shard_h[i] % TILE_HEIGHT == 0 && input_shard_w[i] % TILE_WIDTH == 0,
+                "Input {} shard shape ({}, {}) is not tile-aligned ({}x{})",
+                i,
+                input_shard_h[i],
+                input_shard_w[i],
+                TILE_HEIGHT,
+                TILE_WIDTH);
+        }
     }
 
     const auto& out_ss = output.shard_spec().value();
     const uint32_t output_shard_h = out_ss.shape[0];
     const uint32_t output_shard_w = out_ss.shape[1];
+    if (!rm_layout) {
+        TT_FATAL(
+            output_shard_h % TILE_HEIGHT == 0 && output_shard_w % TILE_WIDTH == 0,
+            "Output shard shape ({}, {}) is not tile-aligned ({}x{})",
+            output_shard_h,
+            output_shard_w,
+            TILE_HEIGHT,
+            TILE_WIDTH);
+    }
 
     auto to_units_h = [&](uint32_t h) { return h / unit_h; };
     auto to_units_w = [&](uint32_t w) { return w / unit_w; };
@@ -103,12 +133,7 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = CreateCircularBuffer(program, all_cores, out_cb_config);
 
-    // Pre-compute buffer addresses and physical core map
-    std::vector<uint32_t> input_buf_addr(num_input_tensors);
-    for (uint32_t i = 0; i < num_input_tensors; i++) {
-        input_buf_addr[i] = input_tensors[i].buffer()->address();
-    }
-
+    // Pre-compute physical core map
     std::vector<std::vector<CoreCoord>> physical_cores(grid_rows, std::vector<CoreCoord>(grid_cols));
     for (uint32_t gy = 0; gy < grid_rows; gy++) {
         for (uint32_t gx = 0; gx < grid_cols; gx++) {
@@ -159,7 +184,8 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
 
                             transfers.push_back(TransferDesc{
                                 .src_physical_core = physical_cores[gy][src_c],
-                                .src_l1_addr = input_buf_addr[inp_id] + to_units_w(src_col_off) * unit_size,
+                                .src_cb_id = inp_id,
+                                .src_l1_offset = to_units_w(src_col_off) * unit_size,
                                 .src_stride = src_stride_bytes,
                                 .dst_offset = to_units_w(dst_col_off) * unit_size,
                                 .dst_stride = dst_stride_bytes,
@@ -205,7 +231,8 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
 
                             transfers.push_back(TransferDesc{
                                 .src_physical_core = physical_cores[src_r][gx],
-                                .src_l1_addr = input_buf_addr[inp_id] + src_offset,
+                                .src_cb_id = inp_id,
+                                .src_l1_offset = src_offset,
                                 .src_stride = src_stride_bytes,
                                 .dst_offset = dst_row_accum_units * dst_stride_bytes,
                                 .dst_stride = dst_stride_bytes,
@@ -249,13 +276,14 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
 
     auto build_runtime_args = [](const std::vector<TransferDesc>& descs, uint32_t start, uint32_t count) {
         std::vector<uint32_t> args;
-        args.reserve(1 + count * 8);
+        args.reserve(1 + count * 9);
         args.push_back(count);
         for (uint32_t i = start; i < start + count; i++) {
             const auto& td = descs[i];
             args.push_back(td.src_physical_core.x);
             args.push_back(td.src_physical_core.y);
-            args.push_back(td.src_l1_addr);
+            args.push_back(td.src_cb_id);
+            args.push_back(td.src_l1_offset);
             args.push_back(td.src_stride);
             args.push_back(td.dst_offset);
             args.push_back(td.dst_stride);
