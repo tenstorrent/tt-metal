@@ -99,6 +99,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.out_features = out_features
         self.gather_output = gather_output
         self.axis_name = axis_name
+        self.cluster_axis = ttml.current_mesh_or_raise().axis_pos(axis_name)
 
         if weight_init is None:
             k = math.sqrt(1.0 / in_features)
@@ -121,9 +122,58 @@ class ColumnParallelLinear(AbstractModuleBase):
     def forward(self, x):
         """Compute linear projection of x."""
         bias_t = self.bias.tensor if self.bias is not None else None
-        cluster_axis = ttml.current_mesh_or_raise().axis_pos(self.axis_name)
-        x = ttml.ops.distributed.broadcast(x, cluster_axis)
+        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            x = ttml.ops.distributed.all_gather(x, 3, cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+            x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+        return x
+
+
+class RowParallelLinear(AbstractModuleBase):
+    """Row-parallel linear layer. Shards input features across TP devices."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        has_bias: bool = True,
+        weight_init: Callable | None = None,
+        bias_init: Callable | None = None,
+        input_is_parallel: bool = False,
+        axis_name: str = "tp",
+    ) -> None:
+        super().__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        # TODO: use ttnn.Tensor.tensor_topology() once CCL ops will properly update this property
+        self.input_is_parallel = input_is_parallel
+        self.axis_name = axis_name
+        self.cluster_axis = ttml.current_mesh_or_raise().axis_pos(axis_name)
+
+        if weight_init is None:
+            k = math.sqrt(1.0 / in_features)
+            weight_init = ttml.init.uniform(-k, k)
+        if bias_init is None:
+            k = math.sqrt(1.0 / in_features)
+            bias_init = ttml.init.uniform(-k, k)
+
+        weight_shape = (1, 1, out_features, in_features)
+        weight_mapper = ttml.current_mesh_or_raise().axis_mapper(axis_name, 3)
+        self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
+
+        if has_bias:
+            bias_shape = (1, 1, 1, out_features)
+            self.bias = Parameter(bias_init(bias_shape))
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        """Compute linear projection of x."""
+        if not self.input_is_parallel:
+            x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
+        x = ttml.ops.linear.linear(x, self.weight.tensor, None)
+        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        if self.bias is not None:
+            x = ttml.ops.binary.add(x, self.bias.tensor)
         return x
