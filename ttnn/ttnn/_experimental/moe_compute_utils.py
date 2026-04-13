@@ -82,10 +82,6 @@ def map_shared_experts(
     if not len(set(shared_experts_per_device)) == 1:
         raise RuntimeError("Shared Experts must be distributed such that all devices have an equal number of experts")
 
-    # this is a fairly soft limitation at the moment, small changes to moe_compute are required to lift it
-    if shared_experts_per_device[0] + routed_experts_per_device > 3:
-        raise RuntimeError("At the moment MoE supports up to 3 experts per device")
-
     if list(range(routed_experts)) + sorted([se for se in shared_expert_ids_to_devices]) != list(
         range(routed_experts + shared_experts)
     ):

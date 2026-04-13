@@ -868,7 +868,7 @@ void kernel_main() {
         noc_async_write_multicast(
             get_read_ptr(per_expert_total_tokens_cb_id),
             all_worker_cores_expert_counts_mcast_addr,
-            experts_per_device * sizeof(uint32_t),
+            per_expert_total_tokens_output_page_size,
             all_worker_cores_bounding_box_num_cores - 1);  // Exclude self
 
         // Ensure multicast completes before signaling semaphore

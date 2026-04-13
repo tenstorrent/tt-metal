@@ -323,11 +323,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
     // offset into token maps, number of tokens, offset into activations
     const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
-    const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_5;
-    const auto token_counts_element_size = dense_token_counts_tensor.element_size();
+    const auto token_counts_tensor_page_size_bytes = dense_token_counts_tensor.tensor_spec().compute_page_size_bytes();
     const uint32_t aligned_token_counts_buffer_size = tt::align(
-        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
+        token_counts_tensor_page_size_bytes + token_offset_count_bytes_per_expert * experts_per_device, l1_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
@@ -386,7 +385,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
-        {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"token_counts_page_size_bytes", token_counts_tensor_page_size_bytes},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
