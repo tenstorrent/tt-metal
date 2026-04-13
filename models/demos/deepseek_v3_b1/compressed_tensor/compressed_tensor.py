@@ -804,7 +804,6 @@ class CompressedTensor:
         self, all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
     ):
         """Create lockstep mesh tensors: pad to global max, concatenate, use ShardTensorToMesh."""
-        num_devices = self._num_devices
         max_shard_bytes = self.max_shard_size
         if self._min_shard_bytes > max_shard_bytes:
             max_shard_bytes = self._min_shard_bytes
@@ -902,18 +901,12 @@ class CompressedTensor:
             assert assignment_memory_config.is_sharded(), "assignment_memory_config must be sharded"
             for coord in self._iter_mesh_coords():
                 dev_assignment = self._per_device_assignment_flat[coord]
-                shard_mapping = self._per_device_shard_mapping[coord]
 
-                if assignment_memory_config is not None:
-                    assign_shard_mapping = compute_shard_page_mapping(
-                        self._per_device_shape, assignment_memory_config, self.tile_hw
-                    )
-                else:
-                    assign_shard_mapping = shard_mapping
-
-                buffer_type = (
-                    assignment_memory_config.buffer_type if assignment_memory_config else memory_config.buffer_type
+                assign_shard_mapping = compute_shard_page_mapping(
+                    self._per_device_shape, assignment_memory_config, self.tile_hw
                 )
+
+                buffer_type = assignment_memory_config.buffer_type
                 assign_per_core = {}
 
                 for core, page_indices in assign_shard_mapping:

@@ -136,7 +136,6 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles: int)
     Returns:
         dict {MeshCoordinate: {core_idx: ttnn.Tensor}}
     """
-    num_experts = len(cts)
     mesh_shape = mesh_device.shape
     all_cores = ttnn.corerange_to_cores(core_grid)
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
@@ -466,7 +465,6 @@ def create_dram_expert_metadata(
             core_meta = []
             core_fmt = []
 
-            num_iterations = num_subblocks_k * per_core_N
             num_tiles_k = subblock_k * num_subblocks_k
             dram_ct_idx = 0
             for global_expert_idx in range(num_total_experts):
@@ -695,7 +693,6 @@ def create_dram_expert_tensors_multi_device(
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
-            dev_idx = row * mesh_shape[1] + col
             logger.info(f"  Creating metadata for device ({row},{col})...")
             meta_tensors, per_core_fmt, meta_l1_addr, per_core_values = create_dram_expert_metadata(
                 mesh_device,
