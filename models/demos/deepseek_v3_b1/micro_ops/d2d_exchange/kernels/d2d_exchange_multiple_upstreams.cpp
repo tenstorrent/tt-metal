@@ -129,6 +129,9 @@ FORCE_INLINE bool process_upstream_sockets(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_packet_header,
     uint64_t* upstream_bytes_acked_noc_addrs,
     volatile tt_l1_ptr uint32_t* termination_semaphore) {
+    if constexpr (num_sockets_this_risc == 0) {
+        return false;
+    }
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
@@ -171,7 +174,9 @@ FORCE_INLINE bool process_upstream_sockets(
             remaining--;
         }
 
-        worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        if constexpr (num_sockets_this_risc > 1) {
+            worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        }
     }
     return false;
 }
@@ -195,7 +200,7 @@ void kernel_main() {
     set_sender_socket_page_size(sender_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
+    SocketReceiverInterface receiver_sockets[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
@@ -208,7 +213,7 @@ void kernel_main() {
     uint64_t downstream_data_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
 
-    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc];
+    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     if constexpr (use_fabric_on_receiver) {
         for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
             upstream_bytes_acked_noc_addrs[i] = get_noc_addr(
