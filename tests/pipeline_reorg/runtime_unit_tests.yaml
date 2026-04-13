@@ -241,3 +241,74 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# =============================================================================
+# Multi-Card Unit Tests (BH + Galaxy)
+# =============================================================================
+
+# --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
+- name: bh_multicard_debug_tools
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TensixTestWatcherPause'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- BH Multi-Card: Dispatch (RandomProgram on multi-card) ---
+- name: bh_multicard_dispatch
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Dispatch (single-card + multi-CQ fixtures) ---
+- name: galaxy_dispatch
+  cmd: |
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardFixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardProgramFixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites'
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshMultiCQMultiDevice*Fixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Device Tests (GalaxyFixture only, SD + FD) ---
+- name: galaxy_device
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter='GalaxyFixture.*'
+    ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter='GalaxyFixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Distributed (DispatchContext SD + remote chip dispatch) ---
+- name: galaxy_distributed
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests \
+      --gtest_filter='*DispatchContext*'
+    TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCard*Fixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

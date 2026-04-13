@@ -83,6 +83,10 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+      - name: Ensure BH links online
+        if: ${{ contains(matrix.test-group.sku, 'bh_quietbox') || contains(matrix.test-group.sku, 'bh_loudbox') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

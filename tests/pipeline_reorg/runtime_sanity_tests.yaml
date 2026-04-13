@@ -14,7 +14,6 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # --- Dispatch: RandomizeProgram (core dispatch health check) ---
-# ~15 tests: random program dispatch + trace paths, excluding NIGHTLY variants
 - name: runtime_sanity_dispatch
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
@@ -28,7 +27,6 @@
   team: runtime
 
 # --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
-# ~35 tests: device init/teardown, DRAM/L1 ping, cluster validation, mock device
 - name: runtime_sanity_device
   cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
   skus:
@@ -40,7 +38,6 @@
   team: runtime
 
 # --- API: DRAM R/W + L1 R/W + kernel compile (core API health check) ---
-# ~14 tests: DRAMLoopback (3), SimpleL1 buffer (6), CompileProgram (5)
 - name: runtime_sanity_api
   cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='*DRAMLoopbackSingleCore*:*TestSimpleL1*:*CompileProgram*'
   skus:

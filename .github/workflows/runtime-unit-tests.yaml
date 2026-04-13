@@ -35,11 +35,6 @@ on:
         required: false
         type: boolean
         default: true
-      run-fd-python-tests:
-        description: "Run FD Python API unit tests (eager/sweep)"
-        required: false
-        type: boolean
-        default: true
       # Build options
       platform:
         required: false
@@ -90,7 +85,7 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             echo "sanity-skus=wh_n150_civ2,bh_p150b_civ2" >> "$GITHUB_OUTPUT"
-            echo "unit-skus=wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu" >> "$GITHUB_OUTPUT"
+            echo "unit-skus=wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox,wh_galaxy" >> "$GITHUB_OUTPUT"
             echo "integration-skus=bh_quietbox,bh_loudbox,wh_galaxy,bh_galaxy" >> "$GITHUB_OUTPUT"
             echo "perf-skus=wh_n300_civ2,bh_p150_perf" >> "$GITHUB_OUTPUT"
           else
@@ -100,7 +95,7 @@ jobs:
             perf_skus=""
             if [[ "${{ inputs.wormhole }}" == "true" ]]; then
               sanity_skus="wh_n150_civ2"
-              unit_skus="wh_n150_civ2,wh_n300_civ2"
+              unit_skus="wh_n150_civ2,wh_n300_civ2,wh_galaxy"
               integration_skus="wh_galaxy"
               perf_skus="wh_n300_civ2"
             fi
@@ -108,7 +103,7 @@ jobs:
               [ -n "$sanity_skus" ] && sanity_skus="${sanity_skus},"
               sanity_skus="${sanity_skus}bh_p150b_civ2"
               [ -n "$unit_skus" ] && unit_skus="${unit_skus},"
-              unit_skus="${unit_skus}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu"
+              unit_skus="${unit_skus}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox"
               [ -n "$integration_skus" ] && integration_skus="${integration_skus},"
               integration_skus="${integration_skus}bh_quietbox,bh_loudbox,bh_galaxy"
               [ -n "$perf_skus" ] && perf_skus="${perf_skus},"
@@ -162,7 +157,7 @@ jobs:
 
   runtime-fd-python-tests:
     needs: [build-artifact, resolve-skus]
-    if: ${{ github.event_name == 'schedule' || inputs.run-fd-python-tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run-integration-tests }}
     uses: ./.github/workflows/runtime-fd-python-tests-impl.yaml
     secrets: inherit
     with:
