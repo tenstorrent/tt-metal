@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,6 +55,11 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+        // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
+        sfpi::vFloat ax = sfpi::setsgn(x, 0);
+        sfpi::vFloat threshold = 10.0f;
+        sfpi::vec_min_max(ax, threshold);
+        x = sfpi::setsgn(ax, x);
         sfpi::vFloat result = piecewise_rational_eval<
             ERF_NUM_DEGREE,
             ERF_DEN_DEGREE,
@@ -62,13 +67,6 @@ inline void calculate_erf() {
             ERF_LUT_SIZE,
             true,
             APPROXIMATION_MODE>(ERF_LUT, x);
-        // Clamp: erf(x) = sign(x) for |x| > 10 (uses odd symmetry)
-        sfpi::vFloat ax = sfpi::setsgn(x, 0);
-        v_if(ax > 10.0f) {
-            sfpi::vFloat one = 1.0f;
-            result = sfpi::setsgn(one, x);
-        }
-        v_endif;
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
