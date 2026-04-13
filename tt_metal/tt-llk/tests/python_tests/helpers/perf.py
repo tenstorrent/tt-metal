@@ -5,7 +5,6 @@
 import glob
 import os
 import re
-import subprocess
 from dataclasses import fields
 from functools import reduce
 from pathlib import Path
@@ -28,15 +27,14 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     """
-    ELF-based perf zone name discovery is currently unsupported.
+    Return zone names for mapping counter zones to profiler markers.
 
-    The previous implementation attempted to read a `.perf_counter_meta`
-    section from kernel ELFs, but the firmware/build side does not currently
-    emit that section. Return None unconditionally until `.perf_counter_meta`
-    is actually produced by firmware/linker metadata emission.
+    Zone 0 = INIT, Zone 1 = TILE_LOOP. This matches the order in which
+    MEASURE_PERF_COUNTERS is called in all perf test source files
+    (get_zone_id allocates sequential IDs on first encounter).
     """
     _ = elf_dir
-    return None
+    return ["INIT", "TILE_LOOP"]
 
 
 # Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
@@ -450,7 +448,9 @@ class PerfConfig(TestConfig):
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
-                        counter_results = read_counters(location=TestConfig.TENSIX_LOCATION)
+                        counter_results = read_counters(
+                            location=TestConfig.TENSIX_LOCATION
+                        )
                         if counter_results is not None and not counter_results.empty:
                             counter_results["run_index"] = run_index
                             variant_counter_results.append(counter_results)
