@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "tt-metalium/experimental/tensor/host_tensor.hpp"
+#include "tt-metalium/experimental/tensor/tensor_apis.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -150,7 +151,7 @@ HostTensor unpad_bfloat8_b(
                 tensor.logical_shape(),
                 tensor.padded_shape())),
         tensor.tensor_topology());
-    auto float_tensor = unpad(intermediate, output_tensor_start, output_tensor_end);
+    auto float_tensor = tensor_impl::unpad(intermediate, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = host_buffer::get_as<const float>(float_tensor);
@@ -564,23 +565,6 @@ HostTensor enqueue_read_mesh_tensor(distributed::MeshCommandQueue& cq, const Mes
     cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return HostTensor(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
-}
-
-// ======================================================================================
-//                            Transfer classification
-// ======================================================================================
-
-bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device) {
-    const auto& device_mesh_shape = device.shape();
-    const auto& host_buffer = host_tensor.buffer();
-
-    if (host_buffer.shape() != device_mesh_shape) {
-        return false;
-    }
-
-    auto all_coords = distributed::MeshCoordinateRange(device_mesh_shape);
-    return std::ranges::all_of(
-        all_coords, [&](const auto& coord) { return host_buffer.shard_coords().contains(coord); });
 }
 
 // ======================================================================================
@@ -1042,7 +1026,7 @@ HostTensor pad_to_tile(const HostTensor& tensor, float pad_value) {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    return pad(
+    return tensor_impl::pad(
         tensor,
         tt::tt_metal::Shape(std::move(padded_shape)),
         tt::tt_metal::Shape{std::move(input_tensor_start)},
@@ -1150,7 +1134,7 @@ HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& 
     for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
         output_tensor_end[index] = output_tensor_shape[index];
     }
-    return unpad(tensor, output_tensor_start, output_tensor_end);
+    return tensor_impl::unpad(tensor, output_tensor_start, output_tensor_end);
 }
 
 // ======================================================================================

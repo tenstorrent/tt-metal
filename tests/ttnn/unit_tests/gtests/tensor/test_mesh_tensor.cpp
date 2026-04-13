@@ -19,6 +19,8 @@
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+
 namespace ttnn::distributed::test {
 namespace {
 
@@ -633,7 +635,7 @@ void expect_host_tensors_eq(const HostTensor& expected, const HostTensor& actual
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_FullCoverage) {
     const ttnn::Shape shape{1, 1, 32, 32};
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
-    EXPECT_TRUE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_TRUE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_NO_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
@@ -641,7 +643,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_FullCoverage) {
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SingleShard) {
     const ttnn::Shape shape{1, 1, 32, 32};
     auto host_tensor = make_single_shard_host_tensor(shape, 1);
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
@@ -650,7 +652,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_PartialCoverage) {
     const ttnn::Shape shape{1, 1, 32, 32};
     std::vector<distributed::MeshCoordinate> coords = {{0, 0}, {0, 1}};
     auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, {0, 0});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
@@ -659,7 +661,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SmallerMeshShape) {
     const ttnn::Shape shape{1, 1, 32, 32};
     distributed::MeshShape smaller_mesh{1, 2};
     auto host_tensor = make_full_coverage_host_tensor(shape, smaller_mesh, {0, 0});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }
@@ -669,7 +671,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
     HostTensor host_tensor(std::move(dhb), spec, TensorTopology{});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
 }

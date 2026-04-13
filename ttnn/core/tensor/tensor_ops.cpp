@@ -21,6 +21,8 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+
 namespace tt::tt_metal {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
@@ -100,7 +102,7 @@ Tensor to_device(
     }
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
     Tensor device_tensor;
-    if (tensor_impl::is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
+    if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
         device_tensor =
             Tensor(tensor_impl::enqueue_write_mesh_tensor(cq, input_tensor.host_tensor(), *mesh_device, mem_config));
     } else {
@@ -115,7 +117,7 @@ Tensor to_device(
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    if (tensor_impl::is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
+    if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         tensor_impl::enqueue_write_mesh_tensor(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {

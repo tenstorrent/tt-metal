@@ -25,23 +25,30 @@ class MemoryConfig;
 namespace tt::tt_metal {
 
 // ======================================================================================
-//                                         .to_host() and .to_device()
+//                        Transfer classification
 // ======================================================================================
 
-HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking = true);
-
-void copy_to_host(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& device_tensor,
-    HostTensor& host_tensor,
-    bool blocking = true);
-
-MeshTensor to_device(
-    distributed::MeshCommandQueue& queue,
-    const HostTensor& tensor,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
-
-void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor);
+// Returns true if a H2D between the HostTensor and target MeshDevice is uniform.
+// A transfer is uniform if the host shards cover the entire shape of the MeshDevice.
+//
+// Example of uniform transfer:
+// HostTensor with a DistributedHostBuffer of shards [0, 0], [0, 1], [1, 0], [1, 1] (shape 2x2).
+// MeshDevice of shape 2x2.
+// Here the shards map exactly to the shape of the MeshDevice.
+//
+// Example of non-uniform transfers:
+//
+// 1: one to many replicas
+// HostTensor with a single shard at [0,0].
+// MeshDevice of shape 2x2.
+// This is a replica-based non-uniform transfer.
+//
+// 2: partial coverage:
+// HostTensor with a DistributedHostBuffer of shards [0, 0], and [1, 0]
+// MeshDevice of shape 2x2.
+// This is a partial coverage non-uniform transfer.
+// Only opposite sides of the MeshDevice will receive new data.
+bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device);
 
 // ======================================================================================
 //                                  .to_layout()
