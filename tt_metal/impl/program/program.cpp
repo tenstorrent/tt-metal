@@ -1148,8 +1148,8 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                     tile_opt.has_value() ? fmt::format("{}x{}", tile_opt->get_height(), tile_opt->get_width()) : "?x?";
                 log_info(
                     tt::LogMetal,
-                    "  cb type=scratch buffer_index={} total_size_B={} l1_addr=0x{:x}  "
-                    "[dtype={} page_size_B={} tile={}]\n    core_ranges={}",
+                    "[l1_profile]   cb type=scratch buffer_index={} total_size_B={} l1_addr=0x{:x}  "
+                    "[dtype={} page_size_B={} tile={}]\n[l1_profile]     core_ranges={}",
                     idx,
                     circular_buffer->size(),
                     computed_addr,
