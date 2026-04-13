@@ -547,11 +547,19 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
         return;
     }
 
+    log_warning(LogMetal, "[finish_nolock] cq={} enqueuing record_event_to_host", id_);
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
+    log_warning(
+        LogMetal,
+        "[finish_nolock] cq={} event={} enqueued, blocking on cv (num_outstanding={})",
+        id_,
+        event.id(),
+        num_outstanding_reads_.load());
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    log_warning(LogMetal, "[finish_nolock] cq={} cv_wait returned (num_outstanding={})", id_, num_outstanding_reads_.load());
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
@@ -902,6 +910,11 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 }
 
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
+    log_warning(
+        LogMetal,
+        "[read_completion_queue_event] cq={} waiting for event={}",
+        id_,
+        read_event_descriptor.single_device_descriptor.event_id);
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
@@ -911,7 +924,9 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         uint16_t channel = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
                                .get_cluster()
                                .get_assigned_channel_for_device(device->id());
+        log_warning(LogMetal, "[read_completion_queue_event] cq={} calling completion_queue_wait_front device={}", id_, device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
+        log_warning(LogMetal, "[read_completion_queue_event] cq={} completion_queue_wait_front returned device={}", id_, device->id());
 
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor,
@@ -1278,7 +1293,20 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         }
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+        for (uint32_t i = 0; i < num_sub_devices; ++i) {
+            log_warning(
+                LogMetal,
+                "[wait_for_completion] cq={} sub_device[{}] expected_workers={} reset_launch_msg_state={}",
+                id_,
+                i,
+                expected_num_workers_completed_[i],
+                reset_launch_msg_state);
+        }
         for (auto* device : mesh_device_->get_devices()) {
+            log_warning(
+                LogMetal,
+                "[wait_for_completion] calling reset_worker_dispatch_state_on_device device={}",
+                device->id());
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,
                 device->sysmem_manager(),
@@ -1286,6 +1314,10 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
                 reset_launch_msg_state);
+            log_warning(
+                LogMetal,
+                "[wait_for_completion] reset_worker_dispatch_state_on_device returned device={}",
+                device->id());
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
             MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -1299,7 +1331,9 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
                 std::mem_fn(&LaunchMessageRingBufferState::reset));
         }
+        log_warning(LogMetal, "[wait_for_completion] cq={} calling finish()", id_);
         finish();
+        log_warning(LogMetal, "[wait_for_completion] cq={} finish() returned", id_);
     }
 }
 

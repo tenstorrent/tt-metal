@@ -92,6 +92,26 @@ void issue_record_event_commands(
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
+    log_warning(
+        tt::LogMetal,
+        "[issue_record_event] device={} event={} cq={} distributed_dispatcher={} "
+        "num_worker_counters={} clear_count={} notify_host={}",
+        device_id,
+        event_id,
+        cq_id,
+        distributed_dispatcher,
+        num_worker_counters,
+        clear_count,
+        notify_host);
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+        auto offset_index = *sub_device_ids[i];
+        log_warning(
+            tt::LogMetal,
+            "[issue_record_event]   sub_device[{}] expected_workers={}",
+            offset_index,
+            expected_num_workers_completed[offset_index]);
+    }
+
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
