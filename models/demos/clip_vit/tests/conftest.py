@@ -17,14 +17,14 @@ PCC_BATCH_SIZE = 7
 
 # A small pool the perf tests can draw from; PCC only uses the first entry.
 IMAGE_URLS = [
-    "https://images.cocodataset.org/val2017/000000039769.jpg",
-    "https://images.cocodataset.org/val2017/000000397133.jpg",
-    "https://images.cocodataset.org/val2017/000000037777.jpg",
-    "https://images.cocodataset.org/val2017/000000252219.jpg",
-    "https://images.cocodataset.org/val2017/000000087038.jpg",
-    "https://images.cocodataset.org/val2017/000000174482.jpg",
-    "https://images.cocodataset.org/val2017/000000403385.jpg",
-    "https://images.cocodataset.org/val2017/000000006818.jpg",
+    "http://images.cocodataset.org/val2017/000000039769.jpg",
+    "http://images.cocodataset.org/val2017/000000397133.jpg",
+    "http://images.cocodataset.org/val2017/000000037777.jpg",
+    "http://images.cocodataset.org/val2017/000000252219.jpg",
+    "http://images.cocodataset.org/val2017/000000087038.jpg",
+    "http://images.cocodataset.org/val2017/000000174482.jpg",
+    "http://images.cocodataset.org/val2017/000000403385.jpg",
+    "http://images.cocodataset.org/val2017/000000006818.jpg",
 ]
 
 TEXT_QUERIES = [

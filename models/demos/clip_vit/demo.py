@@ -18,13 +18,13 @@ MODEL_NAME = "openai/clip-vit-base-patch32"
 BATCH_SIZE = 7
 
 DEMO_IMAGES = [
-    "https://images.cocodataset.org/val2017/000000039769.jpg",
-    "https://images.cocodataset.org/val2017/000000397133.jpg",
-    "https://images.cocodataset.org/val2017/000000037777.jpg",
-    "https://images.cocodataset.org/val2017/000000252219.jpg",
-    "https://images.cocodataset.org/val2017/000000087038.jpg",
-    "https://images.cocodataset.org/val2017/000000174482.jpg",
-    "https://images.cocodataset.org/val2017/000000403385.jpg",
+    "http://images.cocodataset.org/val2017/000000039769.jpg",
+    "http://images.cocodataset.org/val2017/000000397133.jpg",
+    "http://images.cocodataset.org/val2017/000000037777.jpg",
+    "http://images.cocodataset.org/val2017/000000252219.jpg",
+    "http://images.cocodataset.org/val2017/000000087038.jpg",
+    "http://images.cocodataset.org/val2017/000000174482.jpg",
+    "http://images.cocodataset.org/val2017/000000403385.jpg",
 ]
 
 DEMO_LABELS = [
