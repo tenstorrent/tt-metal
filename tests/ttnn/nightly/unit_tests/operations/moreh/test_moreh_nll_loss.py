@@ -138,6 +138,19 @@ def run_moreh_nll_loss_backward(
     tt_output_grad = to_ttnn(output_grad, device=device)
     tt_input_grad = to_ttnn(torch_input, device=device)
 
+    # Recreate the divisor tensor: the forward's copy_to_device wrote the correct
+    # value, but subsequent device allocations (tt_output_grad, tt_input_grad) can
+    # recycle its buffer.  Recompute from the host-side target for correctness.
+    if tt_divisor is not None:
+        C = shape[1]
+        target_shape = shape[:1] + shape[2:]
+        non_ignored = int((torch_target != ignore_index).sum().item())
+        if none_weight:
+            divisor_val = float(non_ignored)
+        else:
+            divisor_val = float(torch_weight[torch_target[torch_target != ignore_index]].sum().item())
+        tt_divisor = to_ttnn(torch.tensor([divisor_val], dtype=torch_dtype), dtype=ttnn_dtype, device=device)
+
     tt_input_grad = ttnn.operations.moreh.nll_loss_backward(
         target_tensor=tt_target,
         weight_tensor=tt_weight,
