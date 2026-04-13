@@ -7,7 +7,8 @@
 from torch import nn
 
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch, tree_map
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     trace_enabled,
@@ -134,6 +135,11 @@ class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
     :class:`TTNNEmbedding` so activations align with :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm`
     and the rest of the talker decoder on mesh. This class adds ``ttnn.embedding``-compatible index
     prep (UINT32 / sequence padding) and optional ``padding_idx``.
+
+    On a mesh, outputs must declare **column-sharded** last-dim metadata (``ShardTensorToMesh`` /
+    ``ConcatMeshToTensor(dim=-1)``) like decoder norms and attention. The default
+    ``DistributedConfig`` uses 2-D mesh compose; without this override, host readback can mis-compose
+    shards and corrupt codec hidden states (audible TTS glitches that worsen on longer generations).
     """
 
     @property
@@ -143,6 +149,33 @@ class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
     @property
     def padding_idx(self):
         return self.torch_layer.padding_idx
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Match :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm` col-shard layout."""
+
+        def set_col_sharded_config(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
+                if self.device.get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
+
+                    def logical_shape_for_col_sharded(shape):
+                        shape_list = list(shape)
+                        shape_list[-1] = shape_list[-1] * self.device.get_num_devices()
+                        return tuple(shape_list)
+
+                    e.set_distributed_tensor_config(
+                        DistributedTensorConfig(
+                            mesh_mapper=mesh_mapper,
+                            mesh_composer=mesh_composer,
+                            logical_shape_fn=logical_shape_for_col_sharded,
+                        )
+                    )
+            return e
+
+        if self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+        return tree_map(set_col_sharded_config, output_tensors)
 
     def forward(self, tt_indices):
         tt_indices, orig_seq_len = _prepare_embedding_indices(tt_indices)
