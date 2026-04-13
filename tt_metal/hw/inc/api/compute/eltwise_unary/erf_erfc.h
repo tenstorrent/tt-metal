@@ -46,10 +46,7 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
-ALWI void erfc_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, fast_and_approx));
-}
+ALWI void erfc_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, true)); }
 
 // clang-format off
 /**
@@ -65,9 +62,8 @@ ALWI void erfc_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<fast_and_approx>(sfpu::calculate_erfc<>, idst, (int)VectorMode::RC));
+    MATH(_llk_math_eltwise_unary_sfpu_params_<true>(sfpu::calculate_erfc<>, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel
