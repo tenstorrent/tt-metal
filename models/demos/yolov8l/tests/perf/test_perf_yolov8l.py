@@ -25,7 +25,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
             "b1_1280",
             1,
             1280,
-            0.0,
+            14.9,
             "models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l[1280-l1_1280_for_all_res-True]",
             12000,
         ],
