@@ -138,4 +138,159 @@ void enqueue_write_mesh_tensor(
     queue.enqueue_write_shards(device_tensor.mesh_buffer_invariant_breaking(), shard_data_transfers, false);
 }
 
+// ======================================================================================
+//              Non-uniform enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+namespace non_uniform_data_movement {
+
+HostTensor enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking) {
+    auto distributed_host_buffer = DistributedHostBuffer::create(device_tensor.device().get_view());
+    distributed_host_buffer.emplace_shards(
+        {coords.begin(), coords.end()},
+        [&](const distributed::MeshCoordinate&) {
+            return tensor_impl::allocate_host_buffer(device_tensor.tensor_spec());
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    HostTensor result(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
+    enqueue_read_mesh_tensor(cq, device_tensor, result, coords, blocking);
+    return result;
+}
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    HostTensor& host_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking) {
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    const auto& distributed_host_buffer = host_tensor.buffer();
+
+    std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
+    shards.reserve(coords.size());
+    for (const auto& device_coord : coords) {
+        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+    }
+
+    DistributedHostBuffer dst_distributed_host_buffer =
+        DistributedHostBuffer::create(device_tensor.device().get_view());
+    const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& [device_coord, host_buffer] : shards) {
+        dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
+            TT_FATAL(host_buffer.has_value(), "Host shard for device shard {} is not populated.", device_coord);
+            TT_FATAL(
+                host_buffer->view_bytes().size() == expected_size_bytes,
+                "Host shard for device shard {} has invalid size: {} != {}",
+                device_coord,
+                host_buffer->view_bytes().size(),
+                expected_size_bytes);
+            return *host_buffer;
+        });
+    }
+
+    std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
+    cq.enqueue_read(device_tensor.mesh_buffer_invariant_breaking(), dst_distributed_host_buffer, shard_set, blocking);
+
+    host_tensor = HostTensor(
+        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
+}
+
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    distributed::MeshDevice& mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config) {
+    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
+    if (memory_config) {
+        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+    }
+
+    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
+                                  ? &tensor_spec_overriden_memory_config.value()
+                                  : &host_tensor.tensor_spec();
+
+    auto result = MeshTensor::allocate_on_device(mesh_device, *tensor_spec, host_tensor.tensor_topology());
+    auto coords = non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, result);
+    return {std::move(result), std::move(coords)};
+}
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+void h2d_as_replicate_tensor_on_1x1_mesh(
+    const HostTensor& host_tensor, MeshTensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+    const auto host_buffer = host_tensor.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+    auto data_to_write = host_buffer->view_bytes();
+    const auto expected_packed_buffer_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    const auto input_size_bytes = data_to_write.size();
+    TT_FATAL(
+        input_size_bytes == expected_packed_buffer_size_bytes,
+        "Host data with total size {}B does not match expected size {}B of device buffer!",
+        input_size_bytes,
+        expected_packed_buffer_size_bytes);
+
+    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+
+    const auto& mesh_device_shape = mesh_buffer->device()->shape();
+    auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
+    device_tensor =
+        MeshTensor(mesh_buffer, host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+std::vector<distributed::MeshCoordinate> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    const auto& host_storage_shape = host_tensor.buffer().shape();
+    const auto& dst_device_shape = device_tensor.device().shape();
+
+    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+    if (host_storage_shape.mesh_size() < dst_device_shape.mesh_size() &&
+        host_storage_shape == distributed::MeshShape(1, 1)) {
+        CMAKE_UNIQUE_NAMESPACE::h2d_as_replicate_tensor_on_1x1_mesh(host_tensor, device_tensor, cq);
+
+        // All coordinates of the MeshDevice
+        distributed::MeshCoordinateRange range(device_tensor.device().shape());
+        return {range.begin(), range.end()};
+    }
+
+    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false);
+
+    // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
+    // Coordinates here represents the shards that are local to this instance, there maybe other shards that are on
+    // another host.
+    std::vector<distributed::MeshCoordinate> coords;
+    const auto& shard_coords = host_tensor.buffer().shard_coords();
+    coords.reserve(shard_coords.size());
+    std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
+
+    device_tensor = MeshTensor(
+        mesh_buffer,
+        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        host_tensor.tensor_topology());
+
+    return coords;
+}
+
+}  // namespace non_uniform_data_movement
+
 }  // namespace tt::tt_metal

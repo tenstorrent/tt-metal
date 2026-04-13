@@ -87,6 +87,39 @@ void enqueue_write_mesh_tensor(
     const std::optional<BufferRegion>& region = std::nullopt);
 
 // ======================================================================================
+//                Non-uniform enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+// Data movement for tensors whose shards don't cover the entire MeshDevice.
+// The host-side DistributedHostBuffer only populates a subset of MeshCoordinates,
+// so the resulting DeviceStorage must track which coordinates were actually written.
+namespace non_uniform_data_movement {
+
+HostTensor enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    HostTensor& host_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    distributed::MeshDevice& mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
+
+std::vector<distributed::MeshCoordinate> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
+
+}  // namespace non_uniform_data_movement
+
+// ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 

@@ -105,7 +105,7 @@ Tensor to_device(
     if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
         device_tensor = Tensor(enqueue_write_mesh_tensor(cq, input_tensor.host_tensor(), *mesh_device, mem_config));
     } else {
-        auto [mesh_tensor, coords] = tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(
+        auto [mesh_tensor, coords] = non_uniform_data_movement::enqueue_write_mesh_tensor(
             cq, input_tensor.host_tensor(), *mesh_device, mem_config);
         device_tensor = Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     }
@@ -119,7 +119,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         enqueue_write_mesh_tensor(cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
-        auto coords = tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(
+        auto coords = non_uniform_data_movement::enqueue_write_mesh_tensor(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
         device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
     }
@@ -157,7 +157,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         enqueue_read_mesh_tensor(cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
     } else {
         auto coords = device_tensor.device_storage().get_coords();
-        tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(
+        non_uniform_data_movement::enqueue_read_mesh_tensor(
             cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), coords, blocking);
     }
     GraphTracker::instance().track_function_end(host_tensor);
@@ -176,8 +176,8 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(enqueue_read_mesh_tensor(cq, input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
-        output = Tensor(tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(
-            cq, input_tensor.mesh_tensor(), coords, blocking));
+        output = Tensor(
+            non_uniform_data_movement::enqueue_read_mesh_tensor(cq, input_tensor.mesh_tensor(), coords, blocking));
     }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
