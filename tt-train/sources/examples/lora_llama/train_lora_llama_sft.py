@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Llama LoRA fine-tuning on Shakespeare using SFTTrainer, with optional DDP.
+"""Llama LoRA fine-tuning on Shakespeare using SFTTrainer, with optional DDP and TP.
 
 This is a reimplementation of train_lora_llama.py that delegates the training
 loop to :class:`SFTTrainer`.  DDP support is wired externally via:
@@ -55,7 +55,8 @@ class DDPCallback(TrainerCallback):
     """Synchronise gradients across all DDP devices before the optimiser step."""
 
     def on_before_optimizer_step(self, trainer):
-        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+        dp_axis = ttml.current_mesh_or_raise().axis_pos("dp")
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters(), [dp_axis])
 
 
 class LossLogger(TrainerCallback):
@@ -177,12 +178,12 @@ def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
             f"Mesh shape mismatch!\n"
             f"  Requested mesh_shape: {mesh_shape}\n"
             f"  MGD device_topology dims: {mgd_dims}\n"
-            f"Please ensure --ddp value matches the MGD file."
+            f"Please ensure --ddp and --tp values match the MGD file."
         )
     print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
-def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
+def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = False) -> LlamaConfig:
     """Build a LlamaConfig from a model YAML (transformer_config section)."""
     tc = yaml_config.get("transformer_config", {})
 
@@ -217,6 +218,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
         runner_type=runner_type,
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
+        use_tp=use_tp,
     )
 
 
@@ -243,6 +245,12 @@ def parse_args():
         type=int,
         default=1,
         help="Number of devices for distributed data parallel (default: 1).",
+    )
+    parser.add_argument(
+        "--tp",
+        type=int,
+        default=1,
+        help="Number of devices for tensor parallelism (default: 1, no TP).",
     )
     parser.add_argument(
         "--batch",
@@ -283,8 +291,11 @@ def parse_args():
 def main():
     args = parse_args()
     batch_size = args.batch
-    num_devices = args.ddp
-    use_ddp = num_devices > 1
+    dp_size = args.ddp
+    tp_size = args.tp
+    use_ddp = dp_size > 1
+    use_tp = tp_size > 1
+    distributed = use_ddp or use_tp
 
     set_seed(42)
 
@@ -322,27 +333,27 @@ def main():
 
     # ── Device ────────────────────────────────────────────────────────────────
 
-    mesh_shape = [1, num_devices]
-    if use_ddp:
-        if batch_size % num_devices != 0:
-            raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({num_devices})")
-        ttml.core.distributed.enable_fabric(num_devices)
+    mesh_shape = [dp_size, tp_size]
+
+    if use_ddp and batch_size % dp_size != 0:
+        raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({dp_size})")
+
+    if use_ddp or use_tp:
         validate_mesh_graph_descriptor(mesh_shape)
 
+    mesh = ttml.Mesh((dp_size, tp_size), ("dp", "tp"))
+    ttml.open_device_mesh(mesh)
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    if use_ddp:
-        autograd_ctx.open_device(mesh_shape)
-        autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True))
-        print(f"DDP enabled: {num_devices} devices, mesh_shape={mesh_shape}")
-    else:
-        autograd_ctx.open_device([1, 1], [0])
 
-    # ── DDP mapper ────────────────────────────────────────────────────────────
+    if use_ddp or use_tp:
+        mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
+        print(f"{mode} enabled: dp={dp_size}, tp={tp_size}, mesh_shape={mesh_shape}")
+
+    # ── Data mapper ───────────────────────────────────────────────────────────
 
     mapper = None
     if use_ddp:
-        device = autograd_ctx.get_device()
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+        mapper = ttml.current_mesh_or_raise().axis_mapper("dp", 0)
 
     # ── Model ─────────────────────────────────────────────────────────────────
 
@@ -350,7 +361,7 @@ def main():
         tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
-        llama_cfg = llama_config_from_yaml(yaml_config, vocab_size)
+        llama_cfg = llama_config_from_yaml(yaml_config, vocab_size, use_tp=use_tp)
     else:
         llama_cfg = LlamaConfig(
             hidden_size=384,
@@ -360,6 +371,7 @@ def main():
             vocab_size=vocab_size,
             max_position_embeddings=256,
             rope_theta=500000.0,
+            use_tp=use_tp,
         )
 
     seq_len = llama_cfg.max_position_embeddings
