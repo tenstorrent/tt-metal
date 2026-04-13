@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <filesystem>
 #include <memory>
 #include <tuple>
