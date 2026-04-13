@@ -23,7 +23,7 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
         "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
         core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_kernel_args,

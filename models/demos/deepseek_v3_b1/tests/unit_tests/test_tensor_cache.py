@@ -675,6 +675,7 @@ class TestFusionGroupFingerprint:
         assert c["target"]["kind"] == "fusion_group"
         assert c["target"]["name"] == "test_fusion"
         assert c["target"]["sharding_strategy"] == "WIDTH_SHARDED"
+        assert c["target"]["regions"][0]["subtensors"][0]["overlap_priority"] is None
 
     def test_fusion_determinism(self):
         fp1 = _make_fingerprint(target=_sample_fusion_group_spec())
@@ -698,6 +699,19 @@ class TestFusionGroupFingerprint:
     def test_fusion_sensitivity_mesh_mapper(self):
         fp1 = _make_fingerprint(target=_sample_fusion_group_spec(mesh_mapper_config=ReplicateMeshMapper()))
         fp2 = _make_fingerprint(target=_sample_fusion_group_spec(mesh_mapper_config=ShardMeshMapper(dim=1)))
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
+
+    def test_fusion_sensitivity_overlap_priority(self):
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        base = dict(name="w", core_range_set=crs, raw_tensor_shape=(64, 32), dtype=ttnn.bfloat16)
+        st_lo = OverlappedTensorSpec(**base, overlap_priority=0)
+        st_hi = OverlappedTensorSpec(**base, overlap_priority=1)
+        fp1 = _make_fingerprint(
+            target=FusionGroupSpec(name="test_fusion", regions=(RegionSpec(core_range_set=crs, subtensors=(st_lo,)),))
+        )
+        fp2 = _make_fingerprint(
+            target=FusionGroupSpec(name="test_fusion", regions=(RegionSpec(core_range_set=crs, subtensors=(st_hi,)),))
+        )
         assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
 
 

@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <span>
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -87,37 +88,102 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
+MeshTensor allocate_mesh_tensor(
+    const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology);
+
 // ======================================================================================
-//                                         .to_host() and .to_device()
+//                        Transfer classification
 // ======================================================================================
 
-Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
+// Returns true if a H2D between the HostTensor and target MeshDevice is uniform.
+// A transfer is uniform if the host shards cover the entire shape of the MeshDevice.
+//
+// Example of uniform transfer:
+// HostTensor with a DistributedHostBuffer of shards [0, 0], [0, 1], [1, 0], [1, 1] (shape 2x2).
+// MeshDevice of shape 2x2.
+// Here the shards map exactly to the shape of the MeshDevice.
+//
+// Example of non-uniform transfers:
+//
+// 1: one to many replicas
+// HostTensor with a single shard at [0,0].
+// MeshDevice of shape 2x2.
+// This is a replica-based non-uniform transfer.
+//
+// 2: partial coverage:
+// HostTensor with a DistributedHostBuffer of shards [0, 0], and [1, 0]
+// MeshDevice of shape 2x2.
+// This is a partial coverage non-uniform transfer.
+// Only opposite sides of the MeshDevice will receive new data.
+bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device);
 
-void copy_to_host(
-    const Tensor& device_tensor,
-    Tensor& host_tensor,
-    bool blocking = true,
-    std::optional<QueueId> cq_id = std::nullopt);
+// ======================================================================================
+//                   Uniform enqueue_read/write_mesh_tensor
+// ======================================================================================
 
-void copy_to_host(
+HostTensor enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
+
+MeshTensor enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    distributed::MeshDevice& mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
+
+void enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
+
+// ======================================================================================
+//                Non-uniform enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+// Data movement for tensors whose shards don't cover the entire MeshDevice.
+// The host-side DistributedHostBuffer only populates a subset of MeshCoordinates,
+// so the resulting DeviceStorage must track which coordinates were actually written.
+namespace non_uniform_data_movement {
+
+HostTensor enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const MeshTensor& device_tensor,
+    HostTensor& host_tensor,
+    std::span<const distributed::MeshCoordinate> coords,
+    bool blocking = true);
+
+std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    distributed::MeshDevice& mesh_device,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
+
+std::vector<distributed::MeshCoordinate> enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
+
+}  // namespace non_uniform_data_movement
+
+// ======================================================================================
+//                    Unit Tensor enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+void enqueue_read_mesh_tensor(
     distributed::MeshCommandQueue& queue,
-    const Tensor& device_tensor,
+    const MeshTensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-Tensor to_device(
-    const Tensor& tensor,
-    distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    std::optional<QueueId> cq_id = std::nullopt);
-
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
-
-void copy_to_device(
+void enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
-    Tensor& device_tensor,
+    MeshTensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
 
 // ======================================================================================
@@ -208,5 +274,31 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
         default: TT_THROW("Unsupported data type");
     }
 }
+
+// ======================================================================================
+//                                  HostTensor Factory Functions
+// ======================================================================================
+// These functions create HostTensor objects without device involvement.
+// They are the underlying implementation for Tensor::from_xxx methods.
+
+namespace host_tensor {
+
+template <typename T>
+HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+HostTensor from_borrowed_data(
+    ttsl::Span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
+
+template <typename T>
+HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+std::vector<T> to_vector(const HostTensor& tensor);
+
+}  // namespace host_tensor
 
 }  // namespace tt::tt_metal::tensor_impl

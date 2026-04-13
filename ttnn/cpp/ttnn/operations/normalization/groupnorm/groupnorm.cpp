@@ -207,7 +207,7 @@ Tensor group_norm(
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
     const auto arch = input_tensor.device()->arch();
-    const auto math_fidelity = MathFidelity::HiFi4;
+    const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
     const auto fp32_acc = use_welford;
     auto kernel_config_val =

@@ -163,7 +163,7 @@ class Generator(WarmupForwardMixin):
         ]
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
-        self.prefill_warmup_completed = False
+        self.already_warmed_up_prefill = False
         self.warming_up_prefill = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
@@ -207,7 +207,7 @@ class Generator(WarmupForwardMixin):
         tt_out_logits_all_users=None,
     ):
         # Avoids an infinite loop
-        self.prefill_warmup_completed = True
+        self.already_warmed_up_prefill = True
         self.warming_up_prefill = True
 
         # Llama70b always supports on-device sampling from metal
@@ -337,7 +337,7 @@ class Generator(WarmupForwardMixin):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
 
-        if self.prefill_warmup_completed is False:
+        if not self.already_warmed_up_prefill:
             self.prefill_warmup(
                 tokens,
                 page_table,

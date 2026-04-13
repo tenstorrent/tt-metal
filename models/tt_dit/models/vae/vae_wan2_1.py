@@ -17,9 +17,16 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
+from ...utils.conv3d import (
+    _ntuple,
+    aligned_channels,
+    conv_pad_height,
+    conv_pad_in_channels,
+    count_convs,
+    get_conv3d_config,
+)
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import typed_tensor
+from ...utils.tensor import local_device_to_torch, typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -320,7 +327,7 @@ class WanCausalConv3d(Module):
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+            state["weight"] = local_device_to_torch(prepared)
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
@@ -760,7 +767,7 @@ class WanConv2d(Module):
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+            state["weight"] = local_device_to_torch(prepared)
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
@@ -1369,6 +1376,12 @@ class WanDecoder(Module):
     def clear_cache(self):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
+
+    def prepare_input(self, latents):
+        tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
+        tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+        tt_latents_BTHWC, logical_h = conv_pad_height(tt_latents_BTHWC, self.parallel_config.height_parallel.factor)
+        return tt_latents_BTHWC, logical_h
 
     def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, t_chunk_size: int | None = 1) -> tuple[ttnn.Tensor, int]:
         """

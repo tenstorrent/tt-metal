@@ -8,6 +8,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
@@ -29,7 +31,8 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
         return false;
     }
 
-    if (inp_mem_layout == out_mem_layout && inp_mem_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+    if (inp_mem_layout == out_mem_layout && inp_mem_layout != TensorMemoryLayout::BLOCK_SHARDED &&
+        inp_mem_layout != TensorMemoryLayout::ND_SHARDED) {
         // Resharding must have at least one buffer in L1
         return inp_buffer_type == BufferType::L1 || out_buffer_type == BufferType::L1;
     }  // Resharding requires output buffer to be in L1
@@ -111,39 +114,109 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     return NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
 }
 
-void ReshardDeviceOperation::validate_on_program_cache_miss(
+std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
 
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        return {false, "Operands to shard need to be on device!"};
+    }
+    if (input_tensor.buffer() == nullptr) {
+        return {false, "Operands to shard need to be allocated in buffers on device!"};
+    }
+    if (!input_tensor.is_sharded()) {
+        return {false, "input must be sharded"};
+    }
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output_tensor = tensor_args.preallocated_output.value();
-        TT_FATAL(
-            input_tensor.logical_shape() == output_tensor.logical_shape(),
-            "Input tensor logical shape ({}) must equal output tensor logical shape ({})",
-            input_tensor.logical_shape(),
-            output_tensor.logical_shape());
-        TT_FATAL(
-            input_tensor.dtype() == output_tensor.dtype(),
-            "Input tensor dtype ({}) must equal output tensor dtype ({})",
-            input_tensor.dtype(),
-            output_tensor.dtype());
-        TT_FATAL(
-            input_tensor.layout() == output_tensor.layout(),
-            "Input tensor layout ({}) must equal output tensor layout ({})",
-            input_tensor.layout(),
-            output_tensor.layout());
+        if (input_tensor.logical_shape() != output_tensor.logical_shape()) {
+            return {
+                false,
+                fmt::format(
+                    "Input tensor logical shape ({}) must equal output tensor logical shape ({})",
+                    input_tensor.logical_shape(),
+                    output_tensor.logical_shape())};
+        }
+        if (input_tensor.dtype() != output_tensor.dtype()) {
+            return {
+                false,
+                fmt::format(
+                    "Input tensor dtype ({}) must equal output tensor dtype ({})",
+                    input_tensor.dtype(),
+                    output_tensor.dtype())};
+        }
+        if (input_tensor.layout() != output_tensor.layout()) {
+            return {
+                false,
+                fmt::format(
+                    "Input tensor layout ({}) must equal output tensor layout ({})",
+                    input_tensor.layout(),
+                    output_tensor.layout())};
+        }
     }
 
     const auto& out_mem_config = tensor_args.preallocated_output.has_value()
                                      ? tensor_args.preallocated_output->memory_config()
                                      : args.output_mem_config;
-    TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
+    if (!out_mem_config.is_sharded()) {
+        return {false, "output must be sharded"};
+    }
+
+    // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,
+    // but all other legacy and ND factories require L1-aligned shard widths for correct NOC transfers.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        bool is_height_to_height = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+
+        if (!is_height_to_height) {
+            const uint32_t alignment = hal::get_l1_alignment();
+
+            uint32_t input_page_size = input_tensor.buffer()->page_size();
+            uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
+            if (input_page_size != input_aligned_page_size) {
+                return {
+                    false,
+                    fmt::format(
+                        "Input row-major shard width {} with data type {} gives page size {} bytes, "
+                        "which must be aligned to {} bytes for reshard",
+                        input_tensor.memory_config().shard_spec().has_value()
+                            ? input_tensor.memory_config().shard_spec().value().shape[1]
+                            : 0,
+                        input_tensor.dtype(),
+                        input_page_size,
+                        alignment)};
+            }
+
+            uint32_t output_shard_width = out_mem_config.shard_spec().has_value()
+                                              ? out_mem_config.shard_spec().value().shape[1]
+                                              : out_mem_config.nd_shard_spec().value().shard_shape[-1];
+            uint32_t output_page_size = output_shard_width * input_tensor.element_size();
+            uint32_t output_aligned_page_size = tt::align(output_page_size, alignment);
+            if (output_page_size != output_aligned_page_size) {
+                return {
+                    false,
+                    fmt::format(
+                        "Output row-major shard width {} with data type {} gives page size {} bytes, "
+                        "which must be aligned to {} bytes for reshard",
+                        output_shard_width,
+                        input_tensor.dtype(),
+                        output_page_size,
+                        alignment)};
+            }
+        }
+    }
 
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
     if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
+        auto input_buffer_type = input_tensor.memory_config().buffer_type();
+        auto output_buffer_type = output_tensor_spec.memory_config().buffer_type();
+        if (input_buffer_type != BufferType::DRAM && input_buffer_type != BufferType::L1) {
+            return {false, "Input buffer type must be DRAM or L1 for ND sharded specialized reshard path"};
+        }
+        if (output_buffer_type != BufferType::DRAM && output_buffer_type != BufferType::L1) {
+            return {false, "Output buffer type must be DRAM or L1 for ND sharded specialized reshard path"};
+        }
+
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
 
@@ -153,22 +226,54 @@ void ReshardDeviceOperation::validate_on_program_cache_miss(
         auto input_page_size = input_tensor.tensor_spec().compute_page_size_bytes();
         auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
-        TT_FATAL(
-            n_logical_input_pages == n_logical_output_pages,
-            "Number of input ({}) and output ({}) pages must match",
-            n_logical_input_pages,
-            n_logical_output_pages);
-        TT_FATAL(
-            input_page_size == output_page_size,
-            "Input and output tensors must have the same page size. Input page size: {}, Output page size: {}",
-            input_page_size,
-            output_page_size);
-        TT_FATAL(
-            input_tensor.layout() == output_tensor_spec.tensor_layout().get_layout(),
-            "Input and output tensors must have the same layout. Input layout: {}, Output layout: {}",
-            enchantum::to_string(input_tensor.layout()),
-            enchantum::to_string(output_tensor_spec.tensor_layout().get_layout()));
+        if (n_logical_input_pages != n_logical_output_pages) {
+            return {
+                false,
+                fmt::format(
+                    "Number of input ({}) and output ({}) pages must match",
+                    n_logical_input_pages,
+                    n_logical_output_pages)};
+        }
+        if (input_page_size != output_page_size) {
+            return {
+                false,
+                fmt::format(
+                    "Input and output tensors must have the same page size. Input page size: {}, Output page size: {}",
+                    input_page_size,
+                    output_page_size)};
+        }
+        if (input_tensor.layout() != output_tensor_spec.tensor_layout().get_layout()) {
+            return {
+                false,
+                fmt::format(
+                    "Input and output tensors must have the same layout. Input layout: {}, Output layout: {}",
+                    enchantum::to_string(input_tensor.layout()),
+                    enchantum::to_string(output_tensor_spec.tensor_layout().get_layout()))};
+        }
+    } else {
+        if (input_tensor.layout() == Layout::TILE) {
+            auto tile = input_tensor.tensor_spec().tile();
+            if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+                return {
+                    false,
+                    fmt::format(
+                        "reshard requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
+            }
+            if (tensor_args.preallocated_output.has_value()) {
+                auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+                if (out_tile != tile) {
+                    return {false, "Output tensor tile shape must match input tensor tile shape"};
+                }
+            }
+        }
     }
+    return {true, ""};
+}
+
+void ReshardDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto [valid, msg] = validate_inputs(args, tensor_args);
+    TT_FATAL(valid, "{}", msg);
 }
 
 TensorSpec ReshardDeviceOperation::compute_output_specs(
@@ -178,14 +283,10 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            input_tensor.dtype(),
-            PageConfig(input_tensor.layout()),
-            args.output_mem_config,
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
 Tensor ReshardDeviceOperation::create_output_tensors(

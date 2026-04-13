@@ -39,7 +39,7 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
