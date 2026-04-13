@@ -18,18 +18,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    create_gate_indices_tensor,
-    get_layer_raw_tensors,
-    prepare_dense_layer_weights,
-    prepare_moe_layer_weights,
-)
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
@@ -41,6 +34,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.weights.prepare import (
+    create_gate_indices_tensor,
+    get_layer_raw_tensors,
+    prepare_dense_layer_weights,
+    prepare_moe_layer_weights,
+)
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -66,7 +65,7 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 
 
 # ============================================================================
-# Unified decoder block tensor setup (single BDW instance for all L1 weights)
+# Unified decoder block tensor setup
 # ============================================================================
 def create_decoder_block_tensors(
     submesh,
@@ -84,15 +83,16 @@ def create_decoder_block_tensors(
     num_routed_experts: int = 0,
     preloaded_weights=None,
     rigged_group_count: int | None = None,
+    validate_debug_tensors: bool = False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
     Three modes of operation:
     - **preloaded_weights mode** (production): pass a DeepSeekV3MoELayerWeights from
-      load_moe_layer. Skips BDW allocation, weight processing, and golden tensors.
-    - **state_dict + is_moe=True** (MoE tests): allocates BDW, calls
+      load_moe_layer. Skips weight processing and golden tensors.
+    - **state_dict + is_moe=True** (MoE tests): calls
       prepare_moe_layer_weights, builds MoE golden tensors.
-    - **state_dict + is_moe=False** (dense tests): allocates BDW, calls
+    - **state_dict + is_moe=False** (dense tests): calls
       prepare_dense_layer_weights, builds dense golden tensors.
 
     Returns a dict with all attention + FFN + shared expert + reduce tensors.
@@ -257,22 +257,21 @@ def create_decoder_block_tensors(
         )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via a single BDW instance or preloaded
+    # All weights via prepare_* functions or preloaded
     # ══════════════════════════════════════════════════════════════════════════
     if preloaded_weights is not None:
         layer = preloaded_weights
     else:
-        bdw = BlitzDecodeWeights(submesh)
         if is_moe:
             layer = prepare_moe_layer_weights(
-                bdw,
+                submesh,
                 state_dict,
                 layer_idx,
                 num_routed_experts=num_routed_experts,
                 move_to_device=True,
             )
         else:
-            layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
+            layer = prepare_dense_layer_weights(submesh, state_dict, layer_idx, move_to_device=True)
 
     # ── FFN final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -325,24 +324,27 @@ def create_decoder_block_tensors(
             tile=tile_1x16,
             mesh_mapper=mesh_mapper,
         )
-        moe_ref_gate_output_scores = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
-        moe_ref_gate_output_indices = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.uint16),
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
+        moe_ref_gate_output_scores = None
+        moe_ref_gate_output_indices = None
+        if validate_debug_tensors:
+            moe_ref_gate_output_scores = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
+            moe_ref_gate_output_indices = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.uint16),
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
@@ -481,14 +483,16 @@ def create_decoder_block_tensors(
     kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
+    ttnn_kv_cache_attn_ref = None
+    if validate_debug_tensors:
+        ttnn_kv_cache_attn_ref = ttnn.from_torch(
+            torch_kv_cache_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=kv_mem,
+            mesh_mapper=kv_cache_2d_mesh_mapper,
+        )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
@@ -504,15 +508,17 @@ def create_decoder_block_tensors(
     sdpa_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
-    ttnn_sdpa_output = ttnn.from_torch(
-        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=sdpa_mem,
-        mesh_mapper=mesh_mapper,
-        tile=sdpa_tile,
-    )
+    ttnn_sdpa_output = None
+    if validate_debug_tensors:
+        ttnn_sdpa_output = ttnn.from_torch(
+            torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=sdpa_mem,
+            mesh_mapper=mesh_mapper,
+            tile=sdpa_tile,
+        )
 
     # ── Post-SDPA tensors ──
     a_tile = ttnn.Tile([M, 32])
@@ -537,15 +543,17 @@ def create_decoder_block_tensors(
         memory_config=output_mem_config,
         mesh_mapper=shard_mesh_mapper,
     )
-    attn_ref_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    attn_ref_output = None
+    if validate_debug_tensors:
+        attn_ref_output = ttnn.from_torch(
+            mesh_output_torch,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            tile=a_tile,
+            dtype=ttnn.bfloat16,
+            memory_config=output_mem_config,
+            mesh_mapper=shard_mesh_mapper,
+        )
 
     # ── SDPA worker/forwarder tensors ──
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
@@ -651,24 +659,27 @@ def create_decoder_block_tensors(
 
     # ── Standalone MoE ref reduce tensors (MoE only) ──
     if is_moe:
-        moe_ref_reduce_intermediate = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=intermediate_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        moe_ref_reduce_output = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=reduce_output_mem,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
+        moe_ref_reduce_intermediate = None
+        moe_ref_reduce_output = None
+        if validate_debug_tensors:
+            moe_ref_reduce_intermediate = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=intermediate_mem_config,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
+            moe_ref_reduce_output = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=reduce_output_mem,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
 
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
@@ -783,7 +794,7 @@ def create_decoder_block_tensors(
     routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
 
     result = {
-        # Attention weights (from prepare_*_layer_weights via BDW)
+        # Attention weights (from prepare_*_layer_weights)
         "gamma_overlapped": layer.attn_norm,
         "matmul_weights_overlapped": layer.q_a_proj,
         "rmsnorm2_gamma_overlapped": layer.q_norm,
@@ -997,6 +1008,7 @@ def test_decoder(
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_count=rigged_group_count,
+        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -1012,6 +1024,8 @@ def test_decoder(
         submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
     )
     moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    logger.info("Done setup")
 
     # ========================================================================
     # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)

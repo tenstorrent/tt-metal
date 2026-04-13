@@ -10,6 +10,7 @@ from tests.nightly.t3000.ccl.test_strided_reduce_scatter_async import (
     ReduceScatterTestConfig,
     run_reduce_scatter_impl,
 )
+from models.common.utility_functions import is_wormhole_b0
 
 
 def _make_fabric_router_config(max_packet_payload_size_bytes):
@@ -232,13 +233,14 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "device_params, topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
-        (
+        pytest.param(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": _make_fabric_router_config(8192),
                 "trace_region_size": 1531456,
             },
             ttnn.Topology.Ring,
+            marks=pytest.mark.skipif(is_wormhole_b0(), reason="fabric_router_config=8192 not supported on wormhole_b0"),
         ),
     ],
     indirect=["device_params"],

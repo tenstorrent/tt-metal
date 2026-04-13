@@ -29,9 +29,13 @@ void kernel_main() {
     experimental::Noc noc;
 
     // TODO: Replace with get_thread_idx() kernel API when available
+#ifdef ARCH_QUASAR
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
+#else
+    uint32_t producer_idx = 0;
+#endif
 
     // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
     // ENDL(); DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);
@@ -48,7 +52,9 @@ void kernel_main() {
         DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
+#ifdef ARCH_QUASAR
             dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
+#endif
         } else {
             dfb.reserve_back(1);
             noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});

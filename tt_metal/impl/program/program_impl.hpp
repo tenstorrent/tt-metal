@@ -213,6 +213,7 @@ public:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(

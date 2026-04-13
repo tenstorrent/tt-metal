@@ -143,7 +143,8 @@ ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
         get_optional_tensor_info(batch_mean),
         get_optional_tensor_info(batch_var),
         get_optional_tensor_info(weight),
-        get_optional_tensor_info(bias));
+        get_optional_tensor_info(bias),
+        get_optional_tensor_info(output));
 
     // Apply the hash operation
     return std::apply(

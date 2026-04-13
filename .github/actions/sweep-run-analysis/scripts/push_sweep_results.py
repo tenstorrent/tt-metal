@@ -10,11 +10,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import psycopg2
-
 
 def get_connection():
     """Get database connection from environment variable."""
+    import psycopg2
+
     database_url = os.environ.get("TTNN_OPS_DATABASE_URL")
     if not database_url:
         raise ValueError("TTNN_OPS_DATABASE_URL environment variable not set")
@@ -62,6 +62,148 @@ def collect_test_results(results_dir: str) -> list[dict]:
     return tests
 
 
+def _is_failure(status: str) -> bool:
+    """Return True if status represents a test failure (fail*, xpass)."""
+    s = str(status).lower()
+    return s.startswith("fail") or s == "xpass"
+
+
+def _normalize_run_type(run_type: str) -> str:
+    """Normalize run type to underscore format (e.g. 'lead models' -> 'lead_models')."""
+    return run_type.strip().replace(" ", "_")
+
+
+def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) -> None:
+    """Write a GitHub Actions Job Summary with sweep run results.
+
+    Works for all run types. When called from push_results(), extra_fields
+    contains run_id, pipeline_id, git info. When called via --summary-only,
+    only basic stats are shown.
+
+    Failed tests are grouped by module (op_name), showing top 4 failures
+    per module so all failing modules are visible.
+    """
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    total = len(tests)
+    passed = sum(1 for t in tests if t.get("status") == "pass")
+    failed = sum(1 for t in tests if _is_failure(t.get("status", "")))
+    skipped = total - passed - failed
+    pass_rate = f"{passed * 100.0 / total:.2f}%" if total else "N/A"
+    status_icon = "✅" if failed == 0 else "⚠️"
+
+    normalized_type = _normalize_run_type(run_type) if run_type else ""
+
+    lines = [
+        f"## {status_icon} Sweep Run Summary",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+    ]
+
+    if normalized_type:
+        lines.append(f"| **Run Type** | {normalized_type} |")
+    for key, value in extra_fields.items():
+        label = key.replace("_", " ").title()
+        lines.append(f"| **{label}** | {value} |")
+
+    lines.extend(
+        [
+            f"| **Total Tests** | {total} |",
+            f"| **Passed** | {passed} |",
+            f"| **Failed** | {failed} |",
+            f"| **Skipped** | {skipped} |",
+            f"| **Pass Rate** | **{pass_rate}** |",
+            "",
+        ]
+    )
+
+    if failed > 0:
+        failed_tests = [t for t in tests if _is_failure(t.get("status", ""))]
+
+        # Group by module (op_name), show top 4 per module
+        from collections import defaultdict
+
+        by_module = defaultdict(list)
+        for t in failed_tests:
+            module = t.get("op_name") or t.get("filepath") or "unknown"
+            by_module[module].append(t)
+
+        # Sort modules by failure count descending
+        sorted_modules = sorted(by_module.items(), key=lambda x: len(x[1]), reverse=True)
+
+        lines.append("<details>")
+        lines.append(f"<summary>❌ {failed} Failed Tests ({len(sorted_modules)} modules)</summary>")
+        lines.append("")
+
+        for module, module_tests in sorted_modules:
+            lines.append(f"**{module}** ({len(module_tests)} failures)")
+            lines.append("")
+            lines.append("| Test Name | Config Hash | Status |")
+            lines.append("|-----------|-------------|--------|")
+            for t in module_tests[:4]:
+                name = t.get("full_test_name", "unknown")
+                config_hash = t.get("input_hash", "—")
+                status = t.get("status", "fail")
+                lines.append(f"| `{name}` | `{config_hash}` | {status} |")
+            if len(module_tests) > 4:
+                lines.append(f"| ... and {len(module_tests) - 4} more | | |")
+            lines.append("")
+
+        lines.append("</details>")
+        lines.append("")
+
+    # Write CSV artifact with full test execution list
+    _write_test_csv(tests)
+
+    try:
+        with open(summary_path, "a") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"Summary written to GITHUB_STEP_SUMMARY ({total} tests, {failed} failed)")
+    except OSError as e:
+        print(f"WARNING: Could not write job summary: {e}")
+
+
+def _write_test_csv(tests: list[dict]) -> None:
+    """Write full test execution list as a CSV for download via artifacts."""
+    import csv
+
+    csv_path = os.environ.get("SWEEP_CSV_PATH", "/tmp/sweep_test_results.csv")
+    try:
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "full_test_name",
+                    "op_name",
+                    "status",
+                    "input_hash",
+                    "model_name",
+                    "card_type",
+                    "runner",
+                    "filepath",
+                ]
+            )
+            for t in tests:
+                writer.writerow(
+                    [
+                        t.get("full_test_name", ""),
+                        t.get("op_name", ""),
+                        t.get("status", ""),
+                        t.get("input_hash", ""),
+                        t.get("model_name", ""),
+                        t.get("card_type", ""),
+                        t.get("runner", t.get("hostname", "")),
+                        t.get("filepath", ""),
+                    ]
+                )
+        print(f"CSV written to {csv_path} ({len(tests)} rows)")
+    except OSError as e:
+        print(f"WARNING: Could not write CSV: {e}")
+
+
 def push_results(
     results_dir: str,
     github_pipeline_id: int,
@@ -95,7 +237,7 @@ def push_results(
 
         # Calculate counts
         pass_count = sum(1 for t in tests if t.get("status") == "pass")
-        fail_count = sum(1 for t in tests if str(t.get("status", "")).startswith("fail"))
+        fail_count = sum(1 for t in tests if _is_failure(t.get("status", "")))
 
         # Insert run metadata (upsert)
         cur.execute(
@@ -209,12 +351,40 @@ def push_results(
 
 
 def main():
+    # --summary-only mode: write GitHub Step Summary without DB push
+    if len(sys.argv) >= 2 and sys.argv[1] == "--summary-only":
+        if len(sys.argv) < 3:
+            print("Usage: push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+            sys.exit(1)
+        results_dir = sys.argv[2]
+        run_type = sys.argv[3] if len(sys.argv) > 3 else ""
+        tests = collect_test_results(results_dir)
+        if tests:
+            # Pick up env vars available in all workflow runs
+            extra = {}
+            pipeline_id = os.environ.get("GITHUB_RUN_ID", "")
+            if pipeline_id:
+                extra["Pipeline_Id"] = pipeline_id
+            card_type = os.environ.get("ARCH_NAME", "")
+            if card_type:
+                extra["Card_Type"] = card_type
+            git_sha = os.environ.get("GITHUB_SHA", "")
+            if git_sha:
+                extra["Git_Sha"] = f"`{git_sha[:8]}`"
+            git_branch = os.environ.get("GITHUB_REF_NAME", "")
+            if git_branch:
+                extra["Branch"] = f"`{git_branch}`"
+            _write_job_summary(tests, run_type=run_type, **extra)
+        return
+
     if len(sys.argv) < 3:
         print("Usage: push_sweep_results.py <results_dir> <run_contents>", file=sys.stderr)
+        print("       push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+        print("")
         print("  results_dir: Directory containing JSON result files")
         print("  run_contents: Type of run (e.g., 'lead models')")
         print("")
-        print("Required environment variables:")
+        print("Required environment variables (for DB push):")
         print("  TTNN_OPS_DATABASE_URL: PostgreSQL connection string")
         print("  GITHUB_RUN_ID: GitHub Actions run ID")
         print("  ARCH_NAME: Hardware architecture (e.g., 'wormhole_b0')")

@@ -63,10 +63,12 @@ size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_
 int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        (logical_coord.x < num_dram_views) and (logical_coord.y == 0),
-        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_coord.x < num_dram_views &&
+            (dram_bank_endpoint_coords.empty() || logical_coord.y < dram_bank_endpoint_coords[logical_coord.x].size()),
+        "Bounds-Error -- Logical DRAM core {} is outside valid range (num_views={}, endpoints_per_bank={})",
         logical_coord.str(),
-        CoreCoord(num_dram_views, 1));
+        num_dram_views,
+        dram_bank_endpoint_coords.empty() ? 1 : dram_bank_endpoint_coords[0].size());
     return logical_coord.x;
 }
 
@@ -88,11 +90,15 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
     return {physical_coord.x, physical_coord.y};
 }
 
-// Kernels are not exposed to physical DRAM coordinates. Use case of this function is for host to get access to a DRAM
-// core, host will likely not be bombarding DRAM with different nocs so SYS-1419 isn't a concern here and its safe to
-// use noc 0
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
-    return this->get_preferred_worker_core_for_dram_view(this->get_dram_channel_from_logical_core(logical_coord), 0);
+    TT_FATAL(
+        logical_coord.x < dram_bank_endpoint_coords.size() &&
+            logical_coord.y < dram_bank_endpoint_coords[logical_coord.x].size(),
+        "Bounds-Error -- Logical DRAM core {} is outside dram_bank_endpoint_coords grid ({}x{})",
+        logical_coord.str(),
+        dram_bank_endpoint_coords.size(),
+        dram_bank_endpoint_coords.empty() ? 0 : dram_bank_endpoint_coords[0].size());
+    return dram_bank_endpoint_coords[logical_coord.x][logical_coord.y];
 }
 
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
@@ -107,6 +113,10 @@ CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
 
 CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(this->get_num_dram_views(), 1); }
 
+CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const {
+    return CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
+}
+
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
@@ -115,6 +125,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
+    this->dram_bank_endpoint_coords.clear();
 
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         size_t channel = dram_view["channel"].as<size_t>();
@@ -159,6 +170,20 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         this->dram_view_address_offsets.push_back(address_offset);
         this->dram_view_eth_cores.push_back(eth_dram_cores);
         this->dram_view_worker_cores.push_back(worker_dram_cores);
+
+        size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
+        size_t preferred_subchannel = worker_endpoints[0];
+        std::vector<CoreCoord> bank_endpoints;
+        bank_endpoints.reserve(num_subchannels);
+        auto preferred_coord = get_dram_core_for_channel(channel, preferred_subchannel, tt::CoordSystem::TRANSLATED);
+        bank_endpoints.push_back({preferred_coord.x, preferred_coord.y});
+        for (size_t sub = 0; sub < num_subchannels; sub++) {
+            if (sub != preferred_subchannel) {
+                auto coord = get_dram_core_for_channel(channel, sub, tt::CoordSystem::TRANSLATED);
+                bank_endpoints.push_back({coord.x, coord.y});
+            }
+        }
+        this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));
     }
 }
 

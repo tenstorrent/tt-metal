@@ -159,7 +159,6 @@ void kernel_main() {
     constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
     constexpr uint32_t rotated_in_interm_cb = get_named_compile_time_arg_val("rotated_in_interm_cb");
-    constexpr uint32_t cos_sin_interm_cb = get_named_compile_time_arg_val("cos_sin_interm_cb");
     constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("out_cb");
 
     // Compute args: all CB indices
@@ -168,7 +167,6 @@ void kernel_main() {
         .cos_sin_cb = cos_sin_cb,
         .trans_mat_cb = trans_mat_cb,
         .rotated_in_interm_cb = rotated_in_interm_cb,
-        .cos_sin_interm_cb = cos_sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
     deepseek_compute_kernel_init();

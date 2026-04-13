@@ -295,7 +295,7 @@ struct KernelConfig {
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
 
     // Compute config
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
 };

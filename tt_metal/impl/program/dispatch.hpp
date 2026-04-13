@@ -97,6 +97,13 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size);
 
+// On WH/BH, DFBs are initialised via setup_local_cb_read_write_interfaces and require
+// local_cb_mask to be a proper slot bitmask (one bit per DFB id).  Call this after
+// finalize_dfbs so the mask is set correctly for every kernel group.
+void finalize_dfb_masks(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,

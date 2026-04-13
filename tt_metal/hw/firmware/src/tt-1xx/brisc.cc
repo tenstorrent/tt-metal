@@ -32,6 +32,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
+#include "api/debug/checkpoint.h"
 
 // clang-format on
 
@@ -447,6 +448,9 @@ int main() {
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
+#ifdef DEBUG_CHECKPOINT_ENABLED
+            debug_checkpoint_init(enables);
+#endif
             run_triscs(enables);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
