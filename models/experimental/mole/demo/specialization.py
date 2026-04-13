@@ -3,6 +3,7 @@
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 import matplotlib
@@ -21,7 +22,6 @@ from models.experimental.mole.demo.run import (
     close_ttnn_device,
     model_config_from_args,
     open_ttnn_device,
-    resolve_checkpoint_path,
     set_random_seed,
     unpack_batch,
 )
@@ -29,6 +29,7 @@ from models.experimental.mole.reference.config import MoLEConfig
 
 COLORS = ("#0B6E4F", "#C84C09", "#2F5DBE", "#B02E63", "#0E7490", "#8A6F00", "#6D28D9", "#4B5563")
 DEFAULT_ROUTER_IMAGE_PATH = str(Path.home() / ".cache" / "tt-metal" / "mole" / "router_weights.png")
+CHECKPOINT_BASE_DIR = "/demo_checkpoints"
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,16 @@ class VisualizationOptions:
     seed: int = 2021
     dataset_dir: str | None = None
     dataset_file: str | None = None
+
+
+def _resolve_checkpoint_path(checkpoint_file: str) -> str:
+    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
+    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
+    if not checkpoint_path.startswith(base_dir + os.sep):
+        raise ValueError("checkpoint path escapes checkpoint_dir")
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    return checkpoint_path
 
 
 def _save_png(path: Path, router_weights: torch.Tensor, *, plot_max_samples: int) -> None:
@@ -196,8 +207,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize MoLE router weights as a PNG image.")
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument("--checkpoint-dir", type=str, required=True, help="Directory containing checkpoint file")
-    parser.add_argument("--checkpoint-file", type=str, default="checkpoint.pth", help="Checkpoint file name")
+    parser.add_argument(
+        "--checkpoint-file",
+        type=str,
+        default="checkpoint.pth",
+        help="Checkpoint file path relative to /demo_checkpoints",
+    )
     parser.add_argument(
         "--checkpoint-debug-keys",
         type=int,
@@ -215,7 +230,7 @@ if __name__ == "__main__":
         help="Maximum number of contiguous test samples to visualize",
     )
     args = parser.parse_args()
-    checkpoint_path = resolve_checkpoint_path(args.checkpoint_dir, args.checkpoint_file)
+    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
     options = VisualizationOptions(
         checkpoint_path=checkpoint_path,
         checkpoint_debug_keys=args.checkpoint_debug_keys,

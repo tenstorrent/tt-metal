@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-ROOT_DIR="${REPO_ROOT}/models/experimental/mole/demo_checkpoints"
 DATASET_FILE="ETTh1.csv"
 DATASET_URL="https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/ETT-small/ETTh1.csv?download=true"
 CHECKPOINT_FILE="checkpoint.pth"
@@ -14,6 +13,8 @@ CHECKPOINT_REMOTE_ROOT="demo_checkpoints"
 CHECKPOINT_REPO_CLONE_URL="https://huggingface.co/hybelj/mole"
 BATCH_SIZE=1
 SEED=0
+
+ROOT_DIR="/demo_checkpoints"
 
 EXTRA_SITE_PACKAGES="${REPO_ROOT}/python_env/lib/python3.10/site-packages"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -125,6 +126,7 @@ for run_item in "${runs[@]}"; do
 
     name="$(basename "${checkpoint_dir}")"
     checkpoint_path="${checkpoint_dir}/${CHECKPOINT_FILE}"
+    checkpoint_file_rel="${name}/${CHECKPOINT_FILE}"
     if [[ ! -f "${checkpoint_path}" ]]; then
         echo "[${index}/${#runs[@]}] ${name}"
         echo "  -> FAILED (missing checkpoint file: ${checkpoint_path})"
@@ -141,8 +143,7 @@ for run_item in "${runs[@]}"; do
         --pred-len "${pred_len}" \
         --dataset-dir "${ROOT_DIR}" \
         --dataset-file "${DATASET_FILE}" \
-        --checkpoint-dir "${checkpoint_dir}" \
-        --checkpoint-file "${CHECKPOINT_FILE}" \
+        --checkpoint-file "${checkpoint_file_rel}" \
         --batch-size "${BATCH_SIZE}" \
         --seed "${SEED}"; then
         echo "  -> OK"

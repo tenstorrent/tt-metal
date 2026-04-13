@@ -46,6 +46,7 @@ ROUTER_KEY_ALIASES = {
     "router.2.weight": ("Linear_Temporal.2.weight", "router.2.weight"),
     "router.2.bias": ("Linear_Temporal.2.bias", "router.2.bias"),
 }
+CHECKPOINT_BASE_DIR = "/demo_checkpoints"
 
 
 @dataclass(frozen=True)
@@ -143,32 +144,37 @@ def select_ttnn_memory_config(config: MoLEConfig) -> Any:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def resolve_checkpoint_path(checkpoint_dir: str | Path, checkpoint_file: str) -> str:
-    base_dir = os.path.abspath(os.path.expanduser(str(checkpoint_dir)))
-    if not os.path.isdir(base_dir):
-        raise FileNotFoundError(f"checkpoint directory not found: {base_dir}")
+def _resolve_path_in_base(base_dir: str | Path, user_input: str, *, kind: str) -> str:
+    base = os.path.abspath(os.path.expanduser(str(base_dir)))
+    if not os.path.isdir(base):
+        raise FileNotFoundError(f"{kind} directory not found: {base}")
 
-    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
+    candidate = os.path.abspath(os.path.join(base, user_input))
+    base_prefix = base if base.endswith(os.sep) else base + os.sep
+    if candidate != base and not candidate.startswith(base_prefix):
+        raise ValueError(f"{kind} path escapes base directory")
+    return candidate
 
-    base_prefix = base_dir if base_dir.endswith(os.sep) else base_dir + os.sep
-    if checkpoint_path != base_dir and not checkpoint_path.startswith(base_prefix):
-        raise ValueError("checkpoint path escapes checkpoint_dir")
+
+def resolve_checkpoint_path(checkpoint_file: str) -> str:
+    checkpoint_path = _resolve_path_in_base(CHECKPOINT_BASE_DIR, checkpoint_file, kind="checkpoint")
 
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
     return checkpoint_path
 
 
-def _resolve_checkpoint_path(checkpoint_dir: str | Path, checkpoint_file: str) -> str:
-    return resolve_checkpoint_path(checkpoint_dir, checkpoint_file)
+def _resolve_checkpoint_path(checkpoint_file: str) -> str:
+    return resolve_checkpoint_path(checkpoint_file)
 
 
 def _resolve_dataset_csv_path(dataset_dir: str | Path, dataset_file: str | None) -> Path:
-    base = Path(dataset_dir)
+    base = Path(os.path.abspath(os.path.expanduser(str(dataset_dir))))
     if not base.exists() or not base.is_dir():
         raise FileNotFoundError(f"dataset directory not found: {base}")
+
     if dataset_file is not None:
-        csv_path = base / dataset_file
+        csv_path = Path(_resolve_path_in_base(base, dataset_file, kind="dataset"))
         if not csv_path.exists():
             raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
         return csv_path
@@ -821,8 +827,12 @@ def main() -> None:
     )
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument("--checkpoint-dir", type=str, required=True, help="Directory containing checkpoint file")
-    parser.add_argument("--checkpoint-file", type=str, default="checkpoint.pth", help="Checkpoint file name")
+    parser.add_argument(
+        "--checkpoint-file",
+        type=str,
+        default="checkpoint.pth",
+        help="Checkpoint file path relative to /demo_checkpoints",
+    )
     parser.add_argument(
         "--checkpoint-debug-keys",
         type=int,
@@ -840,7 +850,7 @@ def main() -> None:
 
     set_random_seed(args.seed)
     config = model_config_from_args(args)
-    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_dir, args.checkpoint_file)
+    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
 
     device = open_ttnn_device()
     try:

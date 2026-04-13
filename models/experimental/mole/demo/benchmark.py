@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -20,7 +21,6 @@ from models.experimental.mole.demo.run import (
     close_ttnn_device,
     model_config_from_args,
     open_ttnn_device,
-    resolve_checkpoint_path,
     set_random_seed,
     unpack_batch,
     upload_mole_inputs,
@@ -30,6 +30,7 @@ from models.experimental.mole.reference.config import MoLEConfig, replace_num_ex
 
 MILLISECONDS_PER_SECOND = 1000.0
 TEST_SPLIT = "test"
+CHECKPOINT_BASE_DIR = "/demo_checkpoints"
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,16 @@ class BenchmarkOptions:
     seed: int = 0
     dataset_dir: str | None = None
     dataset_file: str | None = None
+
+
+def _resolve_checkpoint_path(checkpoint_file: str) -> str:
+    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
+    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
+    if not checkpoint_path.startswith(base_dir + os.sep):
+        raise ValueError("checkpoint path escapes checkpoint_dir")
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    return checkpoint_path
 
 
 def _validate_benchmark_options(options: BenchmarkOptions) -> None:
@@ -193,8 +204,12 @@ def main() -> None:
     )
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument("--checkpoint-dir", type=str, required=True, help="Directory containing checkpoint file")
-    parser.add_argument("--checkpoint-file", type=str, default="checkpoint.pth", help="Checkpoint file name")
+    parser.add_argument(
+        "--checkpoint-file",
+        type=str,
+        default="checkpoint.pth",
+        help="Checkpoint file path relative to /demo_checkpoints",
+    )
     parser.add_argument(
         "--checkpoint-debug-keys",
         type=int,
@@ -213,7 +228,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = model_config_from_args(args)
-    checkpoint_path = resolve_checkpoint_path(args.checkpoint_dir, args.checkpoint_file)
+    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
 
     device = open_ttnn_device()
     try:
