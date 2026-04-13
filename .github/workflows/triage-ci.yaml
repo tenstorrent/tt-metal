@@ -43,7 +43,7 @@ jobs:
       create-issues: false
       assign-owners: true
       slack-notify: false
-      issue-repo: ebanerjee/issue_dump
+      issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
       slack-channel-id: C0APK6215B5
     secrets:
