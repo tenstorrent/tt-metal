@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
     )
-    print(file=sys.stdout, flush=True)
+    print(end="", file=sys.stdout, flush=True)
     return 0
 
 

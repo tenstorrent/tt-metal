@@ -109,6 +109,8 @@ class DeepSeekV3:
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
+        self._decode_padded_torch: torch.Tensor = torch.zeros(1, self._page_size_datums, dtype=torch.int32)
+        self._decode_padded_ttnn: ttnn.Tensor | None = None
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
@@ -167,6 +169,21 @@ class DeepSeekV3:
         self._read_fn(self._output_buffer)
         self._position += 1
         return self._output_buffer
+
+    def decode_step_fast(self, token_id: int) -> int:
+        """Optimized decode step that avoids per-step tensor allocations.
+
+        Reuses pre-allocated buffers for the padded input and converts the
+        output directly to an int, bypassing intermediate tensor creation.
+        """
+        self._decode_padded_torch[0, 0] = token_id
+        self._decode_padded_ttnn = ttnn.from_torch(
+            self._decode_padded_torch, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self._write_fn(self._decode_padded_ttnn)
+        self._read_fn(self._output_buffer)
+        self._position += 1
+        return int(ttnn.to_torch(self._output_buffer)[0, 0].item())
 
     @property
     def position(self) -> int:
