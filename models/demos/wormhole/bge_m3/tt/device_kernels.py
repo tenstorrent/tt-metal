@@ -12,6 +12,10 @@ Compute-kernel defaults for BGE-M3.
   downgrade on Wormhole by sequence length.
 
 NOTE: Do not combine smaller SDPA K tiles with disabled FP32 matmul dest acc (previously ~0.2 PCC).
+
+Encoder SDPA picks the largest **Q** and **K** chunk in ``(256, 128)`` that divides ``seq_len`` (capped
+at 256 to avoid oversized K tiles), with ``exp_approx_mode`` **False**, to reduce tiling iterations
+without the softmax shortcuts that hurt PCC. Matmul linears use the default ``ttnn`` program config.
 """
 
 from __future__ import annotations
