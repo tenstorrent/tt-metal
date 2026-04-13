@@ -225,6 +225,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         ), "Reference model and visual model must be provided for vLLM"
 
         self._decode_iteration = 0
+        self._rope_delta_cache = {}
 
         super().__init__(*args, **kwargs)
 
@@ -422,15 +423,54 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             f"({avg_ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
         )
 
+        # Cache M-RoPE deltas keyed by the user's first page-table entry.
+        # The page key is stable between prefill (sequential indices 0..N-1)
+        # and decode (user may sit at any global batch slot).
+        if rope_deltas is not None and page_table is not None:
+            flat_deltas = rope_deltas.flatten()
+            for idx in range(len(flat_deltas)):
+                page_key = int(page_table[idx, 0].item())
+                self._rope_delta_cache[page_key] = flat_deltas[idx].item()
+
         self._decode_iteration = 0
         return logits, rope_deltas
 
+    def _apply_cached_rope_deltas(self, page_table, start_pos):
+        """Apply cached M-RoPE deltas to each model instance's rope_setup
+        using the decode batch's page_table to identify users.
+
+        Only runs when the page_table changes (new prefill / user eviction),
+        which is the only time the base generator re-reads host-side
+        rope_deltas (reset_inputs=True).  On trace-replay steps the device
+        already holds the correct values.
+        """
+        if not self._rope_delta_cache or page_table is None:
+            return
+
+        page_table_id = id(page_table)
+        if getattr(self, "_prev_page_table_id", None) == page_table_id:
+            return
+        self._prev_page_table_id = page_table_id
+
+        max_bsz = self._ttt_generator.model_args[0].max_batch_size
+        dp = self._ttt_generator.data_parallel
+        page_keys = page_table[:, 0].tolist()
+        cache = self._rope_delta_cache
+        for model_id in range(dp):
+            start = model_id * max_bsz
+            end = start + max_bsz
+            deltas = self._ttt_generator.model[model_id].rope_setup.rope_deltas
+            for local_slot, page_key in enumerate(page_keys[start:end]):
+                delta = cache.get(page_key)
+                if delta is not None:
+                    deltas[local_slot] = delta
+
     def decode_forward(self, *args, **kwargs):
-        rope_deltas_list: list = kwargs.pop(
-            "rope_deltas_all_users", None
-        )  # [INFO] update the cos/sin matrices for the current users in the batch
-        if rope_deltas_list is not None:
-            super().update_rope_deltas(rope_deltas_list)
+        kwargs.pop("rope_deltas_all_users", None)
+
+        page_table = kwargs.get("page_table", None)
+        start_pos = kwargs.get("start_pos", None)
+        self._apply_cached_rope_deltas(page_table, start_pos)
 
         decode_start = time.perf_counter()
         result = super().decode_forward(*args, **kwargs)
