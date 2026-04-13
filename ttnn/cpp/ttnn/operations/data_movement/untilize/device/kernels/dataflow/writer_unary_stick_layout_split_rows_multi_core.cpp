@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
 
     constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_stick_size};
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);

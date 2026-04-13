@@ -30,11 +30,11 @@ void kernel_main() {
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_output_cb_index);
-    const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
+    const auto input_tensor_addr_gen = decltype(TensorAccessor(input_tensor_args, input_tensor_buffer_addr)){input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes};
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
-    const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
+    const auto index_tensor_addr_gen = decltype(TensorAccessor(index_tensor_args, index_tensor_buffer_addr)){index_tensor_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes};
 
     // Semaphore setup
     const uint64_t coordinator_core_addr = get_noc_addr(

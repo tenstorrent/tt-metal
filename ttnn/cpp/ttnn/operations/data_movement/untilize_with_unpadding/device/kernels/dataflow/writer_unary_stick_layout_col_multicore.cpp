@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_number = get_arg_val<uint32_t>(1);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, unpadded_X_size};
 
     auto write_block = [&](uint32_t num_rows,
                            uint32_t mul,

@@ -17,7 +17,7 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, tile_bytes};
 #endif
 
 #ifdef DECODE_MODE

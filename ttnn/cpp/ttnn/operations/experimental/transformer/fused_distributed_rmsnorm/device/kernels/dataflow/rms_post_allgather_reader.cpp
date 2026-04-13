@@ -55,12 +55,12 @@ void kernel_main() {
     const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
     const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 
-    const auto input_accessor = TensorAccessor(input_args, input_addr);
-    const auto stats_accessor = TensorAccessor(stats_args, stats_addr);
-    const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
-    const auto transformation_mat_accessor = TensorAccessor(transformation_mat_args, transformation_mat_addr);
-    const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
-    const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
+    const auto input_accessor = decltype(TensorAccessor(input_args, input_addr)){input_args, input_addr, input_tile_bytes};
+    const auto stats_accessor = decltype(TensorAccessor(stats_args, stats_addr)){stats_args, stats_addr, stats_tile_bytes};
+    const auto weight_accessor = decltype(TensorAccessor(weight_args, weight_addr)){weight_args, weight_addr, weight_tile_bytes};
+    const auto transformation_mat_accessor = decltype(TensorAccessor(transformation_mat_args, transformation_mat_addr)){transformation_mat_args, transformation_mat_addr, transformation_mat_tile_bytes};
+    const auto rope_cos_accessor = decltype(TensorAccessor(rope_cos_args, rope_cos_addr)){rope_cos_args, rope_cos_addr, rope_cos_tile_bytes};
+    const auto rope_sin_accessor = decltype(TensorAccessor(rope_sin_args, rope_sin_addr)){rope_sin_args, rope_sin_addr, rope_sin_tile_bytes};
 
     /**
      * Op asserts that weight input is bf16.

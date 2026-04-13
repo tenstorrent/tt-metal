@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_qv);
     const DataFormat data_format = get_dataformat(cb_id_qv);
 
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = decltype(TensorAccessor(in0_args, in0_tensor_addr)){in0_args, in0_tensor_addr, single_tile_size_bytes};
 
     for (uint32_t block = 0; block < num_blocks; block++) {
         // Q
