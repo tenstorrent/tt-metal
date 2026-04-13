@@ -123,4 +123,5 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
 )
