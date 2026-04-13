@@ -224,6 +224,62 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
     }
 }
 
+// uint32 binary comparison for relational ops
+// All ops reduce to computing LT(X, Y) with optional operand swap and result inversion:
+//   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
+//   ge(A,B) = NOT LT(A,B)       le(A,B) = NOT LT(B,A)
+// When MSBs of X and Y match, signed subtraction gives the correct unsigned comparison.
+// When MSBs differ, X < Y iff MSB(X) == 0 (X is in [0, 2^31) while Y is in [2^31, 2^32)).
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(
+        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
+            RELATIONAL_OP == SfpuType::ge,
+        "Supported operation types: lt, gt, le, ge");
+
+    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
+    constexpr bool invert_result = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
+    constexpr uint dst_tile_size = 64;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        if constexpr (swap_operands) {
+            TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
+            TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
+        } else {
+            TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
+            TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
+        }
+
+        // Extract MSBs of X (LREG0) and Y (LREG1)
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+
+        // LREG3 -> 0 for inputs with same MSB, 1 for inputs with different MSBs
+        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+
+        // if (LREG3 == 0) -> same MSBs: signed subtract + extract sign
+        TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+        // else -> different MSBs: load 0, then load 1 if MSB(X) == 0 (X is smaller)
+        TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
+        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPENCC(0, 0, 0, 0);
+
+        if constexpr (invert_result) {
+            TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+            TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+        }
+        TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
+        dst_reg++;
+    }
+}
+
+// uint16 binary comparison for relational ops
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
