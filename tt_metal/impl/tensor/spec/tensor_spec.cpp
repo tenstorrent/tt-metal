@@ -11,39 +11,6 @@ namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-void validate_dtype_and_layout(DataType dtype, Layout layout) {
-    auto supported_dtype = [&dtype]() {
-        TT_ASSERT(
-            (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
-             dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
-             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-            "device!");
-    };
-    auto supported_layout = [&dtype, &layout]() {
-        switch (dtype) {
-            case DataType::UINT32:
-            case DataType::INT32:
-            case DataType::FLOAT32:
-            case DataType::UINT8:
-            case DataType::UINT16:
-            case DataType::BFLOAT16: break;
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B:
-                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
-                break;
-            default:
-                TT_ASSERT(
-                    false,
-                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-                    "device!");
-                break;
-        }
-    };
-    supported_dtype();
-    supported_layout();
-}
-
 std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
@@ -124,6 +91,39 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
         }
     }
     return std::nullopt;
+}
+
+void validate_dtype_and_layout(DataType dtype, Layout layout) {
+    auto supported_dtype = [&dtype]() {
+        TT_ASSERT(
+            (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
+             dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
+             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
+            "device!");
+    };
+    auto supported_layout = [&dtype, &layout]() {
+        switch (dtype) {
+            case DataType::UINT32:
+            case DataType::INT32:
+            case DataType::FLOAT32:
+            case DataType::UINT8:
+            case DataType::UINT16:
+            case DataType::BFLOAT16: break;
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B:
+                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            default:
+                TT_ASSERT(
+                    false,
+                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
+                    "device!");
+                break;
+        }
+    };
+    supported_dtype();
+    supported_layout();
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
