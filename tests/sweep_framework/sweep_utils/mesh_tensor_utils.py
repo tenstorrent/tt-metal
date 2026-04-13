@@ -320,6 +320,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     Returns:
         torch.Tensor: Converted tensor
     """
+
     # ttnn.to_torch() converts uint16 tensors to int16 by default, which
     # causes sign-extension corruption for values > 32767.  Pass torch_dtype
     # to prevent this.

@@ -177,9 +177,11 @@ def run(
         torch_input_d = None
 
     has_updates = (
-        (update_idxs is not None and update_idxs != "__ABSENT__" and isinstance(update_idxs, list) and len(update_idxs) > 0)
-        or (kwargs.get("update_idxs_tensor_shape") is not None)
-    )
+        update_idxs is not None
+        and update_idxs != "__ABSENT__"
+        and isinstance(update_idxs, list)
+        and len(update_idxs) > 0
+    ) or (kwargs.get("update_idxs_tensor_shape") is not None)
 
     torch_output = torch_input_a
 
@@ -245,8 +247,8 @@ def run(
     #   page_table:   [NumUsers, MaxBlocksPerSeq]  where values in [0, MaxNumBlocks)
     #   update_idxs:  [NumUsers]  where values in [0, MaxSeqLen) or -1 to skip
     #                 MaxSeqLen = MaxBlocksPerSeq * BlockSize
-    max_num_blocks = shape_a[0]   # cache dim 0
-    block_size = shape_a[2]       # cache dim 2
+    max_num_blocks = shape_a[0]  # cache dim 0
+    block_size = shape_a[2]  # cache dim 2
     update_idxs_tensor_ttnn = None
     uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
     if uit_info and uit_info.get("shape"):
@@ -332,11 +334,14 @@ def run(
         #
         # Validate tensor creation succeeded and report as pass.
         e2e_perf = stop_measuring_time(start_time)
-        pcc = (True, f"Tensor setup validated: {len(input_tensors)} inputs, "
-               f"update_idxs_tensor={'present' if update_idxs_tensor_ttnn else 'absent'}, "
-               f"page_table={'present' if page_table_ttnn else 'absent'} "
-               f"(execution skipped — op requires HEIGHT_SHARDED L1 inputs "
-               f"with device-specific shard specs)")
+        pcc = (
+            True,
+            f"Tensor setup validated: {len(input_tensors)} inputs, "
+            f"update_idxs_tensor={'present' if update_idxs_tensor_ttnn else 'absent'}, "
+            f"page_table={'present' if page_table_ttnn else 'absent'} "
+            f"(execution skipped — op requires HEIGHT_SHARDED L1 inputs "
+            f"with device-specific shard specs)",
+        )
     else:
         # No updates — safe to execute; inputs stay DRAM interleaved which is fine
         # when not doing paged updates.
