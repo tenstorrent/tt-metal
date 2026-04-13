@@ -48,30 +48,30 @@ def build_parser():
 
 def migrate_prefill_kv_to_turbo_quant(
     tt_model,
-    tq_caches,
     prompt_len: int,
     bits: int,
     mesh_device,
     seed: int = 42,
+    rotation_absorbed: bool = False,
 ):
-    """Copy prefill KV from layer_past into TurboQuant CPU shadow buffers.
+    """Migrate prefill KV from layer_past into TurboQuant pre-rescaled format.
 
-    After a prefill forward pass, each attention layer's layer_past holds the
-    full-context key/value vectors in BFP8 format.  This function:
-      1. Typecasts each layer_past slab BFP8 → BF16 on device.
-      2. Brings the valid prefix [0..prompt_len-1] to CPU as float32.
-      3. Quantizes with TurboQuantMSE (same seed as the TTNN setup).
-      4. Stores the resulting indices + norms in the tq_cache device buffers so
-         that the first decode step at position prompt_len sees the full
-         prefill context.
+    After prefill, each layer's layer_past holds BFP8 KV values. This function:
+      1. Reads each layer_past slab → CPU float32.
+      2. Applies TurboQuant rotation + quantization → centroid × norm values.
+      3. Writes pre-rescaled values back into layer_past (BF16 for paged SDPA).
+
+    This matches the decode-time flow where attention.py quantizes each new token
+    and scatters pre-rescaled centroid×norm values into layer_past.
 
     Args:
         tt_model: Loaded Transformer with layer_past filled by prefill.
-        tq_caches: List of TTNNTurboQuantCache, one per layer.
         prompt_len: Number of prompt tokens (valid positions in layer_past).
-        bits: Quantisation bit-width (must match tq_cache settings).
-        mesh_device: TTNN mesh device (needed to upload BF16 index tensors).
-        seed: Rotation matrix seed (must match tq_cache settings).
+        bits: Quantisation bit-width.
+        mesh_device: TTNN mesh device.
+        seed: Rotation matrix seed (must match TQ setup).
+        rotation_absorbed: If True, V from prefill is already in rotated space
+                          (W_v has Π absorbed). K still needs explicit rotation.
     """
     head_dim = tt_model.layers[0].attention.head_dim
     cpu_quantizer = TurboQuantMSE(
@@ -81,88 +81,57 @@ def migrate_prefill_kv_to_turbo_quant(
         device="cpu",
         dtype=torch.float32,
     )
+    rotation_cpu = cpu_quantizer.rotation
 
-    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TurboQuant ...")
-    for layer, tq_cache in zip(tt_model.layers, tq_caches):
-        # Cast BFP8 KV cache to BF16 on device, then pull to CPU.
-        # layer_past shape: [batch, n_local_kv_heads, max_seq_len, head_dim]
+    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ pre-rescaled format ...")
+    for layer in tt_model.layers:
+        # Read BFP8 KV → CPU float32.
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
         v_bf16 = ttnn.typecast(layer.attention.layer_past[1], ttnn.bfloat16)
-
-        # to_torch on a 1×1 mesh tensor works without a composer.
         k_cpu = ttnn.to_torch(k_bf16).float()  # [1, heads, max_seq, head_dim]
         v_cpu = ttnn.to_torch(v_bf16).float()
         ttnn.deallocate(k_bf16)
         ttnn.deallocate(v_bf16)
 
-        # Take only the filled prefix.
-        k_prefix = k_cpu[:, :, :prompt_len, :]  # [1, heads, prompt_len, head_dim]
+        max_seq = k_cpu.shape[2]
+        k_prefix = k_cpu[:, :, :prompt_len, :]
         v_prefix = v_cpu[:, :, :prompt_len, :]
 
-        # CPU quantize (same rotation + codebook as on-device path).
-        k_idx, k_norms = cpu_quantizer.quantize(k_prefix)  # uint8 [..., head_dim], float [..., 1]
+        # K: has RoPE but NOT rotated by Π → explicit rotation needed.
+        k_idx, k_norms = cpu_quantizer.quantize(k_prefix)
+        k_centroids = cpu_quantizer.codebook.centroids[k_idx.long()]
+        k_rescaled = (k_centroids * k_norms).to(torch.bfloat16)
+
+        # V: already in rotated space if rotation_absorbed (W_v has Π), skip rotation.
+        if rotation_absorbed:
+            cpu_quantizer._skip_rotation = True
         v_idx, v_norms = cpu_quantizer.quantize(v_prefix)
+        cpu_quantizer._skip_rotation = False
+        v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
+        v_rescaled = (v_centroids * v_norms).to(torch.bfloat16)
 
-        # Convert indices to the format expected by the cache.
-        # If cache_centroids=True: store centroid values (via CPU dequantize).
-        # Otherwise: store integer indices as BF16.
-        max_seq_padded = tq_cache.k_indices_dev[0].shape[2]
-        if getattr(tq_cache, "cache_centroids", False):
-            # Store pre-rescaled centroid × norm values (matches decode-time cache format).
-            k_centroids = cpu_quantizer.codebook.centroids[k_idx.long()]  # [..., head_dim]
-            v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
-            k_idx_bf16 = (k_centroids * k_norms).to(torch.bfloat16)
-            v_idx_bf16 = (v_centroids * v_norms).to(torch.bfloat16)
-        else:
-            k_idx_bf16 = k_idx.float().to(torch.bfloat16)
-            v_idx_bf16 = v_idx.float().to(torch.bfloat16)
+        # Write pre-rescaled values back into layer_past (pad to full max_seq).
+        k_full = torch.zeros(1, k_cpu.shape[1], max_seq, head_dim, dtype=torch.bfloat16)
+        v_full = torch.zeros(1, v_cpu.shape[1], max_seq, head_dim, dtype=torch.bfloat16)
+        k_full[:, :, :prompt_len, :] = k_rescaled
+        v_full[:, :, :prompt_len, :] = v_rescaled
 
-        pad_len = max_seq_padded - prompt_len
-        if pad_len > 0:
-            pad = torch.zeros(1, k_idx_bf16.shape[1], pad_len, k_idx_bf16.shape[3], dtype=torch.bfloat16)
-            k_idx_padded = torch.cat([k_idx_bf16, pad], dim=2)
-            v_idx_padded = torch.cat([v_idx_bf16, pad], dim=2)
-        else:
-            k_idx_padded = k_idx_bf16
-            v_idx_padded = v_idx_bf16
-
-        ttnn.deallocate(tq_cache.k_indices_dev[0])
-        ttnn.deallocate(tq_cache.v_indices_dev[0])
-        tq_cache.k_indices_dev[0] = ttnn.from_torch(
-            k_idx_padded,
-            dtype=ttnn.bfloat16,
+        # Write pre-rescaled values back into layer_past as BF16.
+        # BF16 preserves the small centroid×norm values without BFP8 shared-exponent loss.
+        # The SDPA decode kernel handles BF16 KV seamlessly.
+        orig_dtype = ttnn.bfloat16  # Force BF16 for pre-rescaled values
+        ttnn.deallocate(layer.attention.layer_past[0])
+        ttnn.deallocate(layer.attention.layer_past[1])
+        layer.attention.layer_past[0] = ttnn.from_torch(
+            k_full,
+            dtype=orig_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        tq_cache.v_indices_dev[0] = ttnn.from_torch(
-            v_idx_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Phase 1.5-A2: norms live on device as BF16.
-        # Pad to max_seq_padded (same as index tensor), deallocate old, upload new.
-        max_seq_padded = tq_cache.k_norms_dev[0].shape[2]
-        k_norms_padded = torch.zeros(1, k_norms.shape[1], max_seq_padded, 1, dtype=torch.bfloat16)
-        v_norms_padded = torch.zeros(1, v_norms.shape[1], max_seq_padded, 1, dtype=torch.bfloat16)
-        k_norms_padded[:, :, :prompt_len, :] = k_norms.float().to(torch.bfloat16)
-        v_norms_padded[:, :, :prompt_len, :] = v_norms.float().to(torch.bfloat16)
-
-        ttnn.deallocate(tq_cache.k_norms_dev[0])
-        ttnn.deallocate(tq_cache.v_norms_dev[0])
-        tq_cache.k_norms_dev[0] = ttnn.from_torch(
-            k_norms_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        tq_cache.v_norms_dev[0] = ttnn.from_torch(
-            v_norms_padded,
-            dtype=ttnn.bfloat16,
+        layer.attention.layer_past[1] = ttnn.from_torch(
+            v_full,
+            dtype=orig_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -205,14 +174,33 @@ def main():
     print("\nLoading state dict...")
     state_dict = model_args.load_state_dict()
 
+    # Absorb rotation into W_v and W_o before model creation.
+    from turbo_quant.rotation import generate_rotation_matrix
+    from turbo_quant.ttnn_integration import absorb_rotation_into_state_dict
+
+    rotation_cpu = generate_rotation_matrix(model_args.head_dim, seed=args.seed, dtype=torch.float32)
+    print("  Absorbing Π into W_v and Π^T into W_o (before model load)...")
+    absorb_rotation_into_state_dict(
+        state_dict,
+        rotation_cpu,
+        n_layers=model_args.n_layers,
+        n_q_heads=model_args.n_heads,
+        n_kv_heads=model_args.n_kv_heads,
+        head_dim=model_args.head_dim,
+    )
+
+    from pathlib import Path
+    import tempfile
+
     dtype = ttnn.bfloat8_b
-    print("Loading TT model (non-paged, required for TurboQuant decode path)...")
+    wcache = Path(tempfile.mkdtemp(prefix="tq_prefill_weights_"))
+    print("Loading TT model (non-paged, rotation-absorbed)...")
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=wcache,
         paged_attention_config=None,
     )
     del state_dict
@@ -271,16 +259,27 @@ def main():
     print(f"  First new token: {first_new_tok_id} → {tokenizer.decode([first_new_tok_id])!r}")
 
     # ------------------------------------------------------------------ #
-    # Build TurboQuant caches (one per layer, each wrapping 1 layer)      #
+    # Migrate prefill KV to TurboQuant pre-rescaled format                #
+    # ------------------------------------------------------------------ #
+    migrate_prefill_kv_to_turbo_quant(
+        tt_model,
+        prompt_len=prompt_len,
+        bits=args.bits,
+        mesh_device=mesh_device,
+        seed=args.seed,
+        rotation_absorbed=True,
+    )
+
+    # ------------------------------------------------------------------ #
+    # Attach TurboQuant caches to attention layers                        #
     # ------------------------------------------------------------------ #
     n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
     print(
-        f"\nBuilding TurboQuant {args.bits}-bit caches "
-        f"({len(tt_model.layers)} layers, "
-        f"kv_heads={n_local_kv_heads}, head_dim={model_args.head_dim})..."
+        f"\nAttaching TurboQuant {args.bits}-bit cache to {len(tt_model.layers)} layers "
+        f"(kv_heads={n_local_kv_heads}, head_dim={model_args.head_dim})..."
     )
-    tq_caches = [
-        TTNNTurboQuantCache(
+    for layer in tt_model.layers:
+        tq = TTNNTurboQuantCache(
             mesh_device,
             num_layers=1,
             num_kv_heads=n_local_kv_heads,
@@ -288,21 +287,10 @@ def main():
             max_seq_len=model_args.max_seq_len,
             bits=args.bits,
             seed=args.seed,
-            memory_efficient=False,  # Use standard paged SDPA (fused TQ SDPA not yet built)
+            memory_efficient=False,  # Standard paged SDPA path
         )
-        for _ in tt_model.layers
-    ]
-
-    # ------------------------------------------------------------------ #
-    # Migrate prefill KV into TurboQuant shadow buffers                   #
-    # ------------------------------------------------------------------ #
-    migrate_prefill_kv_to_turbo_quant(
-        tt_model, tq_caches, prompt_len=prompt_len, bits=args.bits, mesh_device=mesh_device, seed=args.seed
-    )
-
-    # Attach caches to attention layers for the decode path.
-    for layer, tq_cache in zip(tt_model.layers, tq_caches):
-        layer.attention.tq_cache = tq_cache
+        tq.rotation_absorbed = True
+        layer.attention.tq_cache = tq
 
     # ------------------------------------------------------------------ #
     # Decode loop (free generation from position prompt_len)              #
@@ -402,8 +390,10 @@ def main():
     if use_trace:
         ttnn.release_trace(mesh_device, trace_id)
 
-    for tq_cache in tq_caches:
-        tq_cache.deallocate()
+    for layer in tt_model.layers:
+        tq = getattr(layer.attention, "tq_cache", None)
+        if tq is not None:
+            tq.deallocate()
 
     ttnn.close_mesh_device(mesh_device)
     print("\nDone.")
