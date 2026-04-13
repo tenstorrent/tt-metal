@@ -789,6 +789,10 @@ def test_demo_for_audio_classification_dataset(
     "run_both_batch_sizes",
     [True],
 )
+@pytest.mark.parametrize(
+    "use_batched_decoder_prefill",
+    [True],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
@@ -814,6 +818,7 @@ def test_demo_for_conditional_generation(
     use_per_request_params,
     run_both_batch_sizes,
     request,
+    use_batched_decoder_prefill,
 ):
     # Skip test in CI when using generate_kwargs
     if (
@@ -862,6 +867,7 @@ def test_demo_for_conditional_generation(
         batch_size_per_device=batch_size_per_device,
         stream=stream,
         run_both_batch_sizes=run_both_batch_sizes,
+        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     if (
