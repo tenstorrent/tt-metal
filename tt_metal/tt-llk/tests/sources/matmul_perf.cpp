@@ -68,7 +68,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            return;
         }
         else
         {
@@ -100,7 +101,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_math_common.h"
+#ifdef USE_MATMUL_CUSTOM_NO_MOP
+#include "experimental/llk_math_matmul_custom_no_mop.h"
+#else
 #include "llk_math_matmul.h"
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -119,6 +124,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+#ifdef USE_MATMUL_CUSTOM_NO_MOP
+        _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+            /* tile A */ TILE_R_DIM,
+            /* tile A */ TILE_C_DIM,
+            /* tile B */ TILE_R_DIM,
+            /* tile B */ TILE_C_DIM,
+            /* partial face */ false,
+            /* transpose */ false,
+            CT_DIM,
+            RT_DIM);
+#else
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
             /* tile A */ TILE_R_DIM,
             /* tile A */ TILE_C_DIM,
@@ -128,6 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /* transpose */ false,
             CT_DIM,
             RT_DIM);
+#endif
 
         PROFILER_SYNC();
     }
@@ -139,7 +156,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            return _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -151,8 +169,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
+#ifdef USE_MATMUL_CUSTOM_NO_MOP
+                    _llk_math_matmul_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+                        /* dest_index */ 0, CT_DIM, RT_DIM);
+#else
                     _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(
                         /* dest_index */ 0, CT_DIM, RT_DIM);
+#endif
                 }
             }
         }
@@ -167,8 +190,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_wait_for_dest_available_<dest_sync>();
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
+#ifdef USE_MATMUL_CUSTOM_NO_MOP
+                    _llk_math_matmul_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+                        /* dest_index */ 0, CT_DIM, RT_DIM);
+#else
                     _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(
                         /* dest_index */ 0, CT_DIM, RT_DIM);
+#endif
                 }
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }

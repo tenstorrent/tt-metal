@@ -41,7 +41,6 @@ def test_perf_eltwise_binary_fpu(
     tile_count,
     math_fidelity,
     dest_acc,
-    workers_tensix_coordinates,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -71,4 +70,4 @@ def test_perf_eltwise_binary_fpu(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

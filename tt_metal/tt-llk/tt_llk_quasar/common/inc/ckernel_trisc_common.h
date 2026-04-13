@@ -19,13 +19,10 @@ namespace ckernel::trisc
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
-// Default face dimensions
-constexpr static std::uint32_t FACE_R_DIM = 16;
-constexpr static std::uint32_t FACE_C_DIM = 16;
-
-// Default tile dimensions
-constexpr static std::uint32_t TILE_R_DIM = 32;
-constexpr static std::uint32_t TILE_C_DIM = 32;
+using ckernel::FACE_C_DIM;
+using ckernel::FACE_R_DIM;
+using ckernel::TILE_C_DIM;
+using ckernel::TILE_R_DIM;
 
 // Default number of faces
 constexpr static std::uint32_t NUM_FACES = 4;
@@ -81,8 +78,8 @@ typedef union
 // Points to the tile counters
 tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
 
-// Destination register bank id, id = 0 -> dest rows 0 to 511, id = 1 -> dest rows 512 - 1023
-static std::uint32_t dest_bank_id = 0;
+// Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
+static std::uint32_t dest_register_offset = 0;
 
 /**
 * @brief Check divisibility by power of 2
@@ -148,13 +145,17 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
 }
 
 /**
- * @brief Returns dest buffer base addr according to dest_bank_id
- * Bank 0 -> addr = 0
- * Bank 1 -> addr = 512
+ * @brief Returns dest buffer base addr
+ * If dest register is set to 16bit mode:
+ *     Bank 0 -> addr = 0
+ *     Bank 1 -> addr = 512
+ * If dest register is set to 32bit mode:
+ *     Bank 0 -> addr = 0
+ *     Bank 1 -> addr = 256
  */
 inline std::uint32_t _get_dest_buffer_base_()
 {
-    return (dest_bank_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
+    return dest_register_offset;
 }
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
@@ -188,19 +189,21 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
  */
 
 /**
- * @brief Set destination register bank id variable to 0
+ * @brief Set destination register offset variable to 0
  */
-inline void _reset_dest_bank_id_()
+inline void _reset_dest_register_offset_()
 {
-    dest_bank_id = 0;
+    dest_register_offset = 0;
 }
 
 /**
- * @brief Update destination register bank id, bank id can only toggle between 0 & 1;
+ * @brief Update destination register offset, offset can only toggle between 0 & 512 for 16bit dest, 0 & 256 for 32bit dest
  */
-inline void _update_dest_bank_id_()
+template <bool EN_32BIT_DEST>
+inline void _update_dest_register_offset_()
 {
-    dest_bank_id = 1 - dest_bank_id;
+    constexpr std::uint32_t dest_bank1_offset = EN_32BIT_DEST ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE;
+    dest_register_offset                      = (dest_register_offset == 0) ? dest_bank1_offset : 0;
 }
 
 // Semaphores mapping and trisc space -> tensix space conversion
@@ -241,7 +244,11 @@ inline void t6_semaphore_get(const std::uint8_t index)
 }
 
 /**
- * @brief Flip packer dest register offset to 0 or DEST_REGISTER_HALF_SIZE, flip-flopping between two halves
+ * @brief Set packer's dest register offset to the current dest bank base.
+ *
+ * In SyncHalf mode, alternates between bank 0 (offset 0) and bank 1
+ * (DEST_REGISTER_HALF_SIZE for 16-bit dest, DEST_REGISTER_HALF_SIZE/2 for 32-bit dest).
+ * In SyncFull mode, always reads from offset 0.
  */
 template <std::uint32_t PACK_SEL, ckernel::DstSync DST>
 inline void _set_packer_dest_registers_()

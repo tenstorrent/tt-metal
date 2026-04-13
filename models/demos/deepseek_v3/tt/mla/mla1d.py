@@ -30,6 +30,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
     SliceConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import K_CHUNK_SIZE, Q_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
@@ -405,7 +406,7 @@ class MLA1D(AbstractModule):
     ) -> SavedWeight:
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1).contiguous(),
+            torch_metaweight.transpose(-2, -1),
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
@@ -488,8 +489,8 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
-        q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        q_chunk_size = Q_CHUNK_SIZE
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -963,7 +964,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
