@@ -5,7 +5,11 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
 #include "experimental/circular_buffer.h"
+#endif
 #include "experimental/tensor.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 
@@ -21,20 +25,33 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
     constexpr uint32_t row_chunk = get_compile_time_arg_val(3);
 
+    constexpr uint32_t onetile = 1;
+
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb_in0(0);
+    experimental::DataflowBuffer dfb_scaler(1);
+
+    const uint32_t tile_bytes = dfb_in0.get_entry_size();
+
+    constexpr uint32_t scalar = get_compile_time_arg_val(4);
+    generate_reduce_scaler(dfb_scaler, scalar);
+#else
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
-    constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(4);
     generate_reduce_scaler(cb_id_in2, scalar);
+#endif
 
     constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     experimental::Noc noc;
+#ifndef ARCH_QUASAR
     experimental::CircularBuffer cb_in0(cb_id_in0);
+#endif
 
     uint32_t w = curr_col_in_batch;
 
@@ -64,10 +81,17 @@ void kernel_main() {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
+#ifdef ARCH_QUASAR
+                dfb_in0.reserve_back(onetile);
+                noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                dfb_in0.push_back(onetile);
+#else
                 cb_in0.reserve_back(onetile);
                 noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 cb_in0.push_back(onetile);
+#endif
 
                 ++w;
 

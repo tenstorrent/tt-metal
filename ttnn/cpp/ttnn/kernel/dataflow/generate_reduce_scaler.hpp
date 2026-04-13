@@ -5,9 +5,36 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#endif
 
 // Tile is assumed to have 16-bit elements
 // Scaler is assumed to be a 16-bit value double packed into a u32
+#ifdef ARCH_QUASAR
+template <bool half_tile = false>
+FORCE_INLINE void generate_reduce_scaler(experimental::DataflowBuffer& dfb, const uint32_t scaler) {
+    dfb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        dfb.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
+
+    constexpr uint32_t num_words = (half_tile ? 1024 : 2048) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
+        ptr[i] = 0;
+    }
+
+    if (scaler != 0) {
+        for (int k = 0; k < (half_tile ? 2 : 4); ++k) {
+            uint32_t idx = k << 7;
+            for (int j = 0; j < 8; ++j) {
+                ptr[idx + j] = scaler;
+            }
+        }
+    }
+
+    dfb.push_back(1);
+}
+#else
 template <bool half_tile = false>
 FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     cb_reserve_back(cb_id, 1);
@@ -38,6 +65,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
 
     cb_push_back(cb_id, 1);
 }
+#endif
 template <bool needs_zeroing = true>
 FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B alignment noc reads are allowed, done

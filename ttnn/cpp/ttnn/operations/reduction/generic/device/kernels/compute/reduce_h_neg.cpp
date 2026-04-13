@@ -9,7 +9,11 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
 #include "experimental/circular_buffer.h"
+#endif
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -17,7 +21,21 @@ void kernel_main() {
     uint32_t NC = get_compile_time_arg_val(2);
     uint32_t row_chunk = get_compile_time_arg_val(3);
 
-    // Circular buffers:
+    constexpr int onetile = 1;
+
+#ifdef ARCH_QUASAR
+    constexpr uint32_t cb_input = 0;
+    constexpr uint32_t cb_scaler = 1;
+    constexpr uint32_t cb_output = 2;
+    constexpr uint32_t cb_acc = 3;
+    constexpr uint32_t cb_ineg = 4;
+
+    experimental::DataflowBuffer dfb_input(cb_input);
+    experimental::DataflowBuffer dfb_scaler(cb_scaler);
+    experimental::DataflowBuffer dfb_output(cb_output);
+    experimental::DataflowBuffer dfb_acc(cb_acc);
+    experimental::DataflowBuffer dfb_ineg(cb_ineg);
+#else
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_output = tt::CBIndex::c_3;
@@ -29,11 +47,15 @@ void kernel_main() {
     experimental::CircularBuffer cb_output_obj(cb_output);
     experimental::CircularBuffer cb_acc_obj(cb_acc);
     experimental::CircularBuffer cb_ineg_obj(cb_ineg);
+#endif
 
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
-    constexpr int onetile = 1;
+#ifdef ARCH_QUASAR
+    dfb_scaler.wait_front(onetile);
+#else
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+#endif
 
     // tiles are expected to come in the N C W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
@@ -55,7 +77,11 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
+#ifdef ARCH_QUASAR
+                dfb_input.wait_front(ntiles);
+#else
                 cb_input_obj.wait_front(ntiles);
+#endif
 
                 reconfig_data_format_srca(cb_input);
                 copy_tile_init(cb_input);
@@ -66,23 +92,38 @@ void kernel_main() {
                 }
 
                 tile_regs_commit();
+#ifdef ARCH_QUASAR
+                dfb_input.pop_front(ntiles);
+                dfb_ineg.reserve_back(ntiles);
+#else
                 cb_input_obj.pop_front(chunk_end - wt);
                 cb_ineg_obj.reserve_back(ntiles);
+#endif
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_ineg);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, cb_ineg);
                 }
                 tile_regs_release();
+#ifdef ARCH_QUASAR
+                dfb_ineg.push_back(ntiles);
+#else
                 cb_ineg_obj.push_back(ntiles);
+#endif
 
                 tile_regs_acquire();
 
+#ifdef ARCH_QUASAR
+                if (ht > 0) {
+                    dfb_acc.wait_front(ntiles);
+                }
+                dfb_ineg.wait_front(ntiles);
+#else
                 if (ht > 0) {
                     cb_acc_obj.wait_front(ntiles);
                 }
-
                 cb_ineg_obj.wait_front(ntiles);
+#endif
 
                 if (ht > 0) {
                     reconfig_data_format_srca(cb_acc);
@@ -98,23 +139,38 @@ void kernel_main() {
                 }
                 reduce_uninit(cb_ineg);
                 tile_regs_commit();
+#ifdef ARCH_QUASAR
+                dfb_ineg.pop_front(ntiles);
+                if (ht > 0) {
+                    dfb_acc.pop_front(ntiles);
+                }
+                dfb_acc.reserve_back(ntiles);
+#else
                 cb_ineg_obj.pop_front(ntiles);
-
                 if (ht > 0) {
                     cb_acc_obj.pop_front(ntiles);
                 }
                 cb_acc_obj.reserve_back(ntiles);
+#endif
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, cb_acc);
                 }
                 tile_regs_release();
+#ifdef ARCH_QUASAR
+                dfb_acc.push_back(ntiles);
+#else
                 cb_acc_obj.push_back(ntiles);
+#endif
             }
 
             tile_regs_acquire();
 
+#ifdef ARCH_QUASAR
+            dfb_acc.wait_front(ntiles);
+#else
             cb_acc_obj.wait_front(ntiles);
+#endif
 
             reconfig_data_format_srca(cb_acc);
             copy_tile_init(cb_acc);
@@ -127,15 +183,24 @@ void kernel_main() {
             }
 
             tile_regs_commit();
+#ifdef ARCH_QUASAR
+            dfb_acc.pop_front(ntiles);
+            dfb_output.reserve_back(ntiles);
+#else
             cb_acc_obj.pop_front(ntiles);
             cb_output_obj.reserve_back(ntiles);
+#endif
             tile_regs_wait();
             pack_reconfig_data_format(cb_output);
             for (uint32_t i = 0; i < ntiles; ++i) {
                 pack_tile(i, cb_output);
             }
             tile_regs_release();
+#ifdef ARCH_QUASAR
+            dfb_output.push_back(ntiles);
+#else
             cb_output_obj.push_back(ntiles);
+#endif
         }
     }
 }

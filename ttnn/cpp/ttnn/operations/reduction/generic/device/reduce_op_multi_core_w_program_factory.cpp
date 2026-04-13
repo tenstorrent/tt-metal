@@ -7,6 +7,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "reduce_op_dfb_helpers.hpp"
 #include <cmath>
 
 namespace ttnn::prim {
@@ -40,6 +43,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
+    bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_rows = NC * Ht;
@@ -56,25 +60,122 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
     }
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, src0_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
-            .set_page_size(CBIndex::c_2, scaler_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
-
-    uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, dst_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    reduction_helpers::BufferIds dfb_ids;
+
+    if (is_quasar) {
+        namespace dfb = tt_metal::experimental::dfb;
+
+        dfb::DataflowBufferConfig dfb_input_config = {
+            .entry_size = src0_single_tile_size,
+            .num_entries = num_input_tiles,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = src0_cb_data_format,
+            .tile = a.tensor_spec().tile(),
+        };
+
+        dfb::DataflowBufferConfig dfb_scaler_config = {
+            .entry_size = scaler_single_tile_size,
+            .num_entries = num_input_tiles,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = scaler_cb_data_format,
+            .tile = tt_metal::Tile({32, 32}),
+        };
+
+        dfb::DataflowBufferConfig dfb_output_config = {
+            .entry_size = dst_single_tile_size,
+            .num_entries = num_output_tiles,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = dst_cb_data_format,
+            .tile = output.tensor_spec().tile(),
+        };
+
+        if (operation_attributes.negate) {
+            dfb::DataflowBufferConfig dfb_acc_config = {
+                .entry_size = dst_single_tile_size,
+                .num_entries = 1,
+                .num_producers = 1,
+                .pap = dfb::AccessPattern::STRIDED,
+                .num_consumers = 1,
+                .cap = dfb::AccessPattern::STRIDED,
+                .enable_implicit_sync = false,
+                .data_format = dst_cb_data_format,
+                .tile = output.tensor_spec().tile(),
+            };
+
+            dfb::DataflowBufferConfig dfb_ineg_config = {
+                .entry_size = dst_single_tile_size,
+                .num_entries = 1,
+                .num_producers = 1,
+                .pap = dfb::AccessPattern::STRIDED,
+                .num_consumers = 1,
+                .cap = dfb::AccessPattern::STRIDED,
+                .enable_implicit_sync = false,
+                .data_format = dst_cb_data_format,
+                .tile = output.tensor_spec().tile(),
+            };
+
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program,
+                all_cores,
+                dfb_input_config,
+                dfb_scaler_config,
+                dfb_output_config,
+                true,
+                dfb_acc_config,
+                dfb_ineg_config);
+        } else {
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program, all_cores, dfb_input_config, dfb_scaler_config, dfb_output_config);
+        }
+    } else {
+        uint32_t src0_cb_index = 0;
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+                .set_page_size(src0_cb_index, src0_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+        tt_metal::CircularBufferConfig cb_scaler_config =
+            tt_metal::CircularBufferConfig(
+                num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+                .set_page_size(CBIndex::c_2, scaler_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+
+        uint32_t output_cb_index = tt::CBIndex::c_3;
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+                .set_page_size(output_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+
+        if (operation_attributes.negate) {
+            uint32_t acc_cb_index = tt::CBIndex::c_4;
+            tt_metal::CircularBufferConfig cb_acc_config =
+                tt_metal::CircularBufferConfig(1 * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+                    .set_page_size(acc_cb_index, dst_single_tile_size);
+            tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
+
+            uint32_t inv_cb_index = tt::CBIndex::c_5;
+            tt_metal::CircularBufferConfig cb_inv_config =
+                tt_metal::CircularBufferConfig(1 * dst_single_tile_size, {{inv_cb_index, dst_cb_data_format}})
+                    .set_page_size(inv_cb_index, dst_single_tile_size);
+            tt_metal::CreateCircularBuffer(program, all_cores, cb_inv_config);
+        }
+    }
 
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
@@ -82,40 +183,18 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+
+    uint32_t writer_output_id = is_quasar ? dfb_ids.output : (uint32_t)tt::CBIndex::c_3;
+    std::vector<uint32_t> writer_compile_time_args = {writer_output_id};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    if (operation_attributes.negate) {
-        uint32_t acc_cb_index = tt::CBIndex::c_4;
-        uint32_t num_acc_tiles = 1;
-        tt_metal::CircularBufferConfig cb_acc_config =
-            tt_metal::CircularBufferConfig(num_acc_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
-                .set_page_size(acc_cb_index, dst_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
-
-        uint32_t inv_cb_index = tt::CBIndex::c_5;
-        uint32_t num_inv_tiles = 1;
-        tt_metal::CircularBufferConfig cb_inv_config =
-            tt_metal::CircularBufferConfig(num_inv_tiles * dst_single_tile_size, {{inv_cb_index, dst_cb_data_format}})
-                .set_page_size(inv_cb_index, dst_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_inv_config);
-    }
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
 
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_universal_start_id.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
-
-    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
+    tt_metal::KernelHandle reader_kernel_id;
+    tt_metal::KernelHandle writer_kernel_id;
+    tt_metal::KernelHandle compute_kernel_id_group_1;
+    tt_metal::KernelHandle compute_kernel_id_group_2 = 0;
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_rows_per_core_group_1,  // Ht
@@ -127,32 +206,110 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w") +
         (operation_attributes.negate ? "_neg" : "") + ".cpp";
 
-    tt_metal::CreateKernel(
-        program,
-        compute_kernel,
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = reduce_defines});
+    if (is_quasar) {
+        namespace qsr = tt_metal::experimental::quasar;
 
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_rows_per_core_group_2,  // Ht
-            Wt,                         // Wt
-            1,                          // NC
-        };
+        reader_kernel_id = qsr::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "reader_unary_reduce_universal_start_id.cpp",
+            all_cores,
+            qsr::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_compile_time_args, .defines = reduce_defines});
+
+        writer_kernel_id = qsr::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            all_cores,
+            qsr::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_compile_time_args, .defines = reduce_defines});
+
+        compute_kernel_id_group_1 = qsr::CreateKernel(
+            program,
+            compute_kernel,
+            core_group_1,
+            qsr::QuasarComputeConfig{
+                .num_threads_per_cluster = 1,
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_kernel_args_group_1,
+                .defines = reduce_defines});
+
+        reduction_helpers::bind_reduction_kernels(
+            program,
+            dfb_ids,
+            reader_kernel_id,
+            compute_kernel_id_group_1,
+            writer_kernel_id,
+            operation_attributes.negate);
+
+        if (!core_group_2.ranges().empty()) {
+            std::vector<uint32_t> compute_kernel_args_group_2 = {
+                num_rows_per_core_group_2,  // Ht
+                Wt,                         // Wt
+                1,                          // NC
+            };
+
+            compute_kernel_id_group_2 = qsr::CreateKernel(
+                program,
+                compute_kernel,
+                core_group_2,
+                qsr::QuasarComputeConfig{
+                    .num_threads_per_cluster = 1,
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .compile_args = compute_kernel_args_group_2,
+                    .defines = reduce_defines});
+
+            reduction_helpers::bind_reduction_kernels(
+                program,
+                dfb_ids,
+                reader_kernel_id,
+                compute_kernel_id_group_2,
+                writer_kernel_id,
+                operation_attributes.negate);
+        }
+    } else {
+        reader_kernel_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "reader_unary_reduce_universal_start_id.cpp",
+            all_cores,
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
+
+        writer_kernel_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            all_cores,
+            tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
         tt_metal::CreateKernel(
             program,
             compute_kernel,
-            core_group_2,
+            core_group_1,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = compute_kernel_args_group_2,
+                .compile_args = compute_kernel_args_group_1,
                 .defines = reduce_defines});
+
+        if (!core_group_2.ranges().empty()) {
+            std::vector<uint32_t> compute_kernel_args_group_2 = {
+                num_rows_per_core_group_2,  // Ht
+                Wt,                         // Wt
+                1,                          // NC
+            };
+
+            tt_metal::CreateKernel(
+                program,
+                compute_kernel,
+                core_group_2,
+                tt_metal::ComputeConfig{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .compile_args = compute_kernel_args_group_2,
+                    .defines = reduce_defines});
+        }
     }
 
     TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
