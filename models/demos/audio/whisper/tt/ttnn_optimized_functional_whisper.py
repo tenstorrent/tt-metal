@@ -15,13 +15,17 @@ from models.common.utility_functions import nearest_32
 
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
+# FFN matmuls: LoFi (N150). FFN runs fc1+fc2 in L1 with one DRAM round-trip; fc1 uses fused ``activation='gelu'``.
+WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 WHISPER_BATCH_SIZE = 2
 WHISPER_L1_SMALL_SIZE = 1024
 WHISPER_TRACE_REGION_SIZE = 100000000
-
-
-def gelu(tensor):
-    return ttnn.gelu(tensor, memory_config=WHISPER_MEMORY_CONFIG)
 
 
 def dropout(hidden_states, p, training):
@@ -161,24 +165,48 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-def ffn_linear_thin_m(activations, weight, bias):
+def ffn_forward(
+    hidden_states,
+    fc1_weight,
+    fc1_bias,
+    fc2_weight,
+    fc2_bias,
+):
     """
-    FFN matmul path for small effective M (e.g. decode with few tokens): stage activations in L1 and
-    use ttnn.linear with the full device grid, matching the tuned projection pattern in calculate_key_values.
+    Encoder/decoder FFN: activations stay in L1 across fc1 and fc2 (one DRAM→L1, one L1→DRAM).
+    fc1 uses ``ttnn.linear(..., activation='gelu')`` (fused matmul + GELU).
     """
-    device = activations.device()
+    device = hidden_states.device()
     compute_grid_size = device.compute_with_storage_grid_size()
     core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
-    activations_l1 = ttnn.to_memory_config(activations, ttnn.L1_MEMORY_CONFIG)
-    out_l1 = ttnn.linear(
-        activations_l1,
+    linear_kw = {
+        "core_grid": core_grid,
+        "memory_config": ttnn.L1_MEMORY_CONFIG,
+        "compute_kernel_config": WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG,
+    }
+
+    h = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.linear(h, fc1_weight, bias=fc1_bias, activation="gelu", **linear_kw)
+    h = ttnn.linear(h, fc2_weight, bias=fc2_bias, **linear_kw)
+
+    return ttnn.to_memory_config(h, WHISPER_MEMORY_CONFIG)
+
+
+def _linear_lofi_l1_roundtrip(x, weight, bias):
+    """One linear with DRAM→L1→DRAM staging and LoFi matmul (same idea as ``ffn_forward`` per step)."""
+    device = x.device()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    h = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.linear(
+        h,
         weight,
         bias=bias,
         core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG,
     )
-    ttnn.deallocate(activations_l1)
-    return ttnn.to_memory_config(out_l1, WHISPER_MEMORY_CONFIG)
+    return ttnn.to_memory_config(h, WHISPER_MEMORY_CONFIG)
 
 
 def get_decode_sdpa_configs(config, bsz, device):
@@ -358,7 +386,7 @@ def whisper_attention(
         transpose_k_heads = True
 
     if is_cross_attention:
-        query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
+        query_states = _linear_lofi_l1_roundtrip(hidden_states, parameters.q_proj.weight, parameters.q_proj.bias)
         query_states = ttnn.transpose(query_states, 1, 2)  # B, S, 1, Hxd
         query_states = ttnn.reshape(
             query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size)
@@ -393,13 +421,18 @@ def whisper_attention(
             fused_qkv_dtype = ttnn.bfloat16
         compute_grid_size = hidden_states.device().compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+        fused_qkv_linear_kw = {
+            "bias": parameters.query_key_value.bias,
+            "core_grid": core_grid,
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
+            "dtype": fused_qkv_dtype,
+        }
+        if is_decode:
+            fused_qkv_linear_kw["compute_kernel_config"] = WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG
         fused_qkv = ttnn.linear(
             hidden_states,
             parameters.query_key_value.weight,
-            bias=parameters.query_key_value.bias,
-            core_grid=core_grid,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=fused_qkv_dtype,
+            **fused_qkv_linear_kw,
         )
         ttnn.deallocate(hidden_states)
         fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
@@ -475,7 +508,7 @@ def whisper_attention(
             ttnn.deallocate(value_states)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
-    attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
+    attn_output = _linear_lofi_l1_roundtrip(attn_output, parameters.out_proj.weight, parameters.out_proj.bias)
     return attn_output
 
 
@@ -505,10 +538,13 @@ def encoder_layer(config, hidden_states, *, parameters):
         memory_config=WHISPER_MEMORY_CONFIG,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
-    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc1.weight, parameters.fc1.bias)
-    hidden_states = gelu(hidden_states)
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc2.weight, parameters.fc2.bias)
+    hidden_states = ffn_forward(
+        hidden_states,
+        parameters.fc1.weight,
+        parameters.fc1.bias,
+        parameters.fc2.weight,
+        parameters.fc2.bias,
+    )
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
@@ -620,10 +656,13 @@ def decoder_layer(
         bias=parameters.final_layer_norm.bias,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
-    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc1.weight, parameters.fc1.bias)
-    hidden_states = gelu(hidden_states)
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = ffn_linear_thin_m(hidden_states, parameters.fc2.weight, parameters.fc2.bias)
+    hidden_states = ffn_forward(
+        hidden_states,
+        parameters.fc1.weight,
+        parameters.fc1.bias,
+        parameters.fc2.weight,
+        parameters.fc2.bias,
+    )
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
