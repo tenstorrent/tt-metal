@@ -1643,6 +1643,14 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
         receiver_mesh_program_descriptor);
     ttnn::generic_op(
         std::vector<Tensor>{device_input_tensor_sender, device_output_tensor_sender}, sender_mesh_program_descriptor);
+
+    // Deallocate device tensors before quiesce resets event counters to 0.
+    // Otherwise MeshBuffer::wait_for_pending_events() busy-spins forever on stale event IDs.
+    device_input_tensor_sender.deallocate(true);
+    device_output_tensor_sender.deallocate(true);
+    device_input_tensor_receiver.deallocate(true);
+    device_output_tensor_receiver.deallocate(true);
+
     sender_device->quiesce_devices();
     receiver_device->quiesce_devices();
 
