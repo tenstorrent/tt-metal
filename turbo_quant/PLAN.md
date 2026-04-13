@@ -6,6 +6,20 @@
 - Paper: https://arxiv.org/html/2504.19874v1
 - Target model: Meta-Llama-3.1-8B-Instruct on Tenstorrent Wormhole (N150)
 
+### Result: same speed, half the KV cache
+
+3-bit TurboQuant with BFP4 index cache vs baseline BFP8, on Wormhole N150:
+
+| | Baseline BFP8 | TurboQuant 3-bit BFP4 |
+|--|--|--|
+| **Latency** | 37.0 ms/tok | **37.2 ms/tok** (identical) |
+| **KV cache memory** | 1× | **0.5×** (half) |
+| **Quality** | — | Correct output at all seq lengths 128–131072 |
+| **MSE vs float32 CPU** | — | 0.034 (matches paper bound) |
+
+Latency is flat at 37.2 ms/tok from seq=128 to seq=131072 (128K context).
+KV cache at 128K: 4.6 GB (TurboQuant) vs 9.1 GB (baseline).
+
 ### Core Idea
 
 TurboQuant compresses KV cache vectors during autoregressive LLM inference with
