@@ -205,6 +205,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -1389,6 +1390,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                     "Invalid TT_METAL_FABRIC_OPT_LEVEL value: '{}'. Valid values: O0, O1, O2, O3, Os, Oz, Ofast",
                     value);
             }
+            break;
+        }
+
+        // TT_TOPOLOGY_SOLVER_ENGINE
+        // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as
+        // tt::tt_fabric::topology_mapping_use_sat_engine). Value is snapshotted here at Metal init.
+        // Usage: export TT_TOPOLOGY_SOLVER_ENGINE=sat
+        case EnvVarID::TT_TOPOLOGY_SOLVER_ENGINE: {
+            const std::string lowered = to_lower_copy(trim_copy(std::string(value)));
+            this->topology_mapping_use_sat_engine_ =
+                lowered == "sat" || lowered == "1" || lowered == "true" || lowered == "yes";
             break;
         }
 

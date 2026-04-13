@@ -490,6 +490,19 @@ enum class ConnectionValidationMode {
 };
 
 /**
+ * @brief Search backend for solve_topology_mapping
+ *
+ * Use Dfs or Sat for explicit control (e.g. unit tests). Auto reads TT_TOPOLOGY_SOLVER_ENGINE (same strings as
+ * topology_mapping_use_sat_engine); that variable is also parsed into RunTimeOptions at Metal startup for diagnostics
+ * and tests that query MetalContext::rtoptions().
+ */
+enum class TopologyMappingSolverEngine {
+    Auto,
+    Dfs,
+    Sat,
+};
+
+/**
  * @brief Result of topology mapping operation
  *
  * Contains the mapping result, success status, error messages, and statistics
@@ -571,6 +584,7 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
  * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them but still prefers
  *        stronger channel alignment among feasible mappings (default: RELAXED)
  * @param quiet_mode If true, log errors at debug level instead of error level (useful for auto-discovery)
+ * @param solver_engine Auto uses TT_TOPOLOGY_SOLVER_ENGINE; Dfs/Sat force that backend regardless of env.
  * @return MappingResult containing success status, bidirectional mappings, and warnings
  */
 template <typename TargetNode, typename GlobalNode>
@@ -579,9 +593,12 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
-    bool quiet_mode = false);
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
 
 namespace detail {
+
+bool topology_mapping_should_use_sat_engine(TopologyMappingSolverEngine engine);
 
 /**
  * @brief Indexed graph representation for efficient lookups
@@ -1066,6 +1083,12 @@ private:
  * strictly fewer preferred targets on the same instance.
  *
  * Channel/STRICT checks are still applied by MappingValidator after decode.
+ *
+ * In RELAXED mode, after locking the preferred-hit count (when that optimization runs), a second pass maximizes
+ * auxiliary literals for per-edge channel thresholds so the embedding maximizes the same sum as DFS's relaxed
+ * channel ordering objective (sum of min(required, actual) over target edges). When the number of threshold
+ * literals exceeds a small cap, that k-descent pass is skipped (one final satisfiability solve still returns a valid
+ * embedding). Other caps may also skip encoding or cardinality on very large instances.
  */
 template <typename TargetNode, typename GlobalNode>
 class SatSearchEngine {
@@ -1084,10 +1107,11 @@ private:
 };
 
 /**
- * @brief If true, `solve_topology_mapping` uses the SAT hard backend instead of DFS.
+ * @brief If true, `solve_topology_mapping` uses the SAT hard backend when solver_engine is Auto.
  *
  * Controlled by environment variable `TT_TOPOLOGY_SOLVER_ENGINE` (case-insensitive):
  * `sat`, `1`, `true`, or `yes` enable SAT; unset or any other value selects DFS (default).
+ * The same variable is recorded on RunTimeOptions at Metal initialization.
  */
 inline bool topology_mapping_use_sat_engine();
 
