@@ -623,8 +623,9 @@ static void collect_kernels(
             if (ksrc.source_type_ == KernelSource::FILE_PATH) {
                 src_path = ksrc.path_.string();
             } else {
+                static constexpr int kTmpSuffixLen = 4;  // length of ".cpp" suffix
                 char tmpf[] = "/tmp/tt_emule_src_XXXXXX.cpp";
-                int fd = mkstemps(tmpf, 4);
+                int fd = mkstemps(tmpf, kTmpSuffixLen);
                 if (fd < 0) {
                     throw std::runtime_error("execute_program_emulated: mkstemps failed");
                 }
