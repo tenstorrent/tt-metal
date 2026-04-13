@@ -90,7 +90,7 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
     constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
 
-    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -129,7 +129,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, page_size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         cb_gamma.reserve_back(num_cols_tile_gamma_beta);
 
@@ -175,7 +175,7 @@ void kernel_main() {
         // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
         // Then copy the second set of 32 bytes into the second face
         constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
-        const auto beta = TensorAccessor(beta_args, beta_addr, page_size);
+        const auto beta = TensorAccessor(beta_args, beta_addr);
 
         cb_beta.reserve_back(num_cols_tile_gamma_beta);
 
@@ -209,7 +209,7 @@ void kernel_main() {
         cb_beta.push_back(num_cols_tile_gamma_beta);
     }
 
-    const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
+    const auto dst_a = TensorAccessor(out_args, out_addr);
 
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {

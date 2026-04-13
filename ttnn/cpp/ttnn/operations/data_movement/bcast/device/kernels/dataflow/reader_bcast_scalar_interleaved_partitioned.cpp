@@ -30,7 +30,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #else
     cb_reserve_back(cb_id_in0, num_tiles);
     cb_push_back(cb_id_in0, num_tiles);

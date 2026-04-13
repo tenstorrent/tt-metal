@@ -19,8 +19,7 @@ void kernel_main() {
     // Output data config
     constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(src1_cb_index);
     constexpr auto output_tensor_dram_args = TensorAccessorArgs<1>();
-    const auto output_tensor_dram =
-        TensorAccessor(output_tensor_dram_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
+    const auto output_tensor_dram = TensorAccessor(output_tensor_dram_args, output_tensor_buffer_addr);
 
     // Wait for incoming data from reader1
     cb_wait_front(src1_cb_index, one_tile);

@@ -62,8 +62,12 @@ void kernel_main() {
     const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
     const uint32_t page_size_b = align(page_size_b_arg, alignment_b);
 
-    const auto src = TensorAccessor(src_args, src_addr, page_size_a);
-    const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
+    const decltype(TensorAccessor(src_args, src_addr)) src(
+        src_args, src_addr, page_size_a);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                           // it is coming from runtime arguments, which may be overwritten.
+    const decltype(TensorAccessor(src_b_args, src_addr_b)) src_b(
+        src_b_args, src_addr_b, page_size_b);  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
+                                               // since it is coming from runtime arguments, which may be overwritten.
 
     const uint32_t s_h_a = (aHt == 1) ? 0 : 1;
     const uint32_t s_c_a = (aC == 1) ? 0 : aHt;

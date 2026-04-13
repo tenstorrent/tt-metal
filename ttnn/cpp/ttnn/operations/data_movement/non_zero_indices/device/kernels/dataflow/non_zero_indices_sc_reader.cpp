@@ -22,9 +22,18 @@ void kernel_main() {
     constexpr auto dst0_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto dst1_args = TensorAccessorArgs<dst0_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, input_addr, aligned_elements * element_size);
-    const auto out0 = TensorAccessor(dst0_args, output_addr_0, 32);
-    const auto out1 = TensorAccessor(dst1_args, output_addr_1, aligned_elements * element_size);
+    const decltype(TensorAccessor(src0_args, input_addr)) s0(
+        src0_args,
+        input_addr,
+        aligned_elements * element_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                           // it is coming from runtime arguments, which may be overwritten.
+    const auto out0 = TensorAccessor(dst0_args, output_addr_0);
+    const decltype(TensorAccessor(
+        dst1_args, output_addr_1)) out1(  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                          // it is coming from runtime arguments, which may be overwritten.
+        dst1_args,
+        output_addr_1,
+        aligned_elements * element_size);
 
     uint64_t src_noc_addr = get_noc_addr(0, s0);
     uint32_t input_l1_addr = get_write_ptr(input_cb_index);

@@ -72,7 +72,7 @@ void kernel_main() {
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_bytes_per_row);
+    const auto s0 = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_bytes_per_row};
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position

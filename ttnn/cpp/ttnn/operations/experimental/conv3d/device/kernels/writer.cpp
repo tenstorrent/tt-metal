@@ -69,9 +69,9 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
-    const auto weight_reader = TensorAccessor(weight_args, weight_addr, tile_bytes);
-    const auto bias_reader = TensorAccessor(bias_args, bias_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto weight_reader = TensorAccessor(weight_args, weight_addr);
+    const auto bias_reader = TensorAccessor(bias_args, bias_addr);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;

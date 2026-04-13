@@ -30,7 +30,7 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     constexpr uint32_t onetile = 1;
     for (uint32_t wt = 0; wt < Wt_per_core; ++wt) {

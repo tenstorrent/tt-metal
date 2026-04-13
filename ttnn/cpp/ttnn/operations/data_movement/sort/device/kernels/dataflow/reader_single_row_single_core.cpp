@@ -38,12 +38,11 @@ void kernel_main() {
     // Input tensor config
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto interleaved_accessor0 = TensorAccessor(input_tensor_args, input_tensor_buffer_addr, tile_size_bytes);
+    const auto interleaved_accessor0 = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
-    const auto interleaved_accessor1 =
-        TensorAccessor(index_tensor_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto interleaved_accessor1 = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate

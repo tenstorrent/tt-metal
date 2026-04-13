@@ -123,7 +123,7 @@ void kernel_main() {
     }
 
 #else
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+    const auto s0 = decltype(TensorAccessor(in0_args, in0_tensor_addr)){in0_args, in0_tensor_addr, in0_single_tile_size_bytes};
 #ifndef IN0_SHARDED
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
@@ -135,7 +135,7 @@ void kernel_main() {
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
+    const auto s_sparsity = decltype(TensorAccessor(sparsity_args, sparsity_addr)){sparsity_args, sparsity_addr, sparsity_pagesize};
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted

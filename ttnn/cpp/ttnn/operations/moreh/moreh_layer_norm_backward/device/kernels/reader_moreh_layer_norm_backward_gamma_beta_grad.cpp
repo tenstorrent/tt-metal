@@ -122,10 +122,10 @@ void kernel_main() {
     constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
 
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;

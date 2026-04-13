@@ -123,7 +123,7 @@ void kernel_main() {
     // The stride for stepping along dimension `permuted_w_dim` in the final output
     uint32_t W_stride_tile = dest_tiled_strides[permuted_w_dim];
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t idxs[RANK];
     idxs[RANK - 1] = 0;

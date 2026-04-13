@@ -27,7 +27,7 @@ void kernel_main() {
     generate_mask_h<int32_t>(cb_id_mask_h, mask_h);
 #endif
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t w = curr_col_in_batch;
 

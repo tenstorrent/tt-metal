@@ -27,8 +27,8 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;
@@ -84,7 +84,7 @@ void kernel_main() {
     bool read_indices = true;
     uint32_t col_offset = curr_col;
     uint32_t tiles_per_row = (row_length + tile_height - 1) / tile_height;
-    const auto s = TensorAccessor(input_args, input_buffer_src_addr, tile_size_bytes);
+    const auto s = TensorAccessor(input_args, input_buffer_src_addr);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {

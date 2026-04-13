@@ -81,7 +81,9 @@ void kernel_main() {
     constexpr uint32_t element_size = get_compile_time_arg_val(4);
     constexpr auto dst_args = TensorAccessorArgs<5>();
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const decltype(TensorAccessor(dst_args, dst_addr)) s0(
+        dst_args, dst_addr, output_stick_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
+                                                 // since it is coming from runtime arguments, which may be overwritten.
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
     uint32_t dst_stick_id = start_id;
     uint32_t src_stick_id = start_id;

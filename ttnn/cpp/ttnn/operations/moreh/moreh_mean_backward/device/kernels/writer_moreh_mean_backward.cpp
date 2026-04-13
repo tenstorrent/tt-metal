@@ -19,7 +19,7 @@ void kernel_main() {
 
     uint32_t input_grad_tile_bytes = get_tile_size(cb_id_out);
 
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         uint32_t write_tile_id = i;

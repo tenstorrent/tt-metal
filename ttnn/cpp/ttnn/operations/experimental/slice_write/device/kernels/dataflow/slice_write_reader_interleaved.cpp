@@ -19,7 +19,9 @@ void kernel_main() {
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
-    const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
+    const decltype(TensorAccessor(src_args, src_addr)) s0(
+        src_args, src_addr, stick_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                          // it is coming from runtime arguments, which may be overwritten.
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

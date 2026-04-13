@@ -22,8 +22,8 @@ void kernel_main() {
     const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
     const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
 
-    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr, gamma_grad_tile_bytes);
-    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr, beta_grad_tile_bytes);
+    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr);
+    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr);
 
     constexpr uint32_t onetile = 1;
 

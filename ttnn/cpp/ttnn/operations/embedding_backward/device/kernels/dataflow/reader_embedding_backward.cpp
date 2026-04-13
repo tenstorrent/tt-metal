@@ -112,9 +112,9 @@ void kernel_main() {
     constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
-    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr, grad_page_size);
-    const auto index_s = TensorAccessor(index_args, index_tensor_addr, index_page_size);
-    const auto out_s = TensorAccessor(out_args, output_tensor_addr, out_page_size);
+    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr);
+    const auto index_s = TensorAccessor(index_args, index_tensor_addr);
+    const auto out_s = TensorAccessor(out_args, output_tensor_addr);
 
     uint32_t index_block_size = get_tile_size(cb_index) >> 5;  // we only need 32 elements
     uint32_t index_l1_addr = get_write_ptr(cb_index);          // static

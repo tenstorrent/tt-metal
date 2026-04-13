@@ -51,15 +51,15 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 

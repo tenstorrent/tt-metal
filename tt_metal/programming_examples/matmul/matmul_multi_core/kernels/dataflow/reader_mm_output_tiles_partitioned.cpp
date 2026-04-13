@@ -27,10 +27,10 @@ void kernel_main() {
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     constexpr auto a_args = TensorAccessorArgs<0>();
-    const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);
+    const auto a = TensorAccessor(a_args, src0_addr);
 
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
+    const auto b = TensorAccessor(b_args, src1_addr);
 
     // Simple 2D matmul: A[Mt, Kt] @ B[Kt, Nt] = C[Mt, Nt]
     for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {

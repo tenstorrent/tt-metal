@@ -67,10 +67,10 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_ags++);
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // read the expert mapping table
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);

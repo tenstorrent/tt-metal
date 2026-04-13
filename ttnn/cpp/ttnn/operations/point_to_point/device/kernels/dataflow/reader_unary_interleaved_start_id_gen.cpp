@@ -18,7 +18,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
-    const auto s = TensorAccessor(src_args, src_addr, page_bytes);
+    const decltype(TensorAccessor(src_args, src_addr)) s(
+        src_args, src_addr, page_bytes);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
+                                          // it is coming from runtime arguments, which may be overwritten.
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t end_id = start_id + num_tiles;

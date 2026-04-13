@@ -445,8 +445,8 @@ void kernel_main() {
     constexpr auto weights_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
 
-    const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
-    const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
+    const auto weights_accessor = TensorAccessor(weights_args, weights_addr);
+    const auto indices_accessor = TensorAccessor(indices_args, indices_addr);
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel

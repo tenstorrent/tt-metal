@@ -26,7 +26,7 @@ void kernel_main() {
 
     // Q
     constexpr uint32_t qkv_tile_bytes = get_tile_size(cb_id_q_out);
-    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr, qkv_tile_bytes);
+    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr);
 
     uint32_t q_write_addr = 0;
     uint32_t qkv_tile_id = 0;

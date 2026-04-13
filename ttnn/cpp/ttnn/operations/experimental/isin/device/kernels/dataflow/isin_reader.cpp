@@ -103,12 +103,13 @@ void kernel_main() {
 
     constexpr uint32_t elements_element_size = ctas.elements_tensor_datum_size;
     constexpr uint32_t test_elements_element_size = ctas.elements_tensor_datum_size;
-    const auto elements_addr_gtor = TensorAccessor{
-        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size};
-    const auto test_elements_addr_gtor = TensorAccessor{
-        ctas.test_elements_accessor_args,
-        test_elements_buffer_address,
-        ctas.test_elements_size * test_elements_element_size};
+    const decltype(TensorAccessor(ctas.elements_accessor_args, elements_buffer_address)) elements_addr_gtor(
+        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size);
+    const decltype(TensorAccessor(ctas.test_elements_accessor_args, test_elements_buffer_address))
+        test_elements_addr_gtor(
+            ctas.test_elements_accessor_args,
+            test_elements_buffer_address,
+            ctas.test_elements_size * test_elements_element_size);
 
     /*
         for every subchunk (part of a stick) of the elements tensor - to which an analogous output chunk

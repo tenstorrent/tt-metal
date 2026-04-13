@@ -19,12 +19,12 @@ void kernel_main() {
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // clip_coef_clamped
     const uint32_t clip_coef_clamped_tile_bytes = get_tile_size(cb_id_clip_coef_clamped);
     constexpr auto coef_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr, clip_coef_clamped_tile_bytes);
+    const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr);
 
     // clip_coef_clamped
     const auto clip_coef_clamped_l1_write_ptr = get_write_ptr(cb_id_clip_coef_clamped);

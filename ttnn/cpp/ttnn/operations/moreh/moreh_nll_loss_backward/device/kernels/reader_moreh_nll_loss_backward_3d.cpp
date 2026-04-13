@@ -45,12 +45,12 @@ void kernel_main() {
     constexpr auto divisor_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto output_grad_args = TensorAccessorArgs<divisor_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     // weight: (1, C)
     read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
@@ -60,7 +60,7 @@ void kernel_main() {
 #endif
 
 #if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr);
 
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif

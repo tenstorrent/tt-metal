@@ -45,8 +45,8 @@ void kernel_main() {
 
     constexpr auto in0_args = TensorAccessorArgs<2>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s0 = TensorAccessor(in0_args, src0_addr, in0_tile_bytes);
-    const auto s1 = TensorAccessor(in1_args, src1_addr, in1_tile_bytes);
+    const auto s0 = decltype(TensorAccessor(in0_args, src0_addr)){in0_args, src0_addr, in0_tile_bytes};
+    const auto s1 = decltype(TensorAccessor(in1_args, src1_addr)){in1_args, src1_addr, in1_tile_bytes};
 
     uint32_t itileA_batch = itileA_start;
     uint32_t itileB_batch;

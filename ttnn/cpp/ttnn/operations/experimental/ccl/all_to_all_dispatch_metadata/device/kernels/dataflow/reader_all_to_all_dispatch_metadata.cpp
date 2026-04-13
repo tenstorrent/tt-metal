@@ -75,11 +75,11 @@ void kernel_main() {
     uint32_t payload_size = get_arg_val<uint32_t>(rt_ags++);
     bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_ags++) == 1;
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
-    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Read the expert mapping table - new format: [devices, experts]
     // Each page is one device's view of the mapping. Read only the source device's page.

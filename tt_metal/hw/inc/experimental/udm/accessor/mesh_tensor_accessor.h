@@ -261,9 +261,7 @@ public:
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 MeshTensorAccessor(const MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args) -> MeshTensorAccessor<
     decltype(TensorAccessor(
-        typename MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorAccessorArgsT(),
-        args.get_buffer_address(),
-        args.get_aligned_page_size())),
+        typename MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorAccessorArgsT(), args.get_buffer_address())),
     MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::mesh_dspec_rank,
     MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::num_grids>;
 

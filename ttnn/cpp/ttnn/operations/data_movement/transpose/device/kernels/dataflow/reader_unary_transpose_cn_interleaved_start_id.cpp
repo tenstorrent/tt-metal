@@ -26,7 +26,7 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr, page_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t page_idx = start_id;

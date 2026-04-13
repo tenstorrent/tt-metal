@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
 
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+    const auto s0 = decltype(TensorAccessor(in0_args, in0_tensor_addr)){in0_args, in0_tensor_addr, in0_single_tile_size_bytes};
 
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");

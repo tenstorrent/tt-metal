@@ -32,7 +32,7 @@ void kernel_main() {
     }
     prod[dims - 1] = 1;  // Not used, but set to 1 for completeness
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;

@@ -29,12 +29,12 @@ void kernel_main() {
     constexpr auto target_args = TensorAccessorArgs<1>();
     constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
 
 #if defined(WEIGHT)
     const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     auto weight_element_size = weight_tile_bytes / 1024;
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 #endif
 
     constexpr uint32_t onetile = 1;

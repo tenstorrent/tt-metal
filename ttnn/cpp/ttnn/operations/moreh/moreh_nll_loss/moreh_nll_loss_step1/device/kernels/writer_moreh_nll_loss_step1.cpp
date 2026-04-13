@@ -15,7 +15,7 @@ void kernel_main() {
 
     constexpr auto output_args = TensorAccessorArgs<0>();
 
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     constexpr uint32_t onetile = 1;
 

@@ -16,7 +16,7 @@ void kernel_main() {
 
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
 
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     uint32_t offs = 0;
     const auto NCHt = num_rows_per_core;

@@ -26,7 +26,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const auto s1 = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s1 = TensorAccessor(dst_args, dst_addr);
 
     uint32_t dst_stick_id = start_dst_stick_id;
     uint32_t dst_stick_wi = start_dst_stick_wi;

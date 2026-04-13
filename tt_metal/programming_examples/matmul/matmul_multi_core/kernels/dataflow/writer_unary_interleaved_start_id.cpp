@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
+    const auto c = TensorAccessor(c_args, dst_addr);
 
     // Loop through the tile indices and write each tile to DRAM in order.
     uint32_t end_id = start_id + num_tiles;

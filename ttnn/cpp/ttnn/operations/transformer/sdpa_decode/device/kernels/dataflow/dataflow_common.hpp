@@ -534,7 +534,7 @@ void read_q(
         }
     } else {
         // Q is not sharded - read tiles from DRAM
-        const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
+        const decltype(TensorAccessor(q_args, q_addr)) q_reader(q_args, q_addr, q_page_size_bytes);
         uint32_t q_tile_id = q_batch_offset;
 
         cb_reserve_back(cb_q_in, q_chunk_tiles);

@@ -1009,9 +1009,9 @@ void kernel_main() {
             : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
     constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-    const auto output_scores_addr_gen = TensorAccessor(scores_out_args, scores_out_tensor_address, scores_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
+    const auto output_scores_addr_gen = TensorAccessor(scores_out_args, scores_out_tensor_address);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header_pos = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);

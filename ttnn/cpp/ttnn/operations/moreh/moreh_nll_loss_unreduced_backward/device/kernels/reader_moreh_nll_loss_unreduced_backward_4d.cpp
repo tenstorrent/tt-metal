@@ -38,12 +38,12 @@ void kernel_main() {
     constexpr auto output_grad_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     // weight: (1, C)
     read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);

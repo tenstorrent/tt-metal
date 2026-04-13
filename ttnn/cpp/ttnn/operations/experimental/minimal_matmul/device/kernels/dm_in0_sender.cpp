@@ -59,7 +59,7 @@ void kernel_main() {
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<22>();
-    const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
+    const auto in0_reader = decltype(TensorAccessor(in0_args, in0_addr)){in0_args, in0_addr, in0_tile_size};
 
     // Always create tuple of output accessors (size = N_chunks)
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
@@ -70,7 +70,7 @@ void kernel_main() {
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
+    const auto in2_reader = decltype(TensorAccessor(in2_args, in2_addr)){in2_args, in2_addr, in2_tile_size};
 #endif
 
 #ifdef FUSE_TERNARY
@@ -107,8 +107,8 @@ void kernel_main() {
     constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
 
-    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
-    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+    const auto ternary_a_reader = decltype(TensorAccessor(ternary_a_args, ternary_a_addr)){ternary_a_args, ternary_a_addr, ternary_a_tile_size};
+    const auto ternary_b_reader = decltype(TensorAccessor(ternary_b_args, ternary_b_addr)){ternary_b_args, ternary_b_addr, ternary_b_tile_size};
 
 #endif  // FUSE_TERNARY
 
@@ -157,7 +157,7 @@ void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
-    const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+    const auto in3_reader = decltype(TensorAccessor(in3_args, in3_addr)){in3_args, in3_addr, in3_tile_size};
 #endif
 #endif
 
