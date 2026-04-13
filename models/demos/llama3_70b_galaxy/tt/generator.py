@@ -195,29 +195,6 @@ class Generator(WarmupForwardMixin):
         for ccl_obj in ccl_refs:
             ccl_obj._prefill_column_mask = tt_column_mask
 
-    def _reset_prefill_ccl_state(self):
-        # Compile-only prefill warmup reuses the same prefill TT_CCL object across
-        # sp0/sp1 phases. Reset its indices explicitly so the non-traced path starts
-        # from the same clean state as trace capture/replay.
-        ttnn.synchronize_device(self.mesh_device)
-
-        seen_ids = set()
-        ccl_refs = []
-        for ccl_name in ("tt_ccl", "tt_ccl_prefill", "tt_ccl_decode"):
-            ccl_obj = getattr(self.model, ccl_name, None)
-            if ccl_obj is not None and id(ccl_obj) not in seen_ids:
-                seen_ids.add(id(ccl_obj))
-                ccl_refs.append(ccl_obj)
-        for layer in self.model.layers:
-            attn_ccl = getattr(layer.attention, "tt_ccl", None)
-            if attn_ccl is not None and id(attn_ccl) not in seen_ids:
-                seen_ids.add(id(attn_ccl))
-                ccl_refs.append(attn_ccl)
-        for ccl_obj in ccl_refs:
-            reset_fn = getattr(ccl_obj, "reset_gather_and_buffer_idx", None)
-            if reset_fn is not None:
-                reset_fn()
-
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -240,7 +217,6 @@ class Generator(WarmupForwardMixin):
         sampling_parameters_sweeped = False
 
         self.model.switch_mode("prefill")
-        self._reset_prefill_ccl_state()
         logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
         warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
         block_size = get_block_size(kv_cache[0]) if kv_cache else 64
@@ -303,7 +279,6 @@ class Generator(WarmupForwardMixin):
         # replay. A decode→prefill mode-switch cycle flushes that state.
         self.model.switch_mode("decode")
         self.model.switch_mode("prefill")
-        self._reset_prefill_ccl_state()
 
         # Phase 2: sp1 traces (prefix caching): batch 1 only, one per supported length.
         # Uses a fixed cached prefix aligned to both SDPA chunk size and page block size.
