@@ -41,7 +41,7 @@ from .tile_utils import (
     unpack_bfp_tile,
 )
 
-# Format index → tile_format lookup (matches COMPRESSED_FORMATS ordering)
+# Format index → mantissa bits lookup (matches COMPRESSED_FORMATS ordering)
 _FMT_IDX_TO_MANT_BITS = {idx: BFP_MANT_BITS[fmt] for idx, fmt in enumerate(COMPRESSED_FORMATS) if fmt in BFP_MANT_BITS}
 
 _bfp_utils = ttnn._ttnn.bfp_utils
