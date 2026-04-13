@@ -169,10 +169,15 @@ protected:
         if (!mesh_device_) {
             return;
         }
+        log_warning(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->close()");
         mesh_device_->close();
+        log_warning(tt::LogMetal, "[fixture_teardown] mesh_device_->close() returned, calling mesh_device_.reset()");
         mesh_device_.reset();
+        log_warning(tt::LogMetal, "[fixture_teardown] mesh_device_.reset() returned");
         if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            log_warning(tt::LogMetal, "[fixture_teardown] calling SetFabricConfig(DISABLED) from base TearDown");
             tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+            log_warning(tt::LogMetal, "[fixture_teardown] base SetFabricConfig(DISABLED) returned");
         }
     }
 

@@ -1084,8 +1084,11 @@ protected:
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
+        log_warning(tt::LogMetal, "[fixture_teardown] MeshDevice1x4FabricFixture::TearDown() start");
         MeshDeviceFixtureBase::TearDown();
+        log_warning(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() returned, calling SetFabricConfig(DISABLED)");
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        log_warning(tt::LogMetal, "[fixture_teardown] SetFabricConfig(DISABLED) returned");
     }
 };
 

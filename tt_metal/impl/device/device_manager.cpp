@@ -690,28 +690,40 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     // in create_unit_meshes.  If an exception interrupts that second phase,
     // cleanup must still succeed for the components that *were* initialized.
     if (init_done_.contains(DispatchKernelInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] DispatchKernelInitializer::teardown() start");
         initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+        log_warning(tt::LogMetal, "[close_devices] DispatchKernelInitializer::teardown() returned");
     }
 
     if (init_done_.contains(FabricFirmwareInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::teardown() start");
         initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+        log_warning(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::teardown() returned");
     }
 
     if (init_done_.contains(ProfilerInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] ProfilerInitializer::teardown() start");
         initializers_[ProfilerInitializer::key]->teardown(init_done_);
+        log_warning(tt::LogMetal, "[close_devices] ProfilerInitializer::teardown() returned");
     }
 
     if (init_done_.contains(CommandQueueInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] CommandQueueInitializer::teardown() start");
         initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+        log_warning(tt::LogMetal, "[close_devices] CommandQueueInitializer::teardown() returned");
     }
 
     TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
 
     if (initializers_.contains(DispatchKernelInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] DispatchKernelInitializer::post_teardown() start");
         initializers_[DispatchKernelInitializer::key]->post_teardown();
+        log_warning(tt::LogMetal, "[close_devices] DispatchKernelInitializer::post_teardown() returned");
     }
     if (initializers_.contains(FabricFirmwareInitializer::key)) {
+        log_warning(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::post_teardown() start");
         initializers_[FabricFirmwareInitializer::key]->post_teardown();
+        log_warning(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::post_teardown() returned");
     }
     if (initializers_.contains(ProfilerInitializer::key)) {
         initializers_[ProfilerInitializer::key]->post_teardown();
@@ -723,7 +735,9 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto* dev = this->get_active_device(dev_id);
+        log_warning(tt::LogMetal, "[close_devices] closing device {}", dev_id);
         pass &= dev->close();
+        log_warning(tt::LogMetal, "[close_devices] device {} closed", dev_id);
     }
 
     return pass;
