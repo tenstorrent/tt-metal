@@ -200,15 +200,30 @@ class Generator(WarmupForwardMixin):
 
             logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
 
-            self.prefill_forward_text(
-                **prefill_forward_args,
-                kv_cache=kv_cache,
-                enable_trace=False,  # Vision encoder warmup doesn't support trace
-                model_id_warmup=model_id,
-                sampling_params=None,
-                pixel_values=warmup_pixel_values,
-                image_sizes=[(vision_chunk_size, vision_chunk_size)],
-            )
+            multimodal_prefill = getattr(self, "prefill_forward_multimodal", None)
+            if callable(multimodal_prefill):
+                multimodal_prefill(
+                    prefill_forward_args["tokens"],
+                    page_table=prefill_forward_args["page_table"],
+                    kv_cache=kv_cache,
+                    prompt_lens=prefill_forward_args["prompt_lens"],
+                    empty_slots=prefill_forward_args["empty_slots"],
+                    enable_trace=False,  # Vision encoder warmup doesn't support trace
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                    pixel_values=warmup_pixel_values,
+                    image_sizes=[(vision_chunk_size, vision_chunk_size)],
+                )
+            else:
+                self.prefill_forward_text(
+                    **prefill_forward_args,
+                    kv_cache=kv_cache,
+                    enable_trace=False,  # Vision encoder warmup doesn't support trace
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                    pixel_values=warmup_pixel_values,
+                    image_sizes=[(vision_chunk_size, vision_chunk_size)],
+                )
             logger.info("Vision encoder warmup completed")
 
     def _capture_trace_prefill(
