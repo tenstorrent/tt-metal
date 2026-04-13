@@ -62,9 +62,12 @@ inline void calculate_erf() {
             ERF_LUT_SIZE,
             true,
             APPROXIMATION_MODE>(ERF_LUT, x);
-        // Clamp: erf(x) = +/-1 for |x| > 10
-        v_if(x > 10.0f) { result = 1.0f; }
-        v_elseif(x < -10.0f) { result = -1.0f; }
+        // Clamp: erf(x) = sign(x) for |x| > 10 (uses odd symmetry)
+        sfpi::vFloat ax = sfpi::setsgn(x, 0);
+        v_if(ax > 10.0f) {
+            sfpi::vFloat one = 1.0f;
+            result = sfpi::setsgn(one, x);
+        }
         v_endif;
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
