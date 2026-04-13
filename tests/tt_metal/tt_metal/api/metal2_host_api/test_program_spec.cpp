@@ -42,6 +42,19 @@ using test_helpers::MakeMinimalWorker;
 class ProgramSpecTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
+        // These tests use a Quasar mock device.  If a non-Quasar simulator is
+        // active (TT_METAL_SIMULATOR points to WH/BH libttsim.so), configure_mock_mode
+        // cannot re-initialize the Metal context for a different arch, so skip.
+        const char* sim = std::getenv("TT_METAL_SIMULATOR");
+        if (sim != nullptr) {
+            std::string_view path(sim);
+            bool is_quasar = path.find("_qsr") != std::string_view::npos ||
+                             path.find("quasar") != std::string_view::npos;
+            if (!is_quasar) {
+                GTEST_SKIP() << "ProgramSpecTestQuasar requires a Quasar mock device; "
+                                "skipping under non-Quasar simulator";
+            }
+        }
         //  Configure global mock mode for Quasar
         //  This way, the HAL is initialized for arch check and Program creation.
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
