@@ -82,18 +82,24 @@ jobs:
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && vars.REDIS_HOST != '' }}
         run: |
           # ctcache is not published on PyPI — install from source tag
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@1.2.0" redis
 
+          # Capture vars into shell variables for use within this step
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_USER="${{ vars.REDIS_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
+
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
           CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
           {
-            echo "CTCACHE_REDIS_HOST=${{ vars.REDIS_HOST }}"
-            echo "CTCACHE_REDIS_PORT=${{ vars.REDIS_PORT }}"
-            echo "CTCACHE_REDIS_USERNAME=${{ vars.REDIS_USER }}"
-            echo "CTCACHE_REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
+            echo "CTCACHE_REDIS_HOST=${REDIS_HOST}"
+            echo "CTCACHE_REDIS_PORT=${REDIS_PORT}"
+            echo "CTCACHE_REDIS_USERNAME=${REDIS_USER}"
+            echo "CTCACHE_REDIS_PASSWORD=${REDIS_PASSWORD}"
             echo "CTCACHE_REDIS_NAMESPACE=/ctcache/ct${CT_VERSION}"
             echo "CTCACHE_REDIS_READ_ONLY=false"
             echo "CTCACHE_REDIS_CONNECT_TIMEOUT=2.0"
@@ -103,6 +109,12 @@ jobs:
           echo "ctcache namespace: /ctcache/ct${CT_VERSION}"
 
           # Verify connectivity — warn but don't fail if Redis is down
+          # Note: GITHUB_ENV writes are not visible in os.environ until the next step,
+          # so we pass connection details via shell variables directly.
+          CTCACHE_REDIS_HOST="$REDIS_HOST" \
+          CTCACHE_REDIS_PORT="$REDIS_PORT" \
+          CTCACHE_REDIS_USERNAME="$REDIS_USER" \
+          CTCACHE_REDIS_PASSWORD="$REDIS_PASSWORD" \
           python3 - << 'PYEOF'
           import redis, os, sys
           try:
