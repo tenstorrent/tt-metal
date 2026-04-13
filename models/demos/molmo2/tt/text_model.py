@@ -16,7 +16,7 @@ Supports:
 - Mixed text/vision token sequences
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import torch
 
@@ -26,6 +26,9 @@ from models.demos.molmo2.tt.text_block import TextBlock
 from models.demos.molmo2.tt.text_rmsnorm import TextRMSNorm
 from models.demos.molmo2.tt.text_rotary_emb import TextRotaryEmbedding
 from models.demos.molmo2.tt.text_rotary_setup import TextRotarySetup
+
+if TYPE_CHECKING:
+    from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class TextModel(LightweightModule):
@@ -51,6 +54,7 @@ class TextModel(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer",
         dtype=ttnn.bfloat8_b,
+        tt_ccl: Optional["TT_CCL"] = None,
     ):
         """
         Initialize TextModel.
@@ -147,6 +151,7 @@ class TextModel(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 state_dict_prefix=f"{state_dict_prefix}.blocks",
                 dtype=dtype,
+                tt_ccl=tt_ccl,
             )
             self.blocks.append(block)
 
