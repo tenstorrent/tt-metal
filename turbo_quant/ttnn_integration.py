@@ -738,7 +738,7 @@ class TTNNTurboQuantCache:
             BF16 attention output [B, NQH, 1, DH] on device.
         """
         _require_ttnn()
-        centroids = self.setup.quantizer.codebook.centroids.tolist()
+        centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
 
         # Dummy page table (not used by interleaved reader)
         page_table = ttnn.from_torch(
