@@ -37,23 +37,17 @@ void kernel_main() {
     uint32_t producer_idx = 0;
 #endif
 
-    // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
-    // ENDL(); DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);
-
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
-
-    DPRINT << "HERE" << ENDL();
-    DEVICE_PRINT("HERE\n");
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         const uint32_t page_id = blocked_consumer ? chunk_offset + producer_idx * num_entries_per_producer + tile_id
                                                   : chunk_offset + tile_id * num_producers + producer_idx;
-        DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
-        DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
+        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
+        // DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {
             dfb.reserve_back(1);
@@ -62,9 +56,9 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    DPRINT << "PFW" << ENDL();
-    DEVICE_PRINT("PFW\n");
+    // DPRINT << "PFW" << ENDL();
+    // DEVICE_PRINT("PFW\n");
     dfb.finish();
-    DPRINT << "PFD" << ENDL();
-    DEVICE_PRINT("PFD\n");
+    // DPRINT << "PFD" << ENDL();
+    // DEVICE_PRINT("PFD\n");
 }
