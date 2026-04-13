@@ -18,9 +18,17 @@ from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -63,8 +71,9 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         weight_key="model.multi_modal_projector.mm_soft_emb_norm",
         weight_dtype=dtype,
         is_distributed=False,
-        sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        # Same as TtGemma3MultiModalProjector: interleaved path; no SHARDED_* model_config entries on ModelArgs.
+        sharded_program_config=None,
+        sharded_output_config=None,
     )
 
     # Wrap it in DistributedNorm
@@ -114,9 +123,14 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )

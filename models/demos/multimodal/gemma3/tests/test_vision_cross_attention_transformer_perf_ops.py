@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import json
+import os
 from collections import defaultdict
 
 import pandas as pd
@@ -11,6 +11,8 @@ import pytest
 from loguru import logger
 from tracy.process_model_log import get_latest_ops_log_filename
 
+import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.llama3_70b_galaxy.tests.test_prefill_device_perf import (
     average_per_instance_dict,
     build_duration_dict,
@@ -21,6 +23,47 @@ from models.demos.llama3_70b_galaxy.tests.test_prefill_device_perf import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
+
+_PERF_TARGETS_DIR = "models/demos/multimodal/gemma3/tests/perf_targets"
+
+
+def _infer_mesh_device_name():
+    env = os.environ.get("MESH_DEVICE")
+    if env:
+        return env
+    n = ttnn.get_num_devices()
+    if is_wormhole_b0():
+        return {1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}.get(n)
+    if is_blackhole():
+        return {1: "P150", 2: "P300", 4: "P150x4", 8: "P150x8"}.get(n)
+    return None
+
+
+def resolve_op_to_op_perf_json_paths():
+    """
+    Prefer per-device JSON (required on Blackhole). Legacy unsuffixed files are Wormhole
+    captures and are only used when the inferred device is wormhole-class.
+    """
+    device_key = _infer_mesh_device_name()
+    if device_key:
+        tp = f"{_PERF_TARGETS_DIR}/targets_test_perf_vision_cross_attention_op_to_op_{device_key}.json"
+        mp = f"{_PERF_TARGETS_DIR}/targets_margins_test_perf_vision_cross_attention_op_to_op_{device_key}.json"
+        if os.path.isfile(tp) and os.path.isfile(mp):
+            return tp, mp
+
+    leg_t = f"{_PERF_TARGETS_DIR}/targets_test_perf_vision_cross_attention_op_to_op.json"
+    leg_m = f"{_PERF_TARGETS_DIR}/targets_margins_test_perf_vision_cross_attention_op_to_op.json"
+    if os.path.isfile(leg_t) and os.path.isfile(leg_m):
+        # Legacy unsuffixed JSON is a Wormhole capture; never compare Blackhole traces against it.
+        if not is_blackhole() and (device_key is None or device_key in ("N150", "N300", "N150x4", "T3K", "TG")):
+            return leg_t, leg_m
+
+    pytest.skip(
+        f"No op-to-op perf target JSON pair for MESH_DEVICE/inferred device {device_key!r}. "
+        f"For Blackhole, set MESH_DEVICE and add targets_*_<device>.json plus margins under {_PERF_TARGETS_DIR}/ "
+        "(run target_maker() in this module with make_new_targets=True on that hardware). "
+        "Wormhole uses the legacy unsuffixed targets when no per-device file exists."
+    )
 
 
 def compare_with_target(kernel_duration_per_instance_averaged_dict, perf_targets, margins):
@@ -126,15 +169,14 @@ def target_maker():
 
     logger.info(f"Generated target kernel durations: {all_results_average}")
 
+    device_key = _infer_mesh_device_name() or "N150"
+    targets_path = f"{_PERF_TARGETS_DIR}/targets_test_perf_vision_cross_attention_op_to_op_{device_key}.json"
+
     # Write to file
-    with open(
-        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
-    ) as f:
+    with open(targets_path, "w") as f:
         json.dump(all_results_average, f, indent=2)
 
-    with open(
-        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
-    ) as f:
+    with open(targets_path, "r") as f:
         data_avg = json.load(f)
 
     max_values = defaultdict(float)
@@ -165,9 +207,7 @@ def target_maker():
     logger.info(f"Generated variance values: {variance_values_percentages}")
 
     # Write to file
-    with open(
-        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
-    ) as f:
+    with open(targets_path, "w") as f:
         json.dump(avg_values, f, indent=2)
 
     margin_values = defaultdict(float)
@@ -177,10 +217,8 @@ def target_maker():
 
     logger.info(f"Generated margin values: {margin_values}")
 
-    with open(
-        "models/demos/multimodal/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json",
-        "w",
-    ) as f:
+    margins_path = f"{_PERF_TARGETS_DIR}/targets_margins_test_perf_vision_cross_attention_op_to_op_{device_key}.json"
+    with open(margins_path, "w") as f:
         json.dump(margin_values, f, indent=2)
 
 
@@ -222,16 +260,10 @@ def test_op_to_op_perf_gemma_vision():
     # Average over all iterations of each op instance (in this specific case it is the same)
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
 
-    expected_perf_cols = {}
-    margins = {}
-    with open(
-        f"models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
-    ) as f:
+    targets_path, margins_path = resolve_op_to_op_perf_json_paths()
+    with open(targets_path, "r") as f:
         expected_perf_cols = json.load(f)
-    with open(
-        f"models/demos/multimodal/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json",
-        "r",
-    ) as f:
+    with open(margins_path, "r") as f:
         margins = json.load(f)
     compare_with_target(kernel_duration_per_instance_averaged_dict, expected_perf_cols, margins)
 
