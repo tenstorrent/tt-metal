@@ -11,6 +11,9 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
+#include <optional>
+#include <string>
+
 namespace tt::tt_metal {
 
 std::optional<std::string> get_shard_align_error(
