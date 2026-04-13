@@ -551,16 +551,30 @@ def chunk_gated_delta_rule_ttnn(
     # Uses LAPACK batched triangular solve instead of a Python loop — same math,
     # but ~10-50x faster on CPU for large chunk_size (e.g. 256 iterations → 1 BLAS call).
 
-    A = ttnn.to_torch(attn_raw).float()  # [batch, chunk_size, chunk_size]
+    # Handle both single-device and mesh-sharded tensors
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        A = ttnn.to_torch(attn_raw, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
+    else:
+        A = ttnn.to_torch(attn_raw).float()
     ttnn.deallocate(attn_raw)
     eye = _chunk_eye(chunk_size)
     I_minus_A = eye - A
     del A
     attn_cpu = torch.linalg.solve_triangular(I_minus_A, eye.expand_as(I_minus_A), upper=False)
     del I_minus_A
-    attn = ttnn.from_torch(
-        attn_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_batch_mc
-    )
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        attn = ttnn.from_torch(
+            attn_cpu,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_batch_mc,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        )
+    else:
+        attn = ttnn.from_torch(
+            attn_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_batch_mc
+        )
     del attn_cpu
 
     prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
