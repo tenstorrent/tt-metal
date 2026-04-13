@@ -556,7 +556,6 @@ class PreSDPA:
         qrope_cos_sin_cb = 17  # Cos/Sin CB for RoPE
         qrope_trans_mat_cb = 19  # Trans_mat CB for RoPE
         qrope_rotated_input_interm_cb = 20  # Rotated input intermediate CB for RoPE
-        qrope_cos_sin_interm_cb = 21  # Cos/Sin intermediate CB for RoPE
         # KV cache branch
         dkv_matmul_weights_cb = 23  # DKV Matmul weights CB
         dkv_matmul_output_cb = 24  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
@@ -790,7 +789,6 @@ class PreSDPA:
             ("qrope_cos_sin_cb", qrope_cos_sin_cb),
             ("qrope_trans_mat_cb", qrope_trans_mat_cb),
             ("qrope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("qrope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("qrope_output_cb", qrope_output_cb),
             ("qrope_Wt", qrope_head_dim_per_core_t),
             ("qrope_Ht", qrope_num_heads_per_core),
@@ -1072,7 +1070,6 @@ class PreSDPA:
             ("krope_cos_sin_cb", krope_cos_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
             ("krope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("krope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("krope_output_cb", krope_output_cb),
             ("krope_Wt", krope_Wt),
             ("krope_Ht", krope_Ht),
@@ -1632,23 +1629,7 @@ class PreSDPA:
                     )
                 ]
                 sdpa_out_interm_running_offset += qrope_rotated_input_interm_cb_descriptor.total_size
-                # CB 21: Cos/Sin intermediate CB — overlap with sdpa_out_interm L1 buffer
-                # This CB is consumed before SDPA runs.
-                qrope_cos_sin_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    qrope_cos_sin_interm_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,
-                    total_size=qrope_interm_tile_size * 2,
-                )
-                qrope_cos_sin_interm_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=qrope_cos_sin_interm_cb,
-                        data_format=data_format,
-                        page_size=TILE_1x32.get_tile_size(data_format),
-                        tile=ttnn.TileDescriptor(TILE_1x32),
-                    )
-                ]
-                sdpa_out_interm_running_offset += qrope_cos_sin_interm_cb_descriptor.total_size
+
                 # CB 31: CreateQHeads intermediate buffer (row-major data before tilization)
                 # Senders write row-major data here via NOC, receiver marks pages, TRISC tilizes to output
                 # Allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
@@ -2303,7 +2284,6 @@ class PreSDPA:
                     qrope_cos_sin_cb_descriptor,
                     qrope_trans_mat_cb_descriptor,
                     qrope_rotated_input_interm_cb_descriptor,
-                    qrope_cos_sin_interm_cb_descriptor,
                     dkv_matmul_weights_cb_descriptor,
                     dkv_matmul_output_cb_descriptor,
                     kv_rmsnorm_input_cb_descriptor,

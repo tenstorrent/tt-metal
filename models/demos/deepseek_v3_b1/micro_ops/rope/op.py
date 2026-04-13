@@ -131,7 +131,6 @@ class RopeSingleCore:
         trans_mat_cb = 3  # c_3
         output_cb = 16  # c_16 (output operands start at 16)
         rotated_input_interm_cb = 24  # c_24
-        cos_sin_interm_cb = 25  # c_25
 
         # Create tile descriptor
         tile_descriptor = ttnn.TileDescriptor(tile)
@@ -174,18 +173,6 @@ class RopeSingleCore:
             format_descriptors=[rotated_interm_format],
         )
 
-        cos_sin_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_sin_interm_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        cos_sin_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=2 * num_interm_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[cos_sin_interm_format],
-        )
-
         # ========================================================================
         # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
         # ========================================================================
@@ -220,7 +207,6 @@ class RopeSingleCore:
             ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("rotated_in_interm_cb", rotated_input_interm_cb),
-            ("cos_sin_interm_cb", cos_sin_interm_cb),
             ("out_cb", output_cb),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
@@ -267,7 +253,6 @@ class RopeSingleCore:
                 trans_mat_cb_descriptor,
                 output_cb_descriptor,
                 rotated_interm_cb_descriptor,
-                cos_sin_interm_cb_descriptor,
             ],
         )
 
