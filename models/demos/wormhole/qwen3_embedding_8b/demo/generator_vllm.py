@@ -42,7 +42,7 @@ class Qwen3ForEmbedding:
         max_seq_len: int = 8192,  # Qwen3-Embedding supports up to 8192
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat8_b,
-        model_name: str = "Qwen/Qwen3-Embedding-8B",
+        model_name: str = "Qwen/Qwen3-Embedding-4B",
         vllm_config=None,
         prefix: str = "",
         **kwargs,

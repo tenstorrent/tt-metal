@@ -1,0 +1,5 @@
+1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
+            MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
+        }
+        return math_fidelity_setting_look

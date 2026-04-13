@@ -572,7 +572,7 @@ class ModelArgs:
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
-        supported_batches = {1, 2, 4, 8, 16, 32}
+        supported_batches = {1, 2, 4, 8, 16, 25, 32}
         if self.max_batch_size not in supported_batches:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 

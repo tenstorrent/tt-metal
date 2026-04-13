@@ -1137,9 +1137,18 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+        # reshaping long sequence to matmul fit on device (chunk size 1024; pad if B*S not divisible by 1024)
+        wo_chunk = 1024
+        wo_mm_seq_len = seq_len
+        if seq_len > wo_chunk:
+            if seq_len % wo_chunk != 0:
+                wo_mm_seq_len = ((seq_len + wo_chunk - 1) // wo_chunk) * wo_chunk
+                attn_output_11SH = ttnn.pad(
+                    attn_output_11SH,
+                    padding=[(0, 0), (0, 0), (0, wo_mm_seq_len - seq_len), (0, 0)],
+                    value=0.0,
+                )
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, wo_mm_seq_len // wo_chunk, wo_chunk, -1])
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
@@ -1163,11 +1172,13 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
+            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, wo_mm_seq_len, None),
         )
 
-        if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+        if seq_len > wo_chunk:
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, wo_mm_seq_len, -1])
+            if wo_mm_seq_len != seq_len:
+                output_11SH = output_11SH[:, :, :seq_len, :]
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter

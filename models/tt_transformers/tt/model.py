@@ -255,7 +255,14 @@ class Transformer(LightweightModule):
         return hidden_states
 
     def prepare_prefill_inputs_trace(
-        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+        self,
+        tokens,
+        page_table=None,
+        chunk_page_table=None,
+        batch_size=1,
+        user_id=0,
+        last_token_idx=None,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -268,6 +275,7 @@ class Transformer(LightweightModule):
             trace_enabled=True,
             batch_size=batch_size,
             user_id=user_id,
+            last_token_idx=last_token_idx,
         )
         return host_inputs
 
@@ -323,9 +331,15 @@ class Transformer(LightweightModule):
             tokens_embd = self.embd(tokens)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Slice the rot mats to the prefill seqlen
+        # Slice the rot mats to the prefill seqlen (logical length; S may be padded for trace)
         mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
-        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        if last_token_idx is not None:
+            if isinstance(last_token_idx, (list, tuple)):
+                seq_len = max(last_token_idx) + 1
+            else:
+                seq_len = int(last_token_idx) + 1
+        else:
+            seq_len = S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
         required_end = start_pos + S

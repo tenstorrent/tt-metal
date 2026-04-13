@@ -123,6 +123,7 @@ class MLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+        mlp_prefill_original_seq_len = seq_len
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -133,8 +134,17 @@ class MLP(LightweightModule):
         )
 
         if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
-            # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
+            # Chunked reshape requires seq_len divisible by prefill_len_cutoff (batched prefill B*S may not be).
+            cutoff = self.args.prefill_len_cutoff
+            if seq_len % cutoff != 0:
+                padded_seq_len = ((seq_len + cutoff - 1) // cutoff) * cutoff
+                x = ttnn.pad(
+                    x,
+                    padding=[(0, 0), (0, 0), (0, padded_seq_len - seq_len), (0, 0)],
+                    value=0.0,
+                )
+                seq_len = padded_seq_len
+            x = ttnn.reshape(x, [1, seq_len // cutoff, cutoff, -1])
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
@@ -322,6 +332,9 @@ class MLP(LightweightModule):
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
+
+        if mode == Mode.PREFILL and mlp_prefill_original_seq_len != seq_len:
+            w2_out_reduced = w2_out_reduced[:, :, :mlp_prefill_original_seq_len, :]
 
         if mode == Mode.DECODE:
             w2_out_reduced = ttnn.to_memory_config(

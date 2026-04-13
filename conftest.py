@@ -912,15 +912,6 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_configure(config):
-    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
-    if config.getoption("--trace-params", default=False):
-        # Set a module-level flag that can be checked by operation_tracer
-        import ttnn.operation_tracer
-
-        ttnn.operation_tracer._ENABLE_TRACE = True
-
-
 @pytest.fixture
 def grid_size(request):
     """
@@ -1215,8 +1206,47 @@ def record_test_timestamp(record_property):
     record_property("end_timestamp", end_timestamp)
 
 
+def _junit_xml_destination_writable(xmlpath: str) -> bool:
+    """Return True if we can create the report directory and write a file there."""
+    directory = os.path.dirname(os.path.abspath(xmlpath))
+    if not directory:
+        directory = "."
+    probe = os.path.join(directory, ".tt_metal_junit_write_probe")
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
+    """Trace-params flag, optional JUnit XML disable, CI junit filename de-conflict."""
+    if config.getoption("--trace-params", default=False):
+        import ttnn.operation_tracer
+
+        ttnn.operation_tracer._ENABLE_TRACE = True
+
     xmlpath = config.option.xmlpath
+    if xmlpath:
+        if os.environ.get("TT_METAL_NO_JUNITXML", "").lower() in ("1", "true", "yes"):
+            config.option.xmlpath = None
+            xmlpath = None
+        elif not _junit_xml_destination_writable(xmlpath):
+            config.option.xmlpath = None
+            xmlpath = None
+            import warnings
+
+            warnings.warn(
+                "JUnit XML output disabled: report path is not writable (often errno 28 disk full). "
+                "Free space, set TT_METAL_NO_JUNITXML=1, or use --junitxml=/path/on/spacious/fs.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     # https://github.com/tenstorrent/tt-metal/pull/18372
     # Only override the xmlpath if it's set, and we're in a CI env (GHA)
     # Problem: t3k unit tests run pytest multiple times overwriting the junit xml file each time, so the generated xml artifact only contains test case info from the last running testsuite.
