@@ -190,7 +190,7 @@ jobs:
           # Blitz Pipeline 64 stage (CPU-only superpod / quad-pod Blitz mesh graph)
           TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestControlPlaneInitNoMGD"
 
-          # Dual 4x8 Z-direction fallback (c02u08, c03u02 - Z-only connections between galaxies)
+          # Dual 4x8 Z-direction fallback (SP4 d04u08 / d05u08 — Z-only connections between galaxies; MGD from rank bindings)
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_4x8_z_fallback_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_4x8_z_fallback_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual4x8ZDirectionFallbackControlPlaneInit"
 
           # Triple Pod 32x4 Quad BH Galaxy MGD + SP4 GLX cluster mock (same mapping as 32x4 quad tests)
