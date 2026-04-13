@@ -42,6 +42,7 @@ class WanAttention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_self: bool = True,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -122,7 +123,8 @@ class WanAttention(Module):
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+        ring_sdpa_chunk_size = chunk_lookup.get(
             (
                 is_blackhole(),
                 self.parallel_config.sequence_parallel.factor,
@@ -257,8 +259,8 @@ class WanAttention(Module):
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
                 force_transpose=True,
-                num_workers_per_link=6,
-                num_buffers_per_channel=48,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,

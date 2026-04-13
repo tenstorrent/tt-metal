@@ -29,10 +29,22 @@ void kernel_main() {
     constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
 
-    // Load input/output addresses and range parameters
+    // Load common runtime args (same for all cores, updated in override_runtime_arguments)
+    uint32_t cargidx = 0;
+    const uint32_t in1_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t in2_addr = get_common_arg_val<uint32_t>(cargidx++);
+
+#ifdef FUSE_TERNARY
+    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(cargidx++);
+#endif  // FUSE_TERNARY
+
+    // Output tensor addresses from common args
+    const uint32_t out_addr_common_arg_start = cargidx;
+
+    // Load per-core runtime args
     uint32_t argidx = 0;
-    const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -47,20 +59,15 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
-#ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
-#endif  // FUSE_TERNARY
-
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<20>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
-    // Always create tuple of output accessors (size = N_chunks)
+    // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
+    auto outputs_tuple =
+        make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
@@ -140,7 +147,6 @@ void kernel_main() {
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
-            bool k_block_iter_odd = false;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -179,10 +185,10 @@ void kernel_main() {
                 if constexpr (is_injector_core) {
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
-                    uint32_t k_left_tiles =
-                        k_block_iter_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                    uint32_t k_right_tiles = k_block_iter_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
-                    k_block_iter_odd = !k_block_iter_odd;
+                    uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
+                    bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
+                    uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                     compute_actual_k_block(
                         k_block_iter,
                         K_num_blocks,
@@ -261,6 +267,8 @@ void kernel_main() {
                     cb_id_ternary_a,
                     cb_id_ternary_b,
                     ternary_a_tile_size,
+                    ternary_b_tile_size,
+                    broadcast_ternary_b,
                     m_tile,
                     m_tile_end,
                     n_tile,

@@ -351,6 +351,16 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mla_sender_noc_y_6"),
                 get_named_compile_time_arg_val("mla_sender_noc_y_7"),
             },
+        .knope_core_index = get_named_compile_time_arg_val("knope_core_index"),
+        .nope_mcast_dest_noc_start_x = get_named_compile_time_arg_val("nope_mcast_dest_noc_start_x"),
+        .nope_mcast_dest_noc_start_y = get_named_compile_time_arg_val("nope_mcast_dest_noc_start_y"),
+        .nope_mcast_dest_noc_end_x = get_named_compile_time_arg_val("nope_mcast_dest_noc_end_x"),
+        .nope_mcast_dest_noc_end_y = get_named_compile_time_arg_val("nope_mcast_dest_noc_end_y"),
+        .nope_mcast_sender_semaphore_addr = get_named_compile_time_arg_val("nope_mcast_sender_semaphore_addr"),
+        .nope_mcast_receiver_semaphore_addr = get_named_compile_time_arg_val("nope_mcast_receiver_semaphore_addr"),
+        .nope_mcast_data_size_bytes = get_named_compile_time_arg_val("nope_mcast_data_size_bytes"),
+        .nope_mcast_num_dests = get_named_compile_time_arg_val("nope_mcast_num_dests"),
+        .kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -708,6 +718,7 @@ void kernel_main() {
         .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+        .knope_core_index = get_named_compile_time_arg_val("knope_core_index"),
     };
 
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
@@ -1014,7 +1025,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("qkv_rope_cos_sin_cb"),
         get_named_compile_time_arg_val("qrope_trans_mat_cb"),
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
         get_common_arg_val<uint32_t>(15),  // qrope_trans_mat_addr
     };
@@ -1068,7 +1078,6 @@ void kernel_main() {
     constexpr uint32_t krope_cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb");
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
-    constexpr uint32_t krope_cos_sin_interm_cb = get_named_compile_time_arg_val("krope_cos_sin_interm_cb");
     constexpr uint32_t krope_output_cb = get_named_compile_time_arg_val("krope_output_cb");
 
     // Compute args: all CB indices
@@ -1077,7 +1086,6 @@ void kernel_main() {
         .cos_sin_cb = krope_cos_sin_cb,
         .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
-        .cos_sin_interm_cb = krope_cos_sin_interm_cb,
         .out_cb = krope_output_cb,
         .trans_mat_address_override = get_common_arg_val<uint32_t>(15),
     };
@@ -2197,7 +2205,8 @@ void kernel_main() {
             // Non-owning SP devices skip the entire branch and just signal the
             // KV-cache-ready semaphore so FlashMLA can proceed.
             // ====================================================================
-            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_knope_core, Core::is_krope_core>
+                kv_cache_update;
             kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
             if (!skip_kv_cache_update) {
                 DeviceZoneScopedN("KV CACHE");
