@@ -174,6 +174,9 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for BgeM3MLP")
 
+    if config.mesh_device is None:
+        to_set["mesh_device"] = mesh_device
+
     max_seq = config.max_seq_len
     if config.wi_compute_kernel_cfg is None:
         to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
